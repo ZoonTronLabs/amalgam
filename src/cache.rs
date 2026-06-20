@@ -651,14 +651,27 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             self.enqueue_recovery(full_key, RecoveryAction::Set, now);
             return;
         }
+        if opts.allow_background_distributed_operations() {
+            // Fire-and-forget: don't make the caller wait on L2.
+            let this = self.clone();
+            let full_key = Arc::clone(full_key);
+            let entry = entry.clone();
+            tokio::spawn(async move {
+                this.do_l2_write(&full_key, &entry).await;
+            });
+        } else {
+            self.do_l2_write(full_key, entry).await;
+        }
+    }
+
+    async fn do_l2_write(&self, full_key: &Arc<str>, entry: &Entry<V>) {
         match self.inner.l2_write(full_key, entry).await {
             Ok(()) => self.close_circuit_l2(),
             Err(err) => {
                 self.on_l2_error(full_key, &err);
-                self.enqueue_recovery(full_key, RecoveryAction::Set, now);
+                self.enqueue_recovery(full_key, RecoveryAction::Set, self.inner.clock.now());
             }
         }
-        let _ = opts;
     }
 
     /// L2 read, gated by the circuit breaker and the distributed hard timeout.
