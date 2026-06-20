@@ -134,13 +134,52 @@ Behavioural equivalence is judged by tests, not by "looks right":
 - **Rule:** never weaken a test to make the port "pass". If behaviour must
   change, change the assertion deliberately and say why.
 
-## 7. Per-module status
+## 7. What got built in the full-parity pass
+
+The original draft of this guide stopped at "L1 complete; L2/backplane wired with
+reference backends; the rest is roadmap". A follow-up pass closed that gap and the
+crate now implements the **full** FusionCache feature set. The same two-pass /
+idiom-map discipline applied; each new module maps one FusionCache concept to one
+Rust module, and each is wired into the `cache.rs` request flow (not left as a
+dangling trait):
+
+- **`circuit.rs`** — `CircuitBreaker` (time-based, lock-free) gating L2 and
+  backplane ops; trips/auto-closes and drives `CacheEvent::CircuitBreakerChange`.
+  `Duration::ZERO` ⇒ permanently closed (the FusionCache default).
+- **`recovery.rs`** — `AutoRecoveryService` (latest-wins dedup queue, bounded
+  `max_items`/`max_retries`, background drain) + the `RecoveryExecutor` trait, which
+  `CacheInner` implements by re-doing the L2 write / backplane publish.
+- **`distributed_lock.rs`** — the `DistributedLocker` seam (token-based, so a Redis
+  `SET key token NX PX` maps cleanly) + `InMemoryDistributedLocker`; acquired after
+  the local `KeyedLock` for cluster-wide single-flight.
+- **`plugins.rs`** — `Plugin` + `PluginHost`, notified on every `CacheEvent`.
+- **`registry.rs`** — `CacheRegistry` (named caches) + `DefaultEntryOptionsProvider`
+  (per-key dynamic defaults); the Rust-idiomatic substitute for DI keyed caches.
+- **`observability.rs`** — `MetricsPlugin` (feature `metrics`), recording counters
+  via the `metrics` facade as a plugin.
+- **`serializers.rs`** — `MessagePackSerializer` (feature `messagepack`).
+- **`redis_backend.rs`** — `RedisDistributedCache` / `RedisBackplane` /
+  `RedisDistributedLocker` (feature `redis`) on `redis::aio::ConnectionManager`;
+  integration tests are env-gated on `AMALGAM_REDIS_URL`.
+
+Multi-node **tag/clear** invalidation rides reserved-key backplane messages
+(`__amalgam:t:*`, `__amalgam:clear:*`), and L2 keys carry a wire-version prefix
+(`distributed_wire_version`, default `"v1"`).
+
+## 8. Per-module status
 
 Each source module records where it stands. Implemented & tested: `time`,
 `maybe`, `error`, `options`, `tags`, `entry`, `events`, `memory`, `locking`,
-`factory`, `cache` (the full `get_or_set` flow). Reference implementations:
-`distributed` (L2 trait + in-memory backend + JSON serializer, wired
-read/write-through), `backplane` (trait + in-process backend + listener).
-Roadmap (trait seams ready, see `docs/PARITY.md`): Redis adapters, auto-recovery
-queue, distributed locker, OpenTelemetry. These are tracked as `TODO(port)` where
-they touch existing code.
+`factory`, `cache` (the full `get_or_set` flow), `circuit`, `recovery`,
+`distributed_lock`, `plugins`, `registry`. Implemented behind feature flags:
+`observability` (`metrics`), `serializers` (`messagepack`), `redis_backend`
+(`redis`). Reference implementations wired into the flow: `distributed` (L2 trait +
+in-memory backend + JSON serializer, read/write-through), `backplane` (trait +
+in-process backend + listener).
+
+Genuinely remaining (see the "Still roadmap" section of `docs/PARITY.md`):
+first-class OpenTelemetry tracing **spans** (today: `tracing` log lines at
+factory-error/fail-safe plus `metrics`-facade counters), a DI-container
+integration (the registry is the Rust-idiomatic stand-in), and serializers beyond
+JSON / MessagePack. These are tracked as `TODO(port)` where they touch existing
+code.

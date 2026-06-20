@@ -116,8 +116,8 @@ let html = cache.get_or_set("page", |mut ctx| async move {
 
 Add a distributed L2 (anything implementing `DistributedCache`) and a backplane
 to keep several nodes' L1 caches coherent. Reference in-memory/in-process backends
-ship for testing and single-process multi-instance setups; a Redis adapter is on
-the roadmap.
+ship by default for testing and single-process multi-instance setups; a real
+Redis L2 + backplane + locker ship behind the [`redis` feature](#cargo-features).
 
 ```rust,ignore
 use amalgam::{Cache, InMemoryDistributedCache, InProcessBackplane, JsonSerializer,
@@ -158,6 +158,170 @@ tokio::spawn(async move {
 });
 ```
 
+## Resilience: circuit breakers + auto-recovery
+
+When the L2 cache or backplane is flaky, two FusionCache mechanisms keep the cache
+fast and self-healing:
+
+- **Circuit breakers** stop hammering a known-bad dependency. After a failure the
+  breaker opens for a fixed window; while open, L2 / backplane ops are skipped
+  (and queued for recovery), then it auto-closes. A `Duration::ZERO` breaker is
+  permanently closed — the default, matching FusionCache.
+- **Auto-recovery** queues the ops that failed (or were skipped while a breaker was
+  open) and replays them on a background drain, with **latest-wins dedup** per key
+  and a bounded queue + retry budget. It is enabled by default whenever an L2 or
+  backplane is configured.
+
+```rust,ignore
+use amalgam::{Cache, RecoveryConfig};
+use std::time::Duration;
+
+let cache: Cache<MyData> = Cache::builder()
+    .distributed(l2)
+    .serializer(serializer)
+    .backplane(backplane)
+    // open the L2 breaker for 5s after a failure (ZERO = disabled, the default)
+    .distributed_circuit_breaker(Duration::from_secs(5))
+    .backplane_circuit_breaker(Duration::from_secs(5))
+    // tune the retry queue (this is also the default when L2/backplane is present)
+    .auto_recovery(RecoveryConfig {
+        enabled: true,
+        delay: Duration::from_secs(5),   // drain cadence + post-reconnect barrier
+        max_items: Some(1000),
+        max_retries: Some(5),
+    })
+    .build();
+```
+
+A breaker opening or closing fires `CacheEvent::CircuitBreakerChange { component, closed }`.
+
+## Cross-node single-flight (distributed locker)
+
+In-process stampede protection runs one factory per key *per node*. A
+`DistributedLocker` extends that to **one factory per key across the cluster** — it
+is acquired after the local lock. Share one `InMemoryDistributedLocker` between
+caches in a single process, or use the Redis-backed locker for a real cluster.
+Opt a single call out with `EntryOptions::with_skip_distributed_locker`.
+
+```rust,ignore
+use amalgam::{Cache, DistributedLocker, InMemoryDistributedLocker, Clock, SystemClock};
+use std::sync::Arc;
+
+let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+let locker: Arc<dyn DistributedLocker> = Arc::new(InMemoryDistributedLocker::new(clock));
+
+let cache: Cache<MyData> = Cache::builder()
+    .distributed(l2)
+    .serializer(serializer)
+    .distributed_locker(locker)
+    .build();
+```
+
+## Plugins & metrics
+
+A `Plugin` observes every `CacheEvent` (and an `on_start` lifecycle hook) — the
+Rust counterpart of `IFusionCachePlugin`. Plugins run on the (already cheap,
+non-blocking) event path, so a plugin must not block; offload real work to its own
+task.
+
+```rust,ignore
+use amalgam::{CacheEvent, Plugin};
+
+struct LogPlugin;
+impl Plugin for LogPlugin {
+    fn name(&self) -> &str { "log" }
+    fn on_event(&self, event: &CacheEvent) {
+        if let CacheEvent::FailSafeActivate { key } = event {
+            eprintln!("fail-safe for {key}");
+        }
+    }
+}
+
+let cache: Cache<MyData> = Cache::builder()
+    .plugin(std::sync::Arc::new(LogPlugin))
+    .build();
+```
+
+With the `metrics` feature, `MetricsPlugin` is a ready-made plugin that records
+counters (hits, misses, sets, factory errors/timeouts, fail-safe activations, eager
+refreshes) through the [`metrics`](https://docs.rs/metrics) facade — point any
+compatible exporter (Prometheus, OTLP, …) at it:
+
+```rust,ignore
+use amalgam::MetricsPlugin; // requires `features = ["metrics"]`
+
+let cache: Cache<MyData> = Cache::builder()
+    .plugin(std::sync::Arc::new(MetricsPlugin::new()))
+    .build();
+```
+
+## Named caches & dynamic defaults
+
+Where FusionCache resolves named caches from a DI container, `amalgam` offers a
+`CacheRegistry` (register/resolve by name) and a `DefaultEntryOptionsProvider`
+(per-key default options, consulted when a call passes no explicit options):
+
+```rust,ignore
+use amalgam::{Cache, CacheRegistry, DefaultEntryOptionsProvider, EntryOptions};
+use std::sync::Arc;
+use std::time::Duration;
+
+let registry: CacheRegistry<String> = CacheRegistry::new();
+let users = registry.get_or_create("users", || Cache::builder().name("users").build());
+
+struct PerKeyDefaults;
+impl DefaultEntryOptionsProvider for PerKeyDefaults {
+    fn options_for(&self, key: &str) -> Option<EntryOptions> {
+        key.starts_with("hot:")
+            .then(|| EntryOptions::new(Duration::from_secs(5)))
+    }
+}
+
+let cache: Cache<String> = Cache::builder()
+    .default_options_provider(Arc::new(PerKeyDefaults))
+    .build();
+let _ = (users, cache);
+```
+
+## Cargo features
+
+All distributed *backends* and extras are opt-in; the default build is
+dependency-light and uses the in-memory / in-process reference backends.
+
+| Feature | Enables |
+|---------|---------|
+| *(default)* | L1 + reference L2/backplane/locker (`InMemoryDistributedCache`, `InProcessBackplane`, `InMemoryDistributedLocker`), `JsonSerializer`. |
+| `redis` | `RedisDistributedCache`, `RedisBackplane`, `RedisDistributedLocker` on `redis::aio::ConnectionManager`. |
+| `messagepack` | `MessagePackSerializer` (compact L2 payloads via `rmp-serde`). |
+| `metrics` | `MetricsPlugin` (counters via the `metrics` facade). |
+| `full` | `redis` + `messagepack` + `metrics`. |
+
+```toml
+[dependencies]
+amalgam = { version = "0.1", features = ["redis", "messagepack", "metrics"] }
+# or simply: features = ["full"]
+```
+
+The Redis adapters connect with an async constructor:
+
+```rust,ignore
+use amalgam::{Cache, RedisDistributedCache, RedisBackplane, JsonSerializer,
+              DistributedCache, Backplane};
+use std::sync::Arc;
+
+let l2: Arc<dyn DistributedCache> =
+    Arc::new(RedisDistributedCache::connect("redis://127.0.0.1/").await?);
+let backplane: Arc<dyn Backplane> =
+    Arc::new(RedisBackplane::connect("redis://127.0.0.1/").await?);
+
+let cache: Cache<MyData> = Cache::builder()
+    .distributed(l2)
+    .serializer(Arc::new(JsonSerializer))
+    .backplane(backplane)
+    .instance_id("node-1")
+    .build();
+```
+
 ## Design notes
 
 `amalgam` is a *type-driven* port: where FusionCache leans on .NET runtime type
@@ -174,12 +338,26 @@ classes unrepresentable.
 
 ## Status
 
-The L1 resiliency model is complete and covered by a behavioural test oracle
-(`tests/behavior.rs`); L2 + backplane are wired and tested end-to-end with
-reference backends (`tests/multilevel.rs`). Roadmap: Redis L2/backplane adapters,
-an auto-recovery retry queue, a cross-node distributed locker, and OpenTelemetry
-export. See [`docs/PARITY.md`](docs/PARITY.md) for the precise status of every
-feature.
+The full FusionCache feature set is implemented: the L1 resiliency model
+(stampede, fail-safe, soft/hard timeouts with background completion, eager refresh,
+adaptive + conditional refresh, tagging) **plus** L1 + L2 + backplane with
+read-through / write-through, multi-node invalidation and cross-node tag/clear
+propagation, **circuit breakers**, **auto-recovery**, a **cross-node distributed
+locker**, **plugins**, a **named-cache registry** with a **dynamic default-options
+provider**, and an optional **Redis** backend (L2 + backplane + locker),
+**MessagePack** serializer, and **metrics** plugin behind feature flags.
+
+It is verified by a behavioural test oracle (`tests/behavior.rs`) and end-to-end
+multi-level tests (`tests/multilevel.rs`): the default suite (48 tests) is green
+and `cargo clippy` is warning-clean on both the default build and `--features full`
+(the feature-gated backends compile under their features); `#![forbid(unsafe_code)]`.
+
+Still roadmap (kept honest): first-class OpenTelemetry tracing **spans** (today:
+`tracing` log lines at factory-error / fail-safe plus the `metrics`-facade counters
+from `MetricsPlugin`); a `Microsoft.Extensions.DependencyInjection`-style DI
+integration (the registry is the Rust-idiomatic substitute); and serializers beyond
+JSON / MessagePack (Protobuf / MemoryPack). See [`docs/PARITY.md`](docs/PARITY.md)
+for the precise, row-by-row status of every feature.
 
 ## Acknowledgements
 

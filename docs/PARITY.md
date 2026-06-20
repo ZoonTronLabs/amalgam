@@ -15,20 +15,27 @@ misuse becomes a compile error rather than a runtime surprise.
 
 > **Honesty note.** This table is the proof of "1:1 functional parity"; it does
 > not overclaim. Read the status legend and the **[Build & test status](#build--test-status)**
-> section before relying on any single row. The in-memory (L1) feature set is
-> complete with a behavioural test oracle. The distributed (L2) and backplane
-> layers **are wired into the `Cache` request flow** (read-through, write-through,
-> multi-node invalidation) and tested in `tests/multilevel.rs`, but ship with
-> **in-memory / in-process reference backends**; production backends (Redis) are
-> roadmap. Those rows are marked 🟡 to reflect "wired & tested, reference backend".
+> section before relying on any single row. The whole FusionCache feature set is
+> now implemented and wired into the `Cache` request flow: cache-stampede
+> protection, fail-safe, timeouts, eager refresh, adaptive/conditional refresh,
+> tagging, **L1 + L2 + backplane** (read-through, write-through, multi-node
+> invalidation, cross-node tag/clear propagation), **circuit breakers**,
+> **auto-recovery**, a **cross-node distributed locker**, **plugins**, a **named-cache
+> registry**, a **dynamic default-options provider**, and an optional **Redis**
+> backend (L2 + backplane + locker), **MessagePack** serializer, and **metrics**
+> plugin behind feature flags. The L2/backplane traits ship with in-memory /
+> in-process reference backends so the default suite needs no external services;
+> the production Redis backend lives behind the `redis` feature and is exercised by
+> env-gated integration tests. What genuinely remains is narrow — see the
+> [Still roadmap](#still-roadmap) subsection.
 
 ## Status legend
 
 | Marker | Meaning |
 |--------|---------|
-| ✅ | Implemented & tested — present in `src/`, with a behavioural test in `tests/behavior.rs` (or a unit test in the owning module). |
-| 🟡 | Wired & tested, but ships with an **in-memory / in-process reference backend** only — a production backend (e.g. Redis) is roadmap. |
-| ⬜ | Roadmap — a trait seam exists so a production backend can be dropped in, but no such backend (and no wiring) ships today. |
+| ✅ | Implemented & tested — present in `src/`, with a behavioural test in `tests/behavior.rs`/`tests/multilevel.rs` or a unit test in the owning module. Feature-gated rows (Redis, MessagePack, metrics) compile and are tested under their feature. |
+| 🟡 | Implemented & wired, but the *default* build ships only an in-memory / in-process reference backend; a production backend (Redis) is available behind the `redis` feature. |
+| ⬜ | Roadmap — a seam exists but no implementation ships yet. |
 
 ---
 
@@ -51,11 +58,17 @@ How a FusionCache concept is spelled in `amalgam`.
 | `ExpireAsync` | `expire` | Logical expiration (fail-safe may still serve). |
 | `RemoveByTagAsync` | `remove_by_tag` / `remove_by_tags` | Lazy, marker-based tag invalidation. |
 | `ClearAsync` | `clear(allow_fail_safe)` | Expire-all (fail-safe) or remove-all. |
-| `IDistributedCache` (L2) | `DistributedCache` (trait) | Byte-oriented backend; `InMemoryDistributedCache` reference impl. |
-| `IFusionCacheSerializer` | `DistributedSerializer<V>` (trait) | `JsonSerializer` reference impl (serde_json). |
+| `IDistributedCache` (L2) | `DistributedCache` (trait) | Byte-oriented backend; `InMemoryDistributedCache` reference + `RedisDistributedCache` (feature `redis`). |
+| `IFusionCacheSerializer` | `DistributedSerializer<V>` (trait) | `JsonSerializer` (serde_json) + `MessagePackSerializer` (feature `messagepack`). |
 | L2 wire payload | `DistributedEntry<V>` | Value + freshness metadata, serialized across the wire. |
-| `IFusionCacheBackplane` | `Backplane` (trait) | Multi-node notifications; `InProcessBackplane` reference impl. |
+| `IFusionCacheBackplane` | `Backplane` (trait) | Multi-node notifications; `InProcessBackplane` reference + `RedisBackplane` (feature `redis`). |
 | Backplane message | `BackplaneMessage` + `BackplaneAction` | Carries *what changed*, never the value. |
+| `IFusionCacheDistributedLocker` | `DistributedLocker` (trait) | Cross-node single-flight; `InMemoryDistributedLocker` reference + `RedisDistributedLocker` (feature `redis`). |
+| Auto-recovery queue | `AutoRecoveryService` + `RecoveryExecutor` | Latest-wins dedup queue + background drain; the cache is the executor. |
+| Circuit breaker | `CircuitBreaker` | Time-based, lock-free; one for L2, one for the backplane. |
+| `IFusionCachePlugin` | `Plugin` + `PluginHost` | Notified on every `CacheEvent` (and `on_start`). |
+| Named/keyed caches (DI) | `CacheRegistry<V>` | Register/resolve caches by name. |
+| `DefaultEntryOptionsProvider` | `DefaultEntryOptionsProvider` (trait) | Per-key dynamic default options. |
 | `FusionCacheFactoryExecutionContext` | `FactoryContext<V>` | Handed to the factory; stale value, adapt, conditional outcomes. |
 | `ctx.Fail(...)` | `ctx.fail(...)` | Signal a factory failure (triggers fail-safe). |
 | `ctx.NotModified()` | `ctx.not_modified()` | Reuse the stale value (HTTP `304`). |
@@ -103,63 +116,107 @@ How a FusionCache concept is spelled in `amalgam`.
 | **Entry size weight** | `Size` | `with_size` | ✅ (carried) | Forwarded to the backend's size policy. |
 | **Injectable clock / testable time** | `TimeProvider` | `Clock` trait (`SystemClock` / `ManualClock`) | ✅ | All expiration/throttle/timeout windows are deterministic in tests. |
 | **L1 in-memory cache** | `MemoryCache` | `MemoryStore<V>` over `moka` (absolute expiry, optional capacity) | ✅ | Per-entry physical TTL via a custom `Expiry`. |
-| **L1 + L2 hybrid (read/write-through)** | `IDistributedCache` | `DistributedCache` trait + `InMemoryDistributedCache` reference, wired into the flow | 🟡 | `get_or_set` does L2 read-through (a fresh L2 entry populates L1 and returns; a stale one becomes a fallback); writes go write-through to L1+L2. `l2_read_through_across_instances` proves a second instance serves from shared L2 without re-running the factory. In-memory reference backend (Redis ⬜). |
-| **L2 serialization** | `IFusionCacheSerializer` | `DistributedSerializer<V>` trait + `JsonSerializer` | 🟡 | Object-safe; format pluggable. `DistributedEntry` wire envelope (`from_entry`/`into_entry`, `Entry::rehydrate`) round-trips and is exercised by the multilevel tests. |
-| **Backplane (multi-node invalidation)** | `IFusionCacheBackplane` | `Backplane` trait + `InProcessBackplane` (broadcast) reference, wired into the flow | 🟡 | Publishes `Set`/`Remove`/`Expire` on local changes; a background listener applies remote ones (evict/expire L1), filtering its own `instance_id`. `backplane_remove_invalidates_peer` + `backplane_set_makes_peer_repull_new_value`. In-process reference backend (Redis ⬜). |
-| **Redis L2 adapter** | StackExchange.Redis `IDistributedCache` | — | ⬜ | Trait seam ready (`DistributedCache`); no Redis backend ships. |
-| **Redis backplane adapter** | Redis pub/sub backplane | — | ⬜ | Trait seam ready (`Backplane`); no Redis adapter ships. |
-| **Auto-recovery (retry failed L2/backplane ops)** | auto-recovery queue | — | ⬜ | L2/backplane writes are currently best-effort (fire-and-forget); no retry queue yet. |
-| **Distributed locker (cross-node single-flight)** | `IFusionCacheDistributedLocker` | — | ⬜ | Single-flight today is in-process (`KeyedLock`) only. |
-| **Observability — OpenTelemetry / metrics / tracing spans** | OTel + meters | `tracing` is a dependency; structured spans/metrics not emitted | ⬜ | Events give in-process observability; no OTel export. |
-| **Named caches & DI helpers** | keyed DI, `AddFusionCache` | — | ⬜ | Construct directly via `Cache::builder()`. |
-| **Plugins** | `IFusionCachePlugin` | — | ⬜ | No plugin host. |
-| **Auto-clone of L1 values** | `EnableAutoClone` | — | ⬜ | `V: Clone` is required; values are cloned on read by construction, but there is no opt-in deep-clone-on-get policy. |
+| **L1 + L2 hybrid (read/write-through)** | `IDistributedCache` | `DistributedCache` trait, wired into the flow | 🟡 | `get_or_set` does L2 read-through (a fresh L2 entry populates L1 and returns; a stale one becomes a fallback); writes go write-through to L1+L2. `l2_read_through_across_instances` proves a second instance serves from shared L2 without re-running the factory. `InMemoryDistributedCache` reference by default; `RedisDistributedCache` behind `redis`. |
+| **L2 serialization** | `IFusionCacheSerializer` | `DistributedSerializer<V>` trait + `JsonSerializer` | ✅ | Object-safe; format pluggable. `DistributedEntry` wire envelope (`from_entry`/`into_entry`, `Entry::rehydrate`) round-trips and is exercised by the multilevel tests. `MessagePackSerializer` ships behind `messagepack`. |
+| **Backplane (multi-node invalidation)** | `IFusionCacheBackplane` | `Backplane` trait, wired into the flow | 🟡 | Publishes `Set`/`Remove`/`Expire` on local changes; a background listener applies remote ones (evict/expire L1), filtering its own `instance_id`. `backplane_remove_invalidates_peer` + `backplane_set_makes_peer_repull_new_value`. `InProcessBackplane` reference by default; `RedisBackplane` (pub/sub) behind `redis`. |
+| **L2 distributed timeouts** | `DistributedSoftTimeout` / `DistributedHardTimeout` | `with_distributed_timeouts(soft, hard)` | ✅ | `distributed_hard_timeout` is enforced on every L2 read (`read_l2_guarded`); a slow L2 reads back as a miss instead of stalling the caller. |
+| **L2 error rethrow** | `ReThrowDistributedExceptions` | `rethrow_distributed_exceptions` | ✅ | Off by default; when on, an L2 backend error surfaces from `get_or_set` instead of degrading to a miss. |
+| **(De)serialization error events** | serialization events | `SerializationError` / `DeserializationError` | ✅ | A serialize/deserialize failure on the L2 path emits the matching event (and is rethrown only if `rethrow_serialization_exceptions`, default `true`). |
+| **L2 key wire-version prefix** | wire-format versioning | `distributed_wire_version` (builder, default `"v1"`) | ✅ | L2 keys are stored as `{version}:{key}` (`CacheInner::l2_key`) so incompatible cache versions can share one L2 without colliding. |
+| **Multi-node tagging propagation** | tag markers over the backplane | reserved-key `Set` messages (`__amalgam:t:*`) | ✅ | `remove_by_tag` publishes a marker; receivers update their own `TagRegistry` (`apply_backplane`), so a tag invalidation on one node invalidates matching entries on every node. |
+| **Multi-node clear propagation** | clear markers over the backplane | reserved-key `Set` messages (`__amalgam:clear:*`) | ✅ | `clear(allow_fail_safe)` publishes an expire-all / remove-all marker; receivers apply it to their tag registry (and `invalidate_all` for remove-all). |
+| **Circuit breaker (L2)** | `DistributedCacheCircuitBreakerDuration` | `CircuitBreaker` + `distributed_circuit_breaker(Duration)` | ✅ | Gates every L2 op; trips on failure for the configured window, auto-closes after it, and fires `CircuitBreakerChange{Distributed, ..}`. `Duration::ZERO` (the FusionCache default) keeps it permanently closed. Unit-tested in `circuit::tests`. |
+| **Circuit breaker (backplane)** | `BackplaneCircuitBreakerDuration` | `CircuitBreaker` + `backplane_circuit_breaker(Duration)` | ✅ | Same mechanism for backplane publishes; a *received* message proves health and closes it. Fires `CircuitBreakerChange{Backplane, ..}`. |
+| **Auto-recovery (retry failed L2/backplane ops)** | auto-recovery queue | `AutoRecoveryService` + `auto_recovery(RecoveryConfig{..})` | ✅ | Failed L2 writes/removes and backplane publishes (and ops skipped while a breaker is open) are queued with latest-wins dedup (`max_items`, `max_retries`), then replayed by a background drain (`RecoveryExecutor::replay`, implemented by the cache). Enabled by default when an L2/backplane is configured; `RecoveryConfig{ enabled: false, .. }` opts out. |
+| **Distributed locker (cross-node single-flight)** | `IFusionCacheDistributedLocker` | `DistributedLocker` + `distributed_locker(..)` | ✅ | Acquired *after* the local `KeyedLock`, so one factory runs per key cluster-wide; token-based (maps to `SET key token NX PX`). Per-entry `with_skip_distributed_locker`. `InMemoryDistributedLocker` reference + `RedisDistributedLocker` (`redis`). |
+| **Plugins** | `IFusionCachePlugin` | `Plugin` + `PluginHost` + `plugin(Arc<dyn Plugin>)` | ✅ | Every plugin's `on_event` is called for each `CacheEvent` (and `on_start` at build); the cache skips the call entirely when no plugins are registered. |
+| **Named caches & dynamic options** | keyed DI, `AddFusionCache` | `CacheRegistry<V>` + `DefaultEntryOptionsProvider` | ✅ | `CacheRegistry` registers/resolves caches by name (`get_or_create`); `default_options_provider(..)` supplies per-key defaults consulted (in `resolve_options`) whenever a call passes no explicit options. The Rust-idiomatic substitute for `Microsoft.Extensions.DependencyInjection` keyed registration. |
+| **Metrics** | meters / counters | `MetricsPlugin` (feature `metrics`) | ✅ | A `Plugin` that records counters (hits, misses, sets, factory errors/timeouts, fail-safe activations, eager refreshes) via the `metrics` facade — exporter-agnostic (Prometheus, OTLP, …). |
+| **Redis L2 adapter** | StackExchange.Redis `IDistributedCache` | `RedisDistributedCache` (feature `redis`) | ✅ | `GET`/`SET`/`DEL` on `redis::aio::ConnectionManager`, server-side TTL via `PX`. Env-gated integration tests (`AMALGAM_REDIS_URL`). |
+| **Redis backplane adapter** | Redis pub/sub backplane | `RedisBackplane` (feature `redis`) | ✅ | `PUBLISH`/`SUBSCRIBE` over a compact wire format on a dedicated RESP3 connection, relayed to local subscribers; auto-resubscribes after reconnect. |
+| **Redis distributed locker** | Redis lock | `RedisDistributedLocker` (feature `redis`) | ✅ | `SET key token NX PX`; release is an atomic compare-and-delete Lua script (never frees a lock re-taken by another node). |
+| **Auto-clone of L1 values** | `EnableAutoClone` | `with_enable_auto_clone` | ✅ (inherent) | Reads already return an owned `V` (`value_cloned`), so a caller mutating the result never touches the cached copy — Rust satisfies this by construction. The flag exists for explicit parity. |
+| **Observability — OpenTelemetry tracing spans** | OTel tracer + meters | `tracing` log lines + `metrics`-facade counters | 🟡 | `tracing` warn/debug lines at factory-error and fail-safe; counters via `MetricsPlugin` (`metrics` feature). Full OTel **span** export is roadmap (see below). |
 
 ### `CacheEvent` variants
 
-The broadcast event enum (`#[non_exhaustive]`) covers:
+The broadcast event enum (`#[non_exhaustive]`) covers the L1 set:
 `Hit { stale }` · `Miss` · `Set` · `Remove` · `Expire` · `FactorySuccess` ·
 `FactoryError` · `FactorySyntheticTimeout` · `FailSafeActivate` · `EagerRefresh` ·
-`BackgroundFactorySuccess` · `BackgroundFactoryError` · `RemoveByTag` · `Clear`.
-
-> FusionCache also surfaces distinct distributed/backplane events (e.g. circuit
-> breaker, backplane message received). Those are intentionally absent here until
-> the L2/backplane layers are wired into the flow (see the 🟡 rows above).
+`BackgroundFactorySuccess` · `BackgroundFactoryError` · `RemoveByTag` · `Clear` ·
+`Eviction`,
+plus the distributed/backplane set now that L2 + backplane are wired:
+`CircuitBreakerChange { component, closed }` (with `CircuitComponent::{Distributed, Backplane}`) ·
+`SerializationError` · `DeserializationError` · `MessagePublished` · `MessageReceived`.
 
 ### Builder methods (cache-wide config)
 
 Available on `Cache::builder()`:
-`.name()` · `.instance_id()` · `.key_prefix()` · `.default_options()` · `.clock()` ·
-`.max_capacity()` · `.lock_shards()` · `.remove_by_tag_behavior()` ·
-`.events_capacity()` · `.distributed(..)` · `.serializer(..)` · `.backplane(..)`.
+`.name()` · `.instance_id()` · `.key_prefix()` · `.default_options()` ·
+`.default_options_provider(..)` · `.clock()` · `.max_capacity()` · `.lock_shards()` ·
+`.remove_by_tag_behavior()` · `.events_capacity()` · `.distributed(..)` ·
+`.serializer(..)` · `.backplane(..)` · `.distributed_locker(..)` · `.plugin(..)` ·
+`.distributed_circuit_breaker(Duration)` · `.backplane_circuit_breaker(Duration)` ·
+`.auto_recovery(RecoveryConfig)` · `.distributed_wire_version(..)` ·
+`.ignore_incoming_backplane(bool)`.
 
 > `.distributed()` + `.serializer()` enable L2; `.backplane()` enables multi-node
-> invalidation (and spawns a listener task, so `build()` must run inside a tokio
-> runtime when a backplane is configured).
+> invalidation. Either a backplane *or* an enabled `auto_recovery` spawns a
+> background task, so `build()` must run inside a tokio runtime when one is
+> configured.
 
 ---
 
 ## Build & test status
 
-Verified state of the tree (`cargo clippy --all-targets` is warning-clean;
-`#![forbid(unsafe_code)]`):
+Verified state of the tree (`#![forbid(unsafe_code)]`):
 
-- **Builds & lints clean.** `cargo build`, `cargo clippy --all-targets`, and
-  `cargo test` all succeed.
-- **L1 (in-memory) feature set — implemented, with a behavioural test oracle.**
-  `tests/behavior.rs` (16 tests) pins each FusionCache behaviour (stampede,
-  fail-safe, soft/hard timeouts + background completion, eager refresh, adaptive,
-  conditional refresh, tagging, clear, events, read-only stale); module unit tests
-  (25) cover `EntryOptions`, `Entry`, `TagRegistry`, `Timeout`/`Timestamp`,
-  `MaybeValue`, `FactoryError`, `KeyedLock`, and the L2 reference backend.
-- **L2 + backplane — wired and tested, reference backends.** The traits
-  (`DistributedCache`, `DistributedSerializer`, `Backplane`), reference backends
-  (`InMemoryDistributedCache`, `JsonSerializer`, `InProcessBackplane`), the wire
-  envelope (`DistributedEntry`), and the L1↔L2 rehydration path (`Entry::rehydrate`)
-  are wired into `get_or_set`/`set`/`remove`/`expire` and covered end-to-end by
-  `tests/multilevel.rs` (3 tests: L2 read-through across instances; backplane
-  remove/Set invalidation across peers). Production backends (Redis) remain ⬜.
-- **Totals:** 25 unit + 16 behaviour + 3 multilevel tests, all green, plus doctests.
+- **Builds & lints clean — default *and* `--features full`.** `cargo build`,
+  `cargo clippy --all-targets`, and `cargo test` all succeed with no warnings;
+  `cargo clippy --all-targets --features full` (= `redis` + `messagepack` +
+  `metrics`) and `cargo build --features full` are likewise warning-clean, so the
+  feature-gated backends compile under their features.
+- **Default suite is green: 48 tests.** 29 module unit tests + 16 behaviour
+  (`tests/behavior.rs`) + 3 multilevel (`tests/multilevel.rs`), plus doctests
+  (illustrative builder snippets that don't compile are marked `rust,ignore`).
+- **L1 (in-memory) feature set — behavioural oracle.** `tests/behavior.rs` pins
+  each FusionCache behaviour (stampede, fail-safe, soft/hard timeouts + background
+  completion, eager refresh, adaptive, conditional refresh, tagging, clear, events,
+  read-only stale); module unit tests cover `EntryOptions`, `Entry`, `TagRegistry`,
+  `Timeout`/`Timestamp`, `MaybeValue`, `FactoryError`, `KeyedLock`, the L2 reference
+  backend, the `CircuitBreaker`, and the `InMemoryDistributedLocker`.
+- **L2 + backplane — wired and tested.** The traits (`DistributedCache`,
+  `DistributedSerializer`, `Backplane`, `DistributedLocker`), the wire envelope
+  (`DistributedEntry`), and the rehydration path are wired into
+  `get_or_set`/`set`/`remove`/`expire` and covered end-to-end by
+  `tests/multilevel.rs` (L2 read-through across instances; backplane remove/Set
+  invalidation across peers). The default build uses the in-memory / in-process
+  reference backends.
+- **Circuit breakers, auto-recovery, distributed locker, plugins, registry,
+  default-options provider — implemented and exercised** by unit tests and the
+  multilevel/behaviour flow.
+- **Redis backend — feature `redis`.** `RedisDistributedCache`, `RedisBackplane`,
+  `RedisDistributedLocker` on `redis::aio::ConnectionManager`. Their 9 integration
+  tests are env-gated: they no-op unless `AMALGAM_REDIS_URL` is set (so CI without a
+  server stays green), e.g.
+  `AMALGAM_REDIS_URL=redis://127.0.0.1/ cargo test --features redis`.
+- **`messagepack` / `metrics` features** add `MessagePackSerializer` and
+  `MetricsPlugin`; both compile and lint clean under `--features full`.
+
+### Still roadmap
+
+Kept honest — the small set that is *not* claimed as parity:
+
+- **Full OpenTelemetry tracing spans.** Today observability is `tracing` log lines
+  (factory-error / fail-safe) plus the `metrics`-facade counters from
+  `MetricsPlugin`. A first-class OTel **span** per operation (with the FusionCache
+  span/attribute conventions) is not emitted.
+- **DI-container integration.** `CacheRegistry` + `DefaultEntryOptionsProvider` are
+  the Rust-idiomatic substitute for named/keyed caches; there is no
+  `Microsoft.Extensions.DependencyInjection`-style `AddFusionCache` integration
+  (Rust has no single canonical DI container).
+- **Serializers beyond JSON / MessagePack.** Protobuf and MemoryPack equivalents
+  are not shipped (the `DistributedSerializer<V>` seam makes them additive).
 
 ---
 
@@ -217,10 +274,15 @@ Where `amalgam` intentionally departs from a literal translation — each trades
 | `rethrow_distributed_exceptions` / `rethrow_backplane_exceptions` | `false` / `false` | both false |
 | `allow_background_distributed_operations` | `false` | false |
 | `allow_background_backplane_operations` | `true` | true |
-| Auto-recovery delay | — (⬜ roadmap; FusionCache default `5s`) | `AutoRecoveryDelay` = 5s |
+| `distributed_soft_timeout` / `distributed_hard_timeout` | `Infinite` / `Infinite` | both infinite |
+| `skip_distributed_locker` | `false` | locker used when configured |
+| `enable_auto_clone` | `false` (inherent in Rust — see [parity](#feature-parity)) | `EnableAutoClone` = false |
+| `RecoveryConfig::delay` | `5s` (`enabled: true`, `max_items`/`max_retries` unbounded) | `AutoRecoveryDelay` = 5s |
+| `distributed_wire_version` (cache-wide) | `"v1"` | wire-format version |
+| `distributed_circuit_breaker` / `backplane_circuit_breaker` (cache-wide) | `Duration::ZERO` (disabled) | `…CircuitBreakerDuration` = 0 |
 
 ---
 
-*Source of truth: the `amalgam` crate (`src/`, `tests/behavior.rs`). This document
-is hand-verified against that source; when they disagree, the source wins — please
-update this file.*
+*Source of truth: the `amalgam` crate (`src/`, `tests/behavior.rs`,
+`tests/multilevel.rs`). This document is hand-verified against that source; when
+they disagree, the source wins — please update this file.*

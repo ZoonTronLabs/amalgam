@@ -19,8 +19,8 @@ mod demo {
     };
 
     pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-        let url = std::env::var("AMALGAM_REDIS_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1/".to_owned());
+        let url =
+            std::env::var("AMALGAM_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_owned());
         println!("connecting to {url} …");
 
         let l2 = match RedisDistributedCache::connect(url.clone()).await {

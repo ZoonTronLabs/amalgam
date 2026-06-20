@@ -236,7 +236,7 @@ fn new_token() -> String {
 ///
 /// [`publish`](Backplane::publish) serialises a [`BackplaneMessage`] to a compact
 /// `source_id|timestamp_ticks|action_byte|key` line and `PUBLISH`es it to
-/// [`BACKPLANE_CHANNEL`]. On [`connect`](RedisBackplane::connect) a background
+/// the shared backplane channel. On [`connect`](RedisBackplane::connect) a background
 /// task subscribes (on its own RESP3 connection) to that channel, parses each
 /// incoming line back into a [`BackplaneMessage`], and forwards it to an internal
 /// [`broadcast::Sender`]; [`subscribe`](Backplane::subscribe) hands out receivers
@@ -281,7 +281,7 @@ impl RedisBackplane {
     }
 
     /// Opens a RESP3 [`ConnectionManager`], wires a push channel into it,
-    /// subscribes to [`BACKPLANE_CHANNEL`], and spawns the relay task. Returns
+    /// subscribes to the shared backplane channel, and spawns the relay task. Returns
     /// the manager so the caller can keep it (and the subscription) alive.
     async fn spawn_subscriber(
         connection: &str,
