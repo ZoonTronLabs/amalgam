@@ -114,6 +114,8 @@ pub struct EntryOptions {
     skip_distributed_read: bool,
     skip_distributed_write: bool,
     skip_distributed_read_when_stale: bool,
+    skip_distributed_locker: bool,
+    enable_auto_clone: bool,
 
     // ---- backplane ----
     skip_backplane_notifications: bool,
@@ -155,6 +157,8 @@ impl Default for EntryOptions {
             skip_distributed_read: false,
             skip_distributed_write: false,
             skip_distributed_read_when_stale: false,
+            skip_distributed_locker: false,
+            enable_auto_clone: false,
 
             skip_backplane_notifications: false,
             allow_background_backplane_operations: true,
@@ -408,6 +412,49 @@ impl EntryOptions {
     #[must_use]
     pub fn skip_distributed_read_when_stale(&self) -> bool {
         self.skip_distributed_read_when_stale
+    }
+
+    /// `true` if the cross-node distributed lock should be skipped for this op.
+    #[must_use]
+    pub fn skip_distributed_locker(&self) -> bool {
+        self.skip_distributed_locker
+    }
+
+    /// Skips the cross-node distributed lock for this operation.
+    #[must_use]
+    pub fn with_skip_distributed_locker(mut self, skip: bool) -> Self {
+        self.skip_distributed_locker = skip;
+        self
+    }
+
+    /// `true` if L1 values should be (deep-)cloned out on read.
+    ///
+    /// In Rust this is effectively always true: reads return an owned `V`
+    /// (`value_cloned`), so a caller mutating the returned value never affects the
+    /// cached copy. The flag exists for API parity and to opt into the same
+    /// guarantee explicitly.
+    #[must_use]
+    pub fn enable_auto_clone(&self) -> bool {
+        self.enable_auto_clone
+    }
+
+    /// Enables auto-clone of L1 values on read (see [`enable_auto_clone`](Self::enable_auto_clone)).
+    #[must_use]
+    pub fn with_enable_auto_clone(mut self, enable: bool) -> Self {
+        self.enable_auto_clone = enable;
+        self
+    }
+
+    /// The L2 soft timeout (awaited L2 op when a fallback exists).
+    #[must_use]
+    pub fn distributed_soft_timeout(&self) -> Timeout {
+        self.distributed_soft_timeout
+    }
+
+    /// The L2 hard timeout (always enforced on an awaited L2 op).
+    #[must_use]
+    pub fn distributed_hard_timeout(&self) -> Timeout {
+        self.distributed_hard_timeout
     }
 
     /// `true` if L2 writes should be skipped.

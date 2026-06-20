@@ -13,16 +13,25 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+use async_trait::async_trait;
+
 use crate::backplane::{Backplane, BackplaneAction, BackplaneMessage};
+use crate::circuit::CircuitBreaker;
 use crate::distributed::{DistributedCache, DistributedEntry, DistributedSerializer};
+use crate::distributed_lock::DistributedLocker;
 use crate::entry::Entry;
 use crate::error::{Error, FactoryError, Result};
-use crate::events::{CacheEvent, Events};
+use crate::events::{CacheEvent, CircuitComponent, Events};
 use crate::factory::{FactoryContext, FactoryProduct, StaleInfo};
 use crate::locking::{KeyGuard, KeyedLock};
 use crate::maybe::MaybeValue;
 use crate::memory::MemoryStore;
 use crate::options::{EntryOptions, RemoveByTagBehavior};
+use crate::plugins::{Plugin, PluginHost};
+use crate::recovery::{
+    AutoRecoveryService, RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryItem,
+};
+use crate::registry::DefaultEntryOptionsProvider;
 use crate::tags::{Tag, TagRegistry, TagVerdict};
 use crate::time::{Clock, SystemClock, Timeout, Timestamp};
 
@@ -55,6 +64,14 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     distributed: Option<Arc<dyn DistributedCache>>,
     serializer: Option<Arc<dyn DistributedSerializer<V>>>,
     backplane: Option<Arc<dyn Backplane>>,
+    distributed_locker: Option<Arc<dyn DistributedLocker>>,
+    circuit_l2: CircuitBreaker,
+    circuit_backplane: CircuitBreaker,
+    plugins: PluginHost,
+    recovery: Option<Arc<AutoRecoveryService>>,
+    default_options_provider: Option<Arc<dyn DefaultEntryOptionsProvider>>,
+    ignore_incoming_backplane: bool,
+    distributed_wire_version: Arc<str>,
 }
 
 impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
@@ -153,7 +170,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
     {
-        let opts = options.unwrap_or_else(|| self.inner.default_options.clone());
+        let opts = self.resolve_options(key.as_ref(), options);
         let full_key = self.full_key(key.as_ref());
         let now = self.inner.clock.now();
 
@@ -216,16 +233,14 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             && !(stale_entry.is_some() && opts.skip_distributed_read_when_stale())
         {
             let now = self.inner.clock.now();
-            if let Some(entry) = self.read_l2(&full_key, now).await {
+            if let Some(entry) = self.read_l2_guarded(&full_key, now, &opts).await? {
                 match self.inner.tags.evaluate(
                     entry.meta().created(),
                     entry.meta().tags(),
                     self.inner.remove_by_tag_behavior,
                 ) {
                     TagVerdict::Remove => {
-                        if let Some(l2) = &self.inner.distributed {
-                            let _ = l2.remove(&full_key).await;
-                        }
+                        self.remove_l2_guarded(&full_key).await;
                     }
                     verdict => {
                         if !opts.skip_memory_write() {
@@ -330,7 +345,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
     ) {
-        let opts = options.unwrap_or_else(|| self.inner.default_options.clone());
+        let opts = self.resolve_options(key.as_ref(), options);
         let full_key = self.full_key(key.as_ref());
         let now = self.inner.clock.now();
         let entry = Entry::fresh(value, &opts, now, tags, None, None);
@@ -345,7 +360,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         key: impl AsRef<str>,
         options: Option<EntryOptions>,
     ) -> MaybeValue<V> {
-        let opts = options.unwrap_or_else(|| self.inner.default_options.clone());
+        let opts = self.resolve_options(key.as_ref(), options);
         let full_key = self.full_key(key.as_ref());
         if opts.skip_memory_read() {
             self.emit(CacheEvent::Miss { key: full_key });
@@ -387,11 +402,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Removes an entry from L1 and L2 and tells peers to evict it.
     pub async fn remove(&self, key: impl AsRef<str>) {
         let full_key = self.full_key(key.as_ref());
+        let opts = self.inner.default_options.clone();
         self.inner.memory.remove(&full_key).await;
-        if let Some(l2) = &self.inner.distributed {
-            let _ = l2.remove(&full_key).await;
-        }
-        self.publish(BackplaneAction::Remove, &full_key).await;
+        self.remove_l2_guarded(&full_key).await;
+        self.publish_guarded(BackplaneAction::Remove, &full_key, &opts)
+            .await;
         self.emit(CacheEvent::Remove { key: full_key });
     }
 
@@ -400,15 +415,17 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub async fn expire(&self, key: impl AsRef<str>) {
         let full_key = self.full_key(key.as_ref());
         let now = self.inner.clock.now();
+        let opts = self.inner.default_options.clone();
         if let Some(entry) = self.inner.memory.get(&full_key).await {
             let expired = entry.with_logical_expiration(now);
             self.inner
                 .memory
                 .insert(Arc::clone(&full_key), expired.clone())
                 .await;
-            self.write_l2(&full_key, &expired).await;
+            self.write_l2_guarded(&full_key, &expired, &opts).await;
         }
-        self.publish(BackplaneAction::Expire, &full_key).await;
+        self.publish_guarded(BackplaneAction::Expire, &full_key, &opts)
+            .await;
         self.emit(CacheEvent::Expire { key: full_key });
     }
 
@@ -418,6 +435,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         if let Some(t) = Tag::new(tag.as_ref()) {
             let now = self.inner.clock.now();
             self.inner.tags.mark_tag(t, now);
+            let marker: Arc<str> = Arc::from(format!("{TAG_MARKER_PREFIX}{}", tag.as_ref()));
+            self.publish_marker(marker, now).await;
             self.emit(CacheEvent::RemoveByTag {
                 tag: tag.as_ref().to_owned(),
             });
@@ -442,12 +461,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// they are hard-removed.
     pub async fn clear(&self, allow_fail_safe: bool) {
         let now = self.inner.clock.now();
-        if allow_fail_safe {
+        let marker: Arc<str> = if allow_fail_safe {
             self.inner.tags.mark_clear_expire(now);
+            Arc::from(CLEAR_EXPIRE_KEY)
         } else {
             self.inner.tags.mark_clear_remove(now);
             self.inner.memory.invalidate_all();
-        }
+            Arc::from(CLEAR_REMOVE_KEY)
+        };
+        self.publish_marker(marker, now).await;
         self.emit(CacheEvent::Clear);
     }
 
@@ -467,7 +489,24 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
 
     fn emit(&self, event: CacheEvent) {
+        if !self.inner.plugins.is_empty() {
+            self.inner.plugins.notify(&event);
+        }
         self.inner.events.emit(event);
+    }
+
+    /// Resolves the options for an operation: explicit per-call options, else a
+    /// dynamic provider's options for this key, else the static defaults.
+    fn resolve_options(&self, key: &str, options: Option<EntryOptions>) -> EntryOptions {
+        if let Some(options) = options {
+            return options;
+        }
+        if let Some(provider) = &self.inner.default_options_provider
+            && let Some(options) = provider.options_for(key)
+        {
+            return options;
+        }
+        self.inner.default_options.clone()
     }
 
     /// Reads L1, applies tag markers, and classifies the result.
@@ -501,11 +540,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         opts: &EntryOptions,
         stale_entry: Option<&Entry<V>>,
     ) -> LockOutcome<V> {
-        match opts.lock_timeout() {
-            Timeout::Infinite => LockOutcome::Acquired(self.inner.locks.lock(full_key).await),
+        let local = match opts.lock_timeout() {
+            Timeout::Infinite => self.inner.locks.lock(full_key).await,
             Timeout::After(d) => {
                 match tokio::time::timeout(d, self.inner.locks.lock(full_key)).await {
-                    Ok(guard) => LockOutcome::Acquired(guard),
+                    Ok(guard) => guard,
                     Err(_) => {
                         // Lock timed out: with fail-safe and a stale value, return it
                         // rather than queue behind the lock holder.
@@ -519,10 +558,40 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                             return LockOutcome::ServedStale(stale.value_cloned());
                         }
                         // Otherwise the lock is best-effort: wait for it.
-                        LockOutcome::Acquired(self.inner.locks.lock(full_key).await)
+                        self.inner.locks.lock(full_key).await
                     }
                 }
             }
+        };
+        let distributed = self.acquire_distributed_lock(full_key, opts).await;
+        LockOutcome::Acquired(LockGuard {
+            _local: local,
+            _distributed: distributed,
+        })
+    }
+
+    /// Acquires the cross-node distributed lock (if a locker is configured and not
+    /// skipped). Best-effort: a timeout or error proceeds without it.
+    async fn acquire_distributed_lock(
+        &self,
+        full_key: &str,
+        opts: &EntryOptions,
+    ) -> Option<DistributedReleaseGuard> {
+        if opts.skip_distributed_locker() {
+            return None;
+        }
+        let locker = self.inner.distributed_locker.as_ref()?;
+        let lock_key = format!("amalgam:lock:{full_key}");
+        match locker
+            .acquire(&lock_key, opts.physical_ttl(), opts.lock_timeout())
+            .await
+        {
+            Ok(Some(token)) => Some(DistributedReleaseGuard {
+                locker: Arc::clone(locker),
+                key: Arc::from(lock_key),
+                token,
+            }),
+            _ => None,
         }
     }
 
@@ -563,50 +632,232 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 .await;
         }
         if !opts.skip_distributed_write() {
-            self.write_l2(full_key, entry).await;
+            self.write_l2_guarded(full_key, entry, opts).await;
         }
         if !opts.skip_backplane_notifications() {
-            self.publish(BackplaneAction::Set, full_key).await;
+            self.publish_guarded(BackplaneAction::Set, full_key, opts)
+                .await;
         }
     }
 
-    /// Serializes and writes an entry to L2 (best-effort; auto-recovery of failed
-    /// writes is on the roadmap).
-    async fn write_l2(&self, full_key: &str, entry: &Entry<V>) {
-        let (Some(l2), Some(serializer)) = (&self.inner.distributed, &self.inner.serializer) else {
+    /// L2 write, gated by the circuit breaker, with event emission and
+    /// auto-recovery enqueue on failure.
+    async fn write_l2_guarded(&self, full_key: &Arc<str>, entry: &Entry<V>, opts: &EntryOptions) {
+        if self.inner.distributed.is_none() {
             return;
+        }
+        let now = self.inner.clock.now();
+        if !self.inner.circuit_l2.is_closed(now) {
+            self.enqueue_recovery(full_key, RecoveryAction::Set, now);
+            return;
+        }
+        match self.inner.l2_write(full_key, entry).await {
+            Ok(()) => self.close_circuit_l2(),
+            Err(err) => {
+                self.on_l2_error(full_key, &err);
+                self.enqueue_recovery(full_key, RecoveryAction::Set, now);
+            }
+        }
+        let _ = opts;
+    }
+
+    /// L2 read, gated by the circuit breaker and the distributed hard timeout.
+    /// Returns `Err` only when `rethrow_distributed_exceptions` is set.
+    async fn read_l2_guarded(
+        &self,
+        full_key: &Arc<str>,
+        now: Timestamp,
+        opts: &EntryOptions,
+    ) -> Result<Option<Entry<V>>> {
+        if self.inner.distributed.is_none() || !self.inner.circuit_l2.is_closed(now) {
+            return Ok(None);
+        }
+        let read = self.inner.l2_read(full_key, now);
+        let result = match opts.distributed_hard_timeout() {
+            Timeout::After(d) => match tokio::time::timeout(d, read).await {
+                Ok(r) => r,
+                Err(_) => Err(Error::Distributed("l2 read timed out".to_owned())),
+            },
+            Timeout::Infinite => read.await,
         };
-        let dist = DistributedEntry::from_entry(entry);
-        if let Ok(bytes) = serializer.serialize(&dist) {
-            let _ = l2.set(full_key, bytes, Some(entry.backend_ttl())).await;
+        match result {
+            Ok(entry) => {
+                self.close_circuit_l2();
+                Ok(entry)
+            }
+            Err(err) => {
+                self.on_l2_error(full_key, &err);
+                if opts.rethrow_distributed_exceptions() {
+                    Err(err)
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
-    /// Reads and deserializes an entry from L2, rehydrated relative to `now`.
-    async fn read_l2(&self, full_key: &str, now: Timestamp) -> Option<Entry<V>> {
-        let (Some(l2), Some(serializer)) = (&self.inner.distributed, &self.inner.serializer) else {
-            return None;
-        };
-        let bytes = l2.get(full_key).await.ok()??;
-        let dist = serializer.deserialize(&bytes).ok()?;
-        Some(dist.into_entry(now))
+    /// L2 remove, gated by the circuit breaker, with auto-recovery on failure.
+    async fn remove_l2_guarded(&self, full_key: &Arc<str>) {
+        if self.inner.distributed.is_none() {
+            return;
+        }
+        let now = self.inner.clock.now();
+        if !self.inner.circuit_l2.is_closed(now) {
+            self.enqueue_recovery(full_key, RecoveryAction::Remove, now);
+            return;
+        }
+        match self.inner.l2_remove(full_key).await {
+            Ok(()) => self.close_circuit_l2(),
+            Err(err) => {
+                self.on_l2_error(full_key, &err);
+                self.enqueue_recovery(full_key, RecoveryAction::Remove, now);
+            }
+        }
     }
 
-    /// Publishes a backplane notification (no-op without a backplane configured).
-    async fn publish(&self, action: BackplaneAction, full_key: &Arc<str>) {
-        if let Some(backplane) = &self.inner.backplane {
-            let message = BackplaneMessage {
-                source_id: Arc::clone(&self.inner.instance_id),
-                timestamp: self.inner.clock.now(),
-                action,
+    fn on_l2_error(&self, full_key: &Arc<str>, err: &Error) {
+        match err {
+            Error::Serialization(message) => self.emit(CacheEvent::SerializationError {
                 key: Arc::clone(full_key),
-            };
-            let _ = backplane.publish(message).await;
+                message: message.clone(),
+            }),
+            Error::Deserialization(message) => self.emit(CacheEvent::DeserializationError {
+                key: Arc::clone(full_key),
+                message: message.clone(),
+            }),
+            _ => {}
+        }
+        if self.inner.circuit_l2.trip(self.inner.clock.now()) {
+            self.emit(CacheEvent::CircuitBreakerChange {
+                component: CircuitComponent::Distributed,
+                closed: false,
+            });
         }
     }
 
-    /// Applies an incoming backplane notification to the local L1.
+    fn close_circuit_l2(&self) {
+        if self.inner.circuit_l2.close() {
+            self.emit(CacheEvent::CircuitBreakerChange {
+                component: CircuitComponent::Distributed,
+                closed: true,
+            });
+        }
+    }
+
+    fn close_circuit_backplane(&self) {
+        if self.inner.circuit_backplane.close() {
+            self.emit(CacheEvent::CircuitBreakerChange {
+                component: CircuitComponent::Backplane,
+                closed: true,
+            });
+        }
+    }
+
+    fn enqueue_recovery(&self, full_key: &Arc<str>, action: RecoveryAction, now: Timestamp) {
+        if let Some(recovery) = &self.inner.recovery {
+            recovery.enqueue(RecoveryItem {
+                key: Arc::clone(full_key),
+                action,
+                timestamp: now,
+                expires_at: now.saturating_add(RECOVERY_ITEM_TTL),
+                remaining_retries: None,
+            });
+        }
+    }
+
+    /// Publishes a backplane notification, gated by the circuit breaker. Honours
+    /// `allow_background_backplane_operations` (fire-and-forget vs awaited).
+    async fn publish_guarded(
+        &self,
+        action: BackplaneAction,
+        full_key: &Arc<str>,
+        opts: &EntryOptions,
+    ) {
+        if self.inner.backplane.is_none() {
+            return;
+        }
+        let now = self.inner.clock.now();
+        if !self.inner.circuit_backplane.is_closed(now) {
+            self.enqueue_recovery(full_key, recovery_action_of(action), now);
+            return;
+        }
+        if opts.allow_background_backplane_operations() {
+            let this = self.clone();
+            let key = Arc::clone(full_key);
+            tokio::spawn(async move {
+                this.do_publish(action, &key).await;
+            });
+        } else {
+            self.do_publish(action, full_key).await;
+        }
+    }
+
+    async fn do_publish(&self, action: BackplaneAction, full_key: &Arc<str>) {
+        let now = self.inner.clock.now();
+        match self.inner.backplane_send(action, full_key, now).await {
+            Ok(()) => {
+                self.close_circuit_backplane();
+                self.emit(CacheEvent::MessagePublished {
+                    key: Arc::clone(full_key),
+                });
+            }
+            Err(_) => {
+                if self.inner.circuit_backplane.trip(now) {
+                    self.emit(CacheEvent::CircuitBreakerChange {
+                        component: CircuitComponent::Backplane,
+                        closed: false,
+                    });
+                }
+                self.enqueue_recovery(full_key, recovery_action_of(action), now);
+            }
+        }
+    }
+
+    /// Publishes a reserved-key tag/clear marker so peers update their tag
+    /// registry (best-effort, awaited).
+    async fn publish_marker(&self, key: Arc<str>, now: Timestamp) {
+        if self.inner.backplane.is_none() {
+            return;
+        }
+        if let Ok(()) = self
+            .inner
+            .backplane_send(BackplaneAction::Set, &key, now)
+            .await
+        {
+            self.emit(CacheEvent::MessagePublished { key });
+        }
+    }
+
+    /// Applies an incoming backplane notification to the local L1 / tag registry.
     async fn apply_backplane(&self, message: BackplaneMessage) {
+        if self.inner.ignore_incoming_backplane {
+            return;
+        }
+        self.emit(CacheEvent::MessageReceived {
+            key: Arc::clone(&message.key),
+        });
+        // A received message proves the backplane is healthy.
+        self.close_circuit_backplane();
+
+        // Tag / clear markers ride on `Set` messages with reserved keys.
+        if message.action == BackplaneAction::Set {
+            if let Some(tag) = message.key.strip_prefix(TAG_MARKER_PREFIX) {
+                if let Some(tag) = Tag::new(tag) {
+                    self.inner.tags.mark_tag(tag, message.timestamp);
+                }
+                return;
+            }
+            if &*message.key == CLEAR_EXPIRE_KEY {
+                self.inner.tags.mark_clear_expire(message.timestamp);
+                return;
+            }
+            if &*message.key == CLEAR_REMOVE_KEY {
+                self.inner.tags.mark_clear_remove(message.timestamp);
+                self.inner.memory.invalidate_all();
+                return;
+            }
+        }
+
         match message.action {
             BackplaneAction::Remove => {
                 self.inner.memory.remove(&message.key).await;
@@ -712,7 +963,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         &self,
         full_key: Arc<str>,
         handle: JoinHandle<std::result::Result<FactoryProduct<V>, FactoryError>>,
-        guard: KeyGuard,
+        guard: LockGuard,
     ) {
         let this = self.clone();
         tokio::spawn(async move {
@@ -789,10 +1040,138 @@ impl<V: Clone + Send + Sync + 'static> Default for Cache<V> {
     }
 }
 
+impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
+    /// The L2 storage key (wire-version-prefixed so cache versions can share L2).
+    fn l2_key(&self, full_key: &str) -> String {
+        format!("{}:{}", self.distributed_wire_version, full_key)
+    }
+
+    /// Serializes and writes an entry to L2. `Err` on serialize/backend failure.
+    async fn l2_write(&self, full_key: &str, entry: &Entry<V>) -> Result<()> {
+        let (Some(l2), Some(serializer)) = (&self.distributed, &self.serializer) else {
+            return Ok(());
+        };
+        let dist = DistributedEntry::from_entry(entry);
+        let bytes = serializer.serialize(&dist)?;
+        l2.set(&self.l2_key(full_key), bytes, Some(entry.backend_ttl()))
+            .await
+    }
+
+    /// Reads and deserializes an entry from L2, rehydrated relative to `now`.
+    async fn l2_read(&self, full_key: &str, now: Timestamp) -> Result<Option<Entry<V>>> {
+        let (Some(l2), Some(serializer)) = (&self.distributed, &self.serializer) else {
+            return Ok(None);
+        };
+        let Some(bytes) = l2.get(&self.l2_key(full_key)).await? else {
+            return Ok(None);
+        };
+        let dist = serializer.deserialize(&bytes)?;
+        Ok(Some(dist.into_entry(now)))
+    }
+
+    /// Removes an entry from L2.
+    async fn l2_remove(&self, full_key: &str) -> Result<()> {
+        if let Some(l2) = &self.distributed {
+            l2.remove(&self.l2_key(full_key)).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Publishes a backplane message (awaited). No-op without a backplane.
+    async fn backplane_send(
+        &self,
+        action: BackplaneAction,
+        full_key: &str,
+        ts: Timestamp,
+    ) -> Result<()> {
+        if let Some(backplane) = &self.backplane {
+            backplane
+                .publish(BackplaneMessage {
+                    source_id: Arc::clone(&self.instance_id),
+                    timestamp: ts,
+                    action,
+                    key: Arc::from(full_key),
+                })
+                .await
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait]
+impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
+    async fn replay(&self, item: &RecoveryItem) -> Result<()> {
+        match item.action {
+            RecoveryAction::Set => {
+                if let Some(entry) = self.memory.get(&item.key).await {
+                    self.l2_write(&item.key, &entry).await?;
+                }
+                self.backplane_send(BackplaneAction::Set, &item.key, item.timestamp)
+                    .await?;
+            }
+            RecoveryAction::Remove => {
+                self.l2_remove(&item.key).await?;
+                self.backplane_send(BackplaneAction::Remove, &item.key, item.timestamp)
+                    .await?;
+            }
+            RecoveryAction::Expire => {
+                self.backplane_send(BackplaneAction::Expire, &item.key, item.timestamp)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Reserved key prefix for tag-invalidation markers propagated over the backplane.
+const TAG_MARKER_PREFIX: &str = "__amalgam:t:";
+/// Reserved key for a "clear (expire all)" marker.
+const CLEAR_EXPIRE_KEY: &str = "__amalgam:clear:expire";
+/// Reserved key for a "clear (remove all)" marker.
+const CLEAR_REMOVE_KEY: &str = "__amalgam:clear:remove";
+/// How long a queued auto-recovery item remains eligible for replay.
+const RECOVERY_ITEM_TTL: Duration = Duration::from_secs(600);
+
+/// Maps a backplane action to the equivalent recovery action.
+fn recovery_action_of(action: BackplaneAction) -> RecoveryAction {
+    match action {
+        BackplaneAction::Set => RecoveryAction::Set,
+        BackplaneAction::Remove => RecoveryAction::Remove,
+        BackplaneAction::Expire => RecoveryAction::Expire,
+    }
+}
+
+/// The combined single-flight guard: the local lock plus an optional cross-node
+/// distributed lock. Dropping it releases both.
+struct LockGuard {
+    _local: KeyGuard,
+    _distributed: Option<DistributedReleaseGuard>,
+}
+
+/// Releases a held distributed lock when dropped (best-effort, in the background).
+struct DistributedReleaseGuard {
+    locker: Arc<dyn DistributedLocker>,
+    key: Arc<str>,
+    token: String,
+}
+
+impl Drop for DistributedReleaseGuard {
+    fn drop(&mut self) {
+        let locker = Arc::clone(&self.locker);
+        let key = Arc::clone(&self.key);
+        let token = std::mem::take(&mut self.token);
+        tokio::spawn(async move {
+            let _ = locker.release(&key, &token).await;
+        });
+    }
+}
+
 /// The result of trying to acquire the single-flight lock.
 enum LockOutcome<V> {
     /// The lock was acquired; proceed to read L2 / run the factory.
-    Acquired(KeyGuard),
+    Acquired(LockGuard),
     /// The lock timed out but a stale value was served instead.
     ServedStale(V),
 }
@@ -886,6 +1265,14 @@ pub struct CacheBuilder<V> {
     distributed: Option<Arc<dyn DistributedCache>>,
     serializer: Option<Arc<dyn DistributedSerializer<V>>>,
     backplane: Option<Arc<dyn Backplane>>,
+    distributed_locker: Option<Arc<dyn DistributedLocker>>,
+    plugins: Vec<Arc<dyn Plugin>>,
+    distributed_circuit_breaker: Duration,
+    backplane_circuit_breaker: Duration,
+    recovery_config: RecoveryConfig,
+    default_options_provider: Option<Arc<dyn DefaultEntryOptionsProvider>>,
+    ignore_incoming_backplane: bool,
+    distributed_wire_version: Arc<str>,
     _marker: std::marker::PhantomData<fn() -> V>,
 }
 
@@ -905,6 +1292,14 @@ impl<V> CacheBuilder<V> {
             distributed: None,
             serializer: None,
             backplane: None,
+            distributed_locker: None,
+            plugins: Vec::new(),
+            distributed_circuit_breaker: Duration::ZERO,
+            backplane_circuit_breaker: Duration::ZERO,
+            recovery_config: RecoveryConfig::default(),
+            default_options_provider: None,
+            ignore_incoming_backplane: false,
+            distributed_wire_version: Arc::from("v1"),
             _marker: std::marker::PhantomData,
         }
     }
@@ -988,6 +1383,61 @@ impl<V> CacheBuilder<V> {
         self.events_capacity = capacity;
         self
     }
+
+    /// Attaches a cross-node distributed locker (e.g. Redis-backed) for
+    /// cluster-wide single-flight.
+    pub fn distributed_locker(mut self, locker: Arc<dyn DistributedLocker>) -> Self {
+        self.distributed_locker = Some(locker);
+        self
+    }
+
+    /// Registers a [`Plugin`] to observe events and lifecycle.
+    pub fn plugin(mut self, plugin: Arc<dyn Plugin>) -> Self {
+        self.plugins.push(plugin);
+        self
+    }
+
+    /// Opens the L2 circuit breaker for `duration` after an L2 failure
+    /// (`Duration::ZERO` disables it — the default).
+    pub fn distributed_circuit_breaker(mut self, duration: Duration) -> Self {
+        self.distributed_circuit_breaker = duration;
+        self
+    }
+
+    /// Opens the backplane circuit breaker for `duration` after a backplane
+    /// failure (`Duration::ZERO` disables it — the default).
+    pub fn backplane_circuit_breaker(mut self, duration: Duration) -> Self {
+        self.backplane_circuit_breaker = duration;
+        self
+    }
+
+    /// Configures (or disables) auto-recovery of failed L2 / backplane operations.
+    pub fn auto_recovery(mut self, config: RecoveryConfig) -> Self {
+        self.recovery_config = config;
+        self
+    }
+
+    /// Sets a provider of dynamic, per-key default options (consulted when a call
+    /// supplies no explicit options).
+    pub fn default_options_provider(
+        mut self,
+        provider: Arc<dyn DefaultEntryOptionsProvider>,
+    ) -> Self {
+        self.default_options_provider = Some(provider);
+        self
+    }
+
+    /// Drops all incoming backplane notifications (dangerous; for testing).
+    pub fn ignore_incoming_backplane(mut self, ignore: bool) -> Self {
+        self.ignore_incoming_backplane = ignore;
+        self
+    }
+
+    /// Sets the L2 wire-format version prepended to distributed keys.
+    pub fn distributed_wire_version(mut self, version: impl AsRef<str>) -> Self {
+        self.distributed_wire_version = Arc::from(version.as_ref());
+        self
+    }
 }
 
 impl<V> Default for CacheBuilder<V> {
@@ -1001,6 +1451,17 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
     #[must_use]
     pub fn build(self) -> Cache<V> {
         let clock: Arc<dyn Clock> = self.clock.unwrap_or_else(|| Arc::new(SystemClock));
+        // Auto-recovery only matters when there is an L2 or backplane to recover.
+        let recovery = if self.recovery_config.enabled
+            && (self.distributed.is_some() || self.backplane.is_some())
+        {
+            Some(AutoRecoveryService::new(
+                self.recovery_config,
+                Arc::clone(&clock),
+            ))
+        } else {
+            None
+        };
         let inner = Arc::new(CacheInner {
             name: self.name.unwrap_or_else(|| Arc::from("amalgam")),
             instance_id: self.instance_id.unwrap_or_else(generate_instance_id),
@@ -1015,7 +1476,23 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             distributed: self.distributed,
             serializer: self.serializer,
             backplane: self.backplane,
+            distributed_locker: self.distributed_locker,
+            circuit_l2: CircuitBreaker::new(self.distributed_circuit_breaker),
+            circuit_backplane: CircuitBreaker::new(self.backplane_circuit_breaker),
+            plugins: PluginHost::new(self.plugins),
+            recovery: recovery.clone(),
+            default_options_provider: self.default_options_provider,
+            ignore_incoming_backplane: self.ignore_incoming_backplane,
+            distributed_wire_version: self.distributed_wire_version,
         });
+        // Wire the recovery executor (the cache) as a Weak so it never keeps the
+        // cache alive, then start the background drain loop.
+        if let Some(recovery) = &recovery {
+            let executor: Arc<dyn RecoveryExecutor> =
+                Arc::clone(&inner) as Arc<dyn RecoveryExecutor>;
+            recovery.set_executor(Arc::downgrade(&executor));
+            recovery.spawn();
+        }
         let cache = Cache { inner };
         cache.spawn_backplane_listener();
         cache

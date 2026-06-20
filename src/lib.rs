@@ -24,7 +24,9 @@
 
 pub mod backplane;
 pub mod cache;
+pub mod circuit;
 pub mod distributed;
+pub mod distributed_lock;
 pub mod entry;
 pub mod error;
 pub mod events;
@@ -32,20 +34,44 @@ pub mod factory;
 pub mod locking;
 pub mod maybe;
 pub mod memory;
+pub mod observability;
 pub mod options;
+pub mod plugins;
+pub mod recovery;
+pub mod registry;
+pub mod serializers;
 pub mod tags;
 pub mod time;
 
+#[cfg(feature = "redis")]
+pub mod redis_backend;
+
 pub use backplane::{Backplane, BackplaneAction, BackplaneMessage, InProcessBackplane};
 pub use cache::{Cache, CacheBuilder};
+pub use circuit::CircuitBreaker;
 pub use distributed::{
     DistributedCache, DistributedEntry, DistributedSerializer, InMemoryDistributedCache,
     JsonSerializer,
 };
+pub use distributed_lock::{DistributedLocker, InMemoryDistributedLocker};
 pub use error::{Error, FactoryError, Result};
-pub use events::{CacheEvent, Events};
+pub use events::{CacheEvent, CircuitComponent, Events};
 pub use factory::{FactoryContext, FactoryProduct, ModifiedBuilder};
 pub use maybe::MaybeValue;
 pub use options::{EagerThreshold, EntryOptions, Priority, RemoveByTagBehavior};
+pub use plugins::{Plugin, PluginHost};
+pub use recovery::{
+    AutoRecoveryService, RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryItem,
+};
+pub use registry::{CacheRegistry, DefaultEntryOptionsProvider};
 pub use tags::Tag;
 pub use time::{Clock, ManualClock, SystemClock, Timeout, Timestamp};
+
+#[cfg(feature = "messagepack")]
+pub use serializers::MessagePackSerializer;
+
+#[cfg(feature = "metrics")]
+pub use observability::MetricsPlugin;
+
+#[cfg(feature = "redis")]
+pub use redis_backend::{RedisBackplane, RedisDistributedCache, RedisDistributedLocker};

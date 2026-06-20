@@ -88,6 +88,51 @@ pub enum CacheEvent {
     },
     /// The whole cache was cleared.
     Clear,
+    /// An entry was evicted from L1 by the backend's size/expiry policy.
+    Eviction {
+        /// The cache key.
+        key: Arc<str>,
+    },
+    /// A distributed-cache or backplane circuit breaker opened or closed.
+    CircuitBreakerChange {
+        /// Which component the breaker guards.
+        component: CircuitComponent,
+        /// `true` if the breaker is now closed (healthy), `false` if open.
+        closed: bool,
+    },
+    /// A value failed to serialize for L2.
+    SerializationError {
+        /// The cache key.
+        key: Arc<str>,
+        /// The error message.
+        message: String,
+    },
+    /// A value failed to deserialize from L2.
+    DeserializationError {
+        /// The cache key.
+        key: Arc<str>,
+        /// The error message.
+        message: String,
+    },
+    /// A backplane notification was published to peers.
+    MessagePublished {
+        /// The cache key.
+        key: Arc<str>,
+    },
+    /// A backplane notification was received from a peer.
+    MessageReceived {
+        /// The cache key.
+        key: Arc<str>,
+    },
+}
+
+/// Which subsystem a [`CacheEvent::CircuitBreakerChange`] refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitComponent {
+    /// The L2 distributed cache.
+    Distributed,
+    /// The multi-node backplane.
+    Backplane,
 }
 
 /// A broadcaster of [`CacheEvent`]s.
