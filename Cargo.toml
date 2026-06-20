@@ -1,0 +1,22 @@
+[package]
+name = "amalgam"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A robust, multi-level, fail-safe cache — an idiomatic Rust port of .NET's FusionCache (cache-stampede protection, fail-safe, soft/hard timeouts, eager refresh, L1+L2, backplane, tagging)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ZoonTronGG/amalgam"
+readme = "README.md"
+keywords = ["cache", "caching", "fusioncache", "stampede", "failsafe"]
+categories = ["caching", "asynchronous"]
+
+[dependencies]
+async-trait = "0.1.89"
+dashmap = "6.2.1"
+fastrand = "2.4.1"
+moka = { version = "0.12.15", features = ["future"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1.44"
