@@ -46,7 +46,8 @@ pub struct RecoveryItem {
 pub struct RecoveryConfig {
     /// Master switch.
     pub enabled: bool,
-    /// Delay between drain passes (and the post-reconnect barrier).
+    /// Delay between drain passes (and the post-reconnect barrier). Mirrors
+    /// FusionCache's `AutoRecoveryDelay` (default 2s).
     pub delay: Duration,
     /// Maximum queued items (`None` ⇒ unbounded).
     pub max_items: Option<usize>,
@@ -58,7 +59,7 @@ impl Default for RecoveryConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            delay: Duration::from_secs(5),
+            delay: Duration::from_secs(2),
             max_items: None,
             max_retries: None,
         }
