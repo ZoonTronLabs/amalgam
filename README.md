@@ -5,6 +5,8 @@
 <h1 align="center">amalgam</h1>
 
 <p align="center">
+  <a href="https://crates.io/crates/amalgam-cache"><img src="https://img.shields.io/crates/v/amalgam-cache.svg" alt="crates.io"></a>
+  <a href="https://docs.rs/amalgam-cache"><img src="https://img.shields.io/docsrs/amalgam-cache" alt="docs.rs"></a>
   <a href="https://github.com/ZoonTronLabs/amalgam/actions/workflows/ci.yml"><img src="https://github.com/ZoonTronLabs/amalgam/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
   <img src="https://img.shields.io/badge/unsafe-forbidden-success.svg" alt="forbid unsafe">
