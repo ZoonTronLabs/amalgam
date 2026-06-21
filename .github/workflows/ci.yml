@@ -10,7 +10,7 @@ env:
 
 jobs:
   ci:
-    name: fmt · clippy · test (with Redis)
+    name: ci
     runs-on: ubuntu-latest
     services:
       redis:
