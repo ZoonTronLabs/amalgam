@@ -425,6 +425,72 @@ async fn remove_by_tag_invalidates_matching_entries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disable_tagging_ignores_remove_by_tag() {
+    let clock = Arc::new(ManualClock::default());
+    let dyn_clock: Arc<dyn Clock> = clock.clone();
+    let cache: Cache<i32> = Cache::builder()
+        .clock(dyn_clock)
+        .disable_tagging(true)
+        .build();
+    let long = || EntryOptions::new(Duration::from_secs(100));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tagged = || -> Box<[Tag]> { Box::from([Tag::new("group").unwrap()]) };
+
+    {
+        let calls = calls.clone();
+        cache
+            .get_or_set_full(
+                "k",
+                move |ctx| async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(ctx.value(1))
+                },
+                Some(long()),
+                tagged(),
+                MaybeValue::none(),
+            )
+            .await
+            .unwrap();
+    }
+
+    clock.advance(Duration::from_secs(1));
+    cache.remove_by_tag("group").await; // ignored: tagging is disabled
+    clock.advance(Duration::from_secs(1));
+
+    let v = {
+        let calls = calls.clone();
+        cache
+            .get_or_set_full(
+                "k",
+                move |ctx| async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(ctx.value(2))
+                },
+                Some(long()),
+                tagged(),
+                MaybeValue::none(),
+            )
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        v, 1,
+        "with tagging disabled, remove_by_tag is ignored and the entry survives"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "factory ran only once");
+}
+
+#[test]
+fn wait_for_initial_backplane_subscribe_defaults_true_and_is_configurable() {
+    let on: Cache<i32> = Cache::new();
+    assert!(on.wait_for_initial_backplane_subscribe());
+    let off: Cache<i32> = Cache::builder()
+        .wait_for_initial_backplane_subscribe(false)
+        .build();
+    assert!(!off.wait_for_initial_backplane_subscribe());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn clear_removes_everything() {
     let (cache, _clock) = build::<i32>();
     cache.set("a", 1).await;

@@ -107,7 +107,7 @@ How a FusionCache concept is spelled in `amalgam`.
 | **Remove-by-tag behaviour** | expire vs remove | `RemoveByTagBehavior::{Expire, Remove}` | ✅ | `Expire` is the FusionCache default (fail-safe may still serve). |
 | **Clear (expire-all / remove-all)** | `ClearAsync` | `clear(allow_fail_safe)` via clear-markers | ✅ | `clear_removes_everything`. `true` ⇒ expire-all; `false` ⇒ remove-all + `invalidate_all`. |
 | **Events** | `cache.Events.*` | `cache.events()` → `CacheEvent` broadcast stream | ✅ | `events_are_emitted`. See the [event list](#cacheevent-variants) below. |
-| **Per-entry options surface** | `FusionCacheEntryOptions` | `EntryOptions` with FusionCache defaults | ✅ | Full surface incl. `skip_memory_*`, `skip_distributed_*`, `rethrow_*` (see [Defaults](#defaults)). |
+| **Per-entry options surface** | `FusionCacheEntryOptions` | `EntryOptions` with FusionCache defaults | ✅ | Full surface incl. `skip_memory_*`, `skip_distributed_*`, `with_rethrow_*`, `with_memory_lock_timeout` / `with_distributed_lock_timeout`, `with_distributed_fail_safe_max_duration`, `with_allow_background_backplane_operations` (see [Defaults](#defaults)). |
 | **Infinite vs finite timeout** | `Timeout.InfiniteTimeSpan` (`-1ms`) | `Timeout::{Infinite, After(Duration)}` | ✅ | Sum-typed; negative-duration footgun is unrepresentable. |
 | **Validated eager threshold** | `float?` coerced to disabled | `EagerThreshold` newtype, open interval `(0, 1)` | ✅ | `eager_threshold_rejects_out_of_range`; out-of-range ⇒ `None` (disabled), not clamped. |
 | **Expiration jitter** | `JitterMaxDuration` | `with_jitter_max`; applied to a fresh entry's logical expiration | ✅ | Anti-stampede across nodes. |
@@ -118,9 +118,9 @@ How a FusionCache concept is spelled in `amalgam`.
 | **L1 in-memory cache** | `MemoryCache` | `MemoryStore<V>` over `moka` (absolute expiry, optional capacity) | ✅ | Per-entry physical TTL via a custom `Expiry`. |
 | **L1 + L2 hybrid (read/write-through)** | `IDistributedCache` | `DistributedCache` trait, wired into the flow | 🟡 | `get_or_set` does L2 read-through (a fresh L2 entry populates L1 and returns; a stale one becomes a fallback); writes go write-through to L1+L2. `l2_read_through_across_instances` proves a second instance serves from shared L2 without re-running the factory. `InMemoryDistributedCache` reference by default; `RedisDistributedCache` behind `redis`. |
 | **L2 serialization** | `IFusionCacheSerializer` | `DistributedSerializer<V>` trait + `JsonSerializer` | ✅ | Object-safe; format pluggable. `DistributedEntry` wire envelope (`from_entry`/`into_entry`, `Entry::rehydrate`) round-trips and is exercised by the multilevel tests. `MessagePackSerializer` ships behind `messagepack`. |
-| **Backplane (multi-node invalidation)** | `IFusionCacheBackplane` | `Backplane` trait, wired into the flow | 🟡 | Publishes `Set`/`Remove`/`Expire` on local changes; a background listener applies remote ones (evict/expire L1), filtering its own `instance_id`. `backplane_remove_invalidates_peer` + `backplane_set_makes_peer_repull_new_value`. `InProcessBackplane` reference by default; `RedisBackplane` (pub/sub) behind `redis`. |
-| **L2 distributed timeouts** | `DistributedSoftTimeout` / `DistributedHardTimeout` | `with_distributed_timeouts(soft, hard)` | ✅ | `distributed_hard_timeout` is enforced on every L2 read (`read_l2_guarded`); a slow L2 reads back as a miss instead of stalling the caller. |
-| **L2 error rethrow** | `ReThrowDistributedExceptions` | `rethrow_distributed_exceptions` | ✅ | Off by default; when on, an L2 backend error surfaces from `get_or_set` instead of degrading to a miss. |
+| **Backplane (multi-node invalidation)** | `IFusionCacheBackplane` | `Backplane` trait, wired into the flow | 🟡 | Publishes `Set`/`Remove`/`Expire` on local changes; a background listener applies remote ones, filtering its own `instance_id`: `Remove` evicts L1, `Expire` logically-expires it (physical kept for fail-safe), `Set` **eagerly refreshes L1 from L2** for keys already present (FusionCache passive update). Tests: `backplane_remove_invalidates_peer` · `backplane_set_eagerly_refreshes_present_l1` · `backplane_expire_marks_peer_stale_keeping_physical` · `backplane_clear_remove_propagates_to_peer`. `InProcessBackplane` reference by default; `RedisBackplane` (pub/sub) behind `redis`. |
+| **L2 distributed timeouts** | `DistributedSoftTimeout` / `DistributedHardTimeout` | `with_distributed_timeouts(soft, hard)` | ✅ | Both enforced via `appropriate_distributed_timeout(has_fallback)` (mirrors the factory selector): the **soft** timeout applies when fail-safe is on and a fallback exists — a benign bail-out to the fallback that does **not** trip the L2 breaker — and the **hard** timeout always applies. A slow L2 reads back as a miss instead of stalling the caller. |
+| **L2 error rethrow** | `ReThrowDistributedExceptions` | `with_rethrow_distributed_exceptions` | ✅ | Off by default; when on, an L2 backend error surfaces from `get_or_set` instead of degrading to a miss. `with_rethrow_serialization_exceptions` (default on) toggles the (de)serialization path. |
 | **(De)serialization error events** | serialization events | `SerializationError` / `DeserializationError` | ✅ | A serialize/deserialize failure on the L2 path emits the matching event (and is rethrown only if `rethrow_serialization_exceptions`, default `true`). |
 | **L2 key wire-version prefix** | wire-format versioning | `distributed_wire_version` (builder, default `"v1"`) | ✅ | L2 keys are stored as `{version}:{key}` (`CacheInner::l2_key`) so incompatible cache versions can share one L2 without colliding. |
 | **Multi-node tagging propagation** | tag markers over the backplane | reserved-key `Set` messages (`__amalgam:t:*`) | ✅ | `remove_by_tag` publishes a marker; receivers update their own `TagRegistry` (`apply_backplane`), so a tag invalidation on one node invalidates matching entries on every node. |
@@ -158,7 +158,8 @@ Available on `Cache::builder()`:
 `.serializer(..)` · `.backplane(..)` · `.distributed_locker(..)` · `.plugin(..)` ·
 `.distributed_circuit_breaker(Duration)` · `.backplane_circuit_breaker(Duration)` ·
 `.auto_recovery(RecoveryConfig)` · `.distributed_wire_version(..)` ·
-`.ignore_incoming_backplane(bool)`.
+`.distributed_key_modifier_mode(..)` · `.ignore_incoming_backplane(bool)` ·
+`.disable_tagging(bool)` · `.wait_for_initial_backplane_subscribe(bool)`.
 
 > `.distributed()` + `.serializer()` enable L2; `.backplane()` enables multi-node
 > invalidation. Either a backplane *or* an enabled `auto_recovery` spawns a
@@ -176,9 +177,11 @@ Verified state of the tree (`#![forbid(unsafe_code)]`):
   `cargo clippy --all-targets --features full` (= `redis` + `messagepack` +
   `metrics`) and `cargo build --features full` are likewise warning-clean, so the
   feature-gated backends compile under their features.
-- **Default suite is green: 48 tests.** 29 module unit tests + 16 behaviour
-  (`tests/behavior.rs`) + 3 multilevel (`tests/multilevel.rs`), plus doctests
-  (illustrative builder snippets that don't compile are marked `rust,ignore`).
+- **Default suite is green: 75 tests.** 37 module unit tests + 18 behaviour
+  (`tests/behavior.rs`) + 7 multilevel (`tests/multilevel.rs`) + 6 feature
+  (`tests/features.rs`) + 2 gaps (`tests/gaps.rs`) + 5 recovery (`tests/recovery.rs`),
+  plus doctests (illustrative builder snippets that don't compile are marked
+  `rust,ignore`).
 - **L1 (in-memory) feature set — behavioural oracle.** `tests/behavior.rs` pins
   each FusionCache behaviour (stampede, fail-safe, soft/hard timeouts + background
   completion, eager refresh, adaptive, conditional refresh, tagging, clear, events,
@@ -189,9 +192,10 @@ Verified state of the tree (`#![forbid(unsafe_code)]`):
   `DistributedSerializer`, `Backplane`, `DistributedLocker`), the wire envelope
   (`DistributedEntry`), and the rehydration path are wired into
   `get_or_set`/`set`/`remove`/`expire` and covered end-to-end by
-  `tests/multilevel.rs` (L2 read-through across instances; backplane remove/Set
-  invalidation across peers). The default build uses the in-memory / in-process
-  reference backends.
+  `tests/multilevel.rs`: L2 read-through across instances; backplane Remove eviction,
+  Set **eager L1 refresh**, Expire (logical, physical kept), cross-node clear
+  propagation, and L2 (de)serialization-error rethrow. The default build uses the
+  in-memory / in-process reference backends.
 - **Circuit breakers, auto-recovery, distributed locker, plugins, registry,
   default-options provider — implemented and exercised** by unit tests and the
   multilevel/behaviour flow.
@@ -218,21 +222,23 @@ Kept honest — the small set that is *not* claimed as parity:
 
 ### Known minor differences
 
-Faithful in behaviour, but narrower than FusionCache in these edge configs (none
-affect the default single-cache deployment):
+Faithful in behaviour, with one deliberate architectural divergence:
 
-- **L2 soft timeout** is not separately enforced — only `distributed_hard_timeout`
-  bounds L2 reads.
-- **Single `lock_timeout`** rather than separate memory/distributed lock timeouts;
-  `WaitForInitialBackplaneSubscribe` and a global `DisableTagging` are not exposed.
+- **`ReThrowBackplaneExceptions`** is accepted as a field for parity but is
+  advisory: backplane publishes are fire-and-forget with auto-recovery (a failed
+  publish is queued and replayed, and `set`/`remove`/`expire` return `()`), so a
+  publish error is recovered rather than surfaced to the caller. The L2 and
+  serialization rethrow toggles (`with_rethrow_distributed_exceptions` /
+  `with_rethrow_serialization_exceptions`) *are* wired and configurable.
 
-These are tracked deliberately rather than faked; each is an additive change behind
-the existing seams.
-
-> Closed since first audit: the Redis backplane channel is now configurable
-> (`RedisBackplane::connect_with_channel`) so several caches can share one Redis,
-> and the L2 key modifier supports `Prefix` / `Suffix` / `None`
-> (`CacheBuilder::distributed_key_modifier_mode`).
+> Closed since the first audit: strict tag-marker comparison (`<` not `<=`), L2
+> **soft** timeout enforcement, split memory/distributed lock timeouts, **eager L1
+> refresh** on a backplane `Set`, auto-recovery `delay` default `2s`, configurable
+> `with_rethrow_*` / `with_allow_background_backplane_operations` /
+> `with_distributed_fail_safe_max_duration`, a global `DisableTagging`,
+> `WaitForInitialBackplaneSubscribe`, the configurable Redis backplane channel
+> (`RedisBackplane::connect_with_channel`), and the L2 key modifier modes
+> `Prefix` / `Suffix` / `None` (`CacheBuilder::distributed_key_modifier_mode`).
 
 ---
 
