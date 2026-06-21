@@ -1,14 +1,23 @@
 [package]
-name = "amalgam"
-version = "0.1.0"
+# `amalgam` is taken on crates.io, so the published crate is `amalgam-cache`.
+# The library is still imported as `use amalgam::...` (see `[lib]` below).
+name = "amalgam-cache"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A robust, multi-level, fail-safe cache — an idiomatic Rust port of .NET's FusionCache (cache-stampede protection, fail-safe, soft/hard timeouts, eager refresh, L1+L2, backplane, tagging)."
 license = "MIT"
-repository = "https://github.com/ZoonTronGG/amalgam"
+repository = "https://github.com/ZoonTronLabs/amalgam"
+homepage = "https://github.com/ZoonTronLabs/amalgam"
+documentation = "https://docs.rs/amalgam-cache"
 readme = "README.md"
 keywords = ["cache", "caching", "fusioncache", "stampede", "failsafe"]
 categories = ["caching", "asynchronous"]
+# Keep the published crate lean: ship source + docs, not large binary art or infra.
+exclude = ["/assets/*.png", "/.github", "/docker-compose.yml", "/prometheus.yml"]
+
+[lib]
+name = "amalgam"
 
 [dependencies]
 async-trait = "0.1.89"
