@@ -802,4 +802,25 @@ mod tests {
             Timeout::After(Duration::from_millis(100))
         );
     }
+
+    #[test]
+    fn jitter_widens_logical_expiration_within_bound() {
+        let base_dur = Duration::from_secs(100);
+        let jitter = Duration::from_secs(10);
+        let created = Timestamp::from_ticks(0);
+
+        // No jitter ⇒ exactly base.
+        let plain = EntryOptions::new(base_dur);
+        let base_exp = plain.logical_expiration(created);
+        assert_eq!(plain.logical_expiration(created).ticks(), base_exp.ticks());
+
+        // With jitter ⇒ always in [base, base + jitter], never shorter, never over.
+        let jittered = EntryOptions::new(base_dur).with_jitter_max(jitter);
+        let upper = base_exp.saturating_add(jitter).ticks();
+        for _ in 0..200 {
+            let exp = jittered.logical_expiration(created).ticks();
+            assert!(exp >= base_exp.ticks(), "jitter never shortens expiration");
+            assert!(exp <= upper, "jitter never exceeds jitter_max");
+        }
+    }
 }

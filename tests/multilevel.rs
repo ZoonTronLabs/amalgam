@@ -219,3 +219,96 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
     );
     assert_eq!(got.value().map(String::as_str), Some("v2"));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backplane_expire_marks_peer_stale_keeping_physical() {
+    let clock = Arc::new(ManualClock::default());
+    let dyn_clock: Arc<dyn Clock> = clock.clone();
+    let l2 = shared_l2(dyn_clock.clone());
+    let serializer: Arc<dyn DistributedSerializer<String>> = Arc::new(JsonSerializer);
+    let backplane: Arc<dyn Backplane> = Arc::new(InProcessBackplane::default());
+    let opts = EntryOptions::new(Duration::from_secs(60));
+
+    let build = |id: &str| -> Cache<String> {
+        Cache::builder()
+            .clock(dyn_clock.clone())
+            .distributed(l2.clone())
+            .serializer(serializer.clone())
+            .backplane(backplane.clone())
+            .default_options(opts.clone())
+            .instance_id(id)
+            .build()
+    };
+    let cache1 = build("node-1");
+    let cache2 = build("node-2");
+
+    cache1.set("k", "v1".to_owned()).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    // cache2 holds it fresh in L1.
+    cache2
+        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .await
+        .unwrap();
+
+    cache1.expire("k").await; // logical expire → backplane Expire
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    clock.advance(Duration::from_secs(1)); // move past the logical-expire instant
+
+    // A plain read hides the now-stale entry...
+    assert!(
+        !cache2.try_get("k", None).await.has_value(),
+        "Expire hides the entry from a plain read on the peer"
+    );
+    // ...but it is still physically present (Expire, not Remove): a stale-allowed
+    // read serves it, proving the peer kept it for fail-safe.
+    let stale_opts = cache2.entry_options().with_allow_stale_on_read_only(true);
+    let stale = cache2.try_get("k", Some(stale_opts)).await;
+    assert_eq!(
+        stale.value().map(String::as_str),
+        Some("v1"),
+        "Expire kept the entry physically; only the logical window elapsed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backplane_clear_remove_propagates_to_peer() {
+    let clock = Arc::new(ManualClock::default());
+    let dyn_clock: Arc<dyn Clock> = clock.clone();
+    let l2 = shared_l2(dyn_clock.clone());
+    let serializer: Arc<dyn DistributedSerializer<String>> = Arc::new(JsonSerializer);
+    let backplane: Arc<dyn Backplane> = Arc::new(InProcessBackplane::default());
+    let opts = EntryOptions::new(Duration::from_secs(60));
+
+    let build = |id: &str| -> Cache<String> {
+        Cache::builder()
+            .clock(dyn_clock.clone())
+            .distributed(l2.clone())
+            .serializer(serializer.clone())
+            .backplane(backplane.clone())
+            .default_options(opts.clone())
+            .instance_id(id)
+            .build()
+    };
+    let cache1 = build("node-1");
+    let cache2 = build("node-2");
+
+    cache1.set("k", "v1".to_owned()).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    cache2
+        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .await
+        .unwrap();
+    assert!(
+        cache2.try_get("k", None).await.has_value(),
+        "peer holds the value before the clear"
+    );
+
+    cache1.clear(false).await; // remove-all → CLEAR_REMOVE marker over the backplane
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    cache2.run_pending_tasks().await;
+
+    assert!(
+        !cache2.try_get("k", None).await.has_value(),
+        "cross-node clear(remove-all) evicted the peer's L1 entry"
+    );
+}
