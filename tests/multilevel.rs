@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use amalgam::{
-    Backplane, Cache, Clock, DistributedCache, DistributedSerializer, EntryOptions,
-    InMemoryDistributedCache, InProcessBackplane, JsonSerializer, ManualClock,
+    Backplane, Cache, Clock, DistributedCache, DistributedEntry, DistributedSerializer,
+    EntryOptions, Error, InMemoryDistributedCache, InProcessBackplane, JsonSerializer, ManualClock,
 };
 
 fn shared_l2(clock: Arc<dyn Clock>) -> Arc<dyn DistributedCache> {
@@ -310,5 +310,71 @@ async fn backplane_clear_remove_propagates_to_peer() {
     assert!(
         !cache2.try_get("k", None).await.has_value(),
         "cross-node clear(remove-all) evicted the peer's L1 entry"
+    );
+}
+
+/// A serializer that writes valid JSON but always fails to deserialize — exercises
+/// the L2 (de)serialization-error rethrow toggle.
+struct BadDeserialize;
+
+impl DistributedSerializer<String> for BadDeserialize {
+    fn serialize(&self, entry: &DistributedEntry<String>) -> amalgam::Result<Vec<u8>> {
+        JsonSerializer.serialize(entry)
+    }
+
+    fn deserialize(&self, _bytes: &[u8]) -> amalgam::Result<DistributedEntry<String>> {
+        Err(Error::Deserialization("boom".to_owned()))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
+    let clock = Arc::new(ManualClock::default());
+    let dyn_clock: Arc<dyn Clock> = clock.clone();
+    let l2 = shared_l2(dyn_clock.clone());
+
+    // Writer populates L2 with valid JSON.
+    let writer: Cache<String> = Cache::builder()
+        .clock(dyn_clock.clone())
+        .distributed(l2.clone())
+        .serializer(Arc::new(JsonSerializer))
+        .default_options(EntryOptions::new(Duration::from_secs(60)))
+        .build();
+    writer.set("k", "v1".to_owned()).await;
+    tokio::time::sleep(Duration::from_millis(40)).await;
+
+    // Reader whose serializer always fails to deserialize the L2 payload.
+    let reader: Cache<String> = Cache::builder()
+        .clock(dyn_clock.clone())
+        .distributed(l2.clone())
+        .serializer(Arc::new(BadDeserialize))
+        .default_options(EntryOptions::new(Duration::from_secs(60)))
+        .build();
+
+    // Default (rethrow_serialization_exceptions = true): the deserialize error
+    // surfaces from get_or_set instead of silently degrading.
+    let err = reader
+        .get_or_set(
+            "k",
+            |ctx| async move { Ok(ctx.value("factory".to_owned())) },
+        )
+        .await;
+    assert!(err.is_err(), "deserialize error rethrows by default");
+
+    // With rethrow off: the L2 (de)serialization hiccup degrades to a miss and the
+    // factory runs instead.
+    let lenient =
+        EntryOptions::new(Duration::from_secs(60)).with_rethrow_serialization_exceptions(false);
+    let v = reader
+        .get_or_set_with(
+            "k",
+            |ctx| async move { Ok(ctx.value("factory".to_owned())) },
+            lenient,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        v, "factory",
+        "rethrow off ⇒ an L2 deserialize error is a miss and the factory runs"
     );
 }
