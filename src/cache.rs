@@ -73,6 +73,8 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     ignore_incoming_backplane: bool,
     distributed_wire_version: Arc<str>,
     distributed_key_modifier_mode: KeyModifierMode,
+    disable_tagging: bool,
+    wait_for_initial_backplane_subscribe: bool,
 }
 
 impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
@@ -118,6 +120,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     #[must_use]
     pub fn entry_options(&self) -> EntryOptions {
         self.inner.default_options.clone()
+    }
+
+    /// Whether the cache establishes its backplane subscription before `build`
+    /// returns (FusionCache `WaitForInitialBackplaneSubscribe`). In `amalgam` this
+    /// is inherently satisfied — see
+    /// [`CacheBuilder::wait_for_initial_backplane_subscribe`].
+    #[must_use]
+    pub fn wait_for_initial_backplane_subscribe(&self) -> bool {
+        self.inner.wait_for_initial_backplane_subscribe
     }
 
     // --------------------------------------------------------------- get_or_set
@@ -267,11 +278,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 .read_l2_guarded(&full_key, now, &opts, l2_has_fallback)
                 .await?
             {
-                match self.inner.tags.evaluate(
-                    entry.meta().created(),
-                    entry.meta().tags(),
-                    self.inner.remove_by_tag_behavior,
-                ) {
+                match self.evaluate_tags(entry.meta().created(), entry.meta().tags()) {
                     TagVerdict::Remove => {
                         self.remove_l2_guarded(&full_key).await;
                     }
@@ -465,6 +472,14 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Invalidates every entry carrying `tag` (lazily — entries are dropped on
     /// their next read). No-op for a blank tag.
     pub async fn remove_by_tag(&self, tag: impl AsRef<str>) {
+        if self.inner.disable_tagging {
+            tracing::warn!(
+                cache = %self.inner.name,
+                tag = tag.as_ref(),
+                "remove_by_tag ignored: tagging is disabled (DisableTagging)"
+            );
+            return;
+        }
         if let Some(t) = Tag::new(tag.as_ref()) {
             let now = self.inner.clock.now();
             self.inner.tags.mark_tag(t, now);
@@ -493,6 +508,13 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// logically expired so fail-safe can still serve stale values; with `false`
     /// they are hard-removed.
     pub async fn clear(&self, allow_fail_safe: bool) {
+        if self.inner.disable_tagging {
+            tracing::warn!(
+                cache = %self.inner.name,
+                "clear ignored: tagging is disabled (DisableTagging); clear relies on tag markers"
+            );
+            return;
+        }
         let now = self.inner.clock.now();
         let marker: Arc<str> = if allow_fail_safe {
             self.inner.tags.mark_clear_expire(now);
@@ -542,16 +564,24 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.inner.default_options.clone()
     }
 
+    /// Evaluates tag/clear markers for an entry, honouring the cache-wide
+    /// `disable_tagging` switch: when tagging is disabled every entry is `Valid`
+    /// (the marker registry is never consulted).
+    fn evaluate_tags(&self, created: Timestamp, tags: &[Tag]) -> TagVerdict {
+        if self.inner.disable_tagging {
+            return TagVerdict::Valid;
+        }
+        self.inner
+            .tags
+            .evaluate(created, tags, self.inner.remove_by_tag_behavior)
+    }
+
     /// Reads L1, applies tag markers, and classifies the result.
     async fn read_l1(&self, full_key: &str, now: Timestamp) -> L1Read<V> {
         let Some(entry) = self.inner.memory.get(full_key).await else {
             return L1Read::Miss;
         };
-        match self.inner.tags.evaluate(
-            entry.meta().created(),
-            entry.meta().tags(),
-            self.inner.remove_by_tag_behavior,
-        ) {
+        match self.evaluate_tags(entry.meta().created(), entry.meta().tags()) {
             TagVerdict::Remove => {
                 self.inner.memory.remove(full_key).await;
                 L1Read::Miss
@@ -972,18 +1002,16 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let now = self.inner.clock.now();
         let opts = self.inner.default_options.clone();
         match self.read_l2_guarded(full_key, now, &opts, false).await {
-            Ok(Some(entry)) => match self.inner.tags.evaluate(
-                entry.meta().created(),
-                entry.meta().tags(),
-                self.inner.remove_by_tag_behavior,
-            ) {
-                TagVerdict::Remove => {
-                    self.inner.memory.remove(full_key).await;
+            Ok(Some(entry)) => {
+                match self.evaluate_tags(entry.meta().created(), entry.meta().tags()) {
+                    TagVerdict::Remove => {
+                        self.inner.memory.remove(full_key).await;
+                    }
+                    _ => {
+                        self.inner.memory.insert(Arc::clone(full_key), entry).await;
+                    }
                 }
-                _ => {
-                    self.inner.memory.insert(Arc::clone(full_key), entry).await;
-                }
-            },
+            }
             Ok(None) | Err(_) => {
                 self.inner.memory.remove(full_key).await;
             }
@@ -1391,6 +1419,8 @@ pub struct CacheBuilder<V> {
     ignore_incoming_backplane: bool,
     distributed_wire_version: Arc<str>,
     distributed_key_modifier_mode: KeyModifierMode,
+    disable_tagging: bool,
+    wait_for_initial_backplane_subscribe: bool,
     _marker: std::marker::PhantomData<fn() -> V>,
 }
 
@@ -1419,6 +1449,8 @@ impl<V> CacheBuilder<V> {
             ignore_incoming_backplane: false,
             distributed_wire_version: Arc::from("v1"),
             distributed_key_modifier_mode: KeyModifierMode::default(),
+            disable_tagging: false,
+            wait_for_initial_backplane_subscribe: true,
             _marker: std::marker::PhantomData,
         }
     }
@@ -1564,6 +1596,34 @@ impl<V> CacheBuilder<V> {
         self.distributed_key_modifier_mode = mode;
         self
     }
+
+    /// Disables tagging cache-wide (FusionCache `DisableTagging`).
+    ///
+    /// When enabled, the per-read tag/clear-marker check is skipped entirely (a
+    /// small read-path saving for caches that never tag), and
+    /// [`remove_by_tag`](Cache::remove_by_tag) /
+    /// [`remove_by_tags`](Cache::remove_by_tags) / [`clear`](Cache::clear) are
+    /// ignored and logged at `warn` (never silently) — the Rust-idiomatic
+    /// counterpart of FusionCache throwing on tag use when tagging is disabled.
+    /// Off by default.
+    pub fn disable_tagging(mut self, disable: bool) -> Self {
+        self.disable_tagging = disable;
+        self
+    }
+
+    /// Whether to establish the backplane subscription before [`build`](Self::build)
+    /// returns (FusionCache `WaitForInitialBackplaneSubscribe`, default `true`).
+    ///
+    /// In `amalgam` this is inherently satisfied: the listener calls
+    /// `backplane.subscribe()` synchronously inside `build`, and the Redis backplane
+    /// completes its `SUBSCRIBE` during `connect()` before being handed to the
+    /// builder — so there is no startup window where the node serves while
+    /// unsubscribed. The flag is retained for configuration parity and is queryable
+    /// via [`Cache::wait_for_initial_backplane_subscribe`].
+    pub fn wait_for_initial_backplane_subscribe(mut self, wait: bool) -> Self {
+        self.wait_for_initial_backplane_subscribe = wait;
+        self
+    }
 }
 
 impl<V> Default for CacheBuilder<V> {
@@ -1612,6 +1672,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             ignore_incoming_backplane: self.ignore_incoming_backplane,
             distributed_wire_version: self.distributed_wire_version,
             distributed_key_modifier_mode: self.distributed_key_modifier_mode,
+            disable_tagging: self.disable_tagging,
+            wait_for_initial_backplane_subscribe: self.wait_for_initial_backplane_subscribe,
         });
         // Wire the recovery executor (the cache) as a Weak so it never keeps the
         // cache alive, then start the background drain loop.
