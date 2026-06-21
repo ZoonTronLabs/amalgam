@@ -293,13 +293,14 @@ dependency-light and uses the in-memory / in-process reference backends.
 | *(default)* | L1 + reference L2/backplane/locker (`InMemoryDistributedCache`, `InProcessBackplane`, `InMemoryDistributedLocker`), `JsonSerializer`. |
 | `redis` | `RedisDistributedCache`, `RedisBackplane`, `RedisDistributedLocker` on `redis::aio::ConnectionManager`. |
 | `messagepack` | `MessagePackSerializer` (compact L2 payloads via `rmp-serde`). |
+| `postcard` | `PostcardSerializer` (smallest L2 payloads, `serde`-native binary). |
 | `metrics` | `MetricsPlugin` (counters via the `metrics` facade). |
-| `full` | `redis` + `messagepack` + `metrics`. |
+| `opentelemetry` | `otel::init_otlp(..)` — export the crate's `tracing` spans over OTLP. |
+| `full` | all of the above. |
 
 ```toml
 [dependencies]
-amalgam = { version = "0.1", features = ["redis", "messagepack", "metrics"] }
-# or simply: features = ["full"]
+amalgam = { version = "0.1", features = ["full"] }
 ```
 
 The Redis adapters connect with an async constructor:

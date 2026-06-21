@@ -155,6 +155,28 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         .await
     }
 
+    /// Returns the cached value for `key`, or stores and returns the constant
+    /// `value` if it is absent.
+    ///
+    /// The constant-value form of [`get_or_set`](Self::get_or_set): it goes
+    /// through the same L1 → L2 → single-flight flow, but the "factory" simply
+    /// yields `value`.
+    pub async fn get_or_set_value(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+    ) -> Result<V> {
+        self.get_or_set_full(
+            key,
+            move |ctx| async move { Ok(ctx.value(value)) },
+            options,
+            Box::from([]),
+            MaybeValue::none(),
+        )
+        .await
+    }
+
     /// The full `get_or_set`: per-call `options`, `tags` for the produced entry,
     /// and a `fail_safe_default` served as a last resort when the factory fails
     /// and no stale value exists.
@@ -657,21 +679,22 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             self.enqueue_recovery(full_key, RecoveryAction::Set, now);
             return;
         }
+        let ttl = opts.distributed_physical_ttl();
         if opts.allow_background_distributed_operations() {
             // Fire-and-forget: don't make the caller wait on L2.
             let this = self.clone();
             let full_key = Arc::clone(full_key);
             let entry = entry.clone();
             tokio::spawn(async move {
-                this.do_l2_write(&full_key, &entry).await;
+                this.do_l2_write(&full_key, &entry, ttl).await;
             });
         } else {
-            self.do_l2_write(full_key, entry).await;
+            self.do_l2_write(full_key, entry, ttl).await;
         }
     }
 
-    async fn do_l2_write(&self, full_key: &Arc<str>, entry: &Entry<V>) {
-        match self.inner.l2_write(full_key, entry).await {
+    async fn do_l2_write(&self, full_key: &Arc<str>, entry: &Entry<V>, ttl: Duration) {
+        match self.inner.l2_write(full_key, entry, ttl).await {
             Ok(()) => self.close_circuit_l2(),
             Err(err) => {
                 self.on_l2_error(full_key, &err);
@@ -706,11 +729,17 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
             Err(err) => {
                 self.on_l2_error(full_key, &err);
-                if opts.rethrow_distributed_exceptions() {
-                    Err(err)
-                } else {
-                    Ok(None)
-                }
+                // Serialization/deserialization failures honour
+                // `rethrow_serialization_exceptions`; transport failures honour
+                // `rethrow_distributed_exceptions`. Otherwise an L2 hiccup is a
+                // miss, not an error.
+                let rethrow = match err {
+                    Error::Serialization(_) | Error::Deserialization(_) => {
+                        opts.rethrow_serialization_exceptions()
+                    }
+                    _ => opts.rethrow_distributed_exceptions(),
+                };
+                if rethrow { Err(err) } else { Ok(None) }
             }
         }
     }
@@ -1065,15 +1094,15 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         format!("{}:{}", self.distributed_wire_version, full_key)
     }
 
-    /// Serializes and writes an entry to L2. `Err` on serialize/backend failure.
-    async fn l2_write(&self, full_key: &str, entry: &Entry<V>) -> Result<()> {
+    /// Serializes and writes an entry to L2 with the given physical TTL. `Err` on
+    /// serialize/backend failure.
+    async fn l2_write(&self, full_key: &str, entry: &Entry<V>, ttl: Duration) -> Result<()> {
         let (Some(l2), Some(serializer)) = (&self.distributed, &self.serializer) else {
             return Ok(());
         };
         let dist = DistributedEntry::from_entry(entry);
         let bytes = serializer.serialize(&dist)?;
-        l2.set(&self.l2_key(full_key), bytes, Some(entry.backend_ttl()))
-            .await
+        l2.set(&self.l2_key(full_key), bytes, Some(ttl)).await
     }
 
     /// Reads and deserializes an entry from L2, rehydrated relative to `now`.
@@ -1125,7 +1154,8 @@ impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
         match item.action {
             RecoveryAction::Set => {
                 if let Some(entry) = self.memory.get(&item.key).await {
-                    self.l2_write(&item.key, &entry).await?;
+                    let ttl = entry.backend_ttl();
+                    self.l2_write(&item.key, &entry, ttl).await?;
                 }
                 self.backplane_send(BackplaneAction::Set, &item.key, item.timestamp)
                     .await?;
@@ -1481,13 +1511,14 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         } else {
             None
         };
+        let events = Events::with_capacity(self.events_capacity);
         let inner = Arc::new(CacheInner {
             name: self.name.unwrap_or_else(|| Arc::from("amalgam")),
             instance_id: self.instance_id.unwrap_or_else(generate_instance_id),
-            memory: MemoryStore::new(self.max_capacity),
+            memory: MemoryStore::new(self.max_capacity, events.clone()),
             locks: Arc::new(KeyedLock::new(self.lock_shards)),
             tags: Arc::new(TagRegistry::new()),
-            events: Events::with_capacity(self.events_capacity),
+            events,
             clock,
             default_options: self.default_options,
             key_prefix: self.key_prefix,

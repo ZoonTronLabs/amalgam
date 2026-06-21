@@ -525,6 +525,19 @@ impl EntryOptions {
         }
     }
 
+    /// The physical time-to-live handed to the L2 backend — the L2 analogue of
+    /// [`physical_ttl`](Self::physical_ttl), using the distributed-specific
+    /// duration and fail-safe-max overrides.
+    #[must_use]
+    pub fn distributed_physical_ttl(&self) -> Duration {
+        let logical = self.resolved_distributed_duration();
+        if self.is_fail_safe_enabled {
+            logical.max(self.resolved_distributed_fail_safe_max_duration())
+        } else {
+            logical
+        }
+    }
+
     /// Selects the factory timeout to enforce for this call.
     ///
     /// The soft timeout only applies when fail-safe is on *and* a fallback value

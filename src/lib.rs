@@ -73,6 +73,9 @@ pub use time::{Clock, ManualClock, SystemClock, Timeout, Timestamp};
 #[cfg(feature = "messagepack")]
 pub use serializers::MessagePackSerializer;
 
+#[cfg(feature = "postcard")]
+pub use serializers::PostcardSerializer;
+
 #[cfg(feature = "metrics")]
 pub use observability::MetricsPlugin;
 

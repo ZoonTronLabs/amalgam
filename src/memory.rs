@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 
 use moka::Expiry;
 use moka::future::Cache as MokaCache;
+use moka::notification::RemovalCause;
 
 use crate::entry::Entry;
+use crate::events::{CacheEvent, Events};
 
 /// Per-entry expiry policy: each entry carries the physical TTL the backend
 /// should honour ([`Entry::backend_ttl`]).
@@ -50,10 +52,21 @@ pub struct MemoryStore<V: Clone + Send + Sync + 'static> {
 
 impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     /// Creates a store with an optional maximum entry capacity (`None` =
-    /// unbounded).
+    /// unbounded). `events` receives an [`Eviction`](CacheEvent::Eviction) event
+    /// whenever the backend evicts an entry for expiry or capacity (not for our
+    /// own explicit removes/updates).
     #[must_use]
-    pub fn new(max_capacity: Option<u64>) -> Self {
-        let mut builder = MokaCache::builder().expire_after(EntryExpiry);
+    pub fn new(max_capacity: Option<u64>, events: Events) -> Self {
+        let listener = move |key: Arc<Arc<str>>, _value: Entry<V>, cause: RemovalCause| {
+            if matches!(cause, RemovalCause::Expired | RemovalCause::Size) {
+                events.emit(CacheEvent::Eviction {
+                    key: key.as_ref().clone(),
+                });
+            }
+        };
+        let mut builder = MokaCache::builder()
+            .expire_after(EntryExpiry)
+            .eviction_listener(listener);
         if let Some(capacity) = max_capacity {
             builder = builder.max_capacity(capacity);
         }

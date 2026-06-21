@@ -50,7 +50,7 @@ How a FusionCache concept is spelled in `amalgam`.
 | `FusionCacheEntryOptions` (per-call) | `EntryOptions` | Per-entry knobs; `with_*` chainable setters. |
 | `CacheItemPriority` | `Priority` | `Low` / `Normal` / `High` / `NeverRemove`. |
 | `MaybeValue<T>` | `MaybeValue<V>` | "A value, or explicitly none"; converts to/from `Option<V>`. |
-| `GetOrSetAsync` | `get_or_set` / `get_or_set_with` / `get_or_set_full` | The marquee read-through method. |
+| `GetOrSetAsync` | `get_or_set` / `get_or_set_with` / `get_or_set_value` / `get_or_set_full` | The marquee read-through method. |
 | `SetAsync` | `set` / `set_full` | Write-through write. |
 | `TryGetAsync` | `try_get` | Read without running a factory; miss ⇒ `MaybeValue::none()`. |
 | `GetOrDefaultAsync` | `get_or_default` | Read, or a caller-supplied default. |
@@ -84,7 +84,7 @@ How a FusionCache concept is spelled in `amalgam`.
 
 | Feature | FusionCache | `amalgam` | Status | Notes |
 |---------|-------------|-----------|--------|-------|
-| **Read-through factory** | `GetOrSetAsync` | `get_or_set` / `get_or_set_with` / `get_or_set_full` | ✅ | Three arities: defaults; explicit `EntryOptions`; full (`options` + `tags` + `fail_safe_default`). |
+| **Read-through factory** | `GetOrSetAsync` | `get_or_set` / `get_or_set_with` / `get_or_set_value` / `get_or_set_full` | ✅ | Three arities: defaults; explicit `EntryOptions`; full (`options` + `tags` + `fail_safe_default`). |
 | **Cache-stampede protection (single-flight)** | per-key factory coalescing | sharded async mutexes (`KeyedLock`), re-check L1 under the lock | ✅ | `stampede_runs_factory_once`: 32 concurrent callers ⇒ factory runs once. Sharded (bounded memory), not per-key map. |
 | **Write-through set** | `SetAsync` | `set` / `set_full` | ✅ | `set_full` carries `EntryOptions` + tags. |
 | **Try-get (no factory)** | `TryGetAsync` | `try_get` | ✅ | Miss ⇒ `MaybeValue::none()`; stale hidden unless `allow_stale_on_read_only`. |
@@ -208,11 +208,30 @@ Verified state of the tree (`#![forbid(unsafe_code)]`):
 Kept honest — the small set that is *not* claimed as parity:
 
 - **DI-container integration.** `CacheRegistry` + `DefaultEntryOptionsProvider` are
-  the Rust-idiomatic substitute for named/keyed caches; there is no
-  `Microsoft.Extensions.DependencyInjection`-style `AddFusionCache` integration
-  (Rust has no single canonical DI container).
-- **Serializers beyond JSON / MessagePack.** Protobuf and MemoryPack equivalents
-  are not shipped (the `DistributedSerializer<V>` seam makes them additive).
+  the Rust-idiomatic substitute for named/keyed caches (see `examples/di.rs`);
+  there is no `Microsoft.Extensions.DependencyInjection`-style `AddFusionCache`
+  integration (Rust has no single canonical DI container).
+- **Protobuf / MemoryPack serializers.** Three formats ship — `JsonSerializer`,
+  `MessagePackSerializer` (feature `messagepack`), and `PostcardSerializer`
+  (feature `postcard`, compact binary). Protobuf-net / MemoryPack are .NET-specific
+  formats; their Rust analogues drop into the same `DistributedSerializer<V>` seam.
+
+### Known minor differences
+
+Faithful in behaviour, but narrower than FusionCache in these edge configs (none
+affect the default single-cache deployment):
+
+- **Redis backplane channel is fixed** (`amalgam:backplane`). Running *several*
+  caches against *one* Redis would cross-talk; use a separate Redis DB/instance per
+  cache (the in-process backplane is already per-instance).
+- **L2 soft timeout** is not separately enforced — only `distributed_hard_timeout`
+  bounds L2 reads.
+- **`DistributedCacheKeyModifierMode`** supports `Prefix` only (not `Suffix`/`None`).
+- **Single `lock_timeout`** rather than separate memory/distributed lock timeouts;
+  `WaitForInitialBackplaneSubscribe` and a global `DisableTagging` are not exposed.
+
+These are tracked deliberately rather than faked; each is an additive change behind
+the existing seams.
 
 ---
 
