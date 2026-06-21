@@ -347,14 +347,18 @@ locker**, **plugins**, a **named-cache registry** with a **dynamic default-optio
 provider**, and an optional **Redis** backend (L2 + backplane + locker),
 **MessagePack** serializer, and **metrics** plugin behind feature flags.
 
-It is verified by a behavioural test oracle (`tests/behavior.rs`) and end-to-end
-multi-level tests (`tests/multilevel.rs`): the default suite (48 tests) is green
-and `cargo clippy` is warning-clean on both the default build and `--features full`
-(the feature-gated backends compile under their features); `#![forbid(unsafe_code)]`.
+It is verified by a behavioural test oracle (`tests/behavior.rs`), end-to-end
+multi-level tests (`tests/multilevel.rs`), feature/recovery tests, and Redis
+integration tests run against a live server via `docker-compose.yml`: the default
+suite (60 tests) is green and `cargo clippy` is warning-clean on the default build
+*and* `--features full`; `#![forbid(unsafe_code)]`.
 
-Still roadmap (kept honest): first-class OpenTelemetry tracing **spans** (today:
-`tracing` log lines at factory-error / fail-safe plus the `metrics`-facade counters
-from `MetricsPlugin`); a `Microsoft.Extensions.DependencyInjection`-style DI
+OpenTelemetry is supported: an always-on `tracing` span (`amalgam.get_or_set`)
+works with any subscriber, and `otel::init_otlp(service, endpoint)` (feature
+`opentelemetry`) exports spans over OTLP/gRPC to a collector such as Jaeger — try
+`docker compose up -d` then `cargo run --example otel --features opentelemetry`.
+
+Still roadmap (kept honest): a `Microsoft.Extensions.DependencyInjection`-style DI
 integration (the registry is the Rust-idiomatic substitute); and serializers beyond
 JSON / MessagePack (Protobuf / MemoryPack). See [`docs/PARITY.md`](docs/PARITY.md)
 for the precise, row-by-row status of every feature.

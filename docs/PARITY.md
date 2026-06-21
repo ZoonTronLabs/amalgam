@@ -136,7 +136,7 @@ How a FusionCache concept is spelled in `amalgam`.
 | **Redis backplane adapter** | Redis pub/sub backplane | `RedisBackplane` (feature `redis`) | ✅ | `PUBLISH`/`SUBSCRIBE` over a compact wire format on a dedicated RESP3 connection, relayed to local subscribers; auto-resubscribes after reconnect. |
 | **Redis distributed locker** | Redis lock | `RedisDistributedLocker` (feature `redis`) | ✅ | `SET key token NX PX`; release is an atomic compare-and-delete Lua script (never frees a lock re-taken by another node). |
 | **Auto-clone of L1 values** | `EnableAutoClone` | `with_enable_auto_clone` | ✅ (inherent) | Reads already return an owned `V` (`value_cloned`), so a caller mutating the result never touches the cached copy — Rust satisfies this by construction. The flag exists for explicit parity. |
-| **Observability — OpenTelemetry tracing spans** | OTel tracer + meters | `tracing` log lines + `metrics`-facade counters | 🟡 | `tracing` warn/debug lines at factory-error and fail-safe; counters via `MetricsPlugin` (`metrics` feature). Full OTel **span** export is roadmap (see below). |
+| **Observability — OpenTelemetry tracing spans** | OTel tracer + meters | `tracing` span `amalgam.get_or_set` + `metrics`-facade counters | ✅ | An always-on `#[tracing::instrument]` span per `get_or_set` (with `cache`/`key` fields) plus warn/debug events; export via `otel::init_otlp(service, endpoint)` (OTLP/gRPC → Jaeger, feature `opentelemetry`); counters via `MetricsPlugin` (feature `metrics`). |
 
 ### `CacheEvent` variants
 
@@ -207,10 +207,6 @@ Verified state of the tree (`#![forbid(unsafe_code)]`):
 
 Kept honest — the small set that is *not* claimed as parity:
 
-- **Full OpenTelemetry tracing spans.** Today observability is `tracing` log lines
-  (factory-error / fail-safe) plus the `metrics`-facade counters from
-  `MetricsPlugin`. A first-class OTel **span** per operation (with the FusionCache
-  span/attribute conventions) is not emitted.
 - **DI-container integration.** `CacheRegistry` + `DefaultEntryOptionsProvider` are
   the Rust-idiomatic substitute for named/keyed caches; there is no
   `Microsoft.Extensions.DependencyInjection`-style `AddFusionCache` integration
