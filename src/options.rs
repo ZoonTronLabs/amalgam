@@ -565,6 +565,22 @@ impl EntryOptions {
         selected.min(self.factory_hard_timeout)
     }
 
+    /// Selects the L2 (distributed) timeout to enforce for an awaited L2 read.
+    ///
+    /// Mirrors [`appropriate_factory_timeout`](Self::appropriate_factory_timeout):
+    /// the distributed *soft* timeout only applies when fail-safe is on *and* a
+    /// fallback value exists; the *hard* timeout always applies and wins when it
+    /// is shorter (FusionCache `GetAppropriateDistributedCacheTimeout`).
+    #[must_use]
+    pub fn appropriate_distributed_timeout(&self, has_fallback: bool) -> Timeout {
+        let mut selected = Timeout::Infinite;
+        if self.is_fail_safe_enabled && has_fallback && !self.distributed_soft_timeout.is_infinite()
+        {
+            selected = self.distributed_soft_timeout;
+        }
+        selected.min(self.distributed_hard_timeout)
+    }
+
     /// Computes the logical-expiration timestamp for a *fresh* entry created at
     /// `created`, applying jitter (if any).
     #[must_use]
@@ -670,6 +686,49 @@ mod tests {
             );
         assert_eq!(
             opts.appropriate_factory_timeout(true),
+            Timeout::After(Duration::from_millis(20))
+        );
+    }
+
+    #[test]
+    fn distributed_soft_timeout_applies_only_with_fail_safe_and_fallback() {
+        let opts = EntryOptions::new(Duration::from_secs(10))
+            .with_fail_safe(true, None, None)
+            .with_distributed_timeouts(
+                Timeout::After(Duration::from_millis(50)),
+                Timeout::Infinite,
+            );
+        assert_eq!(
+            opts.appropriate_distributed_timeout(true),
+            Timeout::After(Duration::from_millis(50))
+        );
+        // No fallback ⇒ soft does not apply.
+        assert_eq!(
+            opts.appropriate_distributed_timeout(false),
+            Timeout::Infinite
+        );
+
+        // Fail-safe off ⇒ soft does not apply even with a fallback.
+        let no_fs = EntryOptions::new(Duration::from_secs(10)).with_distributed_timeouts(
+            Timeout::After(Duration::from_millis(50)),
+            Timeout::Infinite,
+        );
+        assert_eq!(
+            no_fs.appropriate_distributed_timeout(true),
+            Timeout::Infinite
+        );
+    }
+
+    #[test]
+    fn distributed_hard_timeout_wins_when_shorter() {
+        let opts = EntryOptions::new(Duration::from_secs(10))
+            .with_fail_safe(true, None, None)
+            .with_distributed_timeouts(
+                Timeout::After(Duration::from_millis(50)),
+                Timeout::After(Duration::from_millis(20)),
+            );
+        assert_eq!(
+            opts.appropriate_distributed_timeout(true),
             Timeout::After(Duration::from_millis(20))
         );
     }
