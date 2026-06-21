@@ -26,3 +26,17 @@ services:
       - "16686:16686" # web UI  → http://localhost:16686
       - "4317:4317" # OTLP gRPC (amalgam's otel example exports here)
       - "4318:4318" # OTLP HTTP
+
+  # Prometheus: scrapes the `prometheus` example's /metrics endpoint on the host
+  # (host.docker.internal:9000 — see prometheus.yml) and serves a query UI.
+  #   cargo run --example prometheus --features metrics   # exposes host :9000/metrics
+  #   open http://localhost:9090                          # query e.g. amalgam_hits_total
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: amalgam-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090" # web UI → http://localhost:9090
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # lets the container reach the host's :9000

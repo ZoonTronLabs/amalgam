@@ -26,7 +26,9 @@ async fn size_eviction_emits_eviction_event() {
 
     let long = EntryOptions::new(Duration::from_secs(3600));
     for i in 0..20 {
-        cache.set_full(format!("k{i}"), i, Some(long.clone()), Box::from([])).await;
+        cache
+            .set_full(format!("k{i}"), i, Some(long.clone()), Box::from([]))
+            .await;
     }
     // Force moka to run its eviction maintenance deterministically.
     cache.run_pending_tasks().await;
@@ -42,5 +44,8 @@ async fn size_eviction_emits_eviction_event() {
             Err(_) => break,
         }
     }
-    assert!(saw_eviction, "a size-based eviction fired an Eviction event");
+    assert!(
+        saw_eviction,
+        "a size-based eviction fired an Eviction event"
+    );
 }
