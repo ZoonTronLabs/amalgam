@@ -1,4 +1,14 @@
-# amalgam
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ZoonTronLabs/amalgam/main/assets/amalgam-icon.png" alt="amalgam" width="168" height="168">
+</p>
+
+<h1 align="center">amalgam</h1>
+
+<p align="center">
+  <a href="https://github.com/ZoonTronLabs/amalgam/actions/workflows/ci.yml"><img src="https://github.com/ZoonTronLabs/amalgam/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
+  <img src="https://img.shields.io/badge/unsafe-forbidden-success.svg" alt="forbid unsafe">
+</p>
 
 **A robust, multi-level, fail-safe cache for Rust** — a faithful, idiomatic port
 of the resiliency model pioneered by .NET's
