@@ -171,3 +171,51 @@ async fn backplane_set_makes_peer_repull_new_value() {
         "no factory ran on the peer"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backplane_set_eagerly_refreshes_present_l1() {
+    let clock = Arc::new(ManualClock::default());
+    let dyn_clock: Arc<dyn Clock> = clock.clone();
+    let l2 = shared_l2(dyn_clock.clone());
+    let serializer: Arc<dyn DistributedSerializer<String>> = Arc::new(JsonSerializer);
+    let backplane: Arc<dyn Backplane> = Arc::new(InProcessBackplane::default());
+    let opts = EntryOptions::new(Duration::from_secs(60));
+
+    let build = |id: &str| -> Cache<String> {
+        Cache::builder()
+            .clock(dyn_clock.clone())
+            .distributed(l2.clone())
+            .serializer(serializer.clone())
+            .backplane(backplane.clone())
+            .default_options(opts.clone())
+            .instance_id(id)
+            .build()
+    };
+    let cache1 = build("node-1");
+    let cache2 = build("node-2");
+
+    cache1.set("k", "v1".to_owned()).await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    // cache2 caches v1 in its own L1.
+    let v = cache2
+        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .await
+        .unwrap();
+    assert_eq!(v, "v1");
+
+    // cache1 updates the value → backplane Set. FusionCache "passive update": a
+    // peer that already holds the key eagerly refreshes its L1 from L2 instead of
+    // merely evicting and re-pulling on the next read.
+    cache1.set("k", "v2".to_owned()).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // try_get reads L1 ONLY (no factory, no L2 read): the fresh value is already
+    // present because it was refreshed eagerly. An evict-only peer would miss here.
+    let got = cache2.try_get("k", None).await;
+    assert!(
+        got.has_value(),
+        "peer L1 was eagerly refreshed from L2, not just evicted"
+    );
+    assert_eq!(got.value().map(String::as_str), Some("v2"));
+}

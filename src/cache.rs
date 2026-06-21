@@ -944,8 +944,48 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 }
             }
             BackplaneAction::Set => {
-                // Drop the local copy; the next read re-pulls the value from L2.
-                self.inner.memory.remove(&message.key).await;
+                // FusionCache "passive update": a node that already holds the key
+                // in L1 eagerly refreshes it from L2; nodes that don't hold it do
+                // nothing. The refresh runs off the listener so a slow L2 never
+                // stalls processing of other backplane messages.
+                if self.inner.memory.get(&message.key).await.is_some() {
+                    let cache = self.clone();
+                    let key = Arc::clone(&message.key);
+                    tokio::spawn(async move {
+                        cache.refresh_l1_from_l2(&key).await;
+                    });
+                }
+            }
+        }
+    }
+
+    /// Eagerly refreshes a key's L1 entry from L2 — FusionCache's passive update
+    /// on a backplane `Set`. On an L2 miss or error, or when a tag/clear marker
+    /// invalidates the value, the stale L1 copy is dropped so the next read
+    /// re-pulls or re-runs the factory. Honours the same tag evaluation as the
+    /// `get_or_set` L2 read-through.
+    async fn refresh_l1_from_l2(&self, full_key: &Arc<str>) {
+        if self.inner.distributed.is_none() {
+            self.inner.memory.remove(full_key).await;
+            return;
+        }
+        let now = self.inner.clock.now();
+        let opts = self.inner.default_options.clone();
+        match self.read_l2_guarded(full_key, now, &opts, false).await {
+            Ok(Some(entry)) => match self.inner.tags.evaluate(
+                entry.meta().created(),
+                entry.meta().tags(),
+                self.inner.remove_by_tag_behavior,
+            ) {
+                TagVerdict::Remove => {
+                    self.inner.memory.remove(full_key).await;
+                }
+                _ => {
+                    self.inner.memory.insert(Arc::clone(full_key), entry).await;
+                }
+            },
+            Ok(None) | Err(_) => {
+                self.inner.memory.remove(full_key).await;
             }
         }
     }
