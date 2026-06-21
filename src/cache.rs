@@ -573,7 +573,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         opts: &EntryOptions,
         stale_entry: Option<&Entry<V>>,
     ) -> LockOutcome<V> {
-        let local = match opts.lock_timeout() {
+        let local = match opts.memory_lock_timeout() {
             Timeout::Infinite => self.inner.locks.lock(full_key).await,
             Timeout::After(d) => {
                 match tokio::time::timeout(d, self.inner.locks.lock(full_key)).await {
@@ -616,7 +616,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let locker = self.inner.distributed_locker.as_ref()?;
         let lock_key = format!("amalgam:lock:{full_key}");
         match locker
-            .acquire(&lock_key, opts.physical_ttl(), opts.lock_timeout())
+            .acquire(
+                &lock_key,
+                opts.physical_ttl(),
+                opts.distributed_lock_timeout(),
+            )
             .await
         {
             Ok(Some(token)) => Some(DistributedReleaseGuard {
