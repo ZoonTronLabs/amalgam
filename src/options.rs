@@ -342,6 +342,39 @@ impl EntryOptions {
         self
     }
 
+    /// Overrides the L2-specific fail-safe max duration (defaults to the general
+    /// `fail_safe_max_duration`). FusionCache `DistributedCacheFailSafeMaxDuration`.
+    #[must_use]
+    pub fn with_distributed_fail_safe_max_duration(mut self, max: Duration) -> Self {
+        self.distributed_fail_safe_max_duration = Some(max);
+        self
+    }
+
+    /// Rethrows L2 transport errors to the caller instead of degrading to a miss
+    /// (FusionCache `ReThrowDistributedCacheExceptions`, default `false`).
+    #[must_use]
+    pub fn with_rethrow_distributed_exceptions(mut self, rethrow: bool) -> Self {
+        self.rethrow_distributed_exceptions = rethrow;
+        self
+    }
+
+    /// Rethrows (de)serialization errors on the L2 path to the caller (FusionCache
+    /// `ReThrowSerializationExceptions`, default `true`).
+    #[must_use]
+    pub fn with_rethrow_serialization_exceptions(mut self, rethrow: bool) -> Self {
+        self.rethrow_serialization_exceptions = rethrow;
+        self
+    }
+
+    /// Runs backplane publishes in the background (fire-and-forget) instead of
+    /// awaiting them (FusionCache `AllowBackgroundBackplaneOperations`, default
+    /// `true`).
+    #[must_use]
+    pub fn with_allow_background_backplane_operations(mut self, allow: bool) -> Self {
+        self.allow_background_backplane_operations = allow;
+        self
+    }
+
     /// Sets the L2 soft/hard timeouts.
     #[must_use]
     pub fn with_distributed_timeouts(mut self, soft: Timeout, hard: Timeout) -> Self {
@@ -800,6 +833,43 @@ mod tests {
         assert_eq!(
             opts.lock_timeout(),
             Timeout::After(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
+    fn jitter_widens_logical_expiration_within_bound() {
+        let base_dur = Duration::from_secs(100);
+        let jitter = Duration::from_secs(10);
+        let created = Timestamp::from_ticks(0);
+
+        // No jitter ⇒ exactly base.
+        let plain = EntryOptions::new(base_dur);
+        let base_exp = plain.logical_expiration(created);
+        assert_eq!(plain.logical_expiration(created).ticks(), base_exp.ticks());
+
+        // With jitter ⇒ always in [base, base + jitter], never shorter, never over.
+        let jittered = EntryOptions::new(base_dur).with_jitter_max(jitter);
+        let upper = base_exp.saturating_add(jitter).ticks();
+        for _ in 0..200 {
+            let exp = jittered.logical_expiration(created).ticks();
+            assert!(exp >= base_exp.ticks(), "jitter never shortens expiration");
+            assert!(exp <= upper, "jitter never exceeds jitter_max");
+        }
+    }
+
+    #[test]
+    fn rethrow_and_background_setters_flip_the_flags() {
+        let o = EntryOptions::new(Duration::from_secs(1))
+            .with_rethrow_distributed_exceptions(true)
+            .with_rethrow_serialization_exceptions(false)
+            .with_allow_background_backplane_operations(false)
+            .with_distributed_fail_safe_max_duration(Duration::from_secs(7));
+        assert!(o.rethrow_distributed_exceptions());
+        assert!(!o.rethrow_serialization_exceptions());
+        assert!(!o.allow_background_backplane_operations());
+        assert_eq!(
+            o.resolved_distributed_fail_safe_max_duration(),
+            Duration::from_secs(7)
         );
     }
 }

@@ -27,6 +27,25 @@ non-enforced L2 soft-timeout are the most substantive findings; both are minor.
 
 **Findings: 0 blockers · 7 minor · 4 cosmetic.**
 
+> ✅ **Resolved since this audit (branch `fix/audit-strict-tags-recovery-delay`).**
+> Every audit-flagged gap is now closed: **#1** strict tag comparison
+> (`created < marker`) + same-tick boundary tests; **#2** eager L1 refresh from L2 on
+> a backplane `Set` (FusionCache passive update) — present-in-L1 only, off the
+> listener; **#3** L2 **soft** timeout enforcement via
+> `appropriate_distributed_timeout` (a benign soft-bail that does not trip the L2
+> breaker); **#4** split `MemoryLockTimeout` / `DistributedLockTimeout` inheriting the
+> general `lock_timeout`; **#7** auto-recovery `delay` default `5s → 2s`.
+> Additionally, four wired-but-unconfigurable options gained setters
+> (`with_rethrow_distributed_exceptions`, `with_rethrow_serialization_exceptions`,
+> `with_distributed_fail_safe_max_duration`, `with_allow_background_backplane_operations`),
+> and the two missing FusionCache options were added (`DisableTagging`,
+> `WaitForInitialBackplaneSubscribe`). New tests cover the backplane
+> `Expire`/clear/Set paths, the serialization-rethrow toggle, jitter bounds, and
+> `disable_tagging`. The only remaining deltas are the documented idiomatic
+> divergences (events as one broadcast vs three hubs; `Clear` via dedicated markers;
+> `Priority`/`Size` carried-not-honoured) and the .NET-only items (DI-container
+> integration; Protobuf-net / MemoryPack serializers) — none functional.
+
 > ⚠️ **Tree state at audit time:** the working tree does **not compile** — `src/cache.rs:1516`
 > omits the `distributed_key_modifier_mode` field that the in-flight `KeyModifierMode` edit added
 > to `CacheInner` (`src/cache.rs:75`), and `CacheBuilder` has no setter for it yet
