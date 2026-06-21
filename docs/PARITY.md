@@ -221,17 +221,18 @@ Kept honest — the small set that is *not* claimed as parity:
 Faithful in behaviour, but narrower than FusionCache in these edge configs (none
 affect the default single-cache deployment):
 
-- **Redis backplane channel is fixed** (`amalgam:backplane`). Running *several*
-  caches against *one* Redis would cross-talk; use a separate Redis DB/instance per
-  cache (the in-process backplane is already per-instance).
 - **L2 soft timeout** is not separately enforced — only `distributed_hard_timeout`
   bounds L2 reads.
-- **`DistributedCacheKeyModifierMode`** supports `Prefix` only (not `Suffix`/`None`).
 - **Single `lock_timeout`** rather than separate memory/distributed lock timeouts;
   `WaitForInitialBackplaneSubscribe` and a global `DisableTagging` are not exposed.
 
 These are tracked deliberately rather than faked; each is an additive change behind
 the existing seams.
+
+> Closed since first audit: the Redis backplane channel is now configurable
+> (`RedisBackplane::connect_with_channel`) so several caches can share one Redis,
+> and the L2 key modifier supports `Prefix` / `Suffix` / `None`
+> (`CacheBuilder::distributed_key_modifier_mode`).
 
 ---
 

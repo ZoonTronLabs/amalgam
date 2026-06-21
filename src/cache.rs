@@ -26,7 +26,7 @@ use crate::factory::{FactoryContext, FactoryProduct, StaleInfo};
 use crate::locking::{KeyGuard, KeyedLock};
 use crate::maybe::MaybeValue;
 use crate::memory::MemoryStore;
-use crate::options::{EntryOptions, RemoveByTagBehavior};
+use crate::options::{EntryOptions, KeyModifierMode, RemoveByTagBehavior};
 use crate::plugins::{Plugin, PluginHost};
 use crate::recovery::{
     AutoRecoveryService, RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryItem,
@@ -72,6 +72,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     default_options_provider: Option<Arc<dyn DefaultEntryOptionsProvider>>,
     ignore_incoming_backplane: bool,
     distributed_wire_version: Arc<str>,
+    distributed_key_modifier_mode: KeyModifierMode,
 }
 
 impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
@@ -1091,7 +1092,11 @@ impl<V: Clone + Send + Sync + 'static> Default for Cache<V> {
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
     /// The L2 storage key (wire-version-prefixed so cache versions can share L2).
     fn l2_key(&self, full_key: &str) -> String {
-        format!("{}:{}", self.distributed_wire_version, full_key)
+        match self.distributed_key_modifier_mode {
+            KeyModifierMode::Prefix => format!("{}:{}", self.distributed_wire_version, full_key),
+            KeyModifierMode::Suffix => format!("{}:{}", full_key, self.distributed_wire_version),
+            KeyModifierMode::None => full_key.to_owned(),
+        }
     }
 
     /// Serializes and writes an entry to L2 with the given physical TTL. `Err` on
@@ -1322,6 +1327,7 @@ pub struct CacheBuilder<V> {
     default_options_provider: Option<Arc<dyn DefaultEntryOptionsProvider>>,
     ignore_incoming_backplane: bool,
     distributed_wire_version: Arc<str>,
+    distributed_key_modifier_mode: KeyModifierMode,
     _marker: std::marker::PhantomData<fn() -> V>,
 }
 
@@ -1349,6 +1355,7 @@ impl<V> CacheBuilder<V> {
             default_options_provider: None,
             ignore_incoming_backplane: false,
             distributed_wire_version: Arc::from("v1"),
+            distributed_key_modifier_mode: KeyModifierMode::default(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -1482,9 +1489,16 @@ impl<V> CacheBuilder<V> {
         self
     }
 
-    /// Sets the L2 wire-format version prepended to distributed keys.
+    /// Sets the L2 wire-format version combined with distributed keys.
     pub fn distributed_wire_version(mut self, version: impl AsRef<str>) -> Self {
         self.distributed_wire_version = Arc::from(version.as_ref());
+        self
+    }
+
+    /// Sets how the wire-format version is combined with the L2 key (prefix,
+    /// suffix, or none).
+    pub fn distributed_key_modifier_mode(mut self, mode: KeyModifierMode) -> Self {
+        self.distributed_key_modifier_mode = mode;
         self
     }
 }
@@ -1534,6 +1548,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             default_options_provider: self.default_options_provider,
             ignore_incoming_backplane: self.ignore_incoming_backplane,
             distributed_wire_version: self.distributed_wire_version,
+            distributed_key_modifier_mode: self.distributed_key_modifier_mode,
         });
         // Wire the recovery executor (the cache) as a Weak so it never keeps the
         // cache alive, then start the background drain loop.

@@ -43,6 +43,20 @@ pub enum RemoveByTagBehavior {
     Remove,
 }
 
+/// How the L2 wire-format version is combined with a cache key, mirroring
+/// FusionCache's `CacheKeyModifierMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyModifierMode {
+    /// Prepend the version: `v1:key` (the default — different cache versions can
+    /// share one L2 without colliding).
+    #[default]
+    Prefix,
+    /// Append the version: `key:v1`.
+    Suffix,
+    /// Leave the key unmodified.
+    None,
+}
+
 /// A validated eager-refresh threshold: a fraction strictly between 0 and 1.
 ///
 /// A threshold of `0.8` means "once 80% of the entry's duration has elapsed,

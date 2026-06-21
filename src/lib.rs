@@ -61,7 +61,7 @@ pub use error::{Error, FactoryError, Result};
 pub use events::{CacheEvent, CircuitComponent, Events};
 pub use factory::{FactoryContext, FactoryProduct, ModifiedBuilder};
 pub use maybe::MaybeValue;
-pub use options::{EagerThreshold, EntryOptions, Priority, RemoveByTagBehavior};
+pub use options::{EagerThreshold, EntryOptions, KeyModifierMode, Priority, RemoveByTagBehavior};
 pub use plugins::{Plugin, PluginHost};
 pub use recovery::{
     AutoRecoveryService, RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryItem,

@@ -244,6 +244,7 @@ fn new_token() -> String {
 pub struct RedisBackplane {
     manager: ConnectionManager,
     sender: broadcast::Sender<BackplaneMessage>,
+    channel: String,
     // Kept alive for the lifetime of the backplane so the subscriber connection
     // (and thus the relaying task) is not torn down early.
     _subscriber: ConnectionManager,
@@ -257,7 +258,22 @@ impl RedisBackplane {
     /// Returns [`Error::Backplane`] if the URL is invalid, either connection
     /// cannot be established, or the channel subscription fails.
     pub async fn connect(connection: impl Into<String>) -> Result<Self> {
+        Self::connect_with_channel(connection, BACKPLANE_CHANNEL).await
+    }
+
+    /// Like [`connect`](Self::connect) but on a specific pub/sub `channel`. Give
+    /// each cache its own channel when several caches share one Redis server, so
+    /// their invalidation messages don't cross-talk.
+    ///
+    /// # Errors
+    /// Returns [`Error::Backplane`] if the URL is invalid, either connection
+    /// cannot be established, or the channel subscription fails.
+    pub async fn connect_with_channel(
+        connection: impl Into<String>,
+        channel: impl Into<String>,
+    ) -> Result<Self> {
         let connection = connection.into();
+        let channel = channel.into();
 
         // Connection used for publishing (RESP2 is fine for plain PUBLISH).
         let publish_client = Client::open(connection.clone()).map_err(backplane_err)?;
@@ -271,11 +287,12 @@ impl RedisBackplane {
         // Dedicated subscriber connection. Pub/sub pushes are only delivered to
         // the push sender over RESP3, so force the protocol regardless of what
         // the caller's URL requested.
-        let subscriber = Self::spawn_subscriber(&connection, sender.clone()).await?;
+        let subscriber = Self::spawn_subscriber(&connection, &channel, sender.clone()).await?;
 
         Ok(Self {
             manager,
             sender,
+            channel,
             _subscriber: subscriber,
         })
     }
@@ -285,6 +302,7 @@ impl RedisBackplane {
     /// the manager so the caller can keep it (and the subscription) alive.
     async fn spawn_subscriber(
         connection: &str,
+        channel: &str,
         sender: broadcast::Sender<BackplaneMessage>,
     ) -> Result<ConnectionManager> {
         let info = connection
@@ -310,10 +328,7 @@ impl RedisBackplane {
             .await
             .map_err(backplane_err)?;
 
-        manager
-            .subscribe(BACKPLANE_CHANNEL)
-            .await
-            .map_err(backplane_err)?;
+        manager.subscribe(channel).await.map_err(backplane_err)?;
 
         tokio::spawn(relay_pushes(push_rx, sender));
         Ok(manager)
@@ -326,7 +341,7 @@ impl Backplane for RedisBackplane {
         let payload = encode_message(&message);
         let mut conn = self.manager.clone();
         redis::cmd("PUBLISH")
-            .arg(BACKPLANE_CHANNEL)
+            .arg(&self.channel)
             .arg(payload)
             .query_async::<i64>(&mut conn)
             .await
