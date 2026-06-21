@@ -158,6 +158,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// The full `get_or_set`: per-call `options`, `tags` for the produced entry,
     /// and a `fail_safe_default` served as a last resort when the factory fails
     /// and no stale value exists.
+    #[tracing::instrument(
+        level = "debug",
+        name = "amalgam.get_or_set",
+        skip_all,
+        fields(cache = %self.inner.name, key = key.as_ref())
+    )]
     pub async fn get_or_set_full<F, Fut>(
         &self,
         key: impl AsRef<str>,

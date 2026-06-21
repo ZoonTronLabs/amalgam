@@ -43,6 +43,9 @@ pub mod serializers;
 pub mod tags;
 pub mod time;
 
+#[cfg(feature = "opentelemetry")]
+pub mod otel;
+
 #[cfg(feature = "redis")]
 pub mod redis_backend;
 
@@ -72,6 +75,9 @@ pub use serializers::MessagePackSerializer;
 
 #[cfg(feature = "metrics")]
 pub use observability::MetricsPlugin;
+
+#[cfg(feature = "opentelemetry")]
+pub use otel::{OtelGuard, init_otlp};
 
 #[cfg(feature = "redis")]
 pub use redis_backend::{RedisBackplane, RedisDistributedCache, RedisDistributedLocker};

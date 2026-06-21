@@ -1,0 +1,28 @@
+# Local infrastructure for amalgam's integration tests and the OTel example.
+#
+#   docker compose up -d
+#   AMALGAM_REDIS_URL=redis://127.0.0.1:6379/ cargo test --features redis
+#   cargo run --example otel --features opentelemetry   # then open http://localhost:16686
+#   docker compose down
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: amalgam-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  # Jaeger all-in-one: receives OTLP (gRPC 4317 / HTTP 4318) and serves a trace UI.
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    container_name: amalgam-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # web UI  → http://localhost:16686
+      - "4317:4317" # OTLP gRPC (amalgam's otel example exports here)
+      - "4318:4318" # OTLP HTTP
