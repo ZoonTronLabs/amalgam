@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="amalgam">
+  <title>amalgam</title>
+  <defs>
+    <!-- Metallic green sheen: light silver-mint → emerald → deep forge green. -->
+    <linearGradient id="metal" x1="0.15" y1="0.05" x2="0.85" y2="0.95">
+      <stop offset="0" stop-color="#d6fff0"/>
+      <stop offset="0.35" stop-color="#5fd6a0"/>
+      <stop offset="0.7" stop-color="#2da372"/>
+      <stop offset="1" stop-color="#13654a"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="0.5" cy="0.38" r="0.85">
+      <stop offset="0" stop-color="#1d3329"/>
+      <stop offset="1" stop-color="#0e1814"/>
+    </radialGradient>
+    <!-- "Gooey" filter: blurs then sharpens alpha so nearby blobs fuse into one
+         mass — the literal amalgamation. -->
+    <filter id="goo" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="blur"/>
+      <feColorMatrix in="blur" mode="matrix"
+        values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 19 -8" result="goo"/>
+      <feBlend in="goo" in2="goo"/>
+    </filter>
+  </defs>
+
+  <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+
+  <!-- Three droplets placed so the gooey filter fuses them into one amalgam. -->
+  <g filter="url(#goo)" fill="url(#metal)">
+    <circle cx="100" cy="112" r="40"/>
+    <circle cx="156" cy="120" r="46"/>
+    <circle cx="124" cy="160" r="38"/>
+    <circle cx="128" cy="132" r="26"/>
+  </g>
+
+  <!-- Specular highlights for a liquid-metal read. -->
+  <ellipse cx="92" cy="98" rx="13" ry="9" fill="#f4fffb" opacity="0.55"/>
+  <circle cx="150" cy="106" r="6" fill="#f4fffb" opacity="0.4"/>
+</svg>
