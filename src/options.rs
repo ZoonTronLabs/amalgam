@@ -100,6 +100,10 @@ pub struct EntryOptions {
 
     // ---- locking ----
     lock_timeout: Timeout,
+    // Specific overrides; each falls back to `lock_timeout` when `None`
+    // (FusionCache `MemoryLockTimeout` / `DistributedLockTimeout`).
+    memory_lock_timeout: Option<Timeout>,
+    distributed_lock_timeout: Option<Timeout>,
 
     // ---- fail-safe ----
     is_fail_safe_enabled: bool,
@@ -147,6 +151,8 @@ impl Default for EntryOptions {
             jitter_max: Duration::ZERO,
 
             lock_timeout: Timeout::Infinite,
+            memory_lock_timeout: None,
+            distributed_lock_timeout: None,
 
             is_fail_safe_enabled: false,
             fail_safe_max_duration: Duration::from_secs(60 * 60 * 24), // 1 day
@@ -231,10 +237,27 @@ impl EntryOptions {
         self
     }
 
-    /// Sets the maximum time to wait for the per-key single-flight lock.
+    /// Sets the general maximum wait for the per-key single-flight lock — the
+    /// fallback for the memory- and distributed-specific lock timeouts.
     #[must_use]
     pub fn with_lock_timeout(mut self, timeout: Timeout) -> Self {
         self.lock_timeout = timeout;
+        self
+    }
+
+    /// Overrides the wait for the in-memory single-flight lock (defaults to
+    /// [`with_lock_timeout`](Self::with_lock_timeout)). FusionCache `MemoryLockTimeout`.
+    #[must_use]
+    pub fn with_memory_lock_timeout(mut self, timeout: Timeout) -> Self {
+        self.memory_lock_timeout = Some(timeout);
+        self
+    }
+
+    /// Overrides the wait for the cross-node distributed lock (defaults to
+    /// [`with_lock_timeout`](Self::with_lock_timeout)). FusionCache `DistributedLockTimeout`.
+    #[must_use]
+    pub fn with_distributed_lock_timeout(mut self, timeout: Timeout) -> Self {
+        self.distributed_lock_timeout = Some(timeout);
         self
     }
 
@@ -368,10 +391,25 @@ impl EntryOptions {
         self.eager_refresh_threshold
     }
 
-    /// The L1 lock timeout.
+    /// The general lock timeout — the fallback for the memory- and
+    /// distributed-specific lock timeouts.
     #[must_use]
     pub fn lock_timeout(&self) -> Timeout {
         self.lock_timeout
+    }
+
+    /// The effective in-memory single-flight lock timeout (`memory_lock_timeout`,
+    /// or [`lock_timeout`](Self::lock_timeout) when unset).
+    #[must_use]
+    pub fn memory_lock_timeout(&self) -> Timeout {
+        self.memory_lock_timeout.unwrap_or(self.lock_timeout)
+    }
+
+    /// The effective cross-node distributed lock timeout
+    /// (`distributed_lock_timeout`, or [`lock_timeout`](Self::lock_timeout) when unset).
+    #[must_use]
+    pub fn distributed_lock_timeout(&self) -> Timeout {
+        self.distributed_lock_timeout.unwrap_or(self.lock_timeout)
     }
 
     /// `true` if a timed-out factory is allowed to finish in the background.
@@ -565,6 +603,22 @@ impl EntryOptions {
         selected.min(self.factory_hard_timeout)
     }
 
+    /// Selects the L2 (distributed) timeout to enforce for an awaited L2 read.
+    ///
+    /// Mirrors [`appropriate_factory_timeout`](Self::appropriate_factory_timeout):
+    /// the distributed *soft* timeout only applies when fail-safe is on *and* a
+    /// fallback value exists; the *hard* timeout always applies and wins when it
+    /// is shorter (FusionCache `GetAppropriateDistributedCacheTimeout`).
+    #[must_use]
+    pub fn appropriate_distributed_timeout(&self, has_fallback: bool) -> Timeout {
+        let mut selected = Timeout::Infinite;
+        if self.is_fail_safe_enabled && has_fallback && !self.distributed_soft_timeout.is_infinite()
+        {
+            selected = self.distributed_soft_timeout;
+        }
+        selected.min(self.distributed_hard_timeout)
+    }
+
     /// Computes the logical-expiration timestamp for a *fresh* entry created at
     /// `created`, applying jitter (if any).
     #[must_use]
@@ -671,6 +725,81 @@ mod tests {
         assert_eq!(
             opts.appropriate_factory_timeout(true),
             Timeout::After(Duration::from_millis(20))
+        );
+    }
+
+    #[test]
+    fn distributed_soft_timeout_applies_only_with_fail_safe_and_fallback() {
+        let opts = EntryOptions::new(Duration::from_secs(10))
+            .with_fail_safe(true, None, None)
+            .with_distributed_timeouts(
+                Timeout::After(Duration::from_millis(50)),
+                Timeout::Infinite,
+            );
+        assert_eq!(
+            opts.appropriate_distributed_timeout(true),
+            Timeout::After(Duration::from_millis(50))
+        );
+        // No fallback ⇒ soft does not apply.
+        assert_eq!(
+            opts.appropriate_distributed_timeout(false),
+            Timeout::Infinite
+        );
+
+        // Fail-safe off ⇒ soft does not apply even with a fallback.
+        let no_fs = EntryOptions::new(Duration::from_secs(10)).with_distributed_timeouts(
+            Timeout::After(Duration::from_millis(50)),
+            Timeout::Infinite,
+        );
+        assert_eq!(
+            no_fs.appropriate_distributed_timeout(true),
+            Timeout::Infinite
+        );
+    }
+
+    #[test]
+    fn distributed_hard_timeout_wins_when_shorter() {
+        let opts = EntryOptions::new(Duration::from_secs(10))
+            .with_fail_safe(true, None, None)
+            .with_distributed_timeouts(
+                Timeout::After(Duration::from_millis(50)),
+                Timeout::After(Duration::from_millis(20)),
+            );
+        assert_eq!(
+            opts.appropriate_distributed_timeout(true),
+            Timeout::After(Duration::from_millis(20))
+        );
+    }
+
+    #[test]
+    fn lock_timeouts_inherit_general_by_default() {
+        let opts = EntryOptions::new(Duration::from_secs(10))
+            .with_lock_timeout(Timeout::After(Duration::from_millis(100)));
+        assert_eq!(
+            opts.memory_lock_timeout(),
+            Timeout::After(Duration::from_millis(100))
+        );
+        assert_eq!(
+            opts.distributed_lock_timeout(),
+            Timeout::After(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
+    fn specific_lock_timeouts_override_general() {
+        let opts = EntryOptions::new(Duration::from_secs(10))
+            .with_lock_timeout(Timeout::After(Duration::from_millis(100)))
+            .with_memory_lock_timeout(Timeout::After(Duration::from_millis(20)))
+            .with_distributed_lock_timeout(Timeout::Infinite);
+        assert_eq!(
+            opts.memory_lock_timeout(),
+            Timeout::After(Duration::from_millis(20))
+        );
+        assert_eq!(opts.distributed_lock_timeout(), Timeout::Infinite);
+        // The general fallback is untouched.
+        assert_eq!(
+            opts.lock_timeout(),
+            Timeout::After(Duration::from_millis(100))
         );
     }
 }

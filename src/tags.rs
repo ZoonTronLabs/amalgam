@@ -4,10 +4,12 @@
 //!
 //! FusionCache implements "remove by tag" *lazily*: `RemoveByTag` does not scan
 //! and touch matching entries. Instead it records a per-tag timestamp marker;
-//! when an entry is later read, it is considered invalid if it was created at or
-//! before the marker for any of its tags. This crate keeps the same semantics
-//! but stores the markers in a dedicated, strongly-typed structure rather than
-//! smuggling them through the value cache as magic `__fc:t:*` keys.
+//! when an entry is later read, it is considered invalid if it was created
+//! strictly before the marker for any of its tags (FusionCache: the entry is
+//! expired when the marker is *greater than* its creation tick). This crate
+//! keeps the same semantics but stores the markers in a dedicated,
+//! strongly-typed structure rather than smuggling them through the value cache
+//! as magic `__fc:t:*` keys.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -77,9 +79,9 @@ const NEVER: i64 = i64::MIN;
 pub struct TagRegistry {
     /// tag → the tick at which entries with this tag became invalid.
     markers: DashMap<Tag, i64>,
-    /// "expire everything created at/before this tick".
+    /// "expire everything created before this tick".
     clear_expire: AtomicI64,
-    /// "remove everything created at/before this tick".
+    /// "remove everything created before this tick".
     clear_remove: AtomicI64,
 }
 
@@ -115,14 +117,14 @@ impl TagRegistry {
         self.markers.get(tag).map(|v| Timestamp::from_ticks(*v))
     }
 
-    /// Records a "clear (expire)" at `at`: every entry created at/before this
-    /// point becomes logically expired.
+    /// Records a "clear (expire)" at `at`: every entry created strictly before
+    /// this point becomes logically expired.
     pub fn mark_clear_expire(&self, at: Timestamp) {
         bump_max(&self.clear_expire, at.ticks());
     }
 
-    /// Records a "clear (remove)" at `at`: every entry created at/before this
-    /// point is hard-removed.
+    /// Records a "clear (remove)" at `at`: every entry created strictly before
+    /// this point is hard-removed.
     pub fn mark_clear_remove(&self, at: Timestamp) {
         bump_max(&self.clear_remove, at.ticks());
     }
@@ -132,7 +134,9 @@ impl TagRegistry {
     ///
     /// Order mirrors FusionCache: clear-remove first (hardest), then per-tag
     /// markers (honouring `behavior`), then clear-expire. The comparison is
-    /// inclusive (`entry_created <= marker`).
+    /// strict (`entry_created < marker`): an entry created in the same tick as a
+    /// marker survives, exactly as in FusionCache (an entry is invalidated only
+    /// when the marker is *greater than* its creation tick).
     #[must_use]
     pub fn evaluate(
         &self,
@@ -142,13 +146,13 @@ impl TagRegistry {
     ) -> TagVerdict {
         let created = entry_created.ticks();
 
-        if created <= self.clear_remove.load(Ordering::Relaxed) {
+        if created < self.clear_remove.load(Ordering::Relaxed) {
             return TagVerdict::Remove;
         }
 
         for tag in tags {
             if let Some(marker) = self.markers.get(tag).map(|m| *m)
-                && created <= marker
+                && created < marker
             {
                 return match behavior {
                     RemoveByTagBehavior::Expire => TagVerdict::Expire,
@@ -157,7 +161,7 @@ impl TagRegistry {
             }
         }
 
-        if created <= self.clear_expire.load(Ordering::Relaxed) {
+        if created < self.clear_expire.load(Ordering::Relaxed) {
             return TagVerdict::Expire;
         }
 
@@ -208,6 +212,30 @@ mod tests {
     }
 
     #[test]
+    fn entry_at_marker_tick_survives() {
+        // FusionCache invalidates only when the marker is *strictly* greater than
+        // the entry's creation tick. An entry born in the same tick as the marker
+        // must remain valid (the comparison is strict `<`, not `<=`).
+        let reg = TagRegistry::new();
+        let at = Timestamp::from_ticks(200);
+        reg.mark_tag(tag("a"), at);
+        assert_eq!(
+            reg.evaluate(at, &[tag("a")], RemoveByTagBehavior::Expire),
+            TagVerdict::Valid,
+            "an entry created in the marker tick is kept"
+        );
+        // Exactly one tick earlier is invalidated.
+        assert_eq!(
+            reg.evaluate(
+                Timestamp::from_ticks(199),
+                &[tag("a")],
+                RemoveByTagBehavior::Expire
+            ),
+            TagVerdict::Expire,
+        );
+    }
+
+    #[test]
     fn remove_behavior_dominates() {
         let reg = TagRegistry::new();
         reg.mark_tag(tag("a"), Timestamp::from_ticks(200));
@@ -229,6 +257,24 @@ mod tests {
         assert_eq!(
             reg.evaluate(Timestamp::from_ticks(100), &[], RemoveByTagBehavior::Expire),
             TagVerdict::Remove
+        );
+    }
+
+    #[test]
+    fn clear_markers_are_strict_at_the_boundary() {
+        let reg = TagRegistry::new();
+        let at = Timestamp::from_ticks(200);
+        reg.mark_clear_expire(at);
+        reg.mark_clear_remove(at);
+        // Same-tick survives both clear markers.
+        assert_eq!(
+            reg.evaluate(at, &[], RemoveByTagBehavior::Expire),
+            TagVerdict::Valid,
+        );
+        // Strictly older is removed (remove outranks expire).
+        assert_eq!(
+            reg.evaluate(Timestamp::from_ticks(199), &[], RemoveByTagBehavior::Expire),
+            TagVerdict::Remove,
         );
     }
 }

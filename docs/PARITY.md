@@ -293,7 +293,7 @@ Where `amalgam` intentionally departs from a literal translation — each trades
 | `distributed_soft_timeout` / `distributed_hard_timeout` | `Infinite` / `Infinite` | both infinite |
 | `skip_distributed_locker` | `false` | locker used when configured |
 | `enable_auto_clone` | `false` (inherent in Rust — see [parity](#feature-parity)) | `EnableAutoClone` = false |
-| `RecoveryConfig::delay` | `5s` (`enabled: true`, `max_items`/`max_retries` unbounded) | `AutoRecoveryDelay` = 5s |
+| `RecoveryConfig::delay` | `2s` (`enabled: true`, `max_items`/`max_retries` unbounded) | `AutoRecoveryDelay` = 2s |
 | `distributed_wire_version` (cache-wide) | `"v1"` | wire-format version |
 | `distributed_circuit_breaker` / `backplane_circuit_breaker` (cache-wide) | `Duration::ZERO` (disabled) | `…CircuitBreakerDuration` = 0 |
 

@@ -262,7 +262,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             && !(stale_entry.is_some() && opts.skip_distributed_read_when_stale())
         {
             let now = self.inner.clock.now();
-            if let Some(entry) = self.read_l2_guarded(&full_key, now, &opts).await? {
+            let l2_has_fallback = stale_entry.is_some() || fail_safe_default.has_value();
+            if let Some(entry) = self
+                .read_l2_guarded(&full_key, now, &opts, l2_has_fallback)
+                .await?
+            {
                 match self.inner.tags.evaluate(
                     entry.meta().created(),
                     entry.meta().tags(),
@@ -569,7 +573,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         opts: &EntryOptions,
         stale_entry: Option<&Entry<V>>,
     ) -> LockOutcome<V> {
-        let local = match opts.lock_timeout() {
+        let local = match opts.memory_lock_timeout() {
             Timeout::Infinite => self.inner.locks.lock(full_key).await,
             Timeout::After(d) => {
                 match tokio::time::timeout(d, self.inner.locks.lock(full_key)).await {
@@ -612,7 +616,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let locker = self.inner.distributed_locker.as_ref()?;
         let lock_key = format!("amalgam:lock:{full_key}");
         match locker
-            .acquire(&lock_key, opts.physical_ttl(), opts.lock_timeout())
+            .acquire(
+                &lock_key,
+                opts.physical_ttl(),
+                opts.distributed_lock_timeout(),
+            )
             .await
         {
             Ok(Some(token)) => Some(DistributedReleaseGuard {
@@ -704,22 +712,37 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
     }
 
-    /// L2 read, gated by the circuit breaker and the distributed hard timeout.
+    /// L2 read, gated by the circuit breaker and the appropriate distributed
+    /// timeout (soft when fail-safe + a fallback exists, otherwise hard).
     /// Returns `Err` only when `rethrow_distributed_exceptions` is set.
     async fn read_l2_guarded(
         &self,
         full_key: &Arc<str>,
         now: Timestamp,
         opts: &EntryOptions,
+        has_fallback: bool,
     ) -> Result<Option<Entry<V>>> {
         if self.inner.distributed.is_none() || !self.inner.circuit_l2.is_closed(now) {
             return Ok(None);
         }
         let read = self.inner.l2_read(full_key, now);
-        let result = match opts.distributed_hard_timeout() {
+        let timeout = opts.appropriate_distributed_timeout(has_fallback);
+        let result = match timeout {
             Timeout::After(d) => match tokio::time::timeout(d, read).await {
                 Ok(r) => r,
-                Err(_) => Err(Error::Distributed("l2 read timed out".to_owned())),
+                Err(_) => {
+                    // A *soft* distributed timeout (fail-safe on + a fallback
+                    // exists) is an expected, benign bail-out to the fallback: it
+                    // must not mark L2 unhealthy. Only a *hard* timeout is a
+                    // genuine L2 failure that trips the circuit breaker.
+                    if opts.is_fail_safe_enabled()
+                        && has_fallback
+                        && timeout == opts.distributed_soft_timeout()
+                    {
+                        return Ok(None);
+                    }
+                    Err(Error::Distributed("l2 read timed out".to_owned()))
+                }
             },
             Timeout::Infinite => read.await,
         };
