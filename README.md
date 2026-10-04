@@ -14,7 +14,7 @@
 
 An async Rust hybrid cache inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
-This README describes **0.3.0**. Install the crate from crates.io:
+This README describes **0.3.1**. Install the crate from crates.io:
 
 ```toml
 [dependencies]

@@ -6,7 +6,7 @@ The comparison pins are distinct:
 
 - Inspected upstream source: FusionCache commit `af09f81a3ea8d7ed71183b46501946da801a2a22`.
 - Executed reference: published NuGet FusionCache **2.9.0**, binary informational version `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
-- Amalgam: **0.3.0**.
+- Amalgam: **0.3.1**.
 
 ## Observable behavior
 

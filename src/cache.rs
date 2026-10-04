@@ -52,6 +52,7 @@ use crate::time::{Clock, ClockTiming, SystemClock, Timeout, Timestamp};
 use async_trait::async_trait;
 use std::borrow::Cow;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -467,15 +468,23 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         };
         LookupKey { raw, full }
     }
-    async fn observed<T: Send + 'static>(
+    fn observed<T: Send + 'static>(
         &self,
         operation: CacheOperation,
         key: Option<Arc<str>>,
         token: Option<FactoryCancellation>,
         work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
-    ) -> Result<T> {
-        self.observed_using(operation, key, token, CancellationSource::new(), work)
-            .await
+    ) -> impl Future<Output = Result<T>> + Send + '_ {
+        // The scope will own this work on the heap. Erase it before composing
+        // the observer futures, so callers do not embed the complete mutation
+        // state machine in every async adapter and tracing layer.
+        self.observed_using(
+            operation,
+            key,
+            token,
+            CancellationSource::new(),
+            Box::pin(work),
+        )
     }
     async fn observed_using<T: Send + 'static>(
         &self,
@@ -483,7 +492,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         key: Option<Arc<str>>,
         token: Option<FactoryCancellation>,
         source: CancellationSource,
-        work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
+        work: Pin<Box<dyn Future<Output = Result<Observed<T>>> + Send>>,
     ) -> Result<T> {
         let observation = OperationObservation::new(
             self.inner.events.clone(),

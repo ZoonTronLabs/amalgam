@@ -3,6 +3,13 @@
 All notable changes to `amalgam` are documented here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.1] — 2026-10-05
+
+### Fixed
+
+- Heap-own mutation work before composing observation adapters. The 0.3.0 `set`, `remove`, and `clear` futures embedded roughly 55–68 KiB of state, causing a stack overflow when nested in traced backend refresh functions on ordinary test-thread stacks. Mutation futures now occupy about 1.3–1.5 KiB with unchanged cancellation, observation, and shutdown ownership.
+- Add a public mutation-future size budget and a traced read/refresh regression on a 2 MiB thread stack. The ready L1 read path retains its existing representation.
+
 ## [0.3.0] — 2026-10-05
 
 ### Changed
