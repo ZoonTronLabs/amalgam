@@ -1,67 +1,143 @@
 //! Single-flight locking for cache-stampede protection.
 //!
-//! FusionCache guarantees that, per key, only one factory runs at a time; other
-//! callers await that result. We implement this with a fixed bank of sharded
-//! async mutexes: a key always maps to the same shard, so concurrent calls for
-//! the same key serialize on the same lock. Distinct keys that happen to share a
-//! shard may serialize too, but this only affects throughput, never
-//! correctness — after acquiring the lock each caller re-checks its *own* key.
+//! Same-key requests normally share one factory. A configured finite lock wait
+//! can permit best-effort origin work. Each live key has its own async mutex. Hash-map
+//! shards protect only mutex lookup, never the awaited factory: distinct keys
+//! cannot deadlock merely because their hashes collide.
 //!
-//! Sharding (rather than a per-key map) keeps memory bounded and side-steps the
-//! notoriously race-prone "remove the lock entry when the last waiter leaves"
-//! cleanup. The guard is an [`OwnedMutexGuard`] so it is `'static + Send` and can
+//! The map keeps weak references, so removing an idle map slot never replaces a
+//! mutex still owned by a holder or waiter. Periodic cleanup bounds idle slots.
+//! The guard is an [`OwnedMutexGuard`] so it is `'static + Send` and can
 //! be moved into a spawned background task (needed for background factory
 //! completion and eager refresh).
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
 
+use dashmap::{DashMap, mapref::entry::Entry};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-/// A bank of sharded async mutexes providing per-key single-flight.
-#[derive(Debug)]
-pub struct KeyedLock {
-    shards: Box<[Arc<Mutex<()>>]>,
-    mask: usize,
+/// Weak slots with bounded incremental reclamation. Each lookup visits at most
+/// four queued slots, independent of the number of simultaneous live keys.
+pub(crate) struct WeakSlots<T> {
+    slots: DashMap<Arc<str>, Weak<T>>,
+    sweep: std::sync::Mutex<VecDeque<Arc<str>>>,
+    lookups: AtomicUsize,
 }
 
-/// The guard returned by acquiring a key's lock. Releasing it (on drop) lets the
-/// next waiter for that shard proceed.
-pub type KeyGuard = OwnedMutexGuard<()>;
-
-impl KeyedLock {
-    /// Creates a lock bank with at least `shards` shards (rounded up to a power
-    /// of two for fast masking).
-    #[must_use]
-    pub fn new(shards: usize) -> Self {
-        let count = shards.max(1).next_power_of_two();
-        let shards = (0..count).map(|_| Arc::new(Mutex::new(()))).collect();
+impl<T> WeakSlots<T> {
+    pub(crate) fn new() -> Self {
         Self {
-            shards,
-            mask: count - 1,
+            slots: DashMap::new(),
+            sweep: std::sync::Mutex::new(VecDeque::new()),
+            lookups: AtomicUsize::new(0),
         }
     }
 
-    fn shard_for(&self, key: &str) -> &Arc<Mutex<()>> {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let idx = (hasher.finish() as usize) & self.mask;
-        &self.shards[idx]
+    pub(crate) fn get(&self, key: &str, make: impl FnOnce() -> T) -> Arc<T> {
+        if self
+            .lookups
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(16)
+        {
+            self.clean(4);
+        }
+        let key: Arc<str> = Arc::from(key);
+        let (value, inserted) = match self.slots.entry(Arc::clone(&key)) {
+            Entry::Occupied(mut slot) => match slot.get().upgrade() {
+                Some(value) => (value, false),
+                None => {
+                    let value = Arc::new(make());
+                    slot.insert(Arc::downgrade(&value));
+                    (value, false)
+                }
+            },
+            Entry::Vacant(slot) => {
+                let value = Arc::new(make());
+                slot.insert(Arc::downgrade(&value));
+                (value, true)
+            }
+        };
+        if inserted {
+            self.sweep
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push_back(key);
+            self.clean(4);
+        }
+        value
+    }
+
+    pub(crate) fn clean(&self, budget: usize) {
+        let Ok(mut sweep) = self.sweep.try_lock() else {
+            return;
+        };
+        let count = budget.min(sweep.len());
+        for _ in 0..count {
+            let Some(key) = sweep.pop_front() else {
+                break;
+            };
+            match self.slots.entry(Arc::clone(&key)) {
+                Entry::Occupied(slot) if slot.get().strong_count() == 0 => {
+                    slot.remove();
+                }
+                Entry::Occupied(_) => sweep.push_back(key),
+                Entry::Vacant(_) => {}
+            }
+        }
+    }
+}
+
+impl<T> std::fmt::Debug for WeakSlots<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WeakSlots")
+            .field("slots", &self.slots.len())
+            .finish()
+    }
+}
+
+/// Per-key async mutexes with weak, safely reclaimable lookup slots.
+#[derive(Debug)]
+pub struct KeyedLock {
+    locks: WeakSlots<Mutex<()>>,
+}
+
+/// The guard returned by acquiring a key's lock. Releasing it (on drop) lets the
+/// next waiter for that key proceed.
+pub type KeyGuard = OwnedMutexGuard<()>;
+
+impl KeyedLock {
+    /// Creates per-key locks. The legacy `shards` argument is retained for source
+    /// compatibility; lookup sharding is selected by the map implementation.
+    #[must_use]
+    pub fn new(_shards: usize) -> Self {
+        Self {
+            locks: WeakSlots::new(),
+        }
+    }
+
+    fn mutex_for(&self, key: &str) -> Arc<Mutex<()>> {
+        self.locks.get(key, || Mutex::new(()))
+    }
+
+    /// Reclaims at most `budget` idle lookup slots.
+    pub fn clean_idle(&self, budget: usize) {
+        self.locks.clean(budget);
     }
 
     /// Acquires the lock for `key`, waiting if necessary.
     pub async fn lock(&self, key: &str) -> KeyGuard {
-        Arc::clone(self.shard_for(key)).lock_owned().await
+        self.mutex_for(key).lock_owned().await
     }
 
     /// Tries to acquire the lock for `key` without waiting.
     ///
-    /// Returns `None` if another caller currently holds the shard — used by
+    /// Returns `None` if another caller currently holds this key — used by
     /// non-blocking paths (eager refresh) that must not stall the caller.
     #[must_use]
     pub fn try_lock(&self, key: &str) -> Option<KeyGuard> {
-        Arc::clone(self.shard_for(key)).try_lock_owned().ok()
+        self.mutex_for(key).try_lock_owned().ok()
     }
 }
 
@@ -101,5 +177,24 @@ mod tests {
         }
         // Never more than one holder of the same key at once.
         assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn fifty_thousand_active_slots_keep_identity_and_reclaim_after_drop() {
+        let slots = WeakSlots::new();
+        let keys: Vec<_> = (0..50_000).map(|key| key.to_string()).collect();
+        let values: Vec<_> = keys
+            .iter()
+            .map(|key| slots.get(key, || Mutex::new(())))
+            .collect();
+        for (key, value) in keys.iter().zip(&values) {
+            assert!(Arc::ptr_eq(value, &slots.get(key, || Mutex::new(()))));
+        }
+        assert_eq!(slots.slots.len(), keys.len());
+        assert_eq!(slots.sweep.lock().unwrap().len(), keys.len());
+        drop(values);
+        slots.clean(keys.len());
+        assert!(slots.slots.is_empty());
+        assert!(slots.sweep.lock().unwrap().is_empty());
     }
 }

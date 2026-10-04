@@ -10,14 +10,63 @@
 
 use std::time::Duration;
 
-use crate::time::{Timeout, Timestamp, duration_to_ticks};
+use crate::error::ConfigError;
+use crate::time::{Timeout, Timestamp};
 
-/// Memory-eviction priority hint, mirroring `CacheItemPriority`.
+/// An injectable expiration-jitter algorithm. Orchestration samples it before
+/// passing a validated sample to pure entry/lifetime construction.
+pub trait JitterSource: Send + Sync {
+    /// Samples a nonnegative duration no greater than maximum. The receiving
+    /// boundary validates the sample, including custom implementations.
+    fn sample(&self, maximum: Duration) -> Duration;
+}
+
+/// Production jitter source, uniformly sampling the configured nanosecond range.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RandomJitterSource;
+
+impl JitterSource for RandomJitterSource {
+    fn sample(&self, maximum: Duration) -> Duration {
+        if maximum.is_zero() {
+            return Duration::ZERO;
+        }
+        let nanos = fastrand::u128(0..=maximum.as_nanos());
+        // Sampling is bounded by Duration, so neither component can overflow.
+        Duration::new(
+            (nanos / 1_000_000_000) as u64,
+            (nanos % 1_000_000_000) as u32,
+        )
+    }
+}
+
+/// A bounded jitter sample, separate from random sampling behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitterSample(Duration);
+
+impl JitterSample {
+    /// Validates a sampled duration before pure lifetime math.
+    pub fn new(sample: Duration, maximum: Duration) -> Result<Self, ConfigError> {
+        if sample > maximum {
+            return Err(ConfigError::InvalidJitterSample { sample, maximum });
+        }
+        Ok(Self(sample))
+    }
+
+    /// A valid zero-jitter sample.
+    pub const ZERO: Self = Self(Duration::ZERO);
+
+    /// The validated duration.
+    #[must_use]
+    pub const fn duration(self) -> Duration {
+        self.0
+    }
+}
+
+/// Memory-eviction priority, mirroring `CacheItemPriority`.
 ///
-/// The in-memory backend (moka) uses a TinyLFU policy and does not honour an
-/// explicit priority; this is retained for API parity and forwarded where a
-/// backend can use it. `NeverRemove` entries (e.g. internal tag markers) are
-/// kept in a dedicated never-evicting structure instead.
+/// Under a configured capacity, lower priorities are selected first and equal
+/// priorities use least-recently-used ordering. `NeverRemove` entries still
+/// consume capacity, expire physically and can be removed explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Priority {
     /// Evicted first under memory pressure.
@@ -29,6 +78,55 @@ pub enum Priority {
     High,
     /// Never evicted by the size policy.
     NeverRemove,
+}
+
+impl Priority {
+    pub(crate) const fn eviction_rank(self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Normal => 1,
+            Self::High => 2,
+            Self::NeverRemove => 3,
+        }
+    }
+}
+
+/// A nonnegative entry weight in application-defined units.
+///
+/// Zero is a valid weight. An independently configured entry-count limit can
+/// bound zero-weight entries. A missing weight counts as one unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EntryWeight(u64);
+
+impl EntryWeight {
+    /// Constructs a weight from a nonnegative number of units.
+    #[must_use]
+    pub const fn new(units: u64) -> Self {
+        Self(units)
+    }
+
+    /// The number of application-defined units.
+    #[must_use]
+    pub const fn units(self) -> u64 {
+        self.0
+    }
+}
+
+impl TryFrom<i64> for EntryWeight {
+    type Error = ConfigError;
+
+    fn try_from(size: i64) -> Result<Self, Self::Error> {
+        u64::try_from(size)
+            .map(Self)
+            .map_err(|_| ConfigError::NegativeEntryWeight { size })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum EntrySize {
+    Unspecified,
+    Weight(EntryWeight),
+    Rejected(i64),
 }
 
 /// What [`Cache::remove_by_tag`](crate::Cache::remove_by_tag) does to matched
@@ -120,7 +218,7 @@ pub struct EntryOptions {
     skip_memory_read: bool,
     skip_memory_write: bool,
     priority: Priority,
-    size: Option<i64>,
+    size: EntrySize,
     allow_stale_on_read_only: bool,
 
     // ---- distributed (L2) ----
@@ -128,6 +226,7 @@ pub struct EntryOptions {
     distributed_hard_timeout: Timeout,
     allow_background_distributed_operations: bool,
     rethrow_distributed_exceptions: bool,
+    rethrow_distributed_locker_exceptions: bool,
     rethrow_serialization_exceptions: bool,
     skip_distributed_read: bool,
     skip_distributed_write: bool,
@@ -166,13 +265,14 @@ impl Default for EntryOptions {
             skip_memory_read: false,
             skip_memory_write: false,
             priority: Priority::Normal,
-            size: None,
+            size: EntrySize::Unspecified,
             allow_stale_on_read_only: false,
 
             distributed_soft_timeout: Timeout::Infinite,
             distributed_hard_timeout: Timeout::Infinite,
             allow_background_distributed_operations: false,
             rethrow_distributed_exceptions: false,
+            rethrow_distributed_locker_exceptions: false,
             rethrow_serialization_exceptions: true,
             skip_distributed_read: false,
             skip_distributed_write: false,
@@ -303,11 +403,29 @@ impl EntryOptions {
         self
     }
 
-    /// Sets the entry's size weight (forwarded to the backend's size policy).
+    /// Requests an entry weight through the legacy signed API.
+    ///
+    /// Negative requests are rejected by [`validate`](Self::validate), cache
+    /// operations and fallible entry construction before insertion.
     #[must_use]
     pub fn with_size(mut self, size: i64) -> Self {
-        self.size = Some(size);
+        self.size = match u64::try_from(size) {
+            Ok(units) => EntrySize::Weight(EntryWeight::new(units)),
+            Err(_) => EntrySize::Rejected(size),
+        };
         self
+    }
+
+    /// Sets an already-valid weight, including weights above `i64::MAX`.
+    #[must_use]
+    pub fn with_entry_weight(mut self, weight: EntryWeight) -> Self {
+        self.size = EntrySize::Weight(weight);
+        self
+    }
+
+    /// Validates a legacy size request immediately.
+    pub fn try_with_size(self, size: i64) -> Result<Self, ConfigError> {
+        Ok(self.with_entry_weight(EntryWeight::try_from(size)?))
     }
 
     /// Allows read-only methods ([`try_get`](crate::Cache::try_get),
@@ -358,6 +476,20 @@ impl EntryOptions {
         self
     }
 
+    /// Propagates distributed-locker errors instead of running without its lease.
+    #[must_use]
+    pub fn with_rethrow_distributed_locker_exceptions(mut self, rethrow: bool) -> Self {
+        self.rethrow_distributed_locker_exceptions = rethrow;
+        self
+    }
+
+    /// Propagates foreground backplane errors to the caller.
+    #[must_use]
+    pub fn with_rethrow_backplane_exceptions(mut self, rethrow: bool) -> Self {
+        self.rethrow_backplane_exceptions = rethrow;
+        self
+    }
+
     /// Rethrows (de)serialization errors on the L2 path to the caller (FusionCache
     /// `ReThrowSerializationExceptions`, default `true`).
     #[must_use]
@@ -405,6 +537,12 @@ impl EntryOptions {
         self.duration
     }
 
+    /// The configured maximum expiration jitter.
+    #[must_use]
+    pub fn jitter_max(&self) -> Duration {
+        self.jitter_max
+    }
+
     /// `true` if fail-safe is enabled.
     #[must_use]
     pub fn is_fail_safe_enabled(&self) -> bool {
@@ -445,6 +583,19 @@ impl EntryOptions {
         self.distributed_lock_timeout.unwrap_or(self.lock_timeout)
     }
 
+    /// The factory soft deadline, also used for a stale caller's memory-lock
+    /// wait when no finite lock timeout was explicitly configured.
+    #[must_use]
+    pub fn factory_soft_timeout(&self) -> Timeout {
+        self.factory_soft_timeout
+    }
+
+    /// The factory hard execution deadline.
+    #[must_use]
+    pub fn factory_hard_timeout(&self) -> Timeout {
+        self.factory_hard_timeout
+    }
+
     /// `true` if a timed-out factory is allowed to finish in the background.
     #[must_use]
     pub fn allow_timed_out_factory_background_completion(&self) -> bool {
@@ -473,6 +624,32 @@ impl EntryOptions {
     #[must_use]
     pub fn priority(&self) -> Priority {
         self.priority
+    }
+
+    /// The validated weight, or an error for a negative legacy request.
+    pub fn size(&self) -> Result<Option<EntryWeight>, ConfigError> {
+        match self.size {
+            EntrySize::Unspecified => Ok(None),
+            EntrySize::Weight(weight) => Ok(Some(weight)),
+            EntrySize::Rejected(size) => Err(ConfigError::NegativeEntryWeight { size }),
+        }
+    }
+
+    /// Checks this configuration request before any cache side effects.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.size().map(|_| ())
+    }
+
+    /// Also validates the capability required by an auto-clone request.
+    pub fn validate_with_cloner<V>(
+        &self,
+        cloner: Option<&dyn crate::serializers::ValueCloner<V>>,
+    ) -> Result<(), ConfigError> {
+        self.validate()?;
+        if self.enable_auto_clone && cloner.is_none() {
+            return Err(ConfigError::AutoCloneWithoutCloner);
+        }
+        Ok(())
     }
 
     /// `true` if backplane notifications are suppressed for this operation.
@@ -512,12 +689,11 @@ impl EntryOptions {
         self
     }
 
-    /// `true` if L1 values should be (deep-)cloned out on read.
+    /// `true` if cache inputs and public values must be deeply isolated.
     ///
-    /// In Rust this is effectively always true: reads return an owned `V`
-    /// (`value_cloned`), so a caller mutating the returned value never affects the
-    /// cached copy. The flag exists for API parity and to opt into the same
-    /// guarantee explicitly.
+    /// Ordinary [`Clone`] can share interior mutable state (for example an
+    /// `Arc`). Auto-clone uses an explicit [`ValueCloner`](crate::ValueCloner)
+    /// and surfaces its failure instead of returning a shared value.
     #[must_use]
     pub fn enable_auto_clone(&self) -> bool {
         self.enable_auto_clone
@@ -558,6 +734,12 @@ impl EntryOptions {
     #[must_use]
     pub fn rethrow_distributed_exceptions(&self) -> bool {
         self.rethrow_distributed_exceptions
+    }
+
+    /// Whether distributed-locker failures are propagated.
+    #[must_use]
+    pub fn rethrow_distributed_locker_exceptions(&self) -> bool {
+        self.rethrow_distributed_locker_exceptions
     }
 
     /// `true` if (de)serialization errors should bubble to the caller (the
@@ -656,18 +838,42 @@ impl EntryOptions {
     /// `created`, applying jitter (if any).
     #[must_use]
     pub fn logical_expiration(&self, created: Timestamp) -> Timestamp {
-        let base = created.saturating_add(self.resolved_memory_duration());
-        if self.jitter_max.is_zero() {
-            base
-        } else {
-            let max_ticks = duration_to_ticks(self.jitter_max);
-            let extra = if max_ticks > 0 {
-                fastrand::i64(0..=max_ticks)
-            } else {
-                0
-            };
-            base.saturating_add(crate::time::ticks_to_duration(extra))
+        let sample = RandomJitterSource.sample(self.jitter_max);
+        created
+            .saturating_add(self.resolved_memory_duration())
+            .saturating_add(sample)
+    }
+
+    /// Pure lifetime math using a bounded sample supplied by orchestration.
+    pub fn logical_expiration_with_jitter(
+        &self,
+        inserted_at: Timestamp,
+        jitter: JitterSample,
+    ) -> Result<Timestamp, ConfigError> {
+        let sample = JitterSample::new(jitter.duration(), self.jitter_max)?;
+        Ok(inserted_at
+            .saturating_add(self.resolved_memory_duration())
+            .saturating_add(sample.duration()))
+    }
+
+    /// Pure eager-refresh math for the representation's actual freshness window.
+    #[must_use]
+    pub fn eager_refresh_at_expiration(
+        &self,
+        inserted_at: Timestamp,
+        expiration: Timestamp,
+    ) -> Option<Timestamp> {
+        let threshold = self.eager_refresh_threshold?;
+        if expiration <= inserted_at {
+            return None;
         }
+        Some(
+            inserted_at.saturating_add(
+                expiration
+                    .saturating_duration_since(inserted_at)
+                    .mul_f32(threshold.fraction()),
+            ),
+        )
     }
 
     /// Computes the eager-refresh trigger timestamp for an entry created at

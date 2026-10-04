@@ -54,18 +54,18 @@ impl Timestamp {
     /// overflowing. Used to derive expiration points from a "now".
     #[must_use]
     pub fn saturating_add(self, duration: Duration) -> Self {
-        Self(self.0.saturating_add(duration_to_ticks(duration)))
+        let result = i128::from(self.0) + duration_ticks_wide(duration);
+        Self(i64::try_from(result).unwrap_or(i64::MAX))
     }
 
     /// Returns the duration elapsed from `earlier` to `self`, or
     /// [`Duration::ZERO`] if `self` is not after `earlier`.
     #[must_use]
     pub fn saturating_duration_since(self, earlier: Timestamp) -> Duration {
-        let delta = self.0.saturating_sub(earlier.0);
-        if delta <= 0 {
+        if self <= earlier {
             Duration::ZERO
         } else {
-            ticks_to_duration(delta)
+            unsigned_ticks_to_duration(self.0.abs_diff(earlier.0))
         }
     }
 
@@ -79,16 +79,37 @@ impl Timestamp {
 /// Converts a [`Duration`] to 100ns ticks, saturating on overflow.
 #[must_use]
 pub fn duration_to_ticks(duration: Duration) -> i64 {
-    let nanos = duration.as_nanos();
-    let ticks = nanos / (NANOS_PER_TICK as u128);
-    i64::try_from(ticks).unwrap_or(i64::MAX)
+    i64::try_from(duration_ticks_wide(duration)).unwrap_or(i64::MAX)
 }
 
 /// Converts a non-negative tick count to a [`Duration`].
 #[must_use]
 pub fn ticks_to_duration(ticks: i64) -> Duration {
-    let nanos = (ticks.max(0) as u64).saturating_mul(NANOS_PER_TICK as u64);
-    Duration::from_nanos(nanos)
+    unsigned_ticks_to_duration(ticks.max(0) as u64)
+}
+
+fn duration_ticks_wide(duration: Duration) -> i128 {
+    // Duration's full u64-second range fits in i128 at 100ns precision.
+    (duration.as_nanos() / NANOS_PER_TICK as u128) as i128
+}
+
+fn unsigned_ticks_to_duration(ticks: u64) -> Duration {
+    let seconds = ticks / TICKS_PER_SECOND as u64;
+    let nanos = (ticks % TICKS_PER_SECOND as u64) * NANOS_PER_TICK as u64;
+    Duration::new(seconds, nanos as u32)
+}
+
+/// Whether a clock follows elapsed real time or is externally controlled.
+///
+/// Expiry cleanup must respect the injected clock. Runtime I/O timeouts still
+/// use monotonic runtime time independently of this capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClockTiming {
+    /// Real elapsed time can drive physical-expiry maintenance.
+    RealTime,
+    /// Only explicit clock readings/advances can expire entries.
+    #[default]
+    Controlled,
 }
 
 /// Source of the current time.
@@ -98,11 +119,21 @@ pub fn ticks_to_duration(ticks: i64) -> Duration {
 pub trait Clock: Send + Sync {
     /// Returns the current wall-clock instant as a [`Timestamp`].
     fn now(&self) -> Timestamp;
+
+    /// Declares physical-expiry timing. Custom clocks are controlled by default
+    /// so a frozen clock cannot lose entries to an unrelated real timer.
+    fn timing_model(&self) -> ClockTiming {
+        ClockTiming::Controlled
+    }
 }
 
 impl<T: Clock + ?Sized> Clock for std::sync::Arc<T> {
     fn now(&self) -> Timestamp {
         (**self).now()
+    }
+
+    fn timing_model(&self) -> ClockTiming {
+        (**self).timing_model()
     }
 }
 
@@ -112,10 +143,25 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> Timestamp {
-        let since_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO);
-        Timestamp(duration_to_ticks(since_epoch))
+        timestamp_from_system_time(SystemTime::now())
+    }
+
+    fn timing_model(&self) -> ClockTiming {
+        ClockTiming::RealTime
+    }
+}
+
+fn timestamp_from_system_time(at: SystemTime) -> Timestamp {
+    match at.duration_since(UNIX_EPOCH) {
+        Ok(elapsed) => Timestamp(duration_to_ticks(elapsed)),
+        Err(before_epoch) => {
+            // Floor a point in time at tick precision, including negative times.
+            let ticks = before_epoch
+                .duration()
+                .as_nanos()
+                .div_ceil(NANOS_PER_TICK as u128);
+            Timestamp(i64::try_from(-(ticks as i128)).unwrap_or(i64::MIN))
+        }
     }
 }
 
@@ -137,10 +183,15 @@ impl ManualClock {
         }
     }
 
-    /// Moves the clock forward by `duration`.
+    /// Moves the clock forward by `duration`, saturating at [`Timestamp::MAX`].
     pub fn advance(&self, duration: Duration) {
-        self.ticks
-            .fetch_add(duration_to_ticks(duration), Ordering::SeqCst);
+        // The closure always returns Some, so fetch_update cannot reject this
+        // update. Its retry loop preserves concurrent advances without wrapping.
+        let _ = self
+            .ticks
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |ticks| {
+                Some(Timestamp(ticks).saturating_add(duration).ticks())
+            });
     }
 
     /// Sets the clock to an absolute timestamp.
@@ -256,5 +307,21 @@ mod tests {
             Timeout::After(Duration::from_secs(1))
         );
         assert_eq!(Timeout::Infinite.min(Timeout::Infinite), Timeout::Infinite);
+    }
+
+    #[test]
+    fn system_time_before_epoch_is_a_negative_timestamp() {
+        assert_eq!(
+            timestamp_from_system_time(UNIX_EPOCH),
+            Timestamp::from_ticks(0)
+        );
+        assert_eq!(
+            timestamp_from_system_time(UNIX_EPOCH - Duration::from_secs(1)),
+            Timestamp::from_ticks(-TICKS_PER_SECOND)
+        );
+        assert_eq!(
+            timestamp_from_system_time(UNIX_EPOCH - Duration::from_nanos(1)),
+            Timestamp::from_ticks(-1)
+        );
     }
 }

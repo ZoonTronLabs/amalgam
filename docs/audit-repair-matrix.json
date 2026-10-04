@@ -1,0 +1,2515 @@
+{
+  "objective": "Фикси абсолюно все",
+  "scope_source": "full-audit.md and three detailed reports from 2026-10-04",
+  "baseline_commit": "c82c2c71f7960751c1c2836a61dfb1dd3b3249fb",
+  "active_phase": "All52 original requirements and15 review patch findings pass final independent and coherent local/native/package/consumer/security/performance validation. Source commit and exact-commit remote native CI/main delivery remain.",
+  "duplicate": "D15 is C08, counted once",
+  "shared_FC_semantics": [
+    "late origin background completion after remove",
+    "captured physical fallback while waiting",
+    "no remaining hard budget after soft factory timeout",
+    "eager factory does not use normal factory timeout",
+    "unbounded awaited L2 writes/removes",
+    "tag-invalidated fallback may retry within throttle",
+    "already-started recovery L2 I/O can overtake newer explicit writes in FC2.9; Amalgam adds stronger local ordering",
+    "actual NuGet2.9 captured stale readonly fallback after physical lifetime elapsed during L2 wait; legacy Amalgam preserves it, canonical read intentionally rechecks"
+  ],
+  "items": [
+    {
+      "id": "C01",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide",
+          "line": 89
+        }
+      ],
+      "title": "Разные ключи могут взаимно заблокироваться",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C02",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "cancelling_finite_factory_must_not_detach_it_and_release_singleflight",
+          "line": 37
+        },
+        {
+          "file": "tests/parked_cancellation.rs",
+          "test": "explicit_caller_cancellation_releases_a_parked_origin_before_repoll",
+          "line": 20
+        }
+      ],
+      "title": "Отмена запроса оставляет фабрику без владельца",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C03",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "a_configured_memory_lock_timeout_must_bound_a_cold_waiter",
+          "line": 231
+        }
+      ],
+      "title": "Конечный timeout ожидания lock становится бесконечным",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C04",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight",
+          "line": 272
+        }
+      ],
+      "title": "Soft timeout не защищает ожидающего stale caller",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C05",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "eager_refresh_must_obtain_the_configured_distributed_locker",
+          "line": 317
+        },
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory",
+          "line": 391
+        }
+      ],
+      "title": "Eager refresh игнорирует кластерную координацию и новую L2",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C06",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "tag_invalidation_must_cover_a_factory_snapshot_started_before_its_marker",
+          "line": 457
+        }
+      ],
+      "title": "Позднее завершение фабрики обходит tag invalidation",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C07",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "an_immediate_factory_deadline_must_not_invoke_the_factory",
+          "line": 430
+        }
+      ],
+      "title": "Нулевой дедлайн всё равно вызывает фабрику",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "C08",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_concurrency14/14, multilevel7/7, features6/6, gaps2/2, base lib45 and behavior18. Full mandatory live/supported-config gates and independent review remain. /private/tmp/amalgam-core-concurrency-multilevel.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "distributed_locker_must_not_acquire_a_lease_after_the_wait_deadline",
+          "line": 363
+        },
+        {
+          "file": "tests/distributed_redis.rs",
+          "test": "live_lease_acquire_deadline_and_successful_attempt_receipt",
+          "line": 233
+        }
+      ],
+      "title": "Lease выдаётся после истечения acquisition deadline",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D1",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_tag_marker_survives_a_fresh_node_without_backplane",
+          "line": 62
+        },
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_clear_marker_survives_a_fresh_node_without_backplane",
+          "line": 80
+        }
+      ],
+      "title": "Tag/clear invalidation не переживает новый узел",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D2",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_new_recovery_item_survives_older_replay_completion",
+          "line": 156
+        },
+        {
+          "file": "tests/distributed_protocol.rs",
+          "test": "exact_recovery_completion_preserves_replacement_and_strong_lane_pin",
+          "line": 370
+        }
+      ],
+      "title": "Завершение старого recovery удаляет новую операцию",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D3",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "upstream_scope_correction": "4 actual NuGet2.9 oracle cases confirm shared upstream already-started I/O limitation, not Rust-only mismatch. Local commit-lane repair remains required deliberate stronger behavior; independent nodes require conditional writes for strict global guarantees.",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_successful_set_supersedes_pending_recovery_remove",
+          "line": 207
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "newer_completed_set_remains_after_already_started_set_or_remove_recovery",
+          "line": 570
+        }
+      ],
+      "title": "Старый recovery Remove уничтожает успешный новый Set",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D4",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_background_l2_write_publishes_only_after_the_value_is_visible",
+          "line": 750
+        }
+      ],
+      "title": "Backplane Set отправляется раньше фоновой записи L2",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D5",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_passive_refresh_does_not_resurrect_after_remove",
+          "line": 269
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "exact_snapshot_cleanup_and_passive_commit_preserve_equal_timestamp_replacement",
+          "line": 661
+        }
+      ],
+      "title": "Passive refresh восстанавливает удалённый ключ",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D6",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_expire_from_cold_node_updates_l2",
+          "line": 96
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "cold_expire_read_failure_retains_intent_and_original_physical_deadline",
+          "line": 1075
+        }
+      ],
+      "title": "Expire с холодным L1 оставляет L2 свежей",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D7",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_lagged_backplane_invalidates_possibly_stale_l1",
+          "line": 356
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "coalesced_gap_retains_exact_ticket_until_successful_l2_and_marker_reconciliation",
+          "line": 667
+        }
+      ],
+      "title": "Потеря backplane history оставляет старую L1 свежей",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D8",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_clear_respects_cache_key_prefix",
+          "line": 536
+        },
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_ordinary_cache_key_is_not_interpreted_as_a_clear_command",
+          "line": 576
+        }
+      ],
+      "title": "Служебные маркеры пересекаются с prefixes и обычными ключами",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D9",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_failed_tag_marker_is_recovered_after_backplane_returns",
+          "line": 626
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "recovered_storage_then_failed_notification_never_rewrites_storage_on_retry",
+          "line": 1149
+        }
+      ],
+      "title": "Неуспешный publish маркера не восстанавливается",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D10",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_l2_uses_its_own_logical_duration",
+          "line": 113
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "hydration_caps_local_deadlines_recomputes_eager_and_keeps_retention",
+          "line": 333
+        }
+      ],
+      "title": "Независимые сроки L1 и L2 фактически связаны",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D11",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "scope_correction": "Swallowed write/commit error outcomes remain required. Early probes demanding entry read hard budget to bound writes/removes were wrong: actual released NuGet2.9 gated Set/Remove stays pending80ms with hard10ms, then succeeds on release (4 assertions). Preserve FC foreground unbounded write/remove and explicit cancel/receipt policy; do not weaken a real regression to hide failure.",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_factory_write_honors_rethrow_serialization_flag",
+          "line": 456
+        },
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_factory_write_honors_rethrow_distributed_flag",
+          "line": 488
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "mutation_receipts_preserve_suppressed_and_rethrown_failures",
+          "line": 197
+        }
+      ],
+      "title": "Write failures проглатываются при rethrow-настройках",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D12",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_old_backplane_expire_does_not_expire_newer_entry",
+          "line": 327
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "delayed_clear_marker_does_not_evict_a_newer_snapshot",
+          "line": 1208
+        }
+      ],
+      "title": "Старый Expire message инвалидирует новую запись",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D13",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "scope_correction": "Inclusive <= matches original completed audit, clean inspected source af09f81a, and executed NuGet2.9 binary c2af1f39: all9 real Tag/ClearExpire/ClearRemove timestamp boundary cases passed. Equal timestamp invalidates. Rust end-to-end acceptance remains pending.",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_same_tick_tag_marker_invalidates_entry_like_fusioncache",
+          "line": 703
+        },
+        {
+          "file": "tests/distributed_protocol.rs",
+          "test": "tags_reject_blank_at_every_typed_boundary_and_include_minimum_revision",
+          "line": 54
+        }
+      ],
+      "title": "Граница tag/clear marker неверна при равном timestamp",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "D14",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_distributed20 actual public acceptance checks pass;2 Redis fixture cases intentionally await mandatory live run. Pending new exact continuity/replay/lease-loss integration gates; full gate/review remain. /private/tmp/amalgam-core-distributed-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_distributed.rs",
+          "test": "audit_redis_backplane_roundtrips_arbitrary_public_instance_id",
+          "line": 829
+        },
+        {
+          "file": "tests/distributed_protocol.rs",
+          "test": "typed_controls_round_trip_without_reinterpreting_reserved_ordinary_data",
+          "line": 141
+        }
+      ],
+      "title": "Допустимый instance_id ломает Redis wire format",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC01",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "read_only_reads_l2_even_when_memory_reads_are_skipped",
+          "line": 20
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "canonical_reads_preserve_error_and_default_only_on_successful_miss",
+          "line": 186
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "canonical_reads_preserve_default_suppressed_transport_failure_and_no_default",
+          "line": 48
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "canonical_open_circuit_is_failure_without_requerying_backend",
+          "line": 70
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "canonical_reads_preserve_suppressed_codec_error",
+          "line": 100
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "origin_fallback_policy_and_legacy_adapters_keep_their_existing_behavior",
+          "line": 127
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "canonical_stale_read_preserves_timeout_while_legacy_read_serves_configured_fallback",
+          "line": 172
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "canonical_hard_read_timeout_never_becomes_successful_default",
+          "line": 203
+        },
+        {
+          "file": "tests/read_failure_policy.rs",
+          "test": "explicit_skip_remains_successful_absence_without_querying_failed_backend",
+          "line": 222
+        }
+      ],
+      "new_gap_checkpoint": {
+        "before_log": "amalgam-read-policy-before.log",
+        "expected_failures": 3,
+        "compatibility_passes": 1,
+        "state": "7 public regressions passed after named canonical PreserveFailure / legacy FactoryFallback repair",
+        "after_log": "amalgam-read-policy-after.log",
+        "core_ready_log": "amalgam-read-policy-core-ready.log",
+        "after_passes": 7
+      },
+      "title": "Read-only методы пропускают существующую L2",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC02",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "registry_concurrent_get_or_create_returns_one_shared_cache",
+          "line": 49
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "registry_failures_panics_and_recursion_release_initializer",
+          "line": 106
+        }
+      ],
+      "title": "Registry создаёт два кэша на одно имя",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC03",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "auto_clone_isolates_mutable_arc_at_public_boundaries",
+          "line": 122
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "nonserde_cloner_isolates_input_and_every_read",
+          "line": 169
+        }
+      ],
+      "title": "Auto-clone не изолирует изменяемые значения",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC04",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "oversized_weighted_entry_is_rejected",
+          "line": 79
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "first_admitted_pin_survives_rejection_explicit_remove_and_physical_expiry_work",
+          "line": 487
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "incomplete_admission_plan_preserves_all_live_contents_and_replacements",
+          "line": 540
+        }
+      ],
+      "title": "Size и priority не работают",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC05",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "cold_get_or_set_emits_one_logical_miss",
+          "line": 178
+        },
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "metrics_include_factory_misses_and_distinct_cache_labels",
+          "line": 344
+        }
+      ],
+      "title": "Factory miss отсутствует в событиях и метриках",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC06",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "eviction_events_reach_plugins_exactly_once",
+          "line": 192
+        }
+      ],
+      "title": "Eviction события обходят plugins",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC07",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "corrupt_l2_entry_does_not_trip_transport_circuit",
+          "line": 237
+        }
+      ],
+      "title": "Один повреждённый payload выключает здоровую L2",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC08",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "factory_error_source_survives_cache_boundary",
+          "line": 221
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "factory_failure_and_cancellation_keep_distinct_typed_sources",
+          "line": 261
+        }
+      ],
+      "title": "Теряется исходная причина FactoryError",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC09",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "otlp_failed_init_preserves_global_provider",
+          "line": 374
+        },
+        {
+          "file": "tests/foundation_diagnostics.rs",
+          "test": "composable_otlp_layer_preserves_application_subscriber_and_globals",
+          "line": 220
+        }
+      ],
+      "title": "Неуспешный OTel init меняет глобальный provider",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC10",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "acceptance_entrypoints": [
+        {
+          "file": ".github/scripts/check-package.sh"
+        },
+        {
+          "file": ".github/scripts/check-package.py"
+        }
+      ],
+      "title": "README подключает другой Cargo package",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC11",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/core_contract.rs",
+          "test": "initial_native_ack_gates_operations_and_close_releases_parked_admission",
+          "line": 792
+        },
+        {
+          "file": "tests/readiness_options.rs",
+          "test": "disabled_initial_wait_allows_local_mutation_but_explicit_ready_still_needs_ack",
+          "line": 64
+        },
+        {
+          "file": "tests/readiness_options.rs",
+          "test": "close_cancels_initial_ack_admission_before_local_or_notification_effects",
+          "line": 106
+        }
+      ],
+      "title": "Default parity ошибочен, startup flag не меняет поведение",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC12",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "missing_serializer_is_a_typed_build_rejection",
+          "line": 287
+        }
+      ],
+      "title": "Неполная L2 configuration молча превращается в L1-only",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "AC13",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Rust1.88/all-features: regression_contract13/13; source-preserving, isolation, capacity, readonly L2, diagnostics and configuration contracts. Full supported-config/package/independent review remain. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/regression_contract.rs",
+          "test": "resilient_observer_survives_transient_lag",
+          "line": 304
+        }
+      ],
+      "title": "Рекомендованный observer навсегда останавливается при Lagged",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "S1",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "evidence": "Main security minima and patched lock integrated0.3.0; RustSec DB ef6173c main0 vulnerabilities/0 warnings;42 foundation/time all-feature tests on Rust1.88 and strict MSRV library/time Clippy passed; old-consumer dependency fixture forces patched versions. Final real packaged source consumer/features/review remain.",
+      "acceptance_entrypoints": [
+        {
+          "file": "Cargo.toml"
+        },
+        {
+          "file": "Cargo.lock"
+        },
+        {
+          "file": ".github/scripts/check-package.sh"
+        }
+      ],
+      "title": "Обновить проверенные транзитивные зависимости",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "S2",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "public API regression plus implementation review; relevant baseline/feature gates",
+      "acceptance_entrypoints": [
+        {
+          "file": ".github/workflows/ci.yml"
+        }
+      ],
+      "title": "CI не защищает заявленный compatibility contract",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q1",
+      "requirement": "per-cache plugin stop/detach and dynamic registration lifecycle",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Rust1.88 core_contract17/17 + 512-cache lifetime test + parked cancellation1 pass. Source-owner final supervised cleanup slice and full release gates remain. /private/tmp/amalgam-core-recovery-gates.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/core_contract.rs",
+          "test": "dynamic_registration_stops_once_and_is_owned_by_cache_shutdown",
+          "line": 322
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "owning_shutdown_waits_detached_draining_callbacks_and_retains_failures",
+          "line": 1219
+        }
+      ],
+      "title": "per-cache plugin stop/detach and dynamic registration lifecycle",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q2",
+      "requirement": "bounded cache_name metrics and operation/layer diagnostics",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/foundation_diagnostics.rs",
+          "test": "named_metrics_attribute_sessions_and_bound_historical_labels",
+          "line": 8
+        },
+        {
+          "file": "tests/foundation_diagnostics.rs",
+          "test": "logical_and_component_spans_keep_trace_identity_and_final_outcome",
+          "line": 163
+        }
+      ],
+      "title": "bounded cache_name metrics and operation/layer diagnostics",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q3",
+      "requirement": "explicit factory cancellation context and cancellation preserving result contract",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Explicit caller cancel synchronously drops entered pending origin before any caller repoll; Rust1.88/allfeatures1/1. /private/tmp/amalgam-core-canonical-first.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/parked_cancellation.rs",
+          "test": "explicit_caller_cancellation_releases_a_parked_origin_before_repoll",
+          "line": 20
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "explicit_cancel_bypasses_failsafe_and_releases_origin",
+          "line": 119
+        }
+      ],
+      "title": "explicit factory cancellation context and cancellation preserving result contract",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q4",
+      "requirement": "dynamic options for remove/expire",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Rust1.88 core_contract17/17 + 512-cache lifetime test + parked cancellation1 pass. Source-owner final supervised cleanup slice and full release gates remain. /private/tmp/amalgam-core-recovery-gates.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/mutation_options.rs",
+          "test": "dynamic_remove_and_expire_use_raw_key_policy_and_preserve_skipped_layers",
+          "line": 98
+        },
+        {
+          "file": "tests/mutation_options.rs",
+          "test": "explicit_mutation_options_bypass_provider_and_apply_each_layer",
+          "line": 138
+        },
+        {
+          "file": "tests/mutation_options.rs",
+          "test": "invalid_dynamic_mutation_options_reject_before_changing_either_layer",
+          "line": 186
+        }
+      ],
+      "title": "dynamic options for remove/expire",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q5",
+      "requirement": "bounded tag marker cache/cleanup and subscriber/recovery teardown",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Rust1.88 core_contract17/17 + 512-cache lifetime test + parked cancellation1 pass. Source-owner final supervised cleanup slice and full release gates remain. /private/tmp/amalgam-core-recovery-gates.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/lifetime_soak.rs",
+          "test": "repeated_last_handle_drop_releases_workers_even_with_live_event_observers",
+          "line": 32
+        },
+        {
+          "file": "tests/distributed_protocol.rs",
+          "test": "markers_share_effective_namespace_and_compact_without_forgetting_a_tombstone",
+          "line": 71
+        }
+      ],
+      "title": "bounded tag marker cache/cleanup and subscriber/recovery teardown",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q6",
+      "requirement": "real Redis disconnect/reconnect and reconciliation",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/distributed_redis.rs",
+          "test": "live_subscription_requires_ack_recovers_targeted_disconnects_and_releases_clients",
+          "line": 544
+        },
+        {
+          "file": "tests/distributed_redis.rs",
+          "test": "live_bounded_push_overflow_and_malformed_wire_create_new_continuity_epochs",
+          "line": 641
+        }
+      ],
+      "title": "real Redis disconnect/reconnect and reconciliation",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q7",
+      "requirement": "lease expiry/renewal and cancellation-safe acquired lease cleanup",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/distributed_redis.rs",
+          "test": "live_renewal_fences_lost_ownership_and_drop_releases_the_current_token",
+          "line": 284
+        },
+        {
+          "file": "tests/distributed_redis.rs",
+          "test": "live_acquisition_cancellation_and_deadline_clean_up_a_granted_but_unreplied_token",
+          "line": 466
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "native_backend_fence_loss_does_not_commit_l1_l2_or_publish",
+          "line": 437
+        }
+      ],
+      "title": "lease expiry/renewal and cancellation-safe acquired lease cleanup",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q8",
+      "requirement": "clock skew/injected versus real timer contracts and physical expiry",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Rust1.88 core_contract17/17 + 512-cache lifetime test + parked cancellation1 pass. Source-owner final supervised cleanup slice and full release gates remain. /private/tmp/amalgam-core-recovery-gates.log",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/time_contract.rs",
+          "test": "full_timestamp_range_preserves_elapsed_duration",
+          "line": 21
+        },
+        {
+          "file": "tests/foundation_contract.rs",
+          "test": "frozen_clock_survives_real_ttl_in_both_storage_modes",
+          "line": 639
+        },
+        {
+          "file": "tests/core_contract.rs",
+          "test": "huge_finite_budget_is_typed_before_origin_or_storage_effects",
+          "line": 355
+        }
+      ],
+      "title": "clock skew/injected versus real timer contracts and physical expiry",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q9",
+      "requirement": "MSRV/default/each feature/package consumer/advisory/portability gates",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": ".github/workflows/ci.yml"
+        },
+        {
+          "file": ".github/scripts/check-package.sh"
+        }
+      ],
+      "title": "MSRV/default/each feature/package consumer/advisory/portability gates",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q10",
+      "requirement": "meaningful fuzz/property/concurrency/soak/resource tests appropriate to exposed contracts",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/protocol_stress.rs"
+        },
+        {
+          "file": "tests/retention_stress.rs"
+        },
+        {
+          "file": "tests/lifetime_soak.rs"
+        },
+        {
+          "file": "tests/ready_lookup_contract.rs"
+        }
+      ],
+      "title": "meaningful fuzz/property/concurrency/soak/resource tests appropriate to exposed contracts",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q11",
+      "requirement": "sequential fair .NET2.9 oracle/performance/codec checks with representative limits",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": "examples/codec_profile.rs"
+        },
+        {
+          "file": "tests/regression_concurrency.rs",
+          "test": "distinct_cold_keys_are_not_serialized_by_the_legacy_shard_hint",
+          "line": 121
+        }
+      ],
+      "title": "sequential fair .NET2.9 oracle/performance/codec checks with representative limits",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "Q12",
+      "requirement": "verified source delivery, prepared release/consumer update, vault and completion audit",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "acceptance_entrypoints": [
+        {
+          "file": "docs/spec-fix-all-audit.md"
+        },
+        {
+          "file": "docs/PARITY.md"
+        }
+      ],
+      "title": "verified source delivery, prepared release/consumer update, vault and completion audit",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "R1",
+      "requirement": "ticks_to_duration incorrectly truncates representable durations greater than u64 nanoseconds; new Rust1.88 probe fails",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Rust1.88/all-features: time_contract6/6; standalone before4 failing boundary probes now9/9 including old time tests and pre-epoch system time. Strict MSRV library/time Clippy passes. Final full-suite/review remain.",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/time_contract.rs",
+          "test": "representable_long_duration_roundtrips_without_nanosecond_truncation",
+          "line": 10
+        }
+      ],
+      "title": "ticks_to_duration incorrectly truncates representable durations greater than u64 nanoseconds; new Rust1.88 probe fails",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "R2",
+      "requirement": "ManualClock::advance wraps near i64::MAX instead of saturation; new Rust1.88 probe fails",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "targeted acceptance and direct source/result evidence",
+      "evidence": "Rust1.88/all-features: time_contract6/6; standalone before4 failing boundary probes now9/9 including old time tests and pre-epoch system time. Strict MSRV library/time Clippy passes. Final full-suite/review remain.",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/time_contract.rs",
+          "test": "manual_clock_advance_saturates_instead_of_wrapping_into_the_past",
+          "line": 61
+        },
+        {
+          "file": "tests/time_contract.rs",
+          "test": "concurrent_manual_clock_advances_are_not_lost_or_wrapped",
+          "line": 73
+        }
+      ],
+      "title": "ManualClock::advance wraps near i64::MAX instead of saturation; new Rust1.88 probe fails",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    },
+    {
+      "id": "R3",
+      "requirement": "Timestamp saturating_add/saturating_duration_since lose representable full-range results through prematurely saturated i64 intermediate arithmetic",
+      "status": "implemented; independent-review-and-final-local-gates-passed; exact-commit-remote-delivery-pending",
+      "required_evidence": "Rust1.88 full-range public arithmetic regression; pre-fix MIN+full span yields -1 instead of MAX and MAX-MIN truncates the elapsed duration",
+      "evidence": "Rust1.88/all-features: time_contract6/6; standalone before4 failing boundary probes now9/9 including old time tests and pre-epoch system time. Strict MSRV library/time Clippy passes. Final full-suite/review remain.",
+      "acceptance_entrypoints": [
+        {
+          "file": "tests/time_contract.rs",
+          "test": "full_timestamp_range_preserves_elapsed_duration",
+          "line": 21
+        },
+        {
+          "file": "tests/time_contract.rs",
+          "test": "timestamp_addition_clamps_only_the_final_point_in_time",
+          "line": 35
+        }
+      ],
+      "title": "Timestamp saturating_add/saturating_duration_since lose representable full-range results through prematurely saturated i64 intermediate arithmetic",
+      "pre_review_local_evidence": "Current Rust1.88 macOS/default228+allfeatures259 (required Redis), eachfeature, fmt/Clippy/docs, Linux/default228+allfeatures259 (required Redis), packaged fresh/historic full consumers174 dependencies, executable README, and actual Akzhol helper4; source hashes preserved in validation/final-post-policy",
+      "final_local_evidence": {
+        "source_coherent": true,
+        "all_features": "validation/final-boundaries/msrv-all-live.log",
+        "minimum_compiler": "1.88.0",
+        "native_linux": "validation/native-linux-final/native-linux.log",
+        "independent_acceptance": "independent-review/final/acceptance.md"
+      }
+    }
+  ],
+  "scope_notes": [
+    "NeverRemove acceptance corrected against actual FusionCache2.9 MemoryCacheSizeLimit oracle: pinned entries consume capacity; reject further admission instead of requiring all20 entries to survive a size1 limit. Keep count and weighted limits separate.",
+    "D13: earlier core prompt strict< was corrected before handoff. The authoritative completed audit and clean FC pinned source both require inclusive<=; stale repository prose is not evidence."
+  ],
+  "source_release_version": "0.3.0",
+  "fusioncache_pins": {
+    "inspected_source": "af09f81a3ea8d7ed71183b46501946da801a2a22",
+    "executed_nuget": "2.9.0",
+    "executed_repository_commit": "c2af1f39d3ad50791109bb9d48c0fdaffba010dd",
+    "scope": "source and binary are distinct pins, behavior independently evidenced"
+  },
+  "prepared_gates": {
+    "ci_draft": "/private/tmp/amalgam-ci-draft-20261004/ci.yml",
+    "ci_draft_validation": "actionlint, bash syntax and shellcheck passed; source not applied yet",
+    "consumer": "/private/tmp/amalgam-akzhol-source-consumer (verbatim production helper; API execution pending)",
+    "packaged_consumers": "/private/tmp/amalgam-ci-draft-20261004 (fresh/historic lock, source not applied/executed yet)",
+    "performance": "/private/tmp/amalgam-fix-perf-20261004 (controlled final fixture; not compiled/executed yet)",
+    "delivery_inspection": {
+      "repository": "ZoonTronLabs/amalgam",
+      "default_branch": "main",
+      "viewer_permission": "ADMIN",
+      "open_prs": 0,
+      "required_check": "ci",
+      "enforce_admins": false,
+      "rulesets": [],
+      "required_linear_history": true,
+      "protection_changed": false
+    },
+    "native_linux_image": {
+      "image": "rust@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89",
+      "toolchain": "rustc1.88.0/cargo1.88.0/aarch64 Linux, cc present; no source build executed yet"
+    }
+  },
+  "distributed_foundation_evidence": {
+    "root_rerun": "45 library + 17 distributed protocol + 6 live Redis + 5 recovery tests: 73 passed on Rust1.88/all features",
+    "log": "/private/tmp/amalgam-root-distributed-foundation-network.log",
+    "scope": "module protocols only; end-to-end public cache integration remains pending",
+    "marker_equality_correction": "Inclusive created <= marker matches clean pinned FC source af09f81a (FusionCache_Async.cs:1032/1060/1115). Equal timestamp is invalidated; Some(MIN) is a present marker. Previous strict instruction was an erroneous inherited reading of stale original PARITY prose, not the completed audit.",
+    "marker_oracle": {
+      "nuget": "2.9.0",
+      "binary_repository_commit": "c2af1f39d3ad50791109bb9d48c0fdaffba010dd",
+      "passed": 9,
+      "log": "/Users/artyom/.codex/visualizations/2026/10/04/01a105e3-aebd-7cf2-8ff5-03fae4fcdc84/amalgam-fixes/validation/fusioncache-marker-oracle/run.log"
+    }
+  },
+  "fusioncache_write_budget_oracle": {
+    "binary_repository_commit": "c2af1f39d3ad50791109bb9d48c0fdaffba010dd",
+    "passed": 4,
+    "log": "/Users/artyom/.codex/visualizations/2026/10/04/01a105e3-aebd-7cf2-8ff5-03fae4fcdc84/amalgam-fixes/validation/fusioncache-write-budget-oracle/run.log"
+  },
+  "core_additional_gates": {
+    "log": "/private/tmp/amalgam-core-recovery-gates.log",
+    "compiler": "Rust1.88/all-features",
+    "passed": 17,
+    "scope": "4 controlled already-started replay lane combinations, exact coalesced-gap ticket/reconciliation, native fenced replay, lease loss before commit, cancellation, receipts, dynamic plugins, clock/huge budget and readiness",
+    "superseded_by_pending": "Final supervised lease-acquisition/nested cleanup and off-runtime close slice requires retest, then full required live/feature gates."
+  },
+  "core_all_target_checkpoint": {
+    "compiler": "Rust1.88.0",
+    "features": "all",
+    "runner_passed_test_bodies": 222,
+    "failures": 0,
+    "test_binaries": 27,
+    "live_limit": "Eight Redis-dependent bodies can return early without a configured service; this offline run is not mandatory live Redis evidence.",
+    "log": "/private/tmp/amalgam-core-all-targets.log",
+    "focused_contracts": 20,
+    "focused_log": "/private/tmp/amalgam-core-final-contract.log",
+    "new_evidence": [
+      "supervised acquire cleanup and release drainage",
+      "off-runtime close using captured runtime",
+      "original cleanup failure preserved on repeated shutdown"
+    ]
+  },
+  "local_final_gates": {
+    "compiler": "1.88.0",
+    "all_features_live_passed": 234,
+    "default_passed": 203,
+    "default_is_offline_limit": "Redis-dependent tests are compiled only with Redis feature; live acceptance is in all-features and Redis feature gates.",
+    "feature_passed": {
+      "redis": 219,
+      "messagepack": 204,
+      "postcard": 205,
+      "metrics": 204,
+      "opentelemetry": 207
+    },
+    "strict_clippy": true,
+    "rustdoc": true,
+    "fmt": true,
+    "linux_arm64_native": {
+      "default": true,
+      "all_features": true,
+      "image": "rust@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89",
+      "live_redis": false
+    },
+    "package": {
+      "files": 68,
+      "markdown": 5,
+      "fresh_and_historic": true,
+      "full_manifest_features_persisted": true,
+      "historic_full_lock_packages": 174,
+      "readme_from_archive_executed": true
+    },
+    "rustsec": {
+      "commit": "ef6173cbc5c50ec8166f9a5b28f07834144373ee",
+      "advisories": 1290,
+      "lock_dependencies": 232,
+      "vulnerabilities": 0,
+      "warnings": 0
+    },
+    "consumer_helper": {
+      "tests": 4,
+      "compiler": "1.95.0",
+      "copy_sha256": "ca3f956e3f0e8ee1d3ed8a169184ac8498f4019047319d2161e8e3082360d390",
+      "full_backend": false
+    },
+    "supersession": "Relevant gates will be repeated after performance edits and independent reviews."
+  },
+  "performance_before_optimization": {
+    "read_ns": 1060.8,
+    "FC_read_ns": 198.0,
+    "hot_getorset_ns": 1085.5,
+    "FC_hot_getorset_ns": 225.0,
+    "hot_allocations_per_call": 19.1,
+    "required": "Measured regression remains open; preserve correctness/lifecycle and collect new matched timings."
+  },
+  "requirement_count": 52,
+  "requirement_count_breakdown": {
+    "functional_original": 35,
+    "dependency_and_ci": 2,
+    "additional_scope": 12,
+    "new_time_boundaries": 3
+  },
+  "acceptance_map_note": "Each named test entrypoint is checked against actual source and a passing current all-feature live test log. Files referenced without test names have their separate executed lint/package/security/performance evidence. Source delivery and independent reviews remain separate required gates.",
+  "codec_evidence": {
+    "rows": 90,
+    "workloads": 18,
+    "rounds_per_workload": 5,
+    "sizes_bytes": [
+      1024,
+      65536,
+      1048576
+    ],
+    "operations_per_round": [
+      2000,
+      500,
+      30
+    ],
+    "codecs": [
+      "json",
+      "messagepack",
+      "postcard"
+    ],
+    "wire": [
+      "legacy",
+      "v2"
+    ],
+    "source": "/private/tmp/amalgam-codec-profile-final.csv",
+    "limits": "One local Rust Vec<u8> process, all rounds retained; not .NET serializer comparison or tail latency distribution"
+  },
+  "performance_ready_permit_checkpoint": {
+    "allocation_calls": 2000,
+    "read_before": 38202,
+    "read_after": 2202,
+    "try_get_before": 38208,
+    "try_get_after": 2208,
+    "get_or_set_before": 38202,
+    "get_or_set_after": 2202,
+    "direct_memory": 201,
+    "log": "amalgam-hot-allocations-after.log",
+    "timings": {
+      "get_or_set_u64_ns": 321.12,
+      "fusioncache_get_or_set_u64_ns": 261,
+      "try_get_u64_ns": 298.4,
+      "fusioncache_try_get_u64_ns": 218,
+      "cold_factory_ns": 5424.8,
+      "fusioncache_cold_factory_ns": 2184
+    },
+    "method": "3 sequential alternating compiled process pairs, medians of process medians; per-process ranges preserved",
+    "limits": "Source checkpoint before canonical failure repair; not universal speed equivalence"
+  },
+  "performance_after_canonical_repair": {
+    "summary": {
+      "get_or_set_u64": {
+        "rust": {
+          "median_ns": 319.438,
+          "min_process_median_ns": 318.83,
+          "max_process_median_ns": 320.237,
+          "process_medians_ns": [
+            319.438,
+            318.83,
+            320.237
+          ]
+        },
+        "dotnet": {
+          "median_ns": 252.0,
+          "min_process_median_ns": 247.0,
+          "max_process_median_ns": 255.0,
+          "process_medians_ns": [
+            252.0,
+            255.0,
+            247.0
+          ]
+        }
+      },
+      "try_get_u64": {
+        "rust": {
+          "median_ns": 283.927,
+          "min_process_median_ns": 282.116,
+          "max_process_median_ns": 284.391,
+          "process_medians_ns": [
+            282.116,
+            283.927,
+            284.391
+          ]
+        },
+        "dotnet": {
+          "median_ns": 216.0,
+          "min_process_median_ns": 213.0,
+          "max_process_median_ns": 216.0,
+          "process_medians_ns": [
+            216.0,
+            216.0,
+            213.0
+          ]
+        }
+      },
+      "fallible_read_u64": {
+        "rust": {
+          "median_ns": 289.629,
+          "min_process_median_ns": 289.32,
+          "max_process_median_ns": 290.961,
+          "process_medians_ns": [
+            289.629,
+            289.32,
+            290.961
+          ]
+        }
+      },
+      "try_get_64k_owned": {
+        "rust": {
+          "median_ns": 1006.315,
+          "min_process_median_ns": 991.138,
+          "max_process_median_ns": 1006.35,
+          "process_medians_ns": [
+            1006.315,
+            1006.35,
+            991.138
+          ]
+        },
+        "dotnet": {
+          "median_ns": 2035.0,
+          "min_process_median_ns": 2018.0,
+          "max_process_median_ns": 2058.0,
+          "process_medians_ns": [
+            2035.0,
+            2018.0,
+            2058.0
+          ]
+        }
+      },
+      "try_get_64k_shared": {
+        "rust": {
+          "median_ns": 282.659,
+          "min_process_median_ns": 282.048,
+          "max_process_median_ns": 286.52,
+          "process_medians_ns": [
+            282.659,
+            282.048,
+            286.52
+          ]
+        },
+        "dotnet": {
+          "median_ns": 222.0,
+          "min_process_median_ns": 220.0,
+          "max_process_median_ns": 222.0,
+          "process_medians_ns": [
+            220.0,
+            222.0,
+            222.0
+          ]
+        }
+      },
+      "cold_factory_u64": {
+        "rust": {
+          "median_ns": 5354.279,
+          "min_process_median_ns": 5345.742,
+          "max_process_median_ns": 5432.096,
+          "process_medians_ns": [
+            5354.279,
+            5345.742,
+            5432.096
+          ]
+        },
+        "dotnet": {
+          "median_ns": 2208.0,
+          "min_process_median_ns": 1770.0,
+          "max_process_median_ns": 2263.0,
+          "process_medians_ns": [
+            2263.0,
+            2208.0,
+            1770.0
+          ]
+        }
+      },
+      "same_key_128_factory_10ms": {
+        "rust": {
+          "median_ns": 13319875.0,
+          "min_process_median_ns": 11859500.0,
+          "max_process_median_ns": 14295083.0,
+          "process_medians_ns": [
+            13319875.0,
+            11859500.0,
+            14295083.0
+          ]
+        },
+        "dotnet": {
+          "median_ns": 11333700.0,
+          "min_process_median_ns": 11314200.0,
+          "max_process_median_ns": 11412900.0,
+          "process_medians_ns": [
+            11412900.0,
+            11314200.0,
+            11333700.0
+          ]
+        }
+      },
+      "distinct_keys_128_factory_10ms": {
+        "rust": {
+          "median_ns": 12654083.0,
+          "min_process_median_ns": 12575625.0,
+          "max_process_median_ns": 13326375.0,
+          "process_medians_ns": [
+            12654083.0,
+            12575625.0,
+            13326375.0
+          ]
+        },
+        "dotnet": {
+          "median_ns": 11271700.0,
+          "min_process_median_ns": 11265800.0,
+          "max_process_median_ns": 11305500.0,
+          "process_medians_ns": [
+            11265800.0,
+            11271700.0,
+            11305500.0
+          ]
+        }
+      }
+    },
+    "evidence": "validation/final-post-policy/policy-after-summary/results.json",
+    "raw_runs": "validation/final-post-policy/policy-after-runs",
+    "limits": "Three compiled alternating sequential process pairs on macOS ARM, downstream Tokio1.53.1; no universal speed equivalence. Cold profile counts allocated volume, not retained memory; independently controlled providers and no extended production soak."
+  },
+  "prior_pre_review_local_gates": {
+    "default_passed": 228,
+    "allfeatures_required_redis_passed": 259,
+    "native_linux_default_passed": 228,
+    "native_linux_allfeatures_required_redis_passed": 259,
+    "each_feature": {
+      "redis": 244,
+      "messagepack": 229,
+      "postcard": 230,
+      "metrics": 229,
+      "opentelemetry": 232
+    },
+    "packaged_files": 72,
+    "package_markdown_documents": 5,
+    "fresh_and_historic_full_consumer_dependencies": 174,
+    "actual_akzhol_helper_passed": 4,
+    "source_unchanged_in_gate_run": true,
+    "evidence": "validation/final-post-policy"
+  },
+  "independent_review": {
+    "original_candidate_patch_sha256": "430ddf25443f42ae0e85ca7038b71cdadd6f37f483b513983e4c3f73bd66993a",
+    "roles": [
+      "fresh blind diff-only adversarial",
+      "fresh edge-case source auditor",
+      "fresh complete52-requirement acceptance auditor"
+    ],
+    "unique_findings": 15,
+    "classification": "patch; accepted frozen invariants sufficient, no unresolved intent_gap or bad_spec",
+    "classification_reason": "Existing shared ownership/generation/finite-budget/typed-policy mechanisms need completion at overlooked boundaries. Canonical strengthening is explicitly separate from observed legacy FC semantics. No frozen intent changes or unrelated deferred defects.",
+    "targeted_result": "54/54 Rust1.88 after final boundary repairs; added19 checks against first repaired candidate produce18 FAIL +1 valid stale-L2 PASS; initial negative probes retained",
+    "findings": [
+      {
+        "id": "IR01",
+        "title": "ordinary L2 hydration generation/epoch ordering",
+        "covers_requirements": [
+          "D5",
+          "AC01"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "canonical_hydration_does_not_overwrite_set",
+            "line": 133
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "canonical_hydration_does_not_resurrect_remove",
+            "line": 137
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "equal_timestamp_hydration_does_not_overwrite_set",
+            "line": 420
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "equal_timestamp_hydration_does_not_resurrect_remove",
+            "line": 424
+          },
+          {
+            "file": "tests/review_read_policy.rs",
+            "test": "optional_hydration_does_not_wait_on_a_newer_parked_commit",
+            "line": 267
+          }
+        ]
+      },
+      {
+        "id": "IR02",
+        "title": "selected read deadline includes required durable marker I/O",
+        "covers_requirements": [
+          "AC01",
+          "C04"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_read_policy.rs",
+            "test": "distributed_hard_read_budget_includes_required_marker_read",
+            "line": 31
+          },
+          {
+            "file": "tests/review_read_policy.rs",
+            "test": "required_marker_read_respects_soft_budget_and_preserves_origin_fallback",
+            "line": 200
+          }
+        ]
+      },
+      {
+        "id": "IR03",
+        "title": "dynamic cache and standalone plugin startup/teardown drainage",
+        "covers_requirements": [
+          "Q1"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "shutdown_waits_for_already_admitted_plugin_attachment",
+            "line": 286
+          },
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "cache_shutdown_retains_late_attachment_teardown_failure",
+            "line": 161
+          },
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "standalone_host_shutdown_drains_admitted_attachment",
+            "line": 165
+          },
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "standalone_host_retains_late_attachment_teardown_failure",
+            "line": 169
+          }
+        ]
+      },
+      {
+        "id": "IR04",
+        "title": "healthy recovery resumes after malformed inner control frame",
+        "covers_requirements": [
+          "D7",
+          "Q6"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "malformed_control_does_not_permanently_suspend_connected_recovery",
+            "line": 341
+          }
+        ]
+      },
+      {
+        "id": "IR05",
+        "title": "validate representable enabled recovery reconnect delay",
+        "covers_requirements": [
+          "Q8"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "enabled_recovery_rejects_unrepresentable_reconnect_delay_before_start",
+            "line": 179
+          },
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "disabled_recovery_accepts_unused_delay_without_starting_work",
+            "line": 190
+          }
+        ]
+      },
+      {
+        "id": "IR06",
+        "title": "external recovery generation callbacks/destructors outside mutex",
+        "covers_requirements": [
+          "Q5",
+          "Q10"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "recovery_stop_drops_external_fences_after_unlocking",
+            "line": 127
+          },
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "recovery_supersession_drops_external_fences_after_unlocking",
+            "line": 131
+          },
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "recovery_cancellation_drops_external_fences_after_unlocking",
+            "line": 135
+          },
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "recovery_replacement_drops_external_fences_after_unlocking",
+            "line": 139
+          },
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "recovery_capacity_eviction_drops_external_fences_after_unlocking",
+            "line": 143
+          },
+          {
+            "file": "tests/review_recovery_lifecycle.rs",
+            "test": "recovery_reads_extension_generation_outside_queue_mutex",
+            "line": 148
+          }
+        ]
+      },
+      {
+        "id": "IR07",
+        "title": "circuit refusal does not retrip cooldown",
+        "covers_requirements": [
+          "AC07",
+          "D11"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_mutation_policy.rs",
+            "test": "skipped_write_does_not_extend_distributed_circuit_cooldown",
+            "line": 33
+          },
+          {
+            "file": "tests/review_mutation_policy.rs",
+            "test": "skipped_publish_does_not_extend_backplane_circuit_cooldown",
+            "line": 201
+          }
+        ]
+      },
+      {
+        "id": "IR08",
+        "title": "explicit skip-distributed-write for tags/batches/both clear modes",
+        "covers_requirements": [
+          "Q4",
+          "D1"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_mutation_policy.rs",
+            "test": "tag_mutation_skips_requested_distributed_write",
+            "line": 162
+          },
+          {
+            "file": "tests/review_mutation_policy.rs",
+            "test": "batched_tags_skip_requested_distributed_write",
+            "line": 166
+          },
+          {
+            "file": "tests/review_mutation_policy.rs",
+            "test": "clear_expire_skips_requested_distributed_write",
+            "line": 170
+          },
+          {
+            "file": "tests/review_mutation_policy.rs",
+            "test": "clear_remove_skips_requested_distributed_write",
+            "line": 174
+          }
+        ]
+      },
+      {
+        "id": "IR09",
+        "title": "actual stale servicing-layer diagnostics",
+        "covers_requirements": [
+          "Q2"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_read_policy.rs",
+            "test": "stale_distributed_only_read_is_attributed_to_distributed_layer",
+            "line": 156
+          }
+        ]
+      },
+      {
+        "id": "IR10",
+        "title": "canonical final stale retention validation, preserved FC legacy contract",
+        "covers_requirements": [
+          "Q8",
+          "Q11"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_read_policy.rs",
+            "test": "canonical_stale_read_rechecks_physical_retention_after_l2_wait",
+            "line": 147
+          },
+          {
+            "file": "tests/review_read_policy.rs",
+            "test": "legacy_stale_read_preserves_fusioncache_captured_fallback",
+            "line": 151
+          }
+        ]
+      },
+      {
+        "id": "IR11",
+        "title": "supervised compare-release after uncertain known-token acquire reply",
+        "covers_requirements": [
+          "Q7",
+          "C08"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_lease_cleanup.rs",
+            "test": "failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_causes",
+            "line": 71
+          },
+          {
+            "file": "tests/review_lease_cleanup.rs",
+            "test": "a_contended_receipt_does_not_fabricate_uncertain_ownership_cleanup",
+            "line": 124
+          }
+        ]
+      },
+      {
+        "id": "IR12",
+        "title": "overlapping hydration preserves expected immutable L1 identity",
+        "covers_requirements": [
+          "D5",
+          "AC01"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "canonical_overlapping_hydration_preserves_newer_unbounded_entry",
+            "line": 222
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "canonical_overlapping_hydration_preserves_newer_bounded_entry",
+            "line": 226
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "legacy_overlapping_hydration_preserves_newer_unbounded_entry",
+            "line": 230
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "legacy_overlapping_hydration_preserves_newer_bounded_entry",
+            "line": 234
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "origin_overlapping_hydration_preserves_newer_unbounded_entry",
+            "line": 238
+          },
+          {
+            "file": "tests/review_regressions.rs",
+            "test": "origin_overlapping_hydration_preserves_newer_bounded_entry",
+            "line": 242
+          }
+        ]
+      },
+      {
+        "id": "IR13",
+        "title": "owned session destruction completes after final callback before stopped publication",
+        "covers_requirements": [
+          "Q1"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "cache_shutdown_waits_for_owned_session_destruction",
+            "line": 316
+          },
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "standalone_shutdown_waits_for_owned_session_destruction",
+            "line": 320
+          },
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "cache_last_callback_releases_its_pin_before_teardown_completes",
+            "line": 324
+          },
+          {
+            "file": "tests/review_attachment_lifecycle.rs",
+            "test": "standalone_last_callback_releases_its_pin_before_teardown_completes",
+            "line": 328
+          }
+        ]
+      },
+      {
+        "id": "IR14",
+        "title": "continuity eligibility survives external copying and final storage insertion",
+        "covers_requirements": [
+          "D5",
+          "D7",
+          "AC01"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_hydration_continuity.rs",
+            "test": "ordinary_cloner_cannot_repopulate_unbounded_memory_after_a_gap",
+            "line": 181
+          },
+          {
+            "file": "tests/review_hydration_continuity.rs",
+            "test": "ordinary_cloner_cannot_repopulate_bounded_memory_after_a_gap",
+            "line": 185
+          },
+          {
+            "file": "tests/review_hydration_continuity.rs",
+            "test": "passive_cloner_cannot_repopulate_unbounded_memory_after_a_gap",
+            "line": 189
+          },
+          {
+            "file": "tests/review_hydration_continuity.rs",
+            "test": "passive_cloner_cannot_repopulate_bounded_memory_after_a_gap",
+            "line": 193
+          },
+          {
+            "file": "tests/review_hydration_continuity.rs",
+            "test": "unbounded_storage_insertion_keeps_continuity_eligibility",
+            "line": 312
+          },
+          {
+            "file": "tests/review_hydration_continuity.rs",
+            "test": "bounded_storage_insertion_keeps_continuity_eligibility",
+            "line": 316
+          }
+        ]
+      },
+      {
+        "id": "IR15",
+        "title": "preferred newer and equal-stamp stale memory is not overwritten by L2 hydration",
+        "covers_requirements": [
+          "AC01",
+          "Q2"
+        ],
+        "classification": "patch",
+        "status": "independently-rechecked; full-local-gates-passed; exact-commit-remote-delivery-pending",
+        "acceptance_entrypoints": [
+          {
+            "file": "tests/review_stale_selection.rs",
+            "test": "newer_stale_memory_survives_older_l2_hydration",
+            "line": 91
+          },
+          {
+            "file": "tests/review_stale_selection.rs",
+            "test": "newer_stale_l2_keeps_distributed_provenance",
+            "line": 95
+          },
+          {
+            "file": "tests/review_stale_selection.rs",
+            "test": "equal_stamp_stale_memory_survives_older_l2_hydration",
+            "line": 100
+          }
+        ]
+      }
+    ],
+    "followup_reports": [
+      "independent-review/recheck/acceptance.md",
+      "independent-review/recheck/edge.md",
+      "independent-review/recheck/blind.md"
+    ],
+    "boundary_before_evidence": "independent-review/boundaries-before/run.log",
+    "final_targeted_evidence": "independent-review/review54-after.log",
+    "redis_fixture_validation": {
+      "old_trace_result": "1 PASS; captured +OK both times; no deterministic cleanup-ACK reproduction claimed",
+      "repair": "buffer complete LF response lines; only successful SET +OK consumes gate; allow200ms deadline for grant observation before finite expiry",
+      "evidence": "independent-review/redis-wire-trace/run.log"
+    },
+    "final_verdict": "All3 final rechecks accept; no unresolved material defect in reviewed repair scope",
+    "final_reports": {
+      "blind": "independent-review/final/blind.md",
+      "edge": "independent-review/final/edge.md",
+      "acceptance": "independent-review/final/acceptance.md"
+    },
+    "independent_final_counts": {
+      "edge_private": 12,
+      "public_review": 54,
+      "acceptance_product": 313,
+      "acceptance_private": 11,
+      "requirements": 52,
+      "distinct_mapped_tests": 91,
+      "unchanged_public_source_files": 92
+    }
+  },
+  "fusioncache_captured_stale_oracle": {
+    "binary": "2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd",
+    "initial_freshness_ms": 100,
+    "physical_retention_ms": 1000,
+    "read_started_after_ms": 200,
+    "parked_L2_ms": 1200,
+    "result": "captured stale value1 served; subsequent L1-only read absent",
+    "evidence": "independent-review/fusioncache-stale-oracle/run.log"
+  },
+  "current_local_gates": {
+    "checked_at": "2026-10-04T19:01:58.827409+00:00",
+    "macOS": {
+      "all11_gates_exit0": true,
+      "source_unchanged": true,
+      "counts": {
+        "msrv-default": 282,
+        "msrv-all-live": 313
+      },
+      "metadata": "validation/final-boundaries/metadata.json"
+    },
+    "native_linux": {
+      "compiler": "1.88.0",
+      "image": "rust@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89",
+      "required_live_redis": true,
+      "exit_code": 0,
+      "source_matches_macOS": true,
+      "metadata": "validation/native-linux-final/metadata.json"
+    },
+    "stable_clippy": "1.95.0; all-targets/all-features -Dwarnings PASS",
+    "package": {
+      "archive_files": 80,
+      "markdown_documents": 5,
+      "fresh_and_historic_full_consumer_dependencies": 174,
+      "README_ran": true,
+      "consumer_advisories": 0
+    },
+    "actual_Akzhol_helper": {
+      "checks_passed": 4,
+      "evidence": "validation/akzhol-consumer-final.log"
+    },
+    "RustSec": {
+      "audit_version": "0.22.2",
+      "database": "ef6173cbc5c50ec8166f9a5b28f07834144373ee",
+      "advisories_loaded": 1290,
+      "root_dependencies": 232,
+      "findings": 0
+    }
+  },
+  "final_measured_performance": {
+    "evidence": "performance/final-review-summary/results.json",
+    "method": "Three sequential alternating compiled Rust/.NET process pairs, warm entries, equal recorded operation counts; no concurrent build or benchmark",
+    "summary": [
+      {
+        "scenario": "get_or_set_u64",
+        "runtimes": {
+          "rust": {
+            "median_ns": 314.642,
+            "min_process_median_ns": 314.214,
+            "max_process_median_ns": 315.562,
+            "process_medians_ns": [
+              315.562,
+              314.214,
+              314.642
+            ]
+          },
+          "dotnet": {
+            "median_ns": 243.0,
+            "min_process_median_ns": 241.0,
+            "max_process_median_ns": 248.0,
+            "process_medians_ns": [
+              248.0,
+              241.0,
+              243.0
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "try_get_u64",
+        "runtimes": {
+          "rust": {
+            "median_ns": 279.756,
+            "min_process_median_ns": 279.677,
+            "max_process_median_ns": 280.696,
+            "process_medians_ns": [
+              280.696,
+              279.677,
+              279.756
+            ]
+          },
+          "dotnet": {
+            "median_ns": 214.0,
+            "min_process_median_ns": 212.0,
+            "max_process_median_ns": 220.0,
+            "process_medians_ns": [
+              214.0,
+              212.0,
+              220.0
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "fallible_read_u64",
+        "runtimes": {
+          "rust": {
+            "median_ns": 286.911,
+            "min_process_median_ns": 285.469,
+            "max_process_median_ns": 287.154,
+            "process_medians_ns": [
+              285.469,
+              286.911,
+              287.154
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "try_get_64k_owned",
+        "runtimes": {
+          "rust": {
+            "median_ns": 989.821,
+            "min_process_median_ns": 981.875,
+            "max_process_median_ns": 996.84,
+            "process_medians_ns": [
+              996.84,
+              981.875,
+              989.821
+            ]
+          },
+          "dotnet": {
+            "median_ns": 1978.0,
+            "min_process_median_ns": 1971.0,
+            "max_process_median_ns": 2001.0,
+            "process_medians_ns": [
+              2001.0,
+              1971.0,
+              1978.0
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "try_get_64k_shared",
+        "runtimes": {
+          "rust": {
+            "median_ns": 280.445,
+            "min_process_median_ns": 280.4,
+            "max_process_median_ns": 281.095,
+            "process_medians_ns": [
+              280.4,
+              281.095,
+              280.445
+            ]
+          },
+          "dotnet": {
+            "median_ns": 219.0,
+            "min_process_median_ns": 217.0,
+            "max_process_median_ns": 221.0,
+            "process_medians_ns": [
+              221.0,
+              217.0,
+              219.0
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "cold_factory_u64",
+        "runtimes": {
+          "rust": {
+            "median_ns": 5711.771,
+            "min_process_median_ns": 5643.046,
+            "max_process_median_ns": 5746.883,
+            "process_medians_ns": [
+              5746.883,
+              5643.046,
+              5711.771
+            ]
+          },
+          "dotnet": {
+            "median_ns": 1961.0,
+            "min_process_median_ns": 1803.0,
+            "max_process_median_ns": 2220.0,
+            "process_medians_ns": [
+              1961.0,
+              1803.0,
+              2220.0
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "same_key_128_factory_10ms",
+        "runtimes": {
+          "rust": {
+            "median_ns": 14304875.0,
+            "min_process_median_ns": 13098542.0,
+            "max_process_median_ns": 14321250.0,
+            "process_medians_ns": [
+              13098542.0,
+              14304875.0,
+              14321250.0
+            ]
+          },
+          "dotnet": {
+            "median_ns": 11364100.0,
+            "min_process_median_ns": 11310800.0,
+            "max_process_median_ns": 11381100.0,
+            "process_medians_ns": [
+              11364100.0,
+              11381100.0,
+              11310800.0
+            ]
+          }
+        }
+      },
+      {
+        "scenario": "distinct_keys_128_factory_10ms",
+        "runtimes": {
+          "rust": {
+            "median_ns": 14703875.0,
+            "min_process_median_ns": 13502708.0,
+            "max_process_median_ns": 14740875.0,
+            "process_medians_ns": [
+              14703875.0,
+              13502708.0,
+              14740875.0
+            ]
+          },
+          "dotnet": {
+            "median_ns": 11267600.0,
+            "min_process_median_ns": 11073700.0,
+            "max_process_median_ns": 11286900.0,
+            "process_medians_ns": [
+              11286900.0,
+              11267600.0,
+              11073700.0
+            ]
+          }
+        }
+      }
+    ],
+    "source_unchanged": true,
+    "scope": "local workload measurements; warm small/shared data slower, owned64KiB faster, cold overhead remains; no universal equal-speed claim"
+  }
+}

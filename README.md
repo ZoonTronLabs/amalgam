@@ -12,374 +12,111 @@
   <img src="https://img.shields.io/badge/unsafe-forbidden-success.svg" alt="forbid unsafe">
 </p>
 
-**A robust, multi-level, fail-safe cache for Rust** — a faithful, idiomatic port
-of the resiliency model pioneered by .NET's
-[FusionCache](https://github.com/ZiggyCreatures/FusionCache).
+An async Rust hybrid cache inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
-An *amalgam* is a fusion of metals. This crate fuses an in-memory **L1** cache
-(built on [`moka`](https://crates.io/crates/moka)) with an optional distributed
-**L2** cache and a multi-node **backplane**, and gives you the features that make
-a cache *robust* rather than merely fast — on top of `tokio`.
+This README describes the **0.3.0 source release**. The registry still contains 0.2.0 (checked 2026-10-04). Until 0.3.0 is published, use the reviewed source checkout:
 
 ```toml
 [dependencies]
-amalgam = "0.1"
+amalgam = { package = "amalgam-cache", version = "0.3", path = "../amalgam" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-## Why a cache needs more than `get`/`set`
+The published package is `amalgam-cache`; the Rust library is imported as `amalgam`. After the release is available, replace `path` with the registry dependency using the same package alias.
 
-A plain TTL cache collapses under load and failure: when a hot key expires, every
-request stampedes the database at once; when the database hiccups, every request
-fails. `amalgam` solves both, the way FusionCache does:
-
-- **Cache-stampede protection** — only one factory runs per key; everyone else
-  awaits that single result (single-flight).
-- **Fail-safe** — if the factory fails, serve the last known-good (stale) value
-  instead of propagating an error.
-- **Soft / hard timeouts** — a slow factory returns a stale value *immediately*
-  and finishes in the background.
-- **Eager refresh** — refresh proactively before expiration, off the hot path.
-- **Adaptive caching** — the factory can change an entry's options per call.
-- **Conditional refresh** — HTTP-style `NotModified` reuse of a stale value.
-- **Tagging** — invalidate many entries at once, lazily, by tag.
-- **L1 + L2 + backplane** — a pluggable distributed cache and multi-node sync.
-
-See [`docs/PARITY.md`](docs/PARITY.md) for the feature-by-feature mapping to
-FusionCache, and [`PORTING.md`](PORTING.md) for the C#→Rust translation method.
-
-## Quickstart
+## Basic use
 
 ```rust
-use amalgam::{Cache, FactoryError};
+use amalgam::Cache;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cache: Cache<String> = Cache::new();
-
-    // Runs the factory once; concurrent callers for the same key coalesce.
+    let cache: Cache<String> = Cache::builder().try_build()?;
     let greeting = cache
         .get_or_set("greeting", |ctx| async move {
-            // ...expensive work (DB, HTTP, ...)...
             Ok(ctx.value("hello, world".to_owned()))
         })
         .await?;
-
     assert_eq!(greeting, "hello, world");
+
+    cache
+        .try_set("greeting", "hello again".to_owned())
+        .await?
+        .wait()
+        .await?;
+    assert_eq!(
+        cache
+            .read("greeting", None)
+            .await?
+            .value()
+            .map(String::as_str),
+        Some("hello again")
+    );
+    cache.try_remove("greeting").await?.wait().await?;
+    assert!(!cache.read("greeting", None).await?.has_value());
+    cache.shutdown().await?;
     Ok(())
 }
 ```
 
-Signal a factory failure with `ctx.fail(..)` (or return any `FactoryError`); wrap
-a source error with `FactoryError::from_source(e)`:
+Use fallible APIs for new callers. `read` distinguishes a successful miss from a storage, copy or configuration failure. A mutation returns a `MutationReceipt`: `Completed` contains its stage report; `Scheduled` contains awaitable cache-owned completion. `wait()` observes actual completion, including a requested error rethrow. A completed report can also record skipped stages, suppressed failures and work admitted to recovery, according to the configured policy.
 
-```rust,ignore
-let user = cache
-    .get_or_set("user:42", |ctx| async move {
-        match load_user(42).await {
-            Ok(u) => Ok(ctx.value(u)),
-            Err(e) => Err(FactoryError::from_source(e)),
-        }
-    })
-    .await?;
-```
+Legacy `build`, `set`, `try_get`, `remove`, `expire` and `clear(bool)` signatures remain compatibility adapters. Their original signatures cannot return every newly modeled failure; diagnostics retain observed failures. Prefer `try_build`, fallible reads/mutations and explicit shutdown when handling those failures matters.
 
-## Fail-safe + timeouts
+## Freshness, origin work and cancellation
 
-Configure resiliency per call through `EntryOptions`:
+Entries have independent logical freshness and physical fail-safe retention. Fail-safe can serve a captured stale value after an ordinary origin failure or timeout, within its physical lifetime. Cancellation stays a cancellation and bypasses fail-safe.
 
-```rust,ignore
-use amalgam::{EntryOptions, Timeout};
-use std::time::Duration;
+Same-key requests coordinate through per-key ownership. A configured finite lock timeout deliberately permits the best-effort factory path when no fallback is available; it weakens unconditional single-flight. Different keys do not serialize because they happen to share a map shard.
 
-let opts = cache
-    .entry_options()
-    .with_duration(Duration::from_secs(60))
-    // enable fail-safe: keep values for up to 1h, re-serve stale for 30s between retries
-    .with_fail_safe(true, Some(Duration::from_secs(3600)), Some(Duration::from_secs(30)))
-    // if the factory takes > 100ms and a stale value exists, return it now and finish in the background
-    .with_factory_timeouts(Timeout::After(Duration::from_millis(100)), Timeout::Infinite, true);
+Soft factory timeout applies when a fail-safe fallback is available. With background completion enabled, the origin and its ownership move into supervised work; that continuation does not acquire a new hard-timeout budget. Eager refresh is request-driven and does not use the ordinary factory timeout. Adaptive options and conditional `not_modified` are validated before storage. Snapshot creation order and actual insertion time are separate: delayed origin work cannot invent newer source ordering or renew a replay's physical lifetime.
 
-let value = cache.get_or_set_with("report", factory, opts).await?;
-```
+An explicit caller token and `FactoryContext` cancellation state identify cancellation reasons. `close` initiates cancellation; `shutdown` waits for owned work and plugin cleanup. Dropping the last public cache handle also initiates cleanup. Ordinary late origin completion after a concurrent remove remains a FusionCache-compatible behavior; cache removal does not cancel unrelated origin work.
 
-If the factory later errors, `amalgam` serves the stale value and fires a
-`FailSafeActivate` event instead of returning an `Err`.
+## Distributed storage and continuity
 
-## Adaptive & conditional refresh
+L2 backends, serializers, backplanes, lockers and copy strategies are open traits. JSON and reference in-memory providers are available by default; Redis, MessagePack and Postcard are optional. L1 and L2 freshness/retention are configured separately. Hydration caps local deadlines by the remaining source lifetime.
 
-The factory receives a [`FactoryContext`] it can use to adapt caching or do an
-HTTP-style conditional request:
+Healthy L1 reads stay local. Cold L2 reads reconcile durable tag/clear markers; tags and clear against a custom L2 require an atomic invalidation provider. Ordinary legacy byte-store I/O remains usable without that capability. Control markers live outside ordinary value keys and are scoped by the effective physical namespace.
 
-```rust,ignore
-let html = cache.get_or_set("page", |mut ctx| async move {
-    // Adaptive caching: cache an empty result for less time.
-    // Conditional refresh: reuse the stale body on a 304.
-    if let Some(etag) = ctx.stale_etag() {
-        if not_modified_since(etag).await {
-            return ctx.not_modified();           // reuse stale value, bump expiration
-        }
-    }
-    let (body, etag) = fetch_page().await.map_err(FactoryError::from_source)?;
-    Ok(ctx.modified(body).etag(etag).done())     // store with a fresh ETag
-}).await?;
-```
+A backplane continuity gap, queue overflow or changed connection epoch requires reconciliation. Native Redis becomes connected only after a matching subscription acknowledgement. `ready()` and `try_build_ready()` expose that admission; the default initial-wait policy gates operations. A healthless adapter explicitly reports `BackplaneReadiness::BestEffort`. Custom backplanes without a health stream use the documented conservative reconciliation policy.
 
-## Multi-level: L1 + L2 + backplane
+Distributed lease capabilities are explicit. Native owned acquisition, renewal and token-checked release prevent abandoned ownership. Strict stale-owner commit rejection additionally requires an atomic backend ownership check; renewal alone cannot provide it during a partition. An explicitly selected legacy provider mode carries weaker guarantees; an opaque acquisition that never completes cannot promise bounded cancellation drainage. A finite lock timeout, deliberate lock skipping or another writer outside the protocol can also permit duplicate origin work.
 
-Add a distributed L2 (anything implementing `DistributedCache`) and a backplane
-to keep several nodes' L1 caches coherent. Reference in-memory/in-process backends
-ship by default for testing and single-process multi-instance setups; a real
-Redis L2 + backplane + locker ship behind the [`redis` feature](#cargo-features).
+Failed or skipped distributed effects can enter recovery with their original bytes, remaining lifetime and pending stage. Local same-key commit lanes order replay, foreground effects and publication. This protects an awaited newer local mutation from an older replay. Independent nodes and custom writes are not globally linearizable without a participating conditional backend protocol.
 
-```rust,ignore
-use amalgam::{Cache, InMemoryDistributedCache, InProcessBackplane, JsonSerializer,
-              SystemClock, DistributedCache, DistributedSerializer, Backplane, Clock};
-use std::sync::Arc;
+## Copying and capacity
 
-let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-let l2: Arc<dyn DistributedCache> = Arc::new(InMemoryDistributedCache::new(clock.clone()));
-let backplane: Arc<dyn Backplane> = Arc::new(InProcessBackplane::default());
+Rust `Clone` does not isolate mutable state inside `Arc` or similar shared handles. `with_enable_auto_clone(true)` requires an actual fallible `ValueCloner`; built-in serializers can provide value round trips. Isolation is applied at storage and caller-output boundaries, including stale/fail-safe values. A failed copy is an error, never an ordinary shared clone fallback.
 
-// `V` must be `Clone + Serialize + DeserializeOwned` to cross the L2 wire.
-let cache: Cache<MyData> = Cache::builder()
-    .distributed(l2)
-    .serializer(Arc::new(JsonSerializer))
-    .backplane(backplane)
-    .instance_id("node-1")
-    .build();
-```
+Entry count and entry weight are separate limits. Under pressure the priority policy evicts Low before Normal before High and uses recency for ties. `NeverRemove` entries still consume capacity and expire at their physical deadline; further admission can be rejected. Admission and eviction are reported through the shared event/plugin route.
 
-Now `get_or_set` reads through L1 → L2 → factory and writes through to both; a
-`set`/`remove`/`expire` on one node publishes a backplane message so peers drop
-their stale L1 copy and re-pull the authoritative value from L2.
+## Recovery, events and diagnostics
 
-## Observe what the cache is doing
+Recovery defaults to enabled for a configured distributed provider, with a 2-second delay and **1024 queued items**. Explicit `max_items: None` permits an unlimited queue. The bound is a deliberate difference from the FusionCache/0.2 default. Queue-full rejection and exhausted retry budgets are observable. Markers are compacted conservatively rather than silently forgotten.
 
-```rust,ignore
-use amalgam::CacheEvent;
+Transport failures trip the corresponding circuit breaker; codec or value-copy failures do not declare every key's transport unhealthy. Default breaker duration is zero, meaning disabled. Read I/O budgets and provider lifecycle budgets are distinct from the intentionally unbounded default cache write/remove contract.
 
-let mut events = cache.events().subscribe();
-tokio::spawn(async move {
-    while let Ok(event) = events.recv().await {
-        match event {
-            CacheEvent::FailSafeActivate { key } => eprintln!("served stale for {key}"),
-            CacheEvent::FactoryError { key, message } => eprintln!("factory failed for {key}: {message}"),
-            _ => {}
-        }
-    }
-});
-```
+Each cache has its own plugin sessions, including when a plugin object is shared. Dynamic registration detaches and stops exactly once. One event hub reports reads, misses, admission, eviction, origins, distributed effects and operation outcomes. Use the resilient event subscription when a slow observer must recover from broadcast lag.
 
-## Resilience: circuit breakers + auto-recovery
+Metrics use a bounded cache-name label budget. Keys and instance IDs belong in traces rather than metric labels. OpenTelemetry exposes a composable layer; the convenience global initializer preserves an existing subscriber/provider on failure.
 
-When the L2 cache or backplane is flaky, two FusionCache mechanisms keep the cache
-fast and self-healing:
+## Features
 
-- **Circuit breakers** stop hammering a known-bad dependency. After a failure the
-  breaker opens for a fixed window; while open, L2 / backplane ops are skipped
-  (and queued for recovery), then it auto-closes. A `Duration::ZERO` breaker is
-  permanently closed — the default, matching FusionCache.
-- **Auto-recovery** queues the ops that failed (or were skipped while a breaker was
-  open) and replays them on a background drain, with **latest-wins dedup** per key
-  and a bounded queue + retry budget. It is enabled by default whenever an L2 or
-  backplane is configured.
+| Feature | Integration |
+|---|---|
+| default | Local cache, JSON and in-memory distributed/backplane/locker providers |
+| `redis` | Redis value store, durable markers, pub/sub and owned leases |
+| `messagepack` | MessagePack snapshot/value-copy codec |
+| `postcard` | Postcard snapshot/value-copy codec |
+| `metrics` | Exporter-independent metrics plugin |
+| `opentelemetry` | Composable tracing and OTLP convenience initialization |
+| `full` | All integrations above |
 
-```rust,ignore
-use amalgam::{Cache, RecoveryConfig};
-use std::time::Duration;
+The default distributed namespace is **v2 with Prefix**. New codecs read legacy raw payloads, but running 0.2 nodes cannot read 0.3 framed snapshots. Use a coordinated fresh namespace. `KeyModifierMode::None` or intentional reuse of v1 requires a fresh physical prefix or a coordinated migration; it does not make a mixed-version rollout safe.
 
-let cache: Cache<MyData> = Cache::builder()
-    .distributed(l2)
-    .serializer(serializer)
-    .backplane(backplane)
-    // open the L2 breaker for 5s after a failure (ZERO = disabled, the default)
-    .distributed_circuit_breaker(Duration::from_secs(5))
-    .backplane_circuit_breaker(Duration::from_secs(5))
-    // tune the retry queue (this is also the default when L2/backplane is present)
-    .auto_recovery(RecoveryConfig {
-        enabled: true,
-        delay: Duration::from_secs(5),   // drain cadence + post-reconnect barrier
-        max_items: Some(1000),
-        max_retries: Some(5),
-    })
-    .build();
-```
-
-A breaker opening or closing fires `CacheEvent::CircuitBreakerChange { component, closed }`.
-
-## Cross-node single-flight (distributed locker)
-
-In-process stampede protection runs one factory per key *per node*. A
-`DistributedLocker` extends that to **one factory per key across the cluster** — it
-is acquired after the local lock. Share one `InMemoryDistributedLocker` between
-caches in a single process, or use the Redis-backed locker for a real cluster.
-Opt a single call out with `EntryOptions::with_skip_distributed_locker`.
-
-```rust,ignore
-use amalgam::{Cache, DistributedLocker, InMemoryDistributedLocker, Clock, SystemClock};
-use std::sync::Arc;
-
-let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-let locker: Arc<dyn DistributedLocker> = Arc::new(InMemoryDistributedLocker::new(clock));
-
-let cache: Cache<MyData> = Cache::builder()
-    .distributed(l2)
-    .serializer(serializer)
-    .distributed_locker(locker)
-    .build();
-```
-
-## Plugins & metrics
-
-A `Plugin` observes every `CacheEvent` (and an `on_start` lifecycle hook) — the
-Rust counterpart of `IFusionCachePlugin`. Plugins run on the (already cheap,
-non-blocking) event path, so a plugin must not block; offload real work to its own
-task.
-
-```rust,ignore
-use amalgam::{CacheEvent, Plugin};
-
-struct LogPlugin;
-impl Plugin for LogPlugin {
-    fn name(&self) -> &str { "log" }
-    fn on_event(&self, event: &CacheEvent) {
-        if let CacheEvent::FailSafeActivate { key } = event {
-            eprintln!("fail-safe for {key}");
-        }
-    }
-}
-
-let cache: Cache<MyData> = Cache::builder()
-    .plugin(std::sync::Arc::new(LogPlugin))
-    .build();
-```
-
-With the `metrics` feature, `MetricsPlugin` is a ready-made plugin that records
-counters (hits, misses, sets, factory errors/timeouts, fail-safe activations, eager
-refreshes) through the [`metrics`](https://docs.rs/metrics) facade — point any
-compatible exporter (Prometheus, OTLP, …) at it:
-
-```rust,ignore
-use amalgam::MetricsPlugin; // requires `features = ["metrics"]`
-
-let cache: Cache<MyData> = Cache::builder()
-    .plugin(std::sync::Arc::new(MetricsPlugin::new()))
-    .build();
-```
-
-## Named caches & dynamic defaults
-
-Where FusionCache resolves named caches from a DI container, `amalgam` offers a
-`CacheRegistry` (register/resolve by name) and a `DefaultEntryOptionsProvider`
-(per-key default options, consulted when a call passes no explicit options):
-
-```rust,ignore
-use amalgam::{Cache, CacheRegistry, DefaultEntryOptionsProvider, EntryOptions};
-use std::sync::Arc;
-use std::time::Duration;
-
-let registry: CacheRegistry<String> = CacheRegistry::new();
-let users = registry.get_or_create("users", || Cache::builder().name("users").build());
-
-struct PerKeyDefaults;
-impl DefaultEntryOptionsProvider for PerKeyDefaults {
-    fn options_for(&self, key: &str) -> Option<EntryOptions> {
-        key.starts_with("hot:")
-            .then(|| EntryOptions::new(Duration::from_secs(5)))
-    }
-}
-
-let cache: Cache<String> = Cache::builder()
-    .default_options_provider(Arc::new(PerKeyDefaults))
-    .build();
-let _ = (users, cache);
-```
-
-## Cargo features
-
-All distributed *backends* and extras are opt-in; the default build is
-dependency-light and uses the in-memory / in-process reference backends.
-
-| Feature | Enables |
-|---------|---------|
-| *(default)* | L1 + reference L2/backplane/locker (`InMemoryDistributedCache`, `InProcessBackplane`, `InMemoryDistributedLocker`), `JsonSerializer`. |
-| `redis` | `RedisDistributedCache`, `RedisBackplane`, `RedisDistributedLocker` on `redis::aio::ConnectionManager`. |
-| `messagepack` | `MessagePackSerializer` (compact L2 payloads via `rmp-serde`). |
-| `postcard` | `PostcardSerializer` (smallest L2 payloads, `serde`-native binary). |
-| `metrics` | `MetricsPlugin` (counters via the `metrics` facade). |
-| `opentelemetry` | `otel::init_otlp(..)` — export the crate's `tracing` spans over OTLP. |
-| `full` | all of the above. |
-
-```toml
-[dependencies]
-amalgam = { version = "0.1", features = ["full"] }
-```
-
-The Redis adapters connect with an async constructor:
-
-```rust,ignore
-use amalgam::{Cache, RedisDistributedCache, RedisBackplane, JsonSerializer,
-              DistributedCache, Backplane};
-use std::sync::Arc;
-
-let l2: Arc<dyn DistributedCache> =
-    Arc::new(RedisDistributedCache::connect("redis://127.0.0.1/").await?);
-let backplane: Arc<dyn Backplane> =
-    Arc::new(RedisBackplane::connect("redis://127.0.0.1/").await?);
-
-let cache: Cache<MyData> = Cache::builder()
-    .distributed(l2)
-    .serializer(Arc::new(JsonSerializer))
-    .backplane(backplane)
-    .instance_id("node-1")
-    .build();
-```
-
-## Design notes
-
-`amalgam` is a *type-driven* port: where FusionCache leans on .NET runtime type
-info, exceptions, or `null`, `amalgam` uses Rust idioms that make whole bug
-classes unrepresentable.
-
-- **`Cache<V>`** is generic over one value type — no `dyn Any` downcasts.
-- **`Timeout { Infinite, After(Duration) }`** replaces the `-1ms` sentinel.
-- **`MaybeValue<V>` / `Result`** replace `null` / exceptions; a cache *miss* is
-  never an error, and a fail-safe-rescued failure returns a value, not an `Err`.
-- **`Clock`** is injected (`SystemClock` / `ManualClock`), so all expiration is
-  deterministic in tests.
-- `#![forbid(unsafe_code)]`.
-
-## Status
-
-The full FusionCache feature set is implemented: the L1 resiliency model
-(stampede, fail-safe, soft/hard timeouts with background completion, eager refresh,
-adaptive + conditional refresh, tagging) **plus** L1 + L2 + backplane with
-read-through / write-through, multi-node invalidation and cross-node tag/clear
-propagation, **circuit breakers**, **auto-recovery**, a **cross-node distributed
-locker**, **plugins**, a **named-cache registry** with a **dynamic default-options
-provider**, and an optional **Redis** backend (L2 + backplane + locker),
-**MessagePack** serializer, and **metrics** plugin behind feature flags.
-
-It is verified by a behavioural test oracle (`tests/behavior.rs`), end-to-end
-multi-level tests (`tests/multilevel.rs`), feature/recovery tests, and Redis
-integration tests run against a live server via `docker-compose.yml`: the default
-suite (60 tests) is green and `cargo clippy` is warning-clean on the default build
-*and* `--features full`; `#![forbid(unsafe_code)]`.
-
-OpenTelemetry is supported: an always-on `tracing` span (`amalgam.get_or_set`)
-works with any subscriber, and `otel::init_otlp(service, endpoint)` (feature
-`opentelemetry`) exports spans over OTLP/gRPC to a collector such as Jaeger — try
-`docker compose up -d` then `cargo run --example otel --features opentelemetry`.
-
-Still roadmap (kept honest): a `Microsoft.Extensions.DependencyInjection`-style DI
-integration (the registry is the Rust-idiomatic substitute); and serializers beyond
-JSON / MessagePack (Protobuf / MemoryPack). See [`docs/PARITY.md`](docs/PARITY.md)
-for the precise, row-by-row status of every feature.
+See [migration and tested FusionCache contract](docs/PARITY.md), [validation and limits](docs/AUDIT.md), [porting design](PORTING.md), [examples](examples) and the [changelog](CHANGELOG.md). These documents describe supported contracts and evidence; they do not claim universal one-to-one parity or equal performance for every workload.
 
 ## Acknowledgements
 
-- **[FusionCache](https://github.com/ZiggyCreatures/FusionCache)** by Jody Donetti
-  — the design this crate ports.
-- The **C#→Rust porting methodology** ([`PORTING.md`](PORTING.md)) adapts the
-  decision-table approach Bun used for its Zig→Rust AI port.
-- Built on **[moka](https://github.com/moka-rs/moka)** and **[tokio](https://tokio.rs)**.
+[FusionCache](https://github.com/ZiggyCreatures/FusionCache) by ZiggyCreatures provides the resiliency model and comparison reference. Amalgam uses Tokio, Moka and the open Rust integration ecosystem. Distributed providers and copying strategies remain extensible; internal finite outcomes use typed enums. The crate forbids unsafe code.

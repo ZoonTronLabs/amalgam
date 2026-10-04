@@ -225,9 +225,9 @@ async fn circuit_breaker_opens_then_auto_recovery_replays_write() {
     // operation is queued for auto-recovery.
     cache.set("k", "v1".to_owned()).await;
 
-    // The L2 layer prefixes stored keys with the wire-format version ("v1" by
-    // default) and there is no key prefix, so the backend key is "v1:k".
-    const L2_KEY: &str = "v1:k";
+    // The L2 layer prefixes stored keys with the wire-format version ("v2" by
+    // default) and there is no key prefix, so the backend key is "v2:k".
+    const L2_KEY: &str = "v2:k";
     assert!(
         inner_l2.get(L2_KEY).await.unwrap().is_none(),
         "the failed write left nothing in L2"

@@ -1,386 +1,1195 @@
-//! Redis-backed L2 cache, backplane, and distributed locker (feature `redis`).
+//! Redis value storage, atomic invalidation, renewable leases, and an owned backplane.
 //!
-//! Three small adapters, each implementing the matching `amalgam` trait so they
-//! drop straight into
-//! `Cache::builder().distributed(..) / .backplane(..) / .distributed_locker(..)`:
-//!
-//! * [`RedisDistributedCache`] — an L2 byte store (`SET`/`GET`/`DEL`, TTL via `PX`).
-//! * [`RedisDistributedLocker`] — cross-node single-flight (`SET key token NX PX`,
-//!   released with an atomic compare-and-delete Lua script).
-//! * [`RedisBackplane`] — multi-node invalidation over Redis pub/sub.
-//!
-//! All three are built on [`redis::aio::ConnectionManager`], which is cheap to
-//! clone (it is an `Arc` internally) and transparently reconnects, so every
-//! operation simply clones the manager to obtain the `&mut` the `redis` API
-//! wants. Every [`redis::RedisError`] is mapped to [`Error::Distributed`] (or
-//! [`Error::Backplane`] for the backplane) — a `redis` error never escapes.
+//! Values retain their ordinary physical keys except keys in the adapter's
+//! private area, which are injectively escaped by every value operation. Control
+//! hashes and ownership keys consequently cannot be overwritten by ordinary data.
+//! V2 backplane frames accept legacy pipe input; old readers require namespace
+//! migration. The subscriber owns bounded push delivery and explicit reconnect ACKs.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use redis::aio::{ConnectionManager, ConnectionManagerConfig};
-use redis::{
-    Client, ExistenceCheck, Msg, ProtocolVersion, PushInfo, PushKind, SetExpiry, SetOptions,
-};
-use tokio::sync::broadcast;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection};
+use redis::{Client, Msg, ProtocolVersion, PushInfo, PushKind};
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, watch};
 
-use crate::backplane::{Backplane, BackplaneAction, BackplaneMessage};
-use crate::distributed::DistributedCache;
-use crate::distributed_lock::DistributedLocker;
+use crate::backplane::{
+    Backplane, BackplaneAction, BackplaneMessage, BackplaneState, ContinuityEpoch, encode_hex,
+};
+use crate::distributed::{DistributedCache, InvalidationStore, LeasedMutation, LeasedWriteOutcome};
+use crate::distributed_lock::{
+    DistributedLocker, LeaseError, LeaseProof, LeaseReceipt, LeaseSupport, LeaseToken, LeaseTtl,
+    RenewalOutcome, TokenAcquisition, WaitBudget,
+};
 use crate::error::{Error, Result};
+use crate::tags::{
+    CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerStoreLimits, MarkerVersion,
+    StoredMarker,
+};
 use crate::time::{Timeout, Timestamp};
 
-/// The pub/sub channel every node publishes invalidation messages on.
-const BACKPLANE_CHANNEL: &str = "amalgam:backplane";
-
-/// Field separator for the compact backplane wire format
-/// (`source_id|timestamp_ticks|action_byte|key`).
-const WIRE_SEPARATOR: char = '|';
-
-/// How long to wait between `SET NX` attempts while a distributed lock is held
-/// by another node. Mirrors the polling cadence of the in-process locker.
+const BACKPLANE_CHANNEL: &str = "amalgam:backplane:v2";
+const PRIVATE_AREA: &str = "\u{1f}amalgam/v2/";
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
-
-/// Lua for an atomic compare-and-delete lock release: delete the key only if it
-/// still holds the caller's token, so a node never releases a lock that already
-/// expired and was re-acquired by another node.
 const RELEASE_LOCK_SCRIPT: &str = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+const RENEW_LOCK_SCRIPT: &str = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end";
+const FENCED_WRITE_SCRIPT: &str = r#"
+if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+if ARGV[2] == 'remove' then redis.call('del', KEYS[2])
+elseif ARGV[4] == '0' then redis.call('del', KEYS[2])
+elseif ARGV[4] == '' then redis.call('set', KEYS[2], ARGV[3])
+else redis.call('set', KEYS[2], ARGV[3], 'PX', ARGV[4]) end
+return 1
+"#;
 
-/// Maps any `redis` error to a distributed-cache error.
-fn distributed_err(err: redis::RedisError) -> Error {
-    Error::Distributed(err.to_string())
+// Revisions are fixed-width sign-biased hex strings, never Lua floating-point numbers.
+const ADVANCE_MARKER_SCRIPT: &str = r#"
+if redis.call('sismember', KEYS[2], ARGV[1]) == 0 then
+  if redis.call('scard', KEYS[2]) >= tonumber(ARGV[5]) then return {'!capacity', ARGV[5]} end
+  redis.call('sadd', KEYS[2], ARGV[1])
+end
+local previous = redis.call('hget', KEYS[1], ARGV[2])
+local revision = ARGV[3]
+if previous and previous > revision then revision = previous end
+redis.call('hset', KEYS[1], ARGV[2], revision)
+local fields = redis.call('hgetall', KEYS[1])
+local tags = 0
+local through = ''
+for index = 1, #fields, 2 do
+  if string.sub(fields[index], 1, 2) == 't:' then
+    tags = tags + 1
+    if fields[index + 1] > through then through = fields[index + 1] end
+  end
+end
+if tags <= tonumber(ARGV[4]) then return {revision, ''} end
+local clear = redis.call('hget', KEYS[1], 'r')
+if clear and clear > through then through = clear end
+redis.call('hset', KEYS[1], 'r', through)
+for index = 1, #fields, 2 do
+  if string.sub(fields[index], 1, 2) == 't:' and fields[index + 1] <= through then
+    redis.call('hdel', KEYS[1], fields[index])
+  end
+end
+return {revision, through}
+"#;
+
+fn distributed_err(error: impl std::fmt::Display) -> Error {
+    Error::Distributed(error.to_string())
 }
-
-/// Maps any `redis` error to a backplane error.
-fn backplane_err(err: redis::RedisError) -> Error {
-    Error::Backplane(err.to_string())
+fn backplane_err(error: impl std::fmt::Display) -> Error {
+    Error::Backplane(error.to_string())
 }
-
-/// Opens a Redis [`Client`] from a connection string, mapping failures to
-/// [`Error::Distributed`].
 fn open_client(connection: impl Into<String>) -> Result<Client> {
     Client::open(connection.into()).map_err(distributed_err)
 }
 
-/// Builds an auto-reconnecting [`ConnectionManager`] for the given client.
-async fn connect_manager(client: &Client) -> Result<ConnectionManager> {
-    client
-        .get_connection_manager()
-        .await
-        .map_err(distributed_err)
+/// Positive native connection/request budgets, independent of the injected domain clock.
+#[derive(Debug, Clone, Copy)]
+pub struct RedisIoOptions {
+    connection_timeout: Duration,
+    response_timeout: Duration,
 }
 
-// ===========================================================================
-// L2 distributed cache
-// ===========================================================================
+impl RedisIoOptions {
+    /// Validates finite I/O budgets before opening a connection.
+    pub fn new(
+        connection_timeout: Duration,
+        response_timeout: Duration,
+    ) -> std::result::Result<Self, LeaseError> {
+        if connection_timeout.is_zero() || response_timeout.is_zero() {
+            return Err(LeaseError::InvalidDeadline);
+        }
+        WaitBudget::new(Timeout::After(connection_timeout))?;
+        WaitBudget::new(Timeout::After(response_timeout))?;
+        Ok(Self {
+            connection_timeout,
+            response_timeout,
+        })
+    }
 
-/// A Redis-backed L2 distributed cache.
-///
-/// Stores raw value bytes under each (already-prefixed) key. TTLs are honoured
-/// server-side via Redis key expiration (`PX`), so an expired entry simply reads
-/// back as a miss (`None`).
+    /// Maximum connection-attempt lifetime.
+    #[must_use]
+    pub const fn connection_timeout(self) -> Duration {
+        self.connection_timeout
+    }
+
+    /// Maximum request lifetime for lease/control I/O.
+    #[must_use]
+    pub const fn response_timeout(self) -> Duration {
+        self.response_timeout
+    }
+}
+
+impl Default for RedisIoOptions {
+    fn default() -> Self {
+        Self {
+            connection_timeout: Duration::from_secs(2),
+            response_timeout: Duration::from_secs(2),
+        }
+    }
+}
+
+async fn connect_manager(client: &Client, options: RedisIoOptions) -> Result<ConnectionManager> {
+    let config = ConnectionManagerConfig::new()
+        .set_connection_timeout(Some(options.connection_timeout))
+        .set_response_timeout(Some(options.response_timeout))
+        .set_number_of_retries(2)
+        .set_max_delay(Duration::from_millis(100));
+    tokio::time::timeout(
+        options.connection_timeout,
+        client.get_connection_manager_with_config(config),
+    )
+    .await
+    .map_err(distributed_err)?
+    .map_err(distributed_err)
+}
+
+fn value_key(key: &str) -> String {
+    if key.starts_with(PRIVATE_AREA) {
+        format!("{PRIVATE_AREA}data/{}", encode_hex(key.as_bytes()))
+    } else {
+        key.to_owned()
+    }
+}
+fn lease_key(key: &str) -> String {
+    format!("{PRIVATE_AREA}lease/{}", encode_hex(key.as_bytes()))
+}
+fn marker_key(scope: &CacheScope) -> String {
+    format!(
+        "{PRIVATE_AREA}markers/{}",
+        encode_hex(scope.storage_id().as_bytes())
+    )
+}
+fn marker_field(kind: &MarkerKind) -> String {
+    match kind {
+        MarkerKind::Tag(tag) => format!("t:{}", encode_hex(tag.as_str().as_bytes())),
+        MarkerKind::ClearExpire => "e".into(),
+        MarkerKind::ClearRemove => "r".into(),
+    }
+}
+
+/// Redis durable atomic marker maxima in an isolated, bounded control area.
+#[derive(Clone)]
+pub struct RedisInvalidationStore {
+    manager: ConnectionManager,
+    limits: MarkerStoreLimits,
+    io: RedisIoOptions,
+}
+
+impl RedisInvalidationStore {
+    /// Opens a standalone provider which may also accompany a custom value backend.
+    pub async fn connect(connection: impl Into<String>, limits: MarkerStoreLimits) -> Result<Self> {
+        let io = RedisIoOptions::default();
+        let client = open_client(connection)?;
+        Ok(Self {
+            manager: connect_manager(&client, io).await?,
+            limits,
+            io,
+        })
+    }
+}
+
+#[async_trait]
+impl InvalidationStore for RedisInvalidationStore {
+    async fn read(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+        let mut connection = self.manager.clone();
+        let response = tokio::time::timeout(
+            self.io.response_timeout,
+            redis::cmd("HGET")
+                .arg(marker_key(scope))
+                .arg(marker_field(kind))
+                .query_async::<Option<String>>(&mut connection),
+        )
+        .await
+        .map_err(MarkerError::backend)?
+        .map_err(MarkerError::backend)?;
+        response
+            .map(|encoded| MarkerVersion::from_ordered_hex(&encoded))
+            .transpose()
+    }
+
+    async fn advance(
+        &self,
+        scope: &CacheScope,
+        kind: MarkerKind,
+        candidate: MarkerVersion,
+    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+        let mut connection = self.manager.clone();
+        let response = tokio::time::timeout(
+            self.io.response_timeout,
+            redis::cmd("EVAL")
+                .arg(ADVANCE_MARKER_SCRIPT)
+                .arg(2)
+                .arg(marker_key(scope))
+                .arg(format!("{PRIVATE_AREA}marker-scopes"))
+                .arg(scope.storage_id())
+                .arg(marker_field(&kind))
+                .arg(candidate.ordered_hex())
+                .arg(self.limits.max_tags())
+                .arg(self.limits.max_scopes())
+                .query_async::<Vec<String>>(&mut connection),
+        )
+        .await
+        .map_err(MarkerError::backend)?
+        .map_err(MarkerError::backend)?;
+        if response.first().is_some_and(|value| value == "!capacity") {
+            return Err(MarkerError::ScopeCapacity {
+                limit: self.limits.max_scopes(),
+            });
+        }
+        if response.len() != 2 {
+            return Err(MarkerError::Protocol {
+                detail: "invalid marker advance response".into(),
+            });
+        }
+        let marker = StoredMarker::new(kind, MarkerVersion::from_ordered_hex(&response[0])?);
+        if response[1].is_empty() {
+            Ok(MarkerAdvanceOutcome::Advanced(marker))
+        } else {
+            Ok(MarkerAdvanceOutcome::Compacted {
+                marker,
+                clear_remove: MarkerVersion::from_ordered_hex(&response[1])?,
+            })
+        }
+    }
+
+    async fn read_many(
+        &self,
+        scope: &CacheScope,
+        kinds: &[MarkerKind],
+    ) -> std::result::Result<Box<[StoredMarker]>, MarkerError> {
+        if kinds.is_empty() {
+            return Ok(Box::new([]));
+        }
+        let mut connection = self.manager.clone();
+        let mut command = redis::cmd("HMGET");
+        command.arg(marker_key(scope));
+        for kind in kinds {
+            command.arg(marker_field(kind));
+        }
+        let response = tokio::time::timeout(
+            self.io.response_timeout,
+            command.query_async::<Vec<Option<String>>>(&mut connection),
+        )
+        .await
+        .map_err(MarkerError::backend)?
+        .map_err(MarkerError::backend)?;
+        if response.len() != kinds.len() {
+            return Err(MarkerError::Protocol {
+                detail: "invalid marker batch response".into(),
+            });
+        }
+        kinds
+            .iter()
+            .zip(response)
+            .filter_map(|(kind, response)| {
+                response.map(|encoded| {
+                    MarkerVersion::from_ordered_hex(&encoded)
+                        .map(|version| StoredMarker::new(kind.clone(), version))
+                })
+            })
+            .collect()
+    }
+}
+
+/// Redis opaque bytes. Ordinary keys cannot overwrite control or ownership state.
 #[derive(Clone)]
 pub struct RedisDistributedCache {
     manager: ConnectionManager,
+    invalidation: Arc<RedisInvalidationStore>,
 }
 
 impl RedisDistributedCache {
-    /// Connects to Redis at `connection` (e.g. `redis://127.0.0.1/`).
-    ///
-    /// # Errors
-    /// Returns [`Error::Distributed`] if the URL is invalid or the initial
-    /// connection cannot be established.
+    /// Opens the value backend with default bounded transport I/O.
     pub async fn connect(connection: impl Into<String>) -> Result<Self> {
+        Self::connect_with_options(
+            connection,
+            RedisIoOptions::default(),
+            MarkerStoreLimits::default(),
+        )
+        .await
+    }
+
+    /// Opens value/marker storage with explicit positive budgets and resource bounds.
+    pub async fn connect_with_options(
+        connection: impl Into<String>,
+        io: RedisIoOptions,
+        limits: MarkerStoreLimits,
+    ) -> Result<Self> {
         let client = open_client(connection)?;
-        let manager = connect_manager(&client).await?;
-        Ok(Self { manager })
+        let manager = connect_manager(&client, io).await?;
+        let invalidation = Arc::new(RedisInvalidationStore {
+            manager: manager.clone(),
+            limits,
+            io,
+        });
+        Ok(Self {
+            manager,
+            invalidation,
+        })
     }
 }
 
 #[async_trait]
 impl DistributedCache for RedisDistributedCache {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let mut conn = self.manager.clone();
+        let mut connection = self.manager.clone();
         redis::cmd("GET")
-            .arg(key)
-            .query_async::<Option<Vec<u8>>>(&mut conn)
+            .arg(value_key(key))
+            .query_async(&mut connection)
             .await
             .map_err(distributed_err)
     }
 
-    async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
-        let mut conn = self.manager.clone();
-        let mut options = SetOptions::default();
-        if let Some(ttl) = ttl {
-            options = options.with_expiration(SetExpiry::PX(duration_to_millis(ttl)));
+    async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
+        if ttl.is_some_and(|duration| duration.is_zero()) {
+            return self.remove(key).await;
         }
-        // `SET key value [PX ms]`; the value is opaque bytes.
-        redis::cmd("SET")
-            .arg(key)
-            .arg(value)
-            .arg(options)
-            .query_async::<()>(&mut conn)
+        let mut connection = self.manager.clone();
+        let mut command = redis::cmd("SET");
+        command.arg(value_key(key)).arg(bytes);
+        if let Some(duration) = ttl {
+            command.arg("PX").arg(duration_to_millis(duration));
+        }
+        command
+            .query_async::<()>(&mut connection)
             .await
             .map_err(distributed_err)
     }
 
     async fn remove(&self, key: &str) -> Result<()> {
-        let mut conn = self.manager.clone();
+        let mut connection = self.manager.clone();
         redis::cmd("DEL")
-            .arg(key)
-            .query_async::<i64>(&mut conn)
+            .arg(value_key(key))
+            .query_async::<i64>(&mut connection)
             .await
-            .map(|_deleted| ())
+            .map(|_| ())
             .map_err(distributed_err)
+    }
+
+    fn invalidation_store(&self) -> Option<Arc<dyn InvalidationStore>> {
+        Some(self.invalidation.clone())
+    }
+
+    async fn write_with_lease(
+        &self,
+        key: &str,
+        mutation: LeasedMutation,
+        proof: &LeaseProof,
+    ) -> std::result::Result<LeasedWriteOutcome, LeaseError> {
+        let (action, bytes, ttl) = match mutation {
+            LeasedMutation::Set { bytes, ttl } => (
+                "set",
+                bytes,
+                ttl.map(|duration| {
+                    if duration.is_zero() {
+                        "0".into()
+                    } else {
+                        duration_to_millis(duration).to_string()
+                    }
+                })
+                .unwrap_or_default(),
+            ),
+            LeasedMutation::Remove => ("remove", Vec::new(), String::new()),
+        };
+        let mut connection = self.manager.clone();
+        let result = redis::cmd("EVAL")
+            .arg(FENCED_WRITE_SCRIPT)
+            .arg(2)
+            .arg(lease_key(proof.key()))
+            .arg(value_key(key))
+            .arg(proof.token().as_str())
+            .arg(action)
+            .arg(bytes)
+            .arg(ttl)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(LeaseError::backend)?;
+        Ok(if result == 1 {
+            LeasedWriteOutcome::Committed
+        } else {
+            LeasedWriteOutcome::LeaseLost
+        })
     }
 }
 
-// ===========================================================================
-// Distributed locker
-// ===========================================================================
-
-/// A Redis-backed distributed locker.
-///
-/// Acquisition is the canonical `SET key token NX PX <ttl>`: it succeeds only
-/// when the key is absent, and the `PX` TTL guarantees the lock is released even
-/// if the holder dies. Release is an atomic compare-and-delete (a Lua script) so
-/// a node can only delete the lock it still owns — never one that already expired
-/// and was re-taken by someone else.
+/// Redis renewable token leases, with preselected nonce cancellation cleanup.
 #[derive(Clone)]
 pub struct RedisDistributedLocker {
     manager: ConnectionManager,
+    io: RedisIoOptions,
 }
 
 impl RedisDistributedLocker {
-    /// Connects to Redis at `connection`.
-    ///
-    /// # Errors
-    /// Returns [`Error::Distributed`] if the URL is invalid or the initial
-    /// connection cannot be established.
+    /// Opens native renewable ownership with explicit finite transport budgets.
     pub async fn connect(connection: impl Into<String>) -> Result<Self> {
-        let client = open_client(connection)?;
-        let manager = connect_manager(&client).await?;
-        Ok(Self { manager })
+        Self::connect_with_options(connection, RedisIoOptions::default()).await
     }
 
-    /// One non-blocking `SET key token NX PX <ttl>` attempt.
-    ///
-    /// Returns `Ok(true)` if the lock was taken, `Ok(false)` if it is currently
-    /// held by someone else (the `NX` made the SET a no-op, which Redis reports
-    /// as a `Nil` reply → `None`).
-    async fn try_acquire(&self, key: &str, token: &str, ttl: Duration) -> Result<bool> {
-        let mut conn = self.manager.clone();
-        let options = SetOptions::default()
-            .conditional_set(ExistenceCheck::NX)
-            .with_expiration(SetExpiry::PX(duration_to_millis(ttl)));
-        let outcome: Option<String> = redis::cmd("SET")
-            .arg(key)
-            .arg(token)
-            .arg(options)
-            .query_async(&mut conn)
-            .await
-            .map_err(distributed_err)?;
-        Ok(outcome.is_some())
+    /// Opens native ownership with custom validated transport budgets.
+    pub async fn connect_with_options(
+        connection: impl Into<String>,
+        io: RedisIoOptions,
+    ) -> Result<Self> {
+        let client = open_client(connection)?;
+        Ok(Self {
+            manager: connect_manager(&client, io).await?,
+            io,
+        })
+    }
+
+    async fn try_acquire(
+        &self,
+        key: &str,
+        token: &LeaseToken,
+        ttl: LeaseTtl,
+        budget: Duration,
+    ) -> std::result::Result<bool, LeaseError> {
+        let mut connection = self.manager.clone();
+        let result = tokio::time::timeout(
+            budget,
+            redis::cmd("SET")
+                .arg(lease_key(key))
+                .arg(token.as_str())
+                .arg("NX")
+                .arg("PX")
+                .arg(ttl.millis())
+                .query_async::<Option<String>>(&mut connection),
+        )
+        .await
+        .map_err(|_| LeaseError::AcquisitionTimeout)?
+        .map_err(LeaseError::backend)?;
+        Ok(result.is_some())
+    }
+}
+
+struct AcquireCleanup {
+    state: AcquireCleanupState,
+}
+enum AcquireCleanupState {
+    Pending {
+        manager: ConnectionManager,
+        key: String,
+        token: LeaseToken,
+        budget: Duration,
+        owner: Arc<dyn crate::distributed_lock::LeaseTaskOwner>,
+    },
+    Transferred,
+}
+
+impl AcquireCleanup {
+    fn new(
+        locker: &RedisDistributedLocker,
+        key: &str,
+        token: &LeaseToken,
+        owner: Arc<dyn crate::distributed_lock::LeaseTaskOwner>,
+    ) -> Self {
+        Self {
+            state: AcquireCleanupState::Pending {
+                manager: locker.manager.clone(),
+                key: lease_key(key),
+                token: token.clone(),
+                budget: locker.io.response_timeout,
+                owner,
+            },
+        }
+    }
+    fn transfer(&mut self) {
+        self.state = AcquireCleanupState::Transferred;
+    }
+}
+
+impl Drop for AcquireCleanup {
+    fn drop(&mut self) {
+        let state = std::mem::replace(&mut self.state, AcquireCleanupState::Transferred);
+        if let AcquireCleanupState::Pending {
+            mut manager,
+            key,
+            token,
+            budget,
+            owner,
+        } = state
+        {
+            owner.supervise(Box::pin(async move {
+                tokio::time::timeout(
+                    budget,
+                    redis::cmd("EVAL")
+                        .arg(RELEASE_LOCK_SCRIPT)
+                        .arg(1)
+                        .arg(key)
+                        .arg(token.as_str())
+                        .query_async::<i64>(&mut manager),
+                )
+                .await
+                .map_err(|_| LeaseError::CleanupTimeout)?
+                .map_err(LeaseError::backend)?;
+                Ok(())
+            }));
+        }
     }
 }
 
 #[async_trait]
 impl DistributedLocker for RedisDistributedLocker {
     async fn acquire(&self, key: &str, ttl: Duration, timeout: Timeout) -> Result<Option<String>> {
-        let token = new_token();
-        let deadline = match timeout {
-            Timeout::After(d) => Some(tokio::time::Instant::now() + d),
-            Timeout::Infinite => None,
-        };
-        loop {
-            if self.try_acquire(key, &token, ttl).await? {
-                return Ok(Some(token));
-            }
-            if let Some(deadline) = deadline
-                && tokio::time::Instant::now() >= deadline
-            {
-                return Ok(None);
-            }
-            tokio::time::sleep(LOCK_POLL_INTERVAL).await;
-        }
+        let token = LeaseToken::random();
+        let acquired = self
+            .acquire_with_token(key, &token, LeaseTtl::new(ttl)?, timeout)
+            .await?;
+        Ok(acquired.then(|| token.as_str().to_owned()))
     }
 
     async fn release(&self, key: &str, token: &str) -> Result<()> {
-        let mut conn = self.manager.clone();
-        // Compare-and-delete: only drop the key if it still holds *our* token.
-        // Releasing a token that already expired (or was re-taken) is a no-op.
-        // Done as a raw `EVAL` (the `redis` crate's `Script` helper is behind the
-        // `script` feature, which this crate does not enable).
-        redis::cmd("EVAL")
-            .arg(RELEASE_LOCK_SCRIPT)
-            .arg(1) // numkeys
-            .arg(key) // KEYS[1]
-            .arg(token) // ARGV[1]
-            .query_async::<i64>(&mut conn)
+        let mut connection = self.manager.clone();
+        tokio::time::timeout(
+            self.io.response_timeout,
+            redis::cmd("EVAL")
+                .arg(RELEASE_LOCK_SCRIPT)
+                .arg(1)
+                .arg(lease_key(key))
+                .arg(token)
+                .query_async::<i64>(&mut connection),
+        )
+        .await
+        .map_err(distributed_err)?
+        .map(|_| ())
+        .map_err(distributed_err)
+    }
+
+    fn lease_support(&self) -> LeaseSupport {
+        LeaseSupport::Renewable
+    }
+    fn token_acquisition(&self) -> TokenAcquisition {
+        TokenAcquisition::CallerSelected
+    }
+
+    async fn acquire_with_token(
+        &self,
+        key: &str,
+        token: &LeaseToken,
+        ttl: LeaseTtl,
+        timeout: Timeout,
+    ) -> std::result::Result<bool, LeaseError> {
+        self.acquire_receipt(key, token, ttl, timeout)
             .await
-            .map(|_released| ())
-            .map_err(distributed_err)
+            .map(|receipt| receipt.is_some())
+    }
+
+    async fn acquire_receipt(
+        &self,
+        key: &str,
+        token: &LeaseToken,
+        ttl: LeaseTtl,
+        timeout: Timeout,
+    ) -> std::result::Result<Option<LeaseReceipt>, LeaseError> {
+        self.acquire_receipt_supervised(
+            key,
+            token,
+            ttl,
+            timeout,
+            crate::distributed_lock::StandaloneLeaseOwner::current()?,
+        )
+        .await
+    }
+
+    async fn acquire_receipt_supervised(
+        &self,
+        key: &str,
+        token: &LeaseToken,
+        ttl: LeaseTtl,
+        timeout: Timeout,
+        owner: Arc<dyn crate::distributed_lock::LeaseTaskOwner>,
+    ) -> std::result::Result<Option<LeaseReceipt>, LeaseError> {
+        let wait = WaitBudget::new(timeout)?;
+        let mut first = true;
+        let mut cleanup = AcquireCleanup::new(self, key, token, owner);
+        loop {
+            if wait.exhausted() && !(first && wait.immediate()) {
+                return Ok(None);
+            }
+            let budget = if wait.immediate() {
+                self.io.response_timeout
+            } else {
+                wait.remaining().map_or(self.io.response_timeout, |left| {
+                    left.min(self.io.response_timeout)
+                })
+            };
+            let started = tokio::time::Instant::now();
+            let acquired = match self.try_acquire(key, token, ttl, budget).await {
+                Ok(acquired) => acquired,
+                Err(LeaseError::AcquisitionTimeout) => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            if acquired {
+                if wait.exhausted() && !wait.immediate() {
+                    self.release(key, token.as_str())
+                        .await
+                        .map_err(LeaseError::backend)?;
+                    return Ok(None);
+                }
+                cleanup.transfer();
+                return Ok(Some(LeaseReceipt::new(started)));
+            }
+            first = false;
+            if wait.exhausted() {
+                return Ok(None);
+            }
+            wait.pause(LOCK_POLL_INTERVAL).await;
+        }
+    }
+
+    async fn renew(
+        &self,
+        key: &str,
+        token: &LeaseToken,
+        ttl: LeaseTtl,
+    ) -> std::result::Result<RenewalOutcome, LeaseError> {
+        let mut connection = self.manager.clone();
+        let result = tokio::time::timeout(
+            self.io.response_timeout.min(ttl.duration()),
+            redis::cmd("EVAL")
+                .arg(RENEW_LOCK_SCRIPT)
+                .arg(1)
+                .arg(lease_key(key))
+                .arg(token.as_str())
+                .arg(ttl.millis())
+                .query_async::<i64>(&mut connection),
+        )
+        .await
+        .map_err(LeaseError::backend)?
+        .map_err(LeaseError::backend)?;
+        Ok(if result == 1 {
+            RenewalOutcome::Renewed
+        } else {
+            RenewalOutcome::Lost
+        })
     }
 }
 
-/// Generates an opaque, hard-to-guess lock token (128 bits of randomness).
-fn new_token() -> String {
-    format!("{:016x}{:016x}", fastrand::u64(..), fastrand::u64(..))
+/// Actual Redis connection identity, suitable for targeted disconnect tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RedisClientId(u64);
+impl RedisClientId {
+    /// The server-assigned positive connection ID.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.0
+    }
 }
 
-// ===========================================================================
-// Backplane (pub/sub)
-// ===========================================================================
+/// Finite counters from the bounded subscriber relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RedisBackplaneStats {
+    /// Pushes missed through bounded local-buffer overflow.
+    pub dropped_pushes: u64,
+    /// Malformed remote frames which triggered conservative reconciliation.
+    pub malformed_messages: u64,
+    /// Acknowledged subscriber connections.
+    pub acknowledged_connections: u64,
+}
 
-/// A Redis pub/sub backplane.
-///
-/// [`publish`](Backplane::publish) serialises a [`BackplaneMessage`] to a compact
-/// `source_id|timestamp_ticks|action_byte|key` line and `PUBLISH`es it to
-/// the shared backplane channel. On [`connect`](RedisBackplane::connect) a background
-/// task subscribes (on its own RESP3 connection) to that channel, parses each
-/// incoming line back into a [`BackplaneMessage`], and forwards it to an internal
-/// [`broadcast::Sender`]; [`subscribe`](Backplane::subscribe) hands out receivers
-/// off that sender. Messages that fail to parse are skipped, never fatal.
-pub struct RedisBackplane {
-    manager: ConnectionManager,
+#[derive(Clone)]
+struct SubscriberPush {
+    incarnation: u64,
+    info: PushInfo,
+}
+
+struct BackplaneInner {
+    manager: tokio::sync::RwLock<Option<ConnectionManager>>,
+    client: Client,
+    channel: Arc<str>,
+    name: Arc<str>,
+    io: RedisIoOptions,
     sender: broadcast::Sender<BackplaneMessage>,
-    channel: String,
-    // Kept alive for the lifetime of the backplane so the subscriber connection
-    // (and thus the relaying task) is not torn down early.
-    _subscriber: ConnectionManager,
+    state: watch::Sender<BackplaneState>,
+    stop: watch::Sender<bool>,
+    subscriber: Mutex<Option<MultiplexedConnection>>,
+    subscriber_id: AtomicU64,
+    worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    incarnation: Arc<AtomicU64>,
+    liveness: Arc<Mutex<Option<u64>>>,
+    dropped: AtomicU64,
+    malformed: AtomicU64,
+    acknowledged: AtomicU64,
+    shutdown_gate: tokio::sync::Mutex<()>,
+}
+
+/// A bounded, explicitly supervised RESP3 subscriber. Drop closes its owned socket/task.
+pub struct RedisBackplane {
+    inner: Arc<BackplaneInner>,
 }
 
 impl RedisBackplane {
-    /// Connects to Redis at `connection` and starts relaying incoming backplane
-    /// messages to local subscribers.
-    ///
-    /// # Errors
-    /// Returns [`Error::Backplane`] if the URL is invalid, either connection
-    /// cannot be established, or the channel subscription fails.
+    /// Connects on the deliberate V2 control-protocol channel.
     pub async fn connect(connection: impl Into<String>) -> Result<Self> {
         Self::connect_with_channel(connection, BACKPLANE_CHANNEL).await
     }
 
-    /// Like [`connect`](Self::connect) but on a specific pub/sub `channel`. Give
-    /// each cache its own channel when several caches share one Redis server, so
-    /// their invalidation messages don't cross-talk.
-    ///
-    /// # Errors
-    /// Returns [`Error::Backplane`] if the URL is invalid, either connection
-    /// cannot be established, or the channel subscription fails.
+    /// Connects using a channel chosen for an application's coordinated migration.
     pub async fn connect_with_channel(
         connection: impl Into<String>,
         channel: impl Into<String>,
     ) -> Result<Self> {
-        let connection = connection.into();
-        let channel = channel.into();
-
-        // Connection used for publishing (RESP2 is fine for plain PUBLISH).
-        let publish_client = Client::open(connection.clone()).map_err(backplane_err)?;
-        let manager = publish_client
-            .get_connection_manager()
-            .await
-            .map_err(backplane_err)?;
-
-        let (sender, _) = broadcast::channel::<BackplaneMessage>(256);
-
-        // Dedicated subscriber connection. Pub/sub pushes are only delivered to
-        // the push sender over RESP3, so force the protocol regardless of what
-        // the caller's URL requested.
-        let subscriber = Self::spawn_subscriber(&connection, &channel, sender.clone()).await?;
-
-        Ok(Self {
-            manager,
-            sender,
+        Self::connect_named(
+            connection,
             channel,
-            _subscriber: subscriber,
-        })
+            format!("amalgam-backplane-{}", LeaseToken::random().as_str()),
+            256,
+            RedisIoOptions::default(),
+        )
+        .await
     }
 
-    /// Opens a RESP3 [`ConnectionManager`], wires a push channel into it,
-    /// subscribes to the shared backplane channel, and spawns the relay task. Returns
-    /// the manager so the caller can keep it (and the subscription) alive.
-    async fn spawn_subscriber(
-        connection: &str,
-        channel: &str,
-        sender: broadcast::Sender<BackplaneMessage>,
-    ) -> Result<ConnectionManager> {
+    /// Connects with an identifiable fixture and bounded local push buffer.
+    pub async fn connect_named(
+        connection: impl Into<String>,
+        channel: impl Into<String>,
+        name: impl Into<String>,
+        capacity: usize,
+        io: RedisIoOptions,
+    ) -> Result<Self> {
+        let channel = channel.into();
+        let name = name.into();
+        if channel.trim().is_empty() || name.trim().is_empty() || capacity == 0 {
+            return Err(Error::Backplane(
+                "channel/name must be nonblank and push capacity positive".into(),
+            ));
+        }
+        let connection = connection.into();
+        let publish_client = open_client(connection.clone())?;
+        let manager = connect_manager(&publish_client, io).await?;
+        let mut publisher = manager.clone();
+        redis::cmd("CLIENT")
+            .arg("SETNAME")
+            .arg(format!("{name}:publish"))
+            .query_async::<()>(&mut publisher)
+            .await
+            .map_err(backplane_err)?;
         let info = connection
             .parse::<redis::ConnectionInfo>()
             .map_err(backplane_err)?;
-        let redis_settings = info
+        let settings = info
             .redis_settings()
             .clone()
             .set_protocol(ProtocolVersion::RESP3);
-        let info = info.set_redis_settings(redis_settings);
-        let client = Client::open(info).map_err(backplane_err)?;
+        let client = Client::open(info.set_redis_settings(settings)).map_err(backplane_err)?;
+        let (sender, _) = broadcast::channel(capacity);
+        let (push_sender, push_receiver) = broadcast::channel(capacity);
+        let (state, _) = watch::channel(BackplaneState::Disconnected {
+            epoch: ContinuityEpoch::INITIAL,
+        });
+        let (stop, _) = watch::channel(false);
+        let inner = Arc::new(BackplaneInner {
+            manager: tokio::sync::RwLock::new(Some(manager)),
+            client,
+            channel: channel.into(),
+            name: name.into(),
+            io,
+            sender,
+            state,
+            stop,
+            subscriber: Mutex::new(None),
+            subscriber_id: AtomicU64::new(0),
+            worker: Mutex::new(None),
+            incarnation: Arc::new(AtomicU64::new(1)),
+            liveness: Arc::new(Mutex::new(None)),
+            dropped: AtomicU64::new(0),
+            malformed: AtomicU64::new(0),
+            acknowledged: AtomicU64::new(0),
+            shutdown_gate: tokio::sync::Mutex::new(()),
+        });
+        let (subscriber, id) = open_subscriber(&inner, push_sender.clone(), 1).await?;
+        *inner
+            .subscriber
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(subscriber);
+        inner.subscriber_id.store(id, Ordering::Release);
+        inner.acknowledged.store(1, Ordering::Relaxed);
+        if !admit_connected(&inner, ContinuityEpoch::INITIAL) {
+            return Err(Error::Backplane(
+                "subscriber disconnected before initial ACK admission".into(),
+            ));
+        }
+        let worker = tokio::spawn(supervise_subscriber(
+            Arc::downgrade(&inner),
+            push_sender,
+            push_receiver,
+            inner.stop.subscribe(),
+        ));
+        *inner
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(worker);
+        Ok(Self { inner })
+    }
 
-        // `PushInfo`s (including pub/sub `message`s) are delivered onto this
-        // plain tokio mpsc, which the relay task drains without needing any
-        // `Stream` adapter.
-        let (push_tx, push_rx) = tokio::sync::mpsc::unbounded_channel::<PushInfo>();
-        let config = ConnectionManagerConfig::new()
-            .set_push_sender(push_tx)
-            // Re-establish the SUBSCRIBE automatically after a reconnect.
-            .set_automatic_resubscription();
-        let mut manager = client
-            .get_connection_manager_with_config(config)
-            .await
-            .map_err(backplane_err)?;
+    /// The actual current subscriber's server identity, never a synthetic health event.
+    #[must_use]
+    pub fn subscriber_client_id(&self) -> Option<RedisClientId> {
+        if !matches!(*self.inner.state.borrow(), BackplaneState::Connected { .. }) {
+            return None;
+        }
+        let id = self.inner.subscriber_id.load(Ordering::Acquire);
+        (id != 0).then_some(RedisClientId(id))
+    }
 
-        manager.subscribe(channel).await.map_err(backplane_err)?;
+    /// Name reapplied to every new subscriber connection.
+    #[must_use]
+    pub fn subscriber_name(&self) -> String {
+        format!("{}:subscriber", self.inner.name)
+    }
 
-        tokio::spawn(relay_pushes(push_rx, sender));
-        Ok(manager)
+    /// Current finite relay counters.
+    #[must_use]
+    pub fn stats(&self) -> RedisBackplaneStats {
+        RedisBackplaneStats {
+            dropped_pushes: self.inner.dropped.load(Ordering::Relaxed),
+            malformed_messages: self.inner.malformed.load(Ordering::Relaxed),
+            acknowledged_connections: self.inner.acknowledged.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn disconnect(state: &watch::Sender<BackplaneState>) {
+    let epoch = match *state.borrow() {
+        BackplaneState::Connected { epoch } | BackplaneState::Disconnected { epoch } => epoch,
+        BackplaneState::Stopped => return,
+    };
+    state.send_replace(BackplaneState::Disconnected { epoch });
+}
+
+fn admit_connected(inner: &BackplaneInner, epoch: ContinuityEpoch) -> bool {
+    let liveness = inner
+        .liveness
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *liveness != Some(inner.incarnation.load(Ordering::Acquire)) || *inner.stop.borrow() {
+        return false;
+    }
+    inner
+        .state
+        .send_replace(BackplaneState::Connected { epoch });
+    true
+}
+
+async fn open_subscriber(
+    inner: &BackplaneInner,
+    sender: broadcast::Sender<SubscriberPush>,
+    incarnation: u64,
+) -> Result<(MultiplexedConnection, u64)> {
+    let io = inner.io;
+    let state = inner.state.clone();
+    let current = inner.incarnation.clone();
+    let liveness = inner.liveness.clone();
+    *liveness
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(incarnation);
+    let config = redis::AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(io.connection_timeout))
+        .set_response_timeout(Some(io.response_timeout))
+        .set_push_sender(move |push: PushInfo| {
+            if push.kind == PushKind::Disconnection {
+                let mut live = liveness
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if current.load(Ordering::Acquire) == incarnation {
+                    *live = None;
+                    disconnect(&state);
+                }
+            }
+            let _ = sender.send(SubscriberPush {
+                incarnation,
+                info: push,
+            });
+            Ok::<(), redis::aio::SendError>(())
+        });
+    let mut subscriber = tokio::time::timeout(
+        io.connection_timeout,
+        inner
+            .client
+            .get_multiplexed_async_connection_with_config(&config),
+    )
+    .await
+    .map_err(backplane_err)?
+    .map_err(backplane_err)?;
+    redis::cmd("CLIENT")
+        .arg("SETNAME")
+        .arg(format!("{}:subscriber", inner.name))
+        .query_async::<()>(&mut subscriber)
+        .await
+        .map_err(backplane_err)?;
+    let id = redis::cmd("CLIENT")
+        .arg("ID")
+        .query_async::<u64>(&mut subscriber)
+        .await
+        .map_err(backplane_err)?;
+    if id == 0 {
+        return Err(Error::Backplane(
+            "Redis supplied invalid client identity".into(),
+        ));
+    }
+    // Only the matching SUBSCRIBE request's successful ACK admits Connected.
+    subscriber
+        .subscribe(&*inner.channel)
+        .await
+        .map_err(backplane_err)?;
+    Ok((subscriber, id))
+}
+
+async fn restore_subscriber(
+    inner: &BackplaneInner,
+    pushes: broadcast::Sender<SubscriberPush>,
+) -> Result<ContinuityEpoch> {
+    let old = inner
+        .incarnation
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+            old.checked_add(1)
+        })
+        .map_err(|_| Error::Backplane("subscriber incarnation exhausted".into()))?;
+    let (subscriber, id) = open_subscriber(inner, pushes, old + 1).await?;
+    let epoch = match *inner.state.borrow() {
+        BackplaneState::Connected { epoch } | BackplaneState::Disconnected { epoch } => {
+            epoch.next()?
+        }
+        BackplaneState::Stopped => {
+            return Err(Error::Backplane(
+                "subscriber stopped during reconnect".into(),
+            ));
+        }
+    };
+    *inner
+        .subscriber
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(subscriber);
+    inner.subscriber_id.store(id, Ordering::Release);
+    inner
+        .acknowledged
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            Some(value.saturating_add(1))
+        })
+        .ok();
+    Ok(epoch)
+}
+
+async fn supervise_subscriber(
+    weak: std::sync::Weak<BackplaneInner>,
+    pushes: broadcast::Sender<SubscriberPush>,
+    mut receiver: broadcast::Receiver<SubscriberPush>,
+    mut stop: watch::Receiver<bool>,
+) {
+    loop {
+        let received = tokio::select! { biased; _ = stop.changed() => return, received = receiver.recv() => received };
+        let Some(inner) = weak.upgrade() else {
+            return;
+        };
+        let needs_reconnect = match received {
+            Ok(push) if push.incarnation != inner.incarnation.load(Ordering::Acquire) => false,
+            Ok(push) => match push.info.kind {
+                PushKind::Disconnection => true,
+                PushKind::Message => {
+                    match Msg::from_push_info(push.info)
+                        .and_then(|message| decode_message(message.get_payload_bytes()))
+                    {
+                        Some(message) => {
+                            let _ = inner.sender.send(message);
+                            false
+                        }
+                        None => {
+                            inner
+                                .malformed
+                                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                                    Some(value.saturating_add(1))
+                                })
+                                .ok();
+                            true
+                        }
+                    }
+                }
+                PushKind::Subscribe
+                | PushKind::PSubscribe
+                | PushKind::SSubscribe
+                | PushKind::Unsubscribe
+                | PushKind::PUnsubscribe
+                | PushKind::SUnsubscribe
+                | PushKind::Invalidate
+                | PushKind::PMessage
+                | PushKind::SMessage
+                | PushKind::Other(_) => false,
+                // The SDK intentionally leaves its push family open. Unknown pushes
+                // cannot certify continuity, so the boundary reconciles conservatively.
+                _ => true,
+            },
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                inner
+                    .dropped
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                        Some(value.saturating_add(skipped))
+                    })
+                    .ok();
+                true
+            }
+            Err(broadcast::error::RecvError::Closed) => {
+                inner.state.send_replace(BackplaneState::Stopped);
+                return;
+            }
+        };
+        if !needs_reconnect {
+            continue;
+        }
+        disconnect(&inner.state);
+        inner
+            .subscriber
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        loop {
+            let restored = tokio::select! { biased; _ = stop.changed() => return, restored = restore_subscriber(&inner, pushes.clone()) => restored };
+            match restored {
+                Ok(epoch) => {
+                    // Old socket pushes cannot force a newly acknowledged socket
+                    // back into another reconnect storm. Overflow during the gap
+                    // is already covered by the impending epoch reconciliation.
+                    loop {
+                        match receiver.try_recv() {
+                            Ok(push)
+                                if push.incarnation
+                                    == inner.incarnation.load(Ordering::Acquire)
+                                    && push.info.kind == PushKind::Message =>
+                            {
+                                if let Some(message) = Msg::from_push_info(push.info)
+                                    .and_then(|message| decode_message(message.get_payload_bytes()))
+                                {
+                                    let _ = inner.sender.send(message);
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                                inner
+                                    .dropped
+                                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                                        Some(value.saturating_add(skipped))
+                                    })
+                                    .ok();
+                            }
+                            Err(broadcast::error::TryRecvError::Empty) => break,
+                            Err(broadcast::error::TryRecvError::Closed) => {
+                                inner.state.send_replace(BackplaneState::Stopped);
+                                return;
+                            }
+                        }
+                    }
+                    if !admit_connected(&inner, epoch) {
+                        inner
+                            .subscriber
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take();
+                        continue;
+                    }
+                    break;
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "Redis subscriber reconnect failed");
+                    tokio::select! { biased; _ = stop.changed() => return, _ = tokio::time::sleep(Duration::from_millis(100)) => {} }
+                }
+            }
+        }
     }
 }
 
 #[async_trait]
 impl Backplane for RedisBackplane {
     async fn publish(&self, message: BackplaneMessage) -> Result<()> {
-        let payload = encode_message(&message);
-        let mut conn = self.manager.clone();
+        if *self.inner.stop.borrow() {
+            return Err(Error::Backplane("backplane has stopped".into()));
+        }
+        let publisher = self.inner.manager.read().await;
+        let Some(mut connection) = publisher.as_ref().cloned() else {
+            return Err(Error::Backplane("backplane publisher has stopped".into()));
+        };
+        if *self.inner.stop.borrow() {
+            return Err(Error::Backplane("backplane has stopped".into()));
+        }
         redis::cmd("PUBLISH")
-            .arg(&self.channel)
-            .arg(payload)
-            .query_async::<i64>(&mut conn)
+            .arg(&*self.inner.channel)
+            .arg(encode_message(&message))
+            .query_async::<i64>(&mut connection)
             .await
-            .map(|_receivers| ())
+            .map(|_| ())
             .map_err(backplane_err)
     }
-
     fn subscribe(&self) -> broadcast::Receiver<BackplaneMessage> {
-        self.sender.subscribe()
+        self.inner.sender.subscribe()
     }
-}
-
-/// Drains pub/sub pushes, decoding each `message` push into a
-/// [`BackplaneMessage`] and forwarding it to local subscribers. Runs until the
-/// subscriber connection is dropped (which closes `push_rx`).
-async fn relay_pushes(
-    mut push_rx: tokio::sync::mpsc::UnboundedReceiver<PushInfo>,
-    sender: broadcast::Sender<BackplaneMessage>,
-) {
-    while let Some(push) = push_rx.recv().await {
-        // Only ordinary channel messages carry a payload we can decode.
-        if push.kind != PushKind::Message {
-            continue;
-        }
-        let Some(msg) = Msg::from_push_info(push) else {
-            continue;
+    fn connection_state(&self) -> Option<watch::Receiver<BackplaneState>> {
+        Some(self.inner.state.subscribe())
+    }
+    async fn shutdown(&self) -> Result<()> {
+        self.inner.stop.send_replace(true);
+        self.inner.state.send_replace(BackplaneState::Stopped);
+        let _shutdown = self.inner.shutdown_gate.lock().await;
+        self.inner
+            .subscriber
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let worker = self
+            .inner
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let failure = if let Some(worker) = worker
+            && let Err(error) = worker.await
+            && !error.is_cancelled()
+        {
+            Some(backplane_err(error))
+        } else {
+            None
         };
-        if let Some(message) = decode_message(msg.get_payload_bytes()) {
-            // A send error just means "no live subscribers"; that is fine.
-            let _ = sender.send(message);
+        self.inner.manager.write().await.take();
+        failure.map_or(Ok(()), Err)
+    }
+}
+
+impl Drop for RedisBackplane {
+    fn drop(&mut self) {
+        self.inner.stop.send_replace(true);
+        self.inner.state.send_replace(BackplaneState::Stopped);
+        self.inner
+            .subscriber
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(worker) = self
+            .inner
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            worker.abort();
         }
     }
 }
 
-// ===========================================================================
-// Wire encoding
-// ===========================================================================
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireMessage {
+    version: u8,
+    source: String,
+    ticks: i64,
+    action: u8,
+    key: String,
+}
 
-/// Encodes the single-byte discriminant for a backplane action.
 fn action_byte(action: BackplaneAction) -> u8 {
     match action {
         BackplaneAction::Set => 1,
@@ -388,8 +1197,6 @@ fn action_byte(action: BackplaneAction) -> u8 {
         BackplaneAction::Expire => 3,
     }
 }
-
-/// Decodes a single-byte action discriminant, or `None` if unrecognised.
 fn action_from_byte(byte: u8) -> Option<BackplaneAction> {
     match byte {
         1 => Some(BackplaneAction::Set),
@@ -399,68 +1206,53 @@ fn action_from_byte(byte: u8) -> Option<BackplaneAction> {
     }
 }
 
-/// Serialises a [`BackplaneMessage`] to `source_id|timestamp_ticks|action_byte|key`.
-///
-/// The key is placed last and is the only field allowed to contain the separator
-/// (decoding splits with a fixed field count), so arbitrary keys round-trip.
 fn encode_message(message: &BackplaneMessage) -> String {
-    format!(
-        "{src}{sep}{ticks}{sep}{action}{sep}{key}",
-        src = message.source_id,
-        sep = WIRE_SEPARATOR,
-        ticks = message.timestamp.ticks(),
-        action = action_byte(message.action),
-        key = message.key,
-    )
+    // The fields are all infallible JSON primitives; writing to Vec cannot fail.
+    serde_json::json!({"version":2,"source":&*message.source_id,"ticks":message.timestamp.ticks(),"action":action_byte(message.action),"key":&*message.key}).to_string()
 }
 
-/// Parses bytes produced by [`encode_message`] back into a [`BackplaneMessage`],
-/// returning `None` on any malformed input (non-UTF-8, missing fields, bad
-/// numbers, unknown action) so a corrupt message is skipped rather than fatal.
 fn decode_message(bytes: &[u8]) -> Option<BackplaneMessage> {
+    if bytes.first() == Some(&b'{') {
+        let frame: WireMessage = serde_json::from_slice(bytes).ok()?;
+        if frame.version != 2 {
+            return None;
+        }
+        return Some(BackplaneMessage {
+            source_id: frame.source.into(),
+            timestamp: Timestamp::from_ticks(frame.ticks),
+            action: action_from_byte(frame.action)?,
+            key: frame.key.into(),
+        });
+    }
     let text = std::str::from_utf8(bytes).ok()?;
-    // Limit the split so a key containing '|' stays intact in the final field.
-    let mut parts = text.splitn(4, WIRE_SEPARATOR);
-    let source_id = parts.next()?;
-    let ticks: i64 = parts.next()?.parse().ok()?;
-    let action_raw: u8 = parts.next()?.parse().ok()?;
-    let key = parts.next()?;
-    let action = action_from_byte(action_raw)?;
+    let mut fields = text.splitn(4, '|');
     Some(BackplaneMessage {
-        source_id: source_id.into(),
-        timestamp: Timestamp::from_ticks(ticks),
-        action,
-        key: key.into(),
+        source_id: fields.next()?.into(),
+        timestamp: Timestamp::from_ticks(fields.next()?.parse().ok()?),
+        action: action_from_byte(fields.next()?.parse().ok()?)?,
+        key: fields.next()?.into(),
     })
 }
 
-// ===========================================================================
-// Helpers
-// ===========================================================================
-
-/// Converts a [`Duration`] to whole milliseconds for Redis `PX`, saturating at
-/// `u64::MAX` and flooring sub-millisecond TTLs to at least 1ms so a very short
-/// TTL never collapses into "no expiry".
-fn duration_to_millis(ttl: Duration) -> u64 {
-    let millis = ttl.as_millis();
-    if millis == 0 {
-        1
-    } else {
-        u64::try_from(millis).unwrap_or(u64::MAX)
-    }
+fn duration_to_millis(duration: Duration) -> u64 {
+    // Positive Redis PX; cap well below signed absolute-expiration overflow.
+    duration
+        .as_nanos()
+        .div_ceil(1_000_000)
+        .max(1)
+        .min((i64::MAX / 2) as u128) as u64
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Integration tests that need a live Redis. They are skipped (return early)
-    /// unless `AMALGAM_REDIS_URL` is set, so the suite is a no-op in CI without
-    /// a server. Run locally with e.g.
-    /// `AMALGAM_REDIS_URL=redis://127.0.0.1/ cargo test --features redis`.
-    fn redis_url() -> Option<String> {
-        std::env::var("AMALGAM_REDIS_URL").ok()
+    mod fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/redis_fixture.rs"
+        ));
     }
+    use fixture::redis_url;
 
     /// A unique key prefix so concurrent test runs never collide.
     fn unique_key(name: &str) -> String {

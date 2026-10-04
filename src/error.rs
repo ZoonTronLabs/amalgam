@@ -7,8 +7,254 @@
 
 use std::time::Duration;
 
+/// A rejected cache configuration. Configuration is checked before work starts.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ConfigError {
+    /// Local-only reconciliation cannot cover an external data/notification provider.
+    #[error("local-only reconciliation requires memory-only storage and no backplane")]
+    LocalReconciliationWithExternalStorage,
+    /// Strict continuity requires an acknowledged health stream.
+    #[error("backplane continuity policy requires a connection-state provider")]
+    UnavailableBackplaneContinuity,
+    /// A finite timer cannot be represented by the monotonic runtime clock.
+    #[error("finite deadline exceeds the monotonic clock range")]
+    DeadlineOutOfRange,
+    /// Reconciliation requires a positive interval.
+    #[error("reconciliation interval must be positive")]
+    ZeroReconciliationInterval,
+    /// A legacy size request was negative.
+    #[error("entry weight must be nonnegative, got {size}")]
+    NegativeEntryWeight {
+        /// The rejected legacy size.
+        size: i64,
+    },
+    /// L2 was configured without a codec.
+    #[error("a distributed cache requires a serializer")]
+    DistributedWithoutSerializer,
+    /// Deep cloning was requested without an implementation.
+    #[error("auto-clone requires a value cloner or a serializer that supplies one")]
+    AutoCloneWithoutCloner,
+    /// A configured background service requires a Tokio runtime.
+    #[error("{component:?} requires a Tokio runtime")]
+    MissingRuntime {
+        /// The service requiring the runtime.
+        component: RuntimeComponent,
+    },
+    /// A diagnostic or wire identity was empty.
+    #[error("{field:?} must not be blank")]
+    BlankIdentity {
+        /// The rejected identity field.
+        field: IdentityField,
+    },
+    /// Expiration metadata would make a value fresh after it is physically dead.
+    #[error("logical expiration exceeds physical expiration")]
+    InvalidEntryDeadlines,
+    /// A recovery interval would create a continuously running retry loop.
+    #[error("enabled auto-recovery requires a positive interval")]
+    ZeroRecoveryInterval,
+    /// An external jitter source produced a sample outside the configured bound.
+    #[error("jitter sample {sample:?} exceeds maximum {maximum:?}")]
+    InvalidJitterSample {
+        /// The rejected sample.
+        sample: Duration,
+        /// The configured upper bound.
+        maximum: Duration,
+    },
+}
+
+/// Background services with runtime requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeComponent {
+    /// Monotonic budgets or cache-owned asynchronous work.
+    Execution,
+    /// The backplane listener.
+    Backplane,
+    /// The automatic recovery worker.
+    Recovery,
+    /// A plugin session.
+    Plugin,
+}
+
+/// Validated identity fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityField {
+    /// The cache's diagnostic name.
+    CacheName,
+    /// The instance identifier used for peer filtering.
+    InstanceId,
+    /// The distributed wire namespace.
+    WireVersion,
+}
+
+/// The reason a factory's execution scope was cancelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryCancellationReason {
+    /// The caller explicitly requested cancellation.
+    CallerCancelled,
+    /// The caller dropped the operation future.
+    CallerDropped,
+    /// The soft wait deadline elapsed without background completion.
+    SoftTimeout,
+    /// The hard execution deadline elapsed.
+    HardTimeout,
+    /// The owning cache shut down.
+    CacheShutdown,
+    /// The distributed ownership lease was lost.
+    LeaseLost,
+    /// The execution scope ended, including successful completion.
+    ScopeFinished,
+}
+
+impl FactoryCancellationReason {
+    /// A stable diagnostic description.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CallerCancelled => "caller requested cancellation",
+            Self::CallerDropped => "caller dropped the operation",
+            Self::SoftTimeout => "factory soft wait deadline elapsed",
+            Self::HardTimeout => "factory hard deadline elapsed",
+            Self::CacheShutdown => "cache shut down",
+            Self::LeaseLost => "distributed ownership lease was lost",
+            Self::ScopeFinished => "factory execution scope ended",
+        }
+    }
+}
+
+/// A deep-copy implementation failed. Its original cause remains available.
+#[derive(Debug, thiserror::Error)]
+pub enum CloneError {
+    /// Encoding the value failed.
+    #[error("deep-copy serialization failed: {source}")]
+    Serialization {
+        /// The codec's original failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// Decoding the copied value failed.
+    #[error("deep-copy deserialization failed: {source}")]
+    Deserialization {
+        /// The codec's original failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// A custom cloning strategy failed.
+    #[error("deep-copy failed: {source}")]
+    Custom {
+        /// The strategy's original failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+impl CloneError {
+    /// Preserves a custom strategy's source error.
+    pub fn from_source(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Custom {
+            source: Box::new(source),
+        }
+    }
+}
+
 /// The crate-wide result alias.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// An owned task or cleanup stage whose shutdown can fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownTask {
+    /// An origin factory and its completion work.
+    Factory,
+    /// A distributed storage operation.
+    Distributed,
+    /// Peer notification work.
+    Backplane,
+    /// The recovery worker.
+    Recovery,
+    /// Physical-expiry maintenance.
+    Maintenance,
+    /// Releasing an owned distributed lease.
+    LeaseRelease,
+}
+
+impl ShutdownTask {
+    /// A finite diagnostic stage label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Factory => "factory",
+            Self::Distributed => "distributed",
+            Self::Backplane => "backplane",
+            Self::Recovery => "recovery",
+            Self::Maintenance => "maintenance",
+            Self::LeaseRelease => "lease_release",
+        }
+    }
+}
+
+/// A closed failure family retained by concurrent/idempotent cache shutdown.
+#[derive(Debug, thiserror::Error)]
+pub enum ShutdownFailure {
+    /// An attachment's teardown failed.
+    #[error(transparent)]
+    Plugin(#[from] crate::plugins::PluginError),
+    /// An owned task violated its contract or unexpectedly lost its join handle.
+    #[error("{description} task could not be joined: {source}", description = task.as_str())]
+    BackgroundTask {
+        /// The owned task's role.
+        task: ShutdownTask,
+        /// The original join failure, distinct from origin failure.
+        #[source]
+        source: std::sync::Arc<tokio::task::JoinError>,
+    },
+    /// An awaited cleanup/backend operation failed.
+    #[error(transparent)]
+    Work(Error),
+}
+
+/// A nonempty immutable set of shutdown failures. Cloning keeps the same
+/// original sources so every concurrent or repeated caller sees one report.
+#[derive(Debug, Clone)]
+pub struct ShutdownError {
+    failures: std::sync::Arc<[ShutdownFailure]>,
+}
+
+impl ShutdownError {
+    /// Creates a valid report with at least one failure.
+    #[must_use]
+    pub fn new(
+        first: ShutdownFailure,
+        remaining: impl IntoIterator<Item = ShutdownFailure>,
+    ) -> Self {
+        let mut failures = vec![first];
+        failures.extend(remaining);
+        Self {
+            failures: failures.into(),
+        }
+    }
+
+    /// Every retained failure, in shutdown observation order.
+    #[must_use]
+    pub fn failures(&self) -> &[ShutdownFailure] {
+        &self.failures
+    }
+}
+
+impl std::fmt::Display for ShutdownError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "cache shutdown failed in {} stage(s): {}",
+            self.failures.len(),
+            self.failures[0]
+        )
+    }
+}
+
+impl std::error::Error for ShutdownError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.failures[0])
+    }
+}
 
 /// An error surfaced from a cache operation.
 ///
@@ -18,12 +264,84 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A raw tag boundary rejected invalid input.
+    #[error(transparent)]
+    Tag(#[from] crate::tags::TagError),
+
+    /// Typed invalidation storage or control protocol failure.
+    #[error(transparent)]
+    Marker(#[from] crate::tags::MarkerError),
+
+    /// Typed distributed ownership or fencing failure.
+    #[error(transparent)]
+    Lease(#[from] crate::distributed_lock::LeaseError),
+
+    /// Typed recovery construction/lifecycle failure.
+    #[error(transparent)]
+    Recovery(#[from] crate::recovery::RecoveryError),
+
+    /// One or more owned teardown operations failed.
+    #[error(transparent)]
+    Shutdown(#[from] ShutdownError),
+
+    /// Configuration was rejected before this operation started.
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+
+    /// The requested isolation could not be produced.
+    #[error(transparent)]
+    Clone(#[from] CloneError),
+
+    /// A configured plugin attachment/lifecycle failed.
+    #[error(transparent)]
+    Plugin(#[from] crate::plugins::PluginError),
+
+    /// Named-cache initialization failed.
+    #[error(transparent)]
+    Registry(#[from] crate::registry::RegistryError),
+
     /// The factory failed and no stale value or fail-safe default was available
     /// to fall back to. Carries the message reported by the factory.
     #[error("factory failed: {message}")]
     Factory {
         /// The failure message reported by the factory.
         message: String,
+    },
+
+    /// A factory failure with its complete original error chain.
+    #[error("factory failed: {message}")]
+    FactoryWithSource {
+        /// The factory's diagnostic message.
+        message: String,
+        /// The factory failure, including its original source.
+        #[source]
+        source: FactoryError,
+    },
+
+    /// Cancellation is distinct from origin failure and fail-safe activation.
+    #[error("factory cancelled: {description}", description = reason.as_str())]
+    FactoryCancelled {
+        /// The reason the execution scope ended.
+        reason: FactoryCancellationReason,
+    },
+
+    /// A public read, mutation or lifecycle operation was cancelled.
+    #[error("cache operation cancelled: {description}", description = reason.as_str())]
+    OperationCancelled {
+        /// The reason the operation's execution scope ended.
+        reason: FactoryCancellationReason,
+    },
+
+    /// The cache has begun closing and no longer accepts operations.
+    #[error("cache is closed")]
+    CacheClosed,
+
+    /// An eligible backend was not queried because its transport circuit is
+    /// open. This is unavailable storage, distinct from a successful absence.
+    #[error("{component:?} circuit is open")]
+    CircuitOpen {
+        /// The circuit which refused this operation.
+        component: crate::events::CircuitComponent,
     },
 
     /// The factory exceeded its hard timeout and no fallback value existed.
@@ -66,12 +384,19 @@ pub enum Error {
 ///
 /// It can wrap an arbitrary source error so the original cause is preserved in
 /// the error chain.
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
+#[derive(Debug)]
 pub struct FactoryError {
-    message: String,
-    #[source]
-    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    detail: FactoryErrorDetail,
+}
+
+#[derive(Debug)]
+enum FactoryErrorDetail {
+    Message(String),
+    Source {
+        message: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    Cancelled(FactoryCancellationReason),
 }
 
 impl FactoryError {
@@ -79,8 +404,7 @@ impl FactoryError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
-            message: into_nonblank(message.into()),
-            source: None,
+            detail: FactoryErrorDetail::Message(into_nonblank(message.into())),
         }
     }
 
@@ -92,15 +416,54 @@ impl FactoryError {
         E: std::error::Error + Send + Sync + 'static,
     {
         Self {
-            message: source.to_string(),
-            source: Some(Box::new(source)),
+            detail: FactoryErrorDetail::Source {
+                message: into_nonblank(source.to_string()),
+                source: Box::new(source),
+            },
+        }
+    }
+
+    /// Reports cancellation without turning it into an origin failure.
+    #[must_use]
+    pub fn cancelled(reason: FactoryCancellationReason) -> Self {
+        Self {
+            detail: FactoryErrorDetail::Cancelled(reason),
+        }
+    }
+
+    /// The cancellation reason, when this is a cancellation outcome.
+    #[must_use]
+    pub fn cancellation_reason(&self) -> Option<FactoryCancellationReason> {
+        match self.detail {
+            FactoryErrorDetail::Cancelled(reason) => Some(reason),
+            FactoryErrorDetail::Message(_) | FactoryErrorDetail::Source { .. } => None,
         }
     }
 
     /// The failure message.
     #[must_use]
     pub fn message(&self) -> &str {
-        &self.message
+        match &self.detail {
+            FactoryErrorDetail::Message(message) | FactoryErrorDetail::Source { message, .. } => {
+                message
+            }
+            FactoryErrorDetail::Cancelled(reason) => reason.as_str(),
+        }
+    }
+}
+
+impl std::fmt::Display for FactoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for FactoryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.detail {
+            FactoryErrorDetail::Source { source, .. } => Some(source.as_ref()),
+            FactoryErrorDetail::Message(_) | FactoryErrorDetail::Cancelled(_) => None,
+        }
     }
 }
 
@@ -115,8 +478,15 @@ fn into_nonblank(message: String) -> String {
 
 impl From<FactoryError> for Error {
     fn from(err: FactoryError) -> Self {
-        Error::Factory {
-            message: err.message,
+        match &err.detail {
+            FactoryErrorDetail::Message(message) => Self::Factory {
+                message: message.clone(),
+            },
+            FactoryErrorDetail::Source { message, .. } => Self::FactoryWithSource {
+                message: message.clone(),
+                source: err,
+            },
+            FactoryErrorDetail::Cancelled(reason) => Self::FactoryCancelled { reason: *reason },
         }
     }
 }

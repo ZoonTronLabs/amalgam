@@ -1,269 +1,297 @@
-//! The factory execution context and its product.
-//!
-//! When `get_or_set` must produce a value, it hands the factory a
-//! [`FactoryContext`]. Through it the factory can:
-//!
-//! * read the previously-cached **stale value** and its `ETag`/`LastModified`
-//!   (conditional refresh);
-//! * **adapt** the entry options for the value it is about to produce
-//!   (adaptive caching) via [`FactoryContext::options_mut`];
-//! * signal one of three outcomes: a new value ([`FactoryContext::value`] /
-//!   [`FactoryContext::modified`]), "nothing changed, reuse the stale value"
-//!   ([`FactoryContext::not_modified`]), or failure
-//!   ([`FactoryContext::fail`]).
-//!
-//! The factory returns `Result<FactoryProduct<V>, FactoryError>`; an `Err`
-//! drives the fail-safe path.
-
+//! Origin factory context, validated tag requests and closed product variants.
 use crate::error::FactoryError;
+use crate::execution::FactoryCancellation;
 use crate::options::EntryOptions;
-use crate::tags::Tag;
+use crate::tags::{Tag, TagError, try_collect_tags};
 use crate::time::Timestamp;
+use std::sync::Arc;
 
-/// The value (and metadata) a factory produced, ready to be cached.
-///
-/// Construct it through the [`FactoryContext`] methods rather than directly, so
-/// the (possibly adapted) options and tags are carried along correctly.
+#[derive(Debug)]
+enum TagRequest {
+    Inherited,
+    Valid(Box<[Tag]>),
+    Rejected(TagError),
+}
+impl TagRequest {
+    fn resolve(self, fallback: Box<[Tag]>) -> Result<Box<[Tag]>, TagError> {
+        match self {
+            Self::Inherited => Ok(fallback),
+            Self::Valid(tags) => Ok(tags),
+            Self::Rejected(error) => Err(error),
+        }
+    }
+}
+#[derive(Debug)]
+enum FactoryOutput<V> {
+    Modified {
+        value: V,
+        etag: Option<String>,
+        last_modified: Option<Timestamp>,
+        tags: Result<Box<[Tag]>, TagError>,
+    },
+    NotModified {
+        stale: StaleInfo<V>,
+        tags: Result<Box<[Tag]>, TagError>,
+    },
+}
+/// A factory's modified or conditional result, constructed through its context.
 #[derive(Debug)]
 pub struct FactoryProduct<V> {
+    output: FactoryOutput<V>,
+    options: EntryOptions,
+}
+impl<V> FactoryProduct<V> {
+    /// Borrows the produced value.
+    pub fn value(&self) -> &V {
+        match &self.output {
+            FactoryOutput::Modified { value, .. } => value,
+            FactoryOutput::NotModified { stale, .. } => &stale.value,
+        }
+    }
+    pub(crate) fn into_payload(self) -> crate::Result<FactoryPayload<V>> {
+        match self.output {
+            FactoryOutput::Modified {
+                value,
+                etag,
+                last_modified,
+                tags,
+            } => Ok(FactoryPayload {
+                value,
+                options: self.options,
+                etag,
+                last_modified,
+                tags: tags?,
+                origin: ProductOrigin::Modified,
+            }),
+            FactoryOutput::NotModified { stale, tags } => Ok(FactoryPayload {
+                value: stale.value,
+                options: self.options,
+                etag: stale.etag,
+                last_modified: stale.last_modified,
+                tags: tags?,
+                origin: ProductOrigin::NotModified,
+            }),
+        }
+    }
+}
+pub(crate) enum ProductOrigin {
+    Modified,
+    NotModified,
+}
+pub(crate) struct FactoryPayload<V> {
     pub(crate) value: V,
     pub(crate) options: EntryOptions,
     pub(crate) etag: Option<String>,
     pub(crate) last_modified: Option<Timestamp>,
     pub(crate) tags: Box<[Tag]>,
-    /// `true` when this product is the *reused stale value* (a `NotModified`
-    /// conditional-refresh result) rather than a freshly-produced value.
-    pub(crate) reused_stale: bool,
+    pub(crate) origin: ProductOrigin,
 }
-
-impl<V> FactoryProduct<V> {
-    /// Borrows the produced value.
-    #[must_use]
-    pub fn value(&self) -> &V {
-        &self.value
-    }
-}
-
-/// Context passed to a factory, carrying stale-value information and the mutable
-/// options for the value being produced.
+/// Origin context. Optional stale data forms one complete snapshot.
 #[derive(Debug)]
 pub struct FactoryContext<V> {
-    key: std::sync::Arc<str>,
+    key: Arc<str>,
     options: EntryOptions,
     call_tags: Box<[Tag]>,
-    adaptive_tags: Option<Box<[Tag]>>,
-    stale_value: Option<V>,
-    stale_etag: Option<String>,
-    stale_last_modified: Option<Timestamp>,
-    stale_tags: Box<[Tag]>,
+    adaptive_tags: TagRequest,
+    stale: Option<StaleInfo<V>>,
+    cancellation: FactoryCancellation,
 }
-
 impl<V> FactoryContext<V> {
-    pub(crate) fn new(
-        key: std::sync::Arc<str>,
+    pub(crate) fn with_cancellation(
+        key: Arc<str>,
         options: EntryOptions,
         call_tags: Box<[Tag]>,
         stale: Option<StaleInfo<V>>,
+        cancellation: FactoryCancellation,
     ) -> Self {
-        let (stale_value, stale_etag, stale_last_modified, stale_tags) = match stale {
-            Some(s) => (Some(s.value), s.etag, s.last_modified, s.tags),
-            None => (None, None, None, Box::from([])),
-        };
         Self {
             key,
             options,
             call_tags,
-            adaptive_tags: None,
-            stale_value,
-            stale_etag,
-            stale_last_modified,
-            stale_tags,
+            adaptive_tags: TagRequest::Inherited,
+            stale,
+            cancellation,
         }
     }
-
-    /// The (prefixed) cache key being produced.
-    #[must_use]
+    /// The prefixed data key.
     pub fn key(&self) -> &str {
         &self.key
     }
-
-    /// The options for the value being produced. Mutate these to **adapt** the
-    /// caching of this specific value (e.g. shorten the duration for an empty
-    /// result). This is *adaptive caching*.
-    #[must_use]
+    /// Adapts produced-entry options; the cache validates them before effects.
     pub fn options_mut(&mut self) -> &mut EntryOptions {
         &mut self.options
     }
-
-    /// The options for the value being produced.
-    #[must_use]
+    /// Current options.
     pub fn options(&self) -> &EntryOptions {
         &self.options
     }
-
-    /// Adapts the options for the value being produced using the chainable
-    /// builder methods — the ergonomic way to do *adaptive caching*:
-    ///
-    /// ```ignore
-    /// ctx.adapt(|o| o.with_duration(Duration::from_secs(5)));
-    /// ```
-    pub fn adapt<F>(&mut self, f: F)
-    where
-        F: FnOnce(EntryOptions) -> EntryOptions,
-    {
-        let current = self.options.clone();
-        self.options = f(current);
+    /// Applies a chainable option transformation.
+    pub fn adapt(&mut self, adapt: impl FnOnce(EntryOptions) -> EntryOptions) {
+        self.options = adapt(self.options.clone());
     }
-
-    /// `true` if a previously-cached (now stale) value is available.
-    #[must_use]
+    /// Whether a stale snapshot exists.
     pub fn has_stale_value(&self) -> bool {
-        self.stale_value.is_some()
+        self.stale.is_some()
     }
-
-    /// The previously-cached (now stale) value, if any.
-    #[must_use]
+    /// Isolated stale value.
     pub fn stale_value(&self) -> Option<&V> {
-        self.stale_value.as_ref()
+        self.stale.as_ref().map(|stale| &stale.value)
     }
-
-    /// The `ETag` of the stale value, for issuing a conditional request.
-    #[must_use]
+    /// Optional stale validator.
     pub fn stale_etag(&self) -> Option<&str> {
-        self.stale_etag.as_deref()
+        self.stale.as_ref().and_then(|stale| stale.etag.as_deref())
     }
-
-    /// The `LastModified` of the stale value, for issuing a conditional request.
-    #[must_use]
+    /// Optional stale modification timestamp.
     pub fn stale_last_modified(&self) -> Option<Timestamp> {
-        self.stale_last_modified
+        self.stale.as_ref().and_then(|stale| stale.last_modified)
     }
-
-    /// Sets the tags for the value being produced (adaptive tagging). Overrides
-    /// the tags passed to the `get_or_set` call.
+    /// Read-only origin execution cancellation.
+    pub fn cancellation(&self) -> &FactoryCancellation {
+        &self.cancellation
+    }
+    /// Replaces adaptive tags using already validated values.
+    pub fn set_validated_tags(&mut self, tags: Box<[Tag]>) {
+        self.adaptive_tags = TagRequest::Valid(tags);
+    }
+    /// Validates all raw tags, rejecting the entire boundary on invalid input.
+    pub fn try_set_tags<I, S>(&mut self, tags: I) -> Result<(), TagError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.adaptive_tags = TagRequest::Valid(try_collect_tags(tags)?);
+        Ok(())
+    }
+    /// Legacy adapter. A rejected request is diagnosed and its product is rejected
+    /// by the fallible cache pipeline; invalid tags never silently disappear.
     pub fn set_tags<I, S>(&mut self, tags: I)
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.adaptive_tags = Some(crate::tags::collect_tags(tags));
+        self.adaptive_tags = match try_collect_tags(tags) {
+            Ok(tags) => TagRequest::Valid(tags),
+            Err(error) => {
+                tracing::warn!(%error,"invalid legacy factory tags");
+                TagRequest::Rejected(error)
+            }
+        };
     }
-
-    fn effective_tags(&self) -> Box<[Tag]> {
-        self.adaptive_tags
-            .clone()
-            .unwrap_or_else(|| self.call_tags.clone())
-    }
-
-    /// Produces a new value, cached with the current (possibly adapted) options.
-    #[must_use]
+    /// Produces a modified value using current options/tags.
     pub fn value(self, value: V) -> FactoryProduct<V> {
-        let tags = self.effective_tags();
         FactoryProduct {
-            value,
+            output: FactoryOutput::Modified {
+                value,
+                etag: None,
+                last_modified: None,
+                tags: self.adaptive_tags.resolve(self.call_tags),
+            },
             options: self.options,
-            etag: None,
-            last_modified: None,
-            tags,
-            reused_stale: false,
         }
     }
-
-    /// Begins producing a *modified* value, allowing an `ETag`/`LastModified`
-    /// (and tags) to be attached for future conditional refreshes.
+    /// Begins a modified result with conditional metadata.
     pub fn modified(self, value: V) -> ModifiedBuilder<V> {
         ModifiedBuilder {
             ctx: self,
             value,
             etag: None,
             last_modified: None,
-            tags: None,
+            tags: TagRequest::Inherited,
         }
     }
-
-    /// Signals a factory failure, returning a [`FactoryError`] to return as
-    /// `Err`. Triggers the fail-safe path.
-    #[must_use]
+    /// Creates an expected origin failure with a diagnostic message.
     pub fn fail(&self, message: impl Into<String>) -> FactoryError {
         FactoryError::new(message)
     }
-}
-
-impl<V: Clone> FactoryContext<V> {
-    /// Signals that the resource has **not changed** (e.g. an HTTP `304`): the
-    /// stale value is reused as the fresh result and its expiration is bumped
-    /// using the current options. Fails if there is no stale value to reuse.
+    /// Reuses the complete isolated stale snapshot. Absence is typed rejection.
     pub fn not_modified(self) -> Result<FactoryProduct<V>, FactoryError> {
-        match &self.stale_value {
-            Some(value) => Ok(FactoryProduct {
-                value: value.clone(),
-                options: self.options.clone(),
-                etag: self.stale_etag.clone(),
-                last_modified: self.stale_last_modified,
-                tags: self.stale_tags.clone(),
-                reused_stale: true,
-            }),
+        match self.stale {
+            Some(mut stale) => {
+                let tags = self.adaptive_tags.resolve(std::mem::take(&mut stale.tags));
+                Ok(FactoryProduct {
+                    output: FactoryOutput::NotModified { stale, tags },
+                    options: self.options,
+                })
+            }
             None => Err(FactoryError::new(
-                "not_modified() was called but no stale value is available to reuse",
+                "not_modified() requires a stale snapshot",
             )),
         }
     }
 }
-
-/// Carries the stale value and its conditional-refresh metadata into a
-/// [`FactoryContext`].
+#[derive(Debug)]
 pub(crate) struct StaleInfo<V> {
     pub(crate) value: V,
     pub(crate) etag: Option<String>,
     pub(crate) last_modified: Option<Timestamp>,
     pub(crate) tags: Box<[Tag]>,
 }
-
-/// Builder for a modified factory result with conditional-refresh metadata.
+/// Builder for modified-value validators and tags.
 #[derive(Debug)]
-#[must_use = "call `.done()` to produce the FactoryProduct"]
+#[must_use = "call done() to return a factory product"]
 pub struct ModifiedBuilder<V> {
     ctx: FactoryContext<V>,
     value: V,
     etag: Option<String>,
     last_modified: Option<Timestamp>,
-    tags: Option<Box<[Tag]>>,
+    tags: TagRequest,
 }
-
 impl<V> ModifiedBuilder<V> {
-    /// Attaches an `ETag` to the produced value.
+    /// Attaches an ETag.
     pub fn etag(mut self, etag: impl Into<String>) -> Self {
         self.etag = Some(etag.into());
         self
     }
-
-    /// Attaches a `LastModified` timestamp to the produced value.
-    pub fn last_modified(mut self, last_modified: Timestamp) -> Self {
-        self.last_modified = Some(last_modified);
+    /// Attaches a modification timestamp.
+    pub fn last_modified(mut self, at: Timestamp) -> Self {
+        self.last_modified = Some(at);
         self
     }
-
-    /// Sets the tags for the produced value (overriding call/adaptive tags).
+    /// Attaches validated tags.
+    pub fn validated_tags(mut self, tags: Box<[Tag]>) -> Self {
+        self.tags = TagRequest::Valid(tags);
+        self
+    }
+    /// Validates all raw tags before accepting the builder.
+    pub fn try_tags<I, S>(mut self, tags: I) -> Result<Self, TagError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.tags = TagRequest::Valid(try_collect_tags(tags)?);
+        Ok(self)
+    }
+    /// Diagnostic legacy raw-tag adapter. Invalid products fail at cache commit.
     pub fn tags<I, S>(mut self, tags: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.tags = Some(crate::tags::collect_tags(tags));
+        self.tags = match try_collect_tags(tags) {
+            Ok(tags) => TagRequest::Valid(tags),
+            Err(error) => {
+                tracing::warn!(%error,"invalid legacy modified tags");
+                TagRequest::Rejected(error)
+            }
+        };
         self
     }
-
-    /// Finishes building the product.
-    #[must_use]
+    /// Produces the result with current adapted options.
     pub fn done(self) -> FactoryProduct<V> {
-        let tags = self.tags.unwrap_or_else(|| self.ctx.effective_tags());
+        let inherited = self.ctx.adaptive_tags.resolve(self.ctx.call_tags);
+        let tags = match self.tags {
+            TagRequest::Inherited => inherited,
+            TagRequest::Valid(tags) => Ok(tags),
+            TagRequest::Rejected(error) => Err(error),
+        };
         FactoryProduct {
-            value: self.value,
+            output: FactoryOutput::Modified {
+                value: self.value,
+                etag: self.etag,
+                last_modified: self.last_modified,
+                tags,
+            },
             options: self.ctx.options,
-            etag: self.etag,
-            last_modified: self.last_modified,
-            tags,
-            reused_stale: false,
         }
     }
 }

@@ -1,70 +1,183 @@
-//! The [`Cache`] type — the heart of the library.
-//!
-//! This is the Rust counterpart of `IFusionCache`. The marquee method is
-//! [`Cache::get_or_set`]; its flow encodes cache-stampede protection, fail-safe,
-//! soft/hard timeouts with background completion, eager refresh, adaptive
-//! caching and conditional refresh. See `docs/PARITY.md` for the mapping to
-//! FusionCache.
-
-use std::future::Future;
-use std::sync::{Arc, Weak};
-use std::time::Duration;
-
-use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
-
-use async_trait::async_trait;
-
-use crate::backplane::{Backplane, BackplaneAction, BackplaneMessage};
-use crate::circuit::CircuitBreaker;
-use crate::distributed::{DistributedCache, DistributedEntry, DistributedSerializer};
-use crate::distributed_lock::DistributedLocker;
+//! Multi-level orchestration with fallible boundaries and owned work.
+use crate::backplane::{
+    Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState, MarkerCommand,
+};
+use crate::circuit::{CircuitBreaker, CircuitCheck};
+use crate::commit::{
+    CacheValue, CommitCompletion, CommitReceipt, CommitReport, EffectOutcome, Fence, Lanes,
+    LocalEffect, MutationReceipt, SkipReason,
+};
+use crate::distributed::{
+    DistributedCache, DistributedSerializer, DistributedSnapshot, InvalidationStore,
+    LeasedMutation, LeasedWriteOutcome,
+};
+use crate::distributed_lock::{
+    AcquisitionPolicy, DistributedLease, DistributedLocker, LeaseError, LeaseState, LeaseTask,
+    LeaseTaskOwner, LeaseTtl, acquire_owned_supervised,
+};
 use crate::entry::Entry;
-use crate::error::{Error, FactoryError, Result};
-use crate::events::{CacheEvent, CircuitComponent, Events};
-use crate::factory::{FactoryContext, FactoryProduct, StaleInfo};
+use crate::error::{
+    ConfigError, Error, FactoryCancellationReason as Reason, FactoryError, IdentityField, Result,
+    RuntimeComponent, ShutdownError, ShutdownFailure, ShutdownTask,
+};
+use crate::events::{
+    CacheEvent, CacheLevel, CacheOperation, CircuitComponent, Events, OperationOutcome,
+};
+use crate::execution::{
+    CancellationSource, Execution, FactoryCancellation, InlinePermit, LinkMode, Scopes, lock,
+};
+use crate::factory::{FactoryContext, FactoryProduct, ProductOrigin, StaleInfo};
+use crate::lifecycle::Tasks;
 use crate::locking::{KeyGuard, KeyedLock};
 use crate::maybe::MaybeValue;
-use crate::memory::MemoryStore;
-use crate::options::{EntryOptions, KeyModifierMode, RemoveByTagBehavior};
-use crate::plugins::{Plugin, PluginHost};
+use crate::memory::{MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
+use crate::observability::{OperationObservation, component_span};
+use crate::options::{
+    EntryOptions, JitterSample, JitterSource, KeyModifierMode, RandomJitterSource,
+    RemoveByTagBehavior,
+};
+use crate::plugins::{Plugin, PluginContext, PluginHost};
 use crate::recovery::{
-    AutoRecoveryService, RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryItem,
+    AutoRecoveryService, DataMutation, EnqueueOutcome, MarkerReplay, PendingMutation,
+    RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryFence, RecoveryItem, RecoveryWork,
+    ReplayOutcome, ReplayTicket,
 };
 use crate::registry::DefaultEntryOptionsProvider;
-use crate::tags::{Tag, TagRegistry, TagVerdict};
-use crate::time::{Clock, SystemClock, Timeout, Timestamp};
+use crate::serializers::ValueCloner;
+use crate::tags::{
+    CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerVersion, StoredMarker, Tag,
+    TagRegistry, TagVerdict,
+};
+use crate::time::{Clock, ClockTiming, SystemClock, Timeout, Timestamp};
+use async_trait::async_trait;
+use std::borrow::Cow;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, watch};
+use tracing::Instrument;
 
-/// A robust, multi-level cache.
-///
-/// `Cache<V>` is generic over a single value type `V`. Unlike FusionCache (which
-/// leans on .NET runtime type information to store heterogeneous values in one
-/// instance), the idiomatic Rust model is one value type per cache — this makes
-/// "wrong type for this key" unrepresentable instead of a run-time downcast.
-/// Use several caches, or a sum type / `serde_json::Value`, for heterogeneous
-/// values.
-///
-/// Cloning a `Cache` is cheap (it shares one underlying instance) and is how you
-/// hand it to other tasks.
-pub struct Cache<V: Clone + Send + Sync + 'static> {
-    inner: Arc<CacheInner<V>>,
+/// Cache-wide invalidation mode, replacing the legacy boolean parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearMode {
+    /// Keep physically live values for fail-safe.
+    Expire,
+    /// Remove cached values.
+    Remove,
+}
+/// Explicit cluster-lock compatibility contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeasePolicy {
+    /// Require owned acquisition and atomic backend fencing.
+    Fenced,
+    /// Deliberate cooperative legacy integration; cannot promise partition fencing.
+    CooperativeLegacy,
+}
+/// Durable reconciliation contract when notification continuity is unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconciliationPolicy {
+    /// No external storage or notifications exist; all invalidation is local.
+    LocalOnly,
+    /// Periodically discard L1 so subsequent reads reconcile durable markers.
+    Periodic(Duration),
+    /// Trust an acknowledged continuous native backplane; gaps still discard L1.
+    BackplaneContinuity,
+}
+/// Result of requesting close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseOutcome {
+    /// This request initiated close.
+    Started,
+    /// Close is already draining.
+    AlreadyClosing,
+    /// Shutdown previously completed.
+    AlreadyClosed,
+}
+/// Completed owning-cache drainage. Repeated shutdown returns the same report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShutdownReport;
+/// Subscription admission without inventing acknowledgements for legacy adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackplaneReadiness {
+    /// No notification provider is configured.
+    NotConfigured,
+    /// Native provider acknowledged the current subscription epoch.
+    Acknowledged(crate::ContinuityEpoch),
+    /// Legacy provider has no health/ACK facet; periodic reconciliation applies.
+    BestEffort,
 }
 
+/// A typed value cache. Public clones share lifecycle; workers never own public handles.
+pub struct Cache<V: Clone + Send + Sync + 'static> {
+    inner: Arc<CacheInner<V>>,
+    lifetime: Arc<PublicLifetime<V>>,
+}
+struct PublicLifetime<V: Clone + Send + Sync + 'static> {
+    inner: Weak<CacheInner<V>>,
+}
+impl<V: Clone + Send + Sync + 'static> Drop for PublicLifetime<V> {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.close();
+        }
+    }
+}
+impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            lifetime: Arc::clone(&self.lifetime),
+        }
+    }
+}
+struct Worker<V: Clone + Send + Sync + 'static> {
+    inner: Arc<CacheInner<V>>,
+}
+impl<V: Clone + Send + Sync + 'static> Clone for Worker<V> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+enum Storage<V> {
+    MemoryOnly,
+    Hybrid {
+        backend: Arc<dyn DistributedCache>,
+        serializer: Arc<dyn DistributedSerializer<V>>,
+    },
+}
+enum MarkerAccess {
+    Local,
+    Durable(Arc<dyn InvalidationStore>),
+    Unavailable,
+}
+enum Lifecycle {
+    Running,
+    Closing,
+    Closed(std::result::Result<ShutdownReport, ShutdownError>),
+}
 struct CacheInner<V: Clone + Send + Sync + 'static> {
+    owner: Weak<CacheInner<V>>,
     name: Arc<str>,
     instance_id: Arc<str>,
     memory: MemoryStore<V>,
-    locks: Arc<KeyedLock>,
-    tags: Arc<TagRegistry>,
+    locks: KeyedLock,
+    lanes: Lanes,
+    tags: TagRegistry,
     events: Events,
     clock: Arc<dyn Clock>,
     default_options: EntryOptions,
     key_prefix: Option<Arc<str>>,
     remove_by_tag_behavior: RemoveByTagBehavior,
-    distributed: Option<Arc<dyn DistributedCache>>,
-    serializer: Option<Arc<dyn DistributedSerializer<V>>>,
+    storage: Storage<V>,
+    markers: MarkerAccess,
+    scope: CacheScope,
     backplane: Option<Arc<dyn Backplane>>,
     distributed_locker: Option<Arc<dyn DistributedLocker>>,
+    lease_policy: LeasePolicy,
+    lease_ttl: LeaseTtl,
     circuit_l2: CircuitBreaker,
     circuit_backplane: CircuitBreaker,
     plugins: PluginHost,
@@ -75,68 +188,472 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     distributed_key_modifier_mode: KeyModifierMode,
     disable_tagging: bool,
     wait_for_initial_backplane_subscribe: bool,
+    cloner: Option<Arc<dyn ValueCloner<V>>>,
+    jitter: Arc<dyn JitterSource>,
+    scopes: Arc<Scopes>,
+    tasks: Arc<Tasks>,
+    epoch: Arc<AtomicU64>,
+    maintenance: AtomicBool,
+    subscription_admitted: AtomicBool,
+    reconciliation: ReconciliationPolicy,
+    lifecycle: std::sync::Mutex<Lifecycle>,
+    shutdown_gate: tokio::sync::Mutex<()>,
+    marker_lane: Arc<tokio::sync::Mutex<()>>,
+    health_seen: std::sync::Mutex<Option<BackplaneState>>,
+    last_reconcile: std::sync::Mutex<Instant>,
 }
-
-impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
-    fn clone(&self) -> Self {
+struct Observed<T> {
+    value: T,
+    outcome: OperationOutcome,
+    level: Option<CacheLevel>,
+}
+impl<T> Observed<T> {
+    fn new(value: T, outcome: OperationOutcome, level: Option<CacheLevel>) -> Self {
         Self {
-            inner: Arc::clone(&self.inner),
+            value,
+            outcome,
+            level,
         }
     }
 }
-
-/// The classification of an L1 read after tag markers are applied.
 enum L1Read<V> {
     Fresh(Entry<V>),
     Stale(Entry<V>),
     Miss,
 }
+enum HydrationFence<V> {
+    Stable {
+        fence: Fence,
+        observed: Option<Entry<V>>,
+    },
+    ConcurrentMutation,
+}
+struct DistributedLookup<V> {
+    entry: Entry<V>,
+    hydration: HydrationFence<V>,
+}
+enum HydrationOutcome {
+    Evaluated(MemoryAdmission),
+    Skipped(SkipReason),
+}
+impl HydrationOutcome {
+    fn observe(self) {
+        match self {
+            Self::Evaluated(admission) => {
+                tracing::trace!(?admission, "distributed hydration memory admission")
+            }
+            Self::Skipped(reason) => tracing::trace!(?reason, "distributed hydration skipped"),
+        }
+    }
+}
+enum ReadStale<V> {
+    Memory(Entry<V>),
+    Distributed(Entry<V>),
+}
+impl<V> ReadStale<V> {
+    fn entry(&self) -> &Entry<V> {
+        match self {
+            Self::Memory(entry) | Self::Distributed(entry) => entry,
+        }
+    }
+    fn into_parts(self) -> (Entry<V>, CacheLevel) {
+        match self {
+            Self::Memory(entry) => (entry, CacheLevel::Memory),
+            Self::Distributed(entry) => (entry, CacheLevel::Distributed),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum FallbackAvailability {
+    Available,
+    Unavailable,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum L2ReadPolicy {
+    PreserveFailure,
+    FactoryFallback,
+}
+impl L2ReadPolicy {
+    fn rethrow(self, options: &EntryOptions, error: &Error) -> bool {
+        match self {
+            Self::PreserveFailure => true,
+            Self::FactoryFallback => match error {
+                Error::Serialization(_) | Error::Deserialization(_) => {
+                    options.rethrow_serialization_exceptions()
+                }
+                Error::Config(_) | Error::Clone(_) | Error::Tag(_) => true,
+                _ => options.rethrow_distributed_exceptions(),
+            },
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum HitKind {
+    Fresh,
+    Stale,
+}
+impl HitKind {
+    fn is_stale(self) -> bool {
+        match self {
+            Self::Fresh => false,
+            Self::Stale => true,
+        }
+    }
+    fn outcome(self) -> OperationOutcome {
+        match self {
+            Self::Fresh => OperationOutcome::Hit,
+            Self::Stale => OperationOutcome::StaleHit,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum CommitMode {
+    Foreground,
+    Background,
+}
+
+#[derive(Clone, Copy)]
+enum LookupMode {
+    Read,
+    GetOrSet,
+}
+struct ReadyValue<V> {
+    value: V,
+    key: Arc<str>,
+}
+struct LookupKey {
+    raw: Arc<str>,
+    full: Arc<str>,
+}
+// Ready operations cannot park. Their counted permit covers all synchronous
+// user code, including unused factory/fallback destructors and event callbacks.
+struct ReadyLookup<'a, V> {
+    result: Result<ReadyValue<V>>,
+    observation: OperationObservation,
+    permit: InlinePermit<'a>,
+}
+enum LookupStart<'a, V> {
+    Ready(ReadyLookup<'a, V>),
+    Owned {
+        observation: OperationObservation,
+        key: Cow<'a, str>,
+        permit: InlinePermit<'a>,
+    },
+}
+enum ObservationAdmission<'a> {
+    New,
+    Inline(InlinePermit<'a>),
+}
+impl<V> ReadyLookup<'_, V> {
+    fn finish<T>(
+        self,
+        token: Option<&FactoryCancellation>,
+        events: &Events,
+        complete: impl FnOnce(V) -> T,
+    ) -> Result<T> {
+        let permit = self.permit;
+        let mut observation = self.observation;
+        let span = observation.span();
+        let _entered = span.enter();
+        // Completion owns any default input, including its destructor on a hit
+        // or an error. No caller input survives outside the counted boundary.
+        let result = match self.result {
+            Ok(ready) => Ok(ReadyValue {
+                value: complete(ready.value),
+                key: ready.key,
+            }),
+            Err(error) => {
+                drop(complete);
+                Err(error)
+            }
+        };
+        let result = match result {
+            Err(Error::CacheClosed) => Err(Error::CacheClosed),
+            result => permit.status(token).and(result),
+        }
+        .and_then(|ready| {
+            events.emit(CacheEvent::Hit {
+                key: ready.key,
+                stale: false,
+            });
+            permit.status(token)?;
+            Ok(ready.value)
+        });
+        let outcome = match &result {
+            Ok(_) => {
+                observation.set_level(CacheLevel::Memory);
+                OperationOutcome::Hit
+            }
+            Err(error) => OperationOutcome::from_error(error),
+        };
+        observation.finish(outcome);
+        result
+    }
+}
 
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
-    /// Starts building a cache.
+    /// Starts validated construction.
     pub fn builder() -> CacheBuilder<V> {
         CacheBuilder::new()
     }
-
-    /// Creates a cache with all default settings and the real system clock.
-    #[must_use]
+    /// Creates the always-valid memory-only defaults without a runtime.
     pub fn new() -> Self {
         CacheBuilder::new().build()
     }
-
-    /// The cache's name.
-    #[must_use]
+    /// Diagnostic name.
     pub fn name(&self) -> &str {
         &self.inner.name
     }
-
-    /// The event hub; subscribe to observe hits, misses, fail-safe activations…
-    #[must_use]
+    /// Unified event route, including eviction and plugins.
     pub fn events(&self) -> &Events {
         &self.inner.events
     }
-
-    /// A clone of the cache's default entry options, ready to tweak per call.
-    #[must_use]
+    /// Starts a dynamic plugin session owned by its registration and this cache.
+    /// Dropping or stopping the registration detaches it; shutdown waits callbacks.
+    pub fn register_plugin(&self, plugin: Arc<dyn Plugin>) -> Result<crate::PluginRegistration> {
+        let permit = self.inner.scopes.inline();
+        permit.admit()?;
+        let registration = self.inner.plugins.register(plugin)?;
+        permit.status(None)?;
+        Ok(registration)
+    }
+    /// Static default options; per-key providers may override them.
     pub fn entry_options(&self) -> EntryOptions {
         self.inner.default_options.clone()
     }
-
-    /// Whether the cache establishes its backplane subscription before `build`
-    /// returns (FusionCache `WaitForInitialBackplaneSubscribe`). In `amalgam` this
-    /// is inherently satisfied — see
-    /// [`CacheBuilder::wait_for_initial_backplane_subscribe`].
-    #[must_use]
+    /// Configured subscription readiness policy.
     pub fn wait_for_initial_backplane_subscribe(&self) -> bool {
         self.inner.wait_for_initial_backplane_subscribe
     }
-
-    // --------------------------------------------------------------- get_or_set
-
-    /// Returns the cached value for `key`, or runs `factory` to produce it.
-    ///
-    /// Uses the cache's default options, no tags and no fail-safe default. See
-    /// [`get_or_set_full`](Self::get_or_set_full) for the complete form.
+    /// Waits native subscription admission. Close cancels a parked readiness wait.
+    pub async fn ready(&self) -> Result<BackplaneReadiness> {
+        if self.inner.scopes.is_closed() {
+            return Err(Error::CacheClosed);
+        }
+        let worker = self.worker();
+        self.inner
+            .scopes
+            .execution(
+                async move { worker.await_readiness().await },
+                CancellationSource::new(),
+            )
+            .await
+    }
+    /// Number of exact queued/in-flight recovery operations (zero when disabled).
+    pub fn pending_recovery(&self) -> usize {
+        self.inner
+            .recovery
+            .as_ref()
+            .map_or(0, |recovery| recovery.len())
+    }
+    /// Immutable diagnostic ticket for a data key; it pins the exact commit lane.
+    pub fn recovery_ticket(&self, key: impl AsRef<str>) -> Option<ReplayTicket> {
+        let key = self.worker().full_key(key.as_ref());
+        self.inner
+            .recovery
+            .as_ref()
+            .and_then(|recovery| recovery.snapshot(&key))
+    }
+    fn worker(&self) -> Worker<V> {
+        Worker {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+    fn lookup_key(&self, raw: &str, full: Arc<str>) -> LookupKey {
+        let raw = if self.inner.key_prefix.as_deref().is_none_or(str::is_empty) {
+            Arc::clone(&full)
+        } else {
+            Arc::from(raw)
+        };
+        LookupKey { raw, full }
+    }
+    async fn observed<T: Send + 'static>(
+        &self,
+        operation: CacheOperation,
+        key: Option<Arc<str>>,
+        token: Option<FactoryCancellation>,
+        work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
+    ) -> Result<T> {
+        self.observed_using(operation, key, token, CancellationSource::new(), work)
+            .await
+    }
+    async fn observed_using<T: Send + 'static>(
+        &self,
+        operation: CacheOperation,
+        key: Option<Arc<str>>,
+        token: Option<FactoryCancellation>,
+        source: CancellationSource,
+        work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
+    ) -> Result<T> {
+        let observation = OperationObservation::new(
+            self.inner.events.clone(),
+            &self.inner.name,
+            &self.inner.instance_id,
+            operation,
+            key.as_deref(),
+        );
+        self.execute_observed(observation, token, source, ObservationAdmission::New, work)
+            .await
+    }
+    async fn execute_observed<T: Send + 'static>(
+        &self,
+        mut observation: OperationObservation,
+        token: Option<FactoryCancellation>,
+        source: CancellationSource,
+        admission: ObservationAdmission<'_>,
+        work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
+    ) -> Result<T> {
+        let span = observation.span();
+        if self.inner.scopes.is_closed() {
+            drop(work);
+            observation.finish(OperationOutcome::from_error(&Error::CacheClosed));
+            return Err(Error::CacheClosed);
+        }
+        self.worker().start_maintenance();
+        let worker = self.worker();
+        let completion_token = source.token();
+        // The scope owns the observer too: a parked caller can be cancelled and
+        // finish its logical observation without polling its future again.
+        let execution = self.inner.scopes.execution(
+            async move {
+                if worker.inner.wait_for_initial_backplane_subscribe
+                    && !worker.inner.subscription_admitted.load(Ordering::Acquire)
+                {
+                    if let Err(error) = worker.await_readiness().await {
+                        observation.finish(OperationOutcome::from_error(&error));
+                        return Err(error);
+                    }
+                    worker
+                        .inner
+                        .subscription_admitted
+                        .store(true, Ordering::Release);
+                }
+                let result = work.await;
+                // Synchronous completion/destruction can close or explicitly
+                // cancel this scope while it is polling. Attribute that reason
+                // before finishing its single logical observation.
+                let result = match completion_token.reason() {
+                    Some(reason) => Err(Error::OperationCancelled { reason }),
+                    None => result,
+                };
+                match result {
+                    Ok(result) => {
+                        if let Some(level) = result.level {
+                            observation.set_level(level);
+                        }
+                        observation.finish(result.outcome);
+                        Ok(result.value)
+                    }
+                    Err(error) => {
+                        observation.finish(OperationOutcome::from_error(&error));
+                        Err(error)
+                    }
+                }
+            }
+            .instrument(span),
+            source,
+        );
+        // Registration owns the observer and all caller work before the ready
+        // path's permit is released, closing the transfer gap against shutdown.
+        match admission {
+            ObservationAdmission::New => {}
+            ObservationAdmission::Inline(permit) => drop(permit),
+        }
+        drive(execution, token).await
+    }
+    fn start_lookup<'a>(
+        &'a self,
+        raw: &'a str,
+        options: Option<&EntryOptions>,
+        token: Option<&FactoryCancellation>,
+        operation: CacheOperation,
+        mode: LookupMode,
+    ) -> LookupStart<'a, V> {
+        let permit = self.inner.scopes.inline();
+        let key = match &self.inner.key_prefix {
+            Some(prefix) => Cow::Owned(format!("{prefix}{raw}")),
+            None => Cow::Borrowed(raw),
+        };
+        let observation = OperationObservation::new(
+            self.inner.events.clone(),
+            &self.inner.name,
+            &self.inner.instance_id,
+            operation,
+            Some(&key),
+        );
+        let span = observation.span();
+        let _entered = span.enter();
+        let result = permit
+            .admit()
+            .and_then(|()| self.ready_value(&key, options, token, mode, &permit));
+        match result {
+            Ok(None) => LookupStart::Owned {
+                observation,
+                key,
+                permit,
+            },
+            Ok(Some(value)) => LookupStart::Ready(ReadyLookup {
+                result: Ok(value),
+                observation,
+                permit,
+            }),
+            Err(error) => LookupStart::Ready(ReadyLookup {
+                result: Err(error),
+                observation,
+                permit,
+            }),
+        }
+    }
+    fn ready_value(
+        &self,
+        key: &str,
+        options: Option<&EntryOptions>,
+        token: Option<&FactoryCancellation>,
+        mode: LookupMode,
+        permit: &InlinePermit<'_>,
+    ) -> Result<Option<ReadyValue<V>>> {
+        permit.status(token)?;
+        let worker = self.worker();
+        worker.start_maintenance();
+        if self.inner.wait_for_initial_backplane_subscribe
+            && !self.inner.subscription_admitted.load(Ordering::Acquire)
+            || options.is_none() && self.inner.default_options_provider.is_some()
+        {
+            return Ok(None);
+        }
+        let opts = options.unwrap_or(&self.inner.default_options);
+        worker.validate_options(opts)?;
+        if opts.skip_memory_read() {
+            return Ok(None);
+        }
+        worker.ensure_health();
+        permit.status(token)?;
+        let now = self.inner.clock.now();
+        permit.status(token)?;
+        let entry = self.inner.memory.ready_at(key, now);
+        permit.status(token)?;
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        if worker.tags(&entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
+            return Ok(None);
+        }
+        if matches!(mode, LookupMode::GetOrSet) {
+            let eager = entry.should_eager_refresh(self.inner.clock.now());
+            permit.status(token)?;
+            if eager {
+                return Ok(None);
+            }
+        }
+        let value = worker.copy(entry.value(), opts);
+        permit.status(token)?;
+        Ok(Some(ReadyValue {
+            value: value?,
+            key: Arc::from(key),
+        }))
+    }
+    /// Returns a value or produces it. Background write policy is observable;
+    /// use get_or_set_full_with_commit when its actual completion is required.
     pub async fn get_or_set<F, Fut>(&self, key: impl AsRef<str>, factory: F) -> Result<V>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
@@ -145,8 +662,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.get_or_set_full(key, factory, None, Box::from([]), MaybeValue::none())
             .await
     }
-
-    /// Like [`get_or_set`](Self::get_or_set) but with explicit per-call options.
+    /// Retrieval with explicit options.
     pub async fn get_or_set_with<F, Fut>(
         &self,
         key: impl AsRef<str>,
@@ -166,13 +682,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         )
         .await
     }
-
-    /// Returns the cached value for `key`, or stores and returns the constant
-    /// `value` if it is absent.
-    ///
-    /// The constant-value form of [`get_or_set`](Self::get_or_set): it goes
-    /// through the same L1 → L2 → single-flight flow, but the "factory" simply
-    /// yields `value`.
+    /// Constant-value retrieval through the same coordination pipeline.
     pub async fn get_or_set_value(
         &self,
         key: impl AsRef<str>,
@@ -188,16 +698,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         )
         .await
     }
-
-    /// The full `get_or_set`: per-call `options`, `tags` for the produced entry,
-    /// and a `fail_safe_default` served as a last resort when the factory fails
-    /// and no stale value exists.
-    #[tracing::instrument(
-        level = "debug",
-        name = "amalgam.get_or_set",
-        skip_all,
-        fields(cache = %self.inner.name, key = key.as_ref())
-    )]
+    /// Full retrieval. Ordinary timeout may activate fail-safe; explicit
+    /// cancellation/shutdown/lease loss never masquerades as an origin failure.
     pub async fn get_or_set_full<F, Fut>(
         &self,
         key: impl AsRef<str>,
@@ -210,174 +712,376 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
     {
-        let opts = self.resolve_options(key.as_ref(), options);
-        let full_key = self.full_key(key.as_ref());
-        let now = self.inner.clock.now();
-
-        let mut stale_entry: Option<Entry<V>> = None;
-
-        // 1. Hot path: a fresh L1 entry short-circuits everything.
-        if !opts.skip_memory_read() {
-            match self.read_l1(&full_key, now).await {
-                L1Read::Fresh(entry) => {
-                    if entry.should_eager_refresh(now) {
-                        // Hand the factory to a non-blocking background refresh and
-                        // return the still-fresh value immediately.
-                        self.spawn_eager_refresh(
-                            full_key.clone(),
-                            opts.clone(),
-                            entry.clone(),
-                            factory,
-                        );
-                    }
-                    self.emit(CacheEvent::Hit {
-                        key: full_key,
-                        stale: false,
+        Ok(self
+            .get_or_set_impl(
+                key.as_ref(),
+                factory,
+                options,
+                tags,
+                fail_safe_default,
+                None,
+            )
+            .await?
+            .value)
+    }
+    /// Full retrieval plus an actual factory-commit receipt.
+    pub async fn get_or_set_full_with_commit<F, Fut>(
+        &self,
+        key: impl AsRef<str>,
+        factory: F,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fail_safe_default: MaybeValue<V>,
+    ) -> Result<CacheValue<V>>
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        self.get_or_set_impl(
+            key.as_ref(),
+            factory,
+            options,
+            tags,
+            fail_safe_default,
+            None,
+        )
+        .await
+    }
+    /// Retrieval with an explicit caller cancellation request.
+    pub async fn get_or_set_cancellable<F, Fut>(
+        &self,
+        key: impl AsRef<str>,
+        factory: F,
+        cancellation: FactoryCancellation,
+    ) -> Result<V>
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        self.get_or_set_full_cancellable(
+            key,
+            factory,
+            None,
+            Box::from([]),
+            MaybeValue::none(),
+            cancellation,
+        )
+        .await
+    }
+    /// Full retrieval with explicit cancellation until deliberate background handoff.
+    pub async fn get_or_set_full_cancellable<F, Fut>(
+        &self,
+        key: impl AsRef<str>,
+        factory: F,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fail_safe_default: MaybeValue<V>,
+        cancellation: FactoryCancellation,
+    ) -> Result<V>
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        Ok(self
+            .get_or_set_impl(
+                key.as_ref(),
+                factory,
+                options,
+                tags,
+                fail_safe_default,
+                Some(cancellation),
+            )
+            .await?
+            .value)
+    }
+    async fn get_or_set_impl<F, Fut>(
+        &self,
+        key: &str,
+        factory: F,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fallback: MaybeValue<V>,
+        cancellation: Option<FactoryCancellation>,
+    ) -> Result<CacheValue<V>>
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        let (observation, full, permit) = match self.start_lookup(
+            key,
+            options.as_ref(),
+            cancellation.as_ref(),
+            CacheOperation::GetOrSet,
+            LookupMode::GetOrSet,
+        ) {
+            LookupStart::Ready(ready) => {
+                // These captures can execute user Drop code; keep them within
+                // the same counted operation before its final cancellation check.
+                let span = ready.observation.span();
+                let _entered = span.enter();
+                drop((factory, tags, fallback, options));
+                return ready
+                    .finish(
+                        cancellation.as_ref(),
+                        &self.inner.events,
+                        std::convert::identity,
+                    )
+                    .map(|value| CacheValue {
+                        value,
+                        commit: CommitReceipt::Unchanged,
                     });
-                    return Ok(entry.value_cloned());
-                }
-                L1Read::Stale(entry) => stale_entry = Some(entry),
-                L1Read::Miss => {}
             }
-        }
-
-        // 2. Single-flight: acquire the per-key lock.
-        let guard = match self
-            .acquire_lock(&full_key, &opts, stale_entry.as_ref())
+            LookupStart::Owned {
+                observation,
+                key,
+                permit,
+            } => (observation, Arc::<str>::from(key.as_ref()), permit),
+        };
+        let worker = self.worker();
+        let key = self.lookup_key(key, full);
+        let source = CancellationSource::new();
+        let caller = source.token();
+        self.execute_observed(
+            observation,
+            cancellation,
+            source,
+            ObservationAdmission::Inline(permit),
+            async move {
+                worker
+                    .get_or_set(key, factory, options, tags, fallback, caller)
+                    .await
+            },
+        )
+        .await
+    }
+    /// Canonical read-only L1/L2 lookup. Expected failures retain their typed channel.
+    pub async fn read(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+    ) -> Result<MaybeValue<V>> {
+        self.read_impl(key.as_ref(), options, None, CacheOperation::TryGet)
+            .await
+    }
+    /// Canonical read with explicit cancellation.
+    pub async fn read_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+        cancellation: FactoryCancellation,
+    ) -> Result<MaybeValue<V>> {
+        self.read_impl(
+            key.as_ref(),
+            options,
+            Some(cancellation),
+            CacheOperation::TryGet,
+        )
+        .await
+    }
+    async fn read_impl(
+        &self,
+        key: &str,
+        options: Option<EntryOptions>,
+        token: Option<FactoryCancellation>,
+        operation: CacheOperation,
+    ) -> Result<MaybeValue<V>> {
+        self.read_complete(
+            key,
+            options,
+            token,
+            operation,
+            L2ReadPolicy::PreserveFailure,
+            std::convert::identity,
+        )
+        .await
+    }
+    async fn read_complete<T: Send + 'static>(
+        &self,
+        key: &str,
+        options: Option<EntryOptions>,
+        token: Option<FactoryCancellation>,
+        operation: CacheOperation,
+        policy: L2ReadPolicy,
+        complete: impl FnOnce(MaybeValue<V>) -> T + Send + 'static,
+    ) -> Result<T> {
+        let (observation, full, permit) = match self.start_lookup(
+            key,
+            options.as_ref(),
+            token.as_ref(),
+            operation,
+            LookupMode::Read,
+        ) {
+            LookupStart::Ready(ready) => {
+                return ready.finish(token.as_ref(), &self.inner.events, move |value| {
+                    complete(MaybeValue::from_value(value))
+                });
+            }
+            LookupStart::Owned {
+                observation,
+                key,
+                permit,
+            } => (observation, Arc::<str>::from(key.as_ref()), permit),
+        };
+        let worker = self.worker();
+        let key = self.lookup_key(key, full);
+        self.execute_observed(
+            observation,
+            token,
+            CancellationSource::new(),
+            ObservationAdmission::Inline(permit),
+            async move {
+                let result = worker.read(key, options, policy).await?;
+                Ok(Observed::new(
+                    complete(result.value),
+                    result.outcome,
+                    result.level,
+                ))
+            },
+        )
+        .await
+    }
+    /// Returns default only after a successful miss; errors remain errors.
+    pub async fn read_or_default(
+        &self,
+        key: impl AsRef<str>,
+        default: V,
+        options: Option<EntryOptions>,
+    ) -> Result<V> {
+        self.read_complete(
+            key.as_ref(),
+            options,
+            None,
+            CacheOperation::GetOrDefault,
+            L2ReadPolicy::PreserveFailure,
+            move |value| value.value_or(default),
+        )
+        .await
+    }
+    /// Default-on-successful-miss with explicit cancellation.
+    pub async fn read_or_default_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        default: V,
+        options: Option<EntryOptions>,
+        cancellation: FactoryCancellation,
+    ) -> Result<V> {
+        self.read_complete(
+            key.as_ref(),
+            options,
+            Some(cancellation),
+            CacheOperation::GetOrDefault,
+            L2ReadPolicy::PreserveFailure,
+            move |value| value.value_or(default),
+        )
+        .await
+    }
+    /// Legacy lookup adapter. A diagnosed error maps to absent value because this
+    /// historical signature cannot carry failures. Prefer read().
+    pub async fn try_get(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+    ) -> MaybeValue<V> {
+        match self
+            .read_complete(
+                key.as_ref(),
+                options,
+                None,
+                CacheOperation::TryGet,
+                L2ReadPolicy::FactoryFallback,
+                std::convert::identity,
+            )
             .await
         {
-            LockOutcome::Acquired(guard) => guard,
-            LockOutcome::ServedStale(value) => return Ok(value),
-        };
-
-        // 3. Re-check L1 now we hold the lock: another flight may have populated it.
-        let now = self.inner.clock.now();
-        if !opts.skip_memory_read() {
-            match self.read_l1(&full_key, now).await {
-                L1Read::Fresh(entry) => {
-                    self.emit(CacheEvent::Hit {
-                        key: full_key,
-                        stale: false,
-                    });
-                    return Ok(entry.value_cloned());
-                }
-                L1Read::Stale(entry) => stale_entry = Some(entry),
-                L1Read::Miss => {}
+            Ok(value) => value,
+            Err(error) => {
+                self.legacy_error(&error);
+                MaybeValue::none()
             }
         }
-
-        // 3b. L2 read-through: a fresh L2 entry populates L1 and returns; a stale
-        // one becomes a (possibly newer) fail-safe fallback.
-        if self.inner.distributed.is_some()
-            && !opts.skip_distributed_read()
-            && !(stale_entry.is_some() && opts.skip_distributed_read_when_stale())
+    }
+    /// Legacy default adapter; prefer read_or_default for error preservation.
+    pub async fn get_or_default(
+        &self,
+        key: impl AsRef<str>,
+        default: V,
+        options: Option<EntryOptions>,
+    ) -> V {
+        let scopes = Arc::clone(&self.inner.scopes);
+        match self
+            .read_complete(
+                key.as_ref(),
+                options,
+                None,
+                CacheOperation::GetOrDefault,
+                L2ReadPolicy::FactoryFallback,
+                move |value| (value, scopes.inline_owned()),
+            )
+            .await
         {
-            let now = self.inner.clock.now();
-            let l2_has_fallback = stale_entry.is_some() || fail_safe_default.has_value();
-            if let Some(entry) = self
-                .read_l2_guarded(&full_key, now, &opts, l2_has_fallback)
-                .await?
-            {
-                match self.evaluate_tags(entry.meta().created(), entry.meta().tags()) {
-                    TagVerdict::Remove => {
-                        self.remove_l2_guarded(&full_key).await;
-                    }
-                    verdict => {
-                        if !opts.skip_memory_write() {
-                            self.inner
-                                .memory
-                                .insert(Arc::clone(&full_key), entry.clone())
-                                .await;
-                        }
-                        let fresh =
-                            matches!(verdict, TagVerdict::Valid) && entry.freshness(now).is_fresh();
-                        if fresh {
-                            self.emit(CacheEvent::Hit {
-                                key: full_key,
-                                stale: false,
-                            });
-                            return Ok(entry.value_cloned());
-                        }
-                        stale_entry = Some(newer_of(stale_entry, entry));
-                    }
+            Ok((value, permit)) => {
+                let value = value.value_or(default);
+                if let Err(error) = permit.status(None) {
+                    self.legacy_error(&error);
                 }
+                value
             }
-        }
-
-        // 4. Run the factory under soft/hard timeout, with fail-safe behind it.
-        let stale_info = stale_entry.as_ref().map(stale_info_of);
-        let ctx = FactoryContext::new(full_key.clone(), opts.clone(), tags, stale_info);
-        let has_fallback = stale_entry.is_some() || fail_safe_default.has_value();
-        let factory_timeout = opts.appropriate_factory_timeout(has_fallback);
-        let allow_bg = opts.allow_timed_out_factory_background_completion();
-
-        match run_factory(factory, ctx, factory_timeout, allow_bg).await {
-            FactoryRun::Produced(Ok(product)) => {
-                let value = self.store_product(&full_key, product).await;
-                drop(guard);
-                Ok(value)
-            }
-            FactoryRun::Produced(Err(factory_err)) => {
-                tracing::warn!(
-                    cache = %self.inner.name,
-                    key = %full_key,
-                    error = factory_err.message(),
-                    "factory failed"
-                );
-                self.emit(CacheEvent::FactoryError {
-                    key: full_key.clone(),
-                    message: factory_err.message().to_owned(),
-                });
-                let now = self.inner.clock.now();
-                match self
-                    .try_serve_fallback(
-                        &full_key,
-                        &opts,
-                        now,
-                        stale_entry.as_ref(),
-                        &fail_safe_default,
-                    )
-                    .await
-                {
-                    Some(value) => Ok(value),
-                    None => Err(factory_err.into()),
-                }
-            }
-            FactoryRun::TimedOut(handle) => {
-                self.emit(CacheEvent::FactorySyntheticTimeout {
-                    key: full_key.clone(),
-                });
-                if let Some(handle) = handle {
-                    self.spawn_background_completion(full_key.clone(), handle, guard);
-                }
-                let now = self.inner.clock.now();
-                match self
-                    .try_serve_fallback(
-                        &full_key,
-                        &opts,
-                        now,
-                        stale_entry.as_ref(),
-                        &fail_safe_default,
-                    )
-                    .await
-                {
-                    Some(value) => Ok(value),
-                    None => Err(Error::FactoryTimeout {
-                        elapsed: factory_timeout.as_duration().unwrap_or(Duration::ZERO),
-                    }),
-                }
+            Err(error) => {
+                self.legacy_error(&error);
+                default
             }
         }
     }
-
-    // ------------------------------------------------------------- simple ops
-
-    /// Writes `value` with the cache's default options and no tags.
+    /// Canonical set using resolved per-key options.
+    pub async fn try_set(&self, key: impl AsRef<str>, value: V) -> Result<MutationReceipt> {
+        self.try_set_full(key, value, None, Box::from([])).await
+    }
+    /// Canonical set with tags/options.
+    pub async fn try_set_full(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+    ) -> Result<MutationReceipt> {
+        self.set_impl(key.as_ref(), value, options, tags, None)
+            .await
+    }
+    /// Canonical set with explicit cancellation until scheduled ownership transfer.
+    pub async fn try_set_full_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.set_impl(key.as_ref(), value, options, tags, Some(token))
+            .await
+    }
+    async fn set_impl(
+        &self,
+        key: &str,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        token: Option<FactoryCancellation>,
+    ) -> Result<MutationReceipt> {
+        let worker = self.worker();
+        let raw: Arc<str> = Arc::from(key);
+        let full = worker.full_key(key);
+        self.observed(CacheOperation::Set, Some(full), token, async move {
+            worker.set(raw, value, options, tags).await
+        })
+        .await
+    }
+    /// Legacy unit adapter. Prefer try_set to inspect actual completion.
     pub async fn set(&self, key: impl AsRef<str>, value: V) {
-        self.set_full(key, value, None, Box::from([])).await;
+        if let Err(error) = self.try_set(key, value).await {
+            self.legacy_error(&error);
+        }
     }
-
-    /// Writes `value` with explicit options and tags.
+    /// Legacy unit adapter with options and tags.
     pub async fn set_full(
         &self,
         key: impl AsRef<str>,
@@ -385,205 +1089,520 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
     ) {
-        let opts = self.resolve_options(key.as_ref(), options);
-        let full_key = self.full_key(key.as_ref());
-        let now = self.inner.clock.now();
-        let entry = Entry::fresh(value, &opts, now, tags, None, None);
-        self.write_entry(&full_key, &entry, &opts).await;
-        self.emit(CacheEvent::Set { key: full_key });
+        if let Err(error) = self.try_set_full(key, value, options, tags).await {
+            self.legacy_error(&error);
+        }
     }
-
-    /// Reads a value without ever running a factory. A miss (or a stale entry,
-    /// unless `allow_stale_on_read_only` is set) yields [`MaybeValue::none`].
-    pub async fn try_get(
+    /// Canonical remove.
+    pub async fn try_remove(&self, key: impl AsRef<str>) -> Result<MutationReceipt> {
+        self.try_remove_with(key, None).await
+    }
+    /// Remove with per-key dynamic/explicit options.
+    pub async fn try_remove_with(
         &self,
         key: impl AsRef<str>,
         options: Option<EntryOptions>,
-    ) -> MaybeValue<V> {
-        let opts = self.resolve_options(key.as_ref(), options);
-        let full_key = self.full_key(key.as_ref());
-        if opts.skip_memory_read() {
-            self.emit(CacheEvent::Miss { key: full_key });
-            return MaybeValue::none();
-        }
-        let now = self.inner.clock.now();
-        match self.read_l1(&full_key, now).await {
-            L1Read::Fresh(entry) => {
-                self.emit(CacheEvent::Hit {
-                    key: full_key,
-                    stale: false,
-                });
-                MaybeValue::from_value(entry.value_cloned())
-            }
-            L1Read::Stale(entry) if opts.allow_stale_on_read_only() => {
-                self.emit(CacheEvent::Hit {
-                    key: full_key,
-                    stale: true,
-                });
-                MaybeValue::from_value(entry.value_cloned())
-            }
-            _ => {
-                self.emit(CacheEvent::Miss { key: full_key });
-                MaybeValue::none()
-            }
-        }
+    ) -> Result<MutationReceipt> {
+        self.key_mutation(key.as_ref(), options, KeyMutation::Remove, None)
+            .await
     }
-
-    /// Reads a value or returns `default` (never runs a factory).
-    pub async fn get_or_default(
+    /// Cancellable remove.
+    pub async fn try_remove_with_cancellable(
         &self,
         key: impl AsRef<str>,
-        default: V,
         options: Option<EntryOptions>,
-    ) -> V {
-        self.try_get(key, options).await.value_or(default)
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.key_mutation(key.as_ref(), options, KeyMutation::Remove, Some(token))
+            .await
     }
-
-    /// Removes an entry from L1 and L2 and tells peers to evict it.
+    /// Canonical logical expiration, including a cold L2 key.
+    pub async fn try_expire(&self, key: impl AsRef<str>) -> Result<MutationReceipt> {
+        self.try_expire_with(key, None).await
+    }
+    /// Expiration with per-key options.
+    pub async fn try_expire_with(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+    ) -> Result<MutationReceipt> {
+        self.key_mutation(key.as_ref(), options, KeyMutation::Expire, None)
+            .await
+    }
+    /// Cancellable expiration.
+    pub async fn try_expire_with_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.key_mutation(key.as_ref(), options, KeyMutation::Expire, Some(token))
+            .await
+    }
+    async fn key_mutation(
+        &self,
+        key: &str,
+        options: Option<EntryOptions>,
+        mutation: KeyMutation,
+        token: Option<FactoryCancellation>,
+    ) -> Result<MutationReceipt> {
+        let worker = self.worker();
+        let raw: Arc<str> = Arc::from(key);
+        let full = worker.full_key(key);
+        let operation = match mutation {
+            KeyMutation::Remove => CacheOperation::Remove,
+            KeyMutation::Expire => CacheOperation::Expire,
+        };
+        self.observed(operation, Some(full), token, async move {
+            worker.key_mutation(raw, options, mutation).await
+        })
+        .await
+    }
+    /// Legacy unit remove adapter.
     pub async fn remove(&self, key: impl AsRef<str>) {
-        let full_key = self.full_key(key.as_ref());
-        let opts = self.inner.default_options.clone();
-        self.inner.memory.remove(&full_key).await;
-        self.remove_l2_guarded(&full_key).await;
-        self.publish_guarded(BackplaneAction::Remove, &full_key, &opts)
-            .await;
-        self.emit(CacheEvent::Remove { key: full_key });
+        if let Err(error) = self.try_remove(key).await {
+            self.legacy_error(&error);
+        }
     }
-
-    /// Logically expires an entry: it is no longer fresh, but fail-safe can still
-    /// serve it as a stale fallback. Propagated to L2 and peers.
+    /// Legacy unit expiration adapter.
     pub async fn expire(&self, key: impl AsRef<str>) {
-        let full_key = self.full_key(key.as_ref());
-        let now = self.inner.clock.now();
-        let opts = self.inner.default_options.clone();
-        if let Some(entry) = self.inner.memory.get(&full_key).await {
-            let expired = entry.with_logical_expiration(now);
-            self.inner
-                .memory
-                .insert(Arc::clone(&full_key), expired.clone())
-                .await;
-            self.write_l2_guarded(&full_key, &expired, &opts).await;
+        if let Err(error) = self.try_expire(key).await {
+            self.legacy_error(&error);
         }
-        self.publish_guarded(BackplaneAction::Expire, &full_key, &opts)
-            .await;
-        self.emit(CacheEvent::Expire { key: full_key });
     }
-
-    /// Invalidates every entry carrying `tag` (lazily — entries are dropped on
-    /// their next read). No-op for a blank tag.
+    /// Canonical tag invalidation with invariant-preserving Tag.
+    pub async fn try_remove_by_tag(&self, tag: Tag) -> Result<MutationReceipt> {
+        self.try_remove_by_tag_with(tag, None).await
+    }
+    /// Tag invalidation with explicit options.
+    pub async fn try_remove_by_tag_with(
+        &self,
+        tag: Tag,
+        options: Option<EntryOptions>,
+    ) -> Result<MutationReceipt> {
+        self.markers_impl(
+            vec![MarkerKind::Tag(tag)],
+            options,
+            CacheOperation::RemoveByTag,
+            None,
+        )
+        .await
+    }
+    /// Cancellable tag invalidation.
+    pub async fn try_remove_by_tag_with_cancellable(
+        &self,
+        tag: Tag,
+        options: Option<EntryOptions>,
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.markers_impl(
+            vec![MarkerKind::Tag(tag)],
+            options,
+            CacheOperation::RemoveByTag,
+            Some(token),
+        )
+        .await
+    }
+    /// Canonical batch tag invalidation.
+    pub async fn try_remove_by_tags(
+        &self,
+        tags: impl IntoIterator<Item = Tag>,
+    ) -> Result<MutationReceipt> {
+        self.try_remove_by_tags_with(tags, None).await
+    }
+    /// Batch invalidation with explicit options.
+    pub async fn try_remove_by_tags_with(
+        &self,
+        tags: impl IntoIterator<Item = Tag>,
+        options: Option<EntryOptions>,
+    ) -> Result<MutationReceipt> {
+        self.markers_impl(
+            tags.into_iter().map(MarkerKind::Tag).collect(),
+            options,
+            CacheOperation::RemoveByTags,
+            None,
+        )
+        .await
+    }
+    /// Cancellable batch invalidation.
+    pub async fn try_remove_by_tags_with_cancellable(
+        &self,
+        tags: impl IntoIterator<Item = Tag>,
+        options: Option<EntryOptions>,
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.markers_impl(
+            tags.into_iter().map(MarkerKind::Tag).collect(),
+            options,
+            CacheOperation::RemoveByTags,
+            Some(token),
+        )
+        .await
+    }
+    /// Canonical scoped clear.
+    pub async fn try_clear(&self, mode: ClearMode) -> Result<MutationReceipt> {
+        self.try_clear_with(mode, None).await
+    }
+    /// Clear with explicit options.
+    pub async fn try_clear_with(
+        &self,
+        mode: ClearMode,
+        options: Option<EntryOptions>,
+    ) -> Result<MutationReceipt> {
+        self.markers_impl(
+            vec![match mode {
+                ClearMode::Expire => MarkerKind::ClearExpire,
+                ClearMode::Remove => MarkerKind::ClearRemove,
+            }],
+            options,
+            CacheOperation::Clear,
+            None,
+        )
+        .await
+    }
+    /// Cancellable clear.
+    pub async fn try_clear_with_cancellable(
+        &self,
+        mode: ClearMode,
+        options: Option<EntryOptions>,
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.markers_impl(
+            vec![match mode {
+                ClearMode::Expire => MarkerKind::ClearExpire,
+                ClearMode::Remove => MarkerKind::ClearRemove,
+            }],
+            options,
+            CacheOperation::Clear,
+            Some(token),
+        )
+        .await
+    }
+    async fn markers_impl(
+        &self,
+        kinds: Vec<MarkerKind>,
+        options: Option<EntryOptions>,
+        operation: CacheOperation,
+        token: Option<FactoryCancellation>,
+    ) -> Result<MutationReceipt> {
+        let worker = self.worker();
+        self.observed(operation, None, token, async move {
+            worker.mutate_markers(kinds, options).await
+        })
+        .await
+    }
+    /// Legacy raw-tag/unit adapter. Invalid requests are diagnosed.
     pub async fn remove_by_tag(&self, tag: impl AsRef<str>) {
-        if self.inner.disable_tagging {
-            tracing::warn!(
-                cache = %self.inner.name,
-                tag = tag.as_ref(),
-                "remove_by_tag ignored: tagging is disabled (DisableTagging)"
-            );
-            return;
-        }
-        if let Some(t) = Tag::new(tag.as_ref()) {
-            let now = self.inner.clock.now();
-            self.inner.tags.mark_tag(t, now);
-            let marker: Arc<str> = Arc::from(format!("{TAG_MARKER_PREFIX}{}", tag.as_ref()));
-            self.publish_marker(marker, now).await;
-            self.emit(CacheEvent::RemoveByTag {
-                tag: tag.as_ref().to_owned(),
-            });
+        match Tag::new(tag) {
+            Ok(tag) => {
+                if let Err(error) = self.try_remove_by_tag(tag).await {
+                    self.legacy_error(&error);
+                }
+            }
+            Err(error) => self.legacy_error(&error.into()),
         }
     }
-
-    /// Invalidates every entry carrying any of `tags`.
+    /// Legacy raw batch adapter; any invalid tag rejects the batch.
     pub async fn remove_by_tags<I, S>(&self, tags: I)
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        for tag in tags {
-            self.remove_by_tag(tag).await;
+        match crate::tags::try_collect_tags(tags) {
+            Ok(tags) => {
+                if let Err(error) = self.try_remove_by_tags(Vec::from(tags)).await {
+                    self.legacy_error(&error);
+                }
+            }
+            Err(error) => self.legacy_error(&error.into()),
         }
     }
-
-    /// Clears the whole cache.
-    ///
-    /// With `allow_fail_safe = true` (the FusionCache default) every entry is
-    /// logically expired so fail-safe can still serve stale values; with `false`
-    /// they are hard-removed.
+    /// Legacy boolean/unit clear adapter.
     pub async fn clear(&self, allow_fail_safe: bool) {
-        if self.inner.disable_tagging {
-            tracing::warn!(
-                cache = %self.inner.name,
-                "clear ignored: tagging is disabled (DisableTagging); clear relies on tag markers"
-            );
-            return;
+        if let Err(error) = self
+            .try_clear(if allow_fail_safe {
+                ClearMode::Expire
+            } else {
+                ClearMode::Remove
+            })
+            .await
+        {
+            self.legacy_error(&error);
         }
-        let now = self.inner.clock.now();
-        let marker: Arc<str> = if allow_fail_safe {
-            self.inner.tags.mark_clear_expire(now);
-            Arc::from(CLEAR_EXPIRE_KEY)
-        } else {
-            self.inner.tags.mark_clear_remove(now);
-            self.inner.memory.invalidate_all();
-            Arc::from(CLEAR_REMOVE_KEY)
-        };
-        self.publish_marker(marker, now).await;
-        self.emit(CacheEvent::Clear);
     }
-
-    /// Runs the L1 backend's pending maintenance (eviction, expiry). Primarily
-    /// for deterministic tests.
+    fn legacy_error(&self, error: &Error) {
+        tracing::warn!(cache=%self.inner.name,%error,"legacy cache adapter discarded a typed failure; use the canonical fallible API");
+    }
+    /// Initiates close, cancellation and plugin teardown once.
+    pub fn close(&self) -> CloseOutcome {
+        self.inner.close()
+    }
+    /// Waits execution scopes, supervised effects, cleanup, recovery and plugins.
+    pub async fn shutdown(&self) -> Result<ShutdownReport> {
+        self.inner.shutdown().await
+    }
+    /// Runs explicit memory maintenance; does not claim background commit completion.
     pub async fn run_pending_tasks(&self) {
         self.inner.memory.run_pending_tasks().await;
+        self.inner.locks.clean_idle(256);
+        self.inner.lanes.clean(256);
     }
+    /// Waits currently scheduled effects and their cleanup without closing the cache.
+    pub async fn flush_pending(&self) -> Result<()> {
+        self.inner.tasks.flush().await;
+        Ok(())
+    }
+}
+impl<V: Clone + Send + Sync + 'static> Default for Cache<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+#[derive(Clone, Copy)]
+enum KeyMutation {
+    Remove,
+    Expire,
+}
+async fn drive<T: Send + 'static>(
+    mut execution: Execution<T>,
+    token: Option<FactoryCancellation>,
+) -> Result<T> {
+    if let Some(token) = token {
+        execution.link(&token, LinkMode::Explicit);
+        tokio::select! {biased; reason=token.cancelled()=>{execution.cancel(reason);execution.await},result=&mut execution=>result}
+    } else {
+        execution.await
+    }
+}
+fn validate_budget(timeout: Timeout) -> Result<()> {
+    if let Timeout::After(duration) = timeout
+        && Instant::now().checked_add(duration).is_none()
+    {
+        return Err(ConfigError::DeadlineOutOfRange.into());
+    }
+    Ok(())
+}
+async fn bounded<T>(timeout: Timeout, work: impl Future<Output = T>) -> Result<Option<T>> {
+    validate_budget(timeout)?;
+    match timeout {
+        Timeout::Infinite => Ok(Some(work.await)),
+        Timeout::After(duration) if duration.is_zero() => Ok(None),
+        Timeout::After(duration) => Ok(tokio::time::timeout(duration, work).await.ok()),
+    }
+}
 
-    // ----------------------------------------------------------------- internals
-
+struct FlightGuard {
+    local: LocalParticipation,
+    lease: Option<DistributedLease>,
+    tasks: Arc<Tasks>,
+    events: Events,
+    key: Arc<str>,
+    policy: LeasePolicy,
+}
+enum LocalParticipation {
+    Held(KeyGuard),
+    UnlockedAfterTimeout,
+    ReplayOnly,
+}
+impl LocalParticipation {
+    fn release(self) {
+        match self {
+            Self::Held(guard) => drop(guard),
+            Self::UnlockedAfterTimeout | Self::ReplayOnly => {}
+        }
+    }
+}
+struct CacheLeaseOwner {
+    tasks: Arc<Tasks>,
+    events: Events,
+    key: Arc<str>,
+}
+impl LeaseTaskOwner for CacheLeaseOwner {
+    fn supervise(&self, work: LeaseTask) {
+        self.tasks
+            .cleanup(Arc::clone(&self.key), self.events.clone(), async move {
+                work.await.map_err(Error::from)
+            });
+    }
+}
+impl FlightGuard {
+    fn proof(&self) -> Result<Option<crate::LeaseProof>> {
+        match &self.lease {
+            Some(lease) if self.policy == LeasePolicy::Fenced => Ok(Some(lease.proof()?)),
+            Some(lease) => {
+                if *lease.state().borrow() == LeaseState::Lost {
+                    Err(LeaseError::Lost.into())
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
+    }
+}
+impl Drop for FlightGuard {
+    fn drop(&mut self) {
+        if let Some(lease) = self.lease.take() {
+            self.tasks
+                .cleanup(Arc::clone(&self.key), self.events.clone(), async move {
+                    lease.release().await.map_err(Error::from)
+                });
+        }
+        std::mem::replace(&mut self.local, LocalParticipation::ReplayOnly).release();
+    }
+}
+enum LockOutcome<V> {
+    Acquired(FlightGuard),
+    UnlockedAfterTimeout(FlightGuard),
+    Served(V),
+}
+impl<V: Clone + Send + Sync + 'static> Worker<V> {
+    fn lease_owner(&self, key: &Arc<str>) -> Arc<dyn LeaseTaskOwner> {
+        Arc::new(CacheLeaseOwner {
+            tasks: Arc::clone(&self.inner.tasks),
+            events: self.inner.events.clone(),
+            key: Arc::clone(key),
+        })
+    }
+    async fn await_readiness(&self) -> Result<BackplaneReadiness> {
+        let Some(backplane) = &self.inner.backplane else {
+            return Ok(BackplaneReadiness::NotConfigured);
+        };
+        let Some(mut state) = backplane.connection_state() else {
+            return Ok(BackplaneReadiness::BestEffort);
+        };
+        loop {
+            let current = *state.borrow_and_update();
+            match current {
+                BackplaneState::Connected { epoch } => {
+                    self.ensure_health();
+                    return Ok(BackplaneReadiness::Acknowledged(epoch));
+                }
+                BackplaneState::Disconnected { .. } => {
+                    self.ensure_health();
+                }
+                BackplaneState::Stopped => {
+                    return Err(Error::Backplane("backplane provider stopped".into()));
+                }
+            }
+            if state.changed().await.is_err() {
+                return Err(Error::Backplane("backplane health stream closed".into()));
+            }
+        }
+    }
     fn full_key(&self, key: &str) -> Arc<str> {
         match &self.inner.key_prefix {
             Some(prefix) => Arc::from(format!("{prefix}{key}")),
             None => Arc::from(key),
         }
     }
-
-    fn emit(&self, event: CacheEvent) {
-        if !self.inner.plugins.is_empty() {
-            self.inner.plugins.notify(&event);
+    fn resolve_options(&self, key: &str, options: Option<EntryOptions>) -> Result<EntryOptions> {
+        let opts = options
+            .or_else(|| {
+                self.inner
+                    .default_options_provider
+                    .as_ref()
+                    .and_then(|provider| provider.options_for(key))
+            })
+            .unwrap_or_else(|| self.inner.default_options.clone());
+        self.validate_options(&opts)?;
+        Ok(opts)
+    }
+    fn validate_options(&self, opts: &EntryOptions) -> Result<()> {
+        opts.validate_with_cloner(self.inner.cloner.as_deref())?;
+        for timeout in [
+            opts.memory_lock_timeout(),
+            opts.distributed_lock_timeout(),
+            opts.factory_soft_timeout(),
+            opts.factory_hard_timeout(),
+            opts.distributed_soft_timeout(),
+            opts.distributed_hard_timeout(),
+        ] {
+            validate_budget(timeout)?;
         }
+        let timers = [
+            opts.memory_lock_timeout(),
+            opts.factory_soft_timeout(),
+            opts.factory_hard_timeout(),
+            opts.distributed_soft_timeout(),
+            opts.distributed_hard_timeout(),
+        ]
+        .into_iter()
+        .any(|timeout| matches!(timeout,Timeout::After(duration) if !duration.is_zero()));
+        let background = opts.eager_refresh_threshold().is_some()
+            || opts.allow_background_distributed_operations()
+                && matches!(self.inner.storage, Storage::Hybrid { .. })
+            || opts.allow_background_backplane_operations() && self.inner.backplane.is_some();
+        if (timers
+            || background
+            || !opts.skip_distributed_locker() && self.inner.distributed_locker.is_some())
+            && tokio::runtime::Handle::try_current().is_err()
+        {
+            return Err(ConfigError::MissingRuntime {
+                component: RuntimeComponent::Execution,
+            }
+            .into());
+        }
+        Ok(())
+    }
+    fn copy(&self, value: &V, opts: &EntryOptions) -> Result<V> {
+        crate::serializers::copy_value(value, opts, self.inner.cloner.as_deref())
+    }
+    fn stale_info(&self, entry: &Entry<V>, opts: &EntryOptions) -> Result<StaleInfo<V>> {
+        Ok(StaleInfo {
+            value: self.copy(entry.value(), opts)?,
+            etag: entry.meta().etag().map(str::to_owned),
+            last_modified: entry.meta().last_modified(),
+            tags: entry.meta().tags().into(),
+        })
+    }
+    fn fresh_entry(
+        &self,
+        value: V,
+        opts: &EntryOptions,
+        snapshot: Timestamp,
+        tags: Box<[Tag]>,
+        etag: Option<String>,
+        last_modified: Option<Timestamp>,
+    ) -> Result<Entry<V>> {
+        let now = self.inner.clock.now();
+        let sample = JitterSample::new(
+            self.inner.jitter.sample(opts.jitter_max()),
+            opts.jitter_max(),
+        )?;
+        Entry::try_fresh_with_jitter(
+            value,
+            opts,
+            snapshot,
+            now,
+            sample,
+            tags,
+            etag,
+            last_modified,
+        )
+    }
+    fn emit(&self, event: CacheEvent) {
         self.inner.events.emit(event);
     }
-
-    /// Resolves the options for an operation: explicit per-call options, else a
-    /// dynamic provider's options for this key, else the static defaults.
-    fn resolve_options(&self, key: &str, options: Option<EntryOptions>) -> EntryOptions {
-        if let Some(options) = options {
-            return options;
-        }
-        if let Some(provider) = &self.inner.default_options_provider
-            && let Some(options) = provider.options_for(key)
-        {
-            return options;
-        }
-        self.inner.default_options.clone()
-    }
-
-    /// Evaluates tag/clear markers for an entry, honouring the cache-wide
-    /// `disable_tagging` switch: when tagging is disabled every entry is `Valid`
-    /// (the marker registry is never consulted).
-    fn evaluate_tags(&self, created: Timestamp, tags: &[Tag]) -> TagVerdict {
+    fn tags(&self, entry: &Entry<V>) -> TagVerdict {
         if self.inner.disable_tagging {
-            return TagVerdict::Valid;
+            TagVerdict::Valid
+        } else {
+            self.inner.tags.evaluate(
+                entry.meta().created(),
+                entry.meta().tags(),
+                self.inner.remove_by_tag_behavior,
+            )
         }
-        self.inner
-            .tags
-            .evaluate(created, tags, self.inner.remove_by_tag_behavior)
     }
-
-    /// Reads L1, applies tag markers, and classifies the result.
-    async fn read_l1(&self, full_key: &str, now: Timestamp) -> L1Read<V> {
-        let Some(entry) = self.inner.memory.get(full_key).await else {
+    async fn read_l1(&self, key: &str) -> L1Read<V> {
+        let now = self.inner.clock.now();
+        let Some(entry) = self.inner.memory.get_at(key, now).await else {
             return L1Read::Miss;
         };
-        match self.evaluate_tags(entry.meta().created(), entry.meta().tags()) {
+        match self.tags(&entry) {
             TagVerdict::Remove => {
-                self.inner.memory.remove(full_key).await;
+                self.inner.memory.remove_if_same(key, &entry).await;
                 L1Read::Miss
             }
             TagVerdict::Expire => L1Read::Stale(entry),
@@ -596,791 +1615,2303 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
         }
     }
-
-    async fn acquire_lock(
-        &self,
-        full_key: &str,
-        opts: &EntryOptions,
-        stale_entry: Option<&Entry<V>>,
-    ) -> LockOutcome<V> {
-        let local = match opts.memory_lock_timeout() {
-            Timeout::Infinite => self.inner.locks.lock(full_key).await,
-            Timeout::After(d) => {
-                match tokio::time::timeout(d, self.inner.locks.lock(full_key)).await {
-                    Ok(guard) => guard,
-                    Err(_) => {
-                        // Lock timed out: with fail-safe and a stale value, return it
-                        // rather than queue behind the lock holder.
-                        if opts.is_fail_safe_enabled()
-                            && let Some(stale) = stale_entry
-                        {
-                            self.emit(CacheEvent::Hit {
-                                key: Arc::from(full_key),
-                                stale: true,
-                            });
-                            return LockOutcome::ServedStale(stale.value_cloned());
-                        }
-                        // Otherwise the lock is best-effort: wait for it.
-                        self.inner.locks.lock(full_key).await
-                    }
-                }
-            }
-        };
-        let distributed = self.acquire_distributed_lock(full_key, opts).await;
-        LockOutcome::Acquired(LockGuard {
-            _local: local,
-            _distributed: distributed,
-        })
-    }
-
-    /// Acquires the cross-node distributed lock (if a locker is configured and not
-    /// skipped). Best-effort: a timeout or error proceeds without it.
-    async fn acquire_distributed_lock(
-        &self,
-        full_key: &str,
-        opts: &EntryOptions,
-    ) -> Option<DistributedReleaseGuard> {
-        if opts.skip_distributed_locker() {
-            return None;
-        }
-        let locker = self.inner.distributed_locker.as_ref()?;
-        let lock_key = format!("amalgam:lock:{full_key}");
-        match locker
-            .acquire(
-                &lock_key,
-                opts.physical_ttl(),
-                opts.distributed_lock_timeout(),
-            )
-            .await
-        {
-            Ok(Some(token)) => Some(DistributedReleaseGuard {
-                locker: Arc::clone(locker),
-                key: Arc::from(lock_key),
-                token,
-            }),
-            _ => None,
-        }
-    }
-
-    /// Stores a freshly-produced (or `NotModified`-reused) value as a fresh entry,
-    /// fires the appropriate events, and returns the value.
-    async fn store_product(&self, full_key: &Arc<str>, product: FactoryProduct<V>) -> V {
-        let now = self.inner.clock.now();
-        let reused = product.reused_stale;
-        let value = product.value.clone();
-        let opts = product.options;
-        let entry = Entry::fresh(
-            product.value,
-            &opts,
-            now,
-            product.tags,
-            product.etag,
-            product.last_modified,
-        );
-        self.write_entry(full_key, &entry, &opts).await;
-        if !reused {
-            self.emit(CacheEvent::FactorySuccess {
-                key: Arc::clone(full_key),
-            });
-        }
-        self.emit(CacheEvent::Set {
-            key: Arc::clone(full_key),
-        });
-        value
-    }
-
-    /// Write-through: stores `entry` into L1 and (if configured) L2, then
-    /// publishes a backplane `Set` so peers drop their local copy.
-    async fn write_entry(&self, full_key: &Arc<str>, entry: &Entry<V>, opts: &EntryOptions) {
-        if !opts.skip_memory_write() {
-            self.inner
-                .memory
-                .insert(Arc::clone(full_key), entry.clone())
-                .await;
-        }
-        if !opts.skip_distributed_write() {
-            self.write_l2_guarded(full_key, entry, opts).await;
-        }
-        if !opts.skip_backplane_notifications() {
-            self.publish_guarded(BackplaneAction::Set, full_key, opts)
-                .await;
-        }
-    }
-
-    /// L2 write, gated by the circuit breaker, with event emission and
-    /// auto-recovery enqueue on failure.
-    async fn write_l2_guarded(&self, full_key: &Arc<str>, entry: &Entry<V>, opts: &EntryOptions) {
-        if self.inner.distributed.is_none() {
-            return;
-        }
-        let now = self.inner.clock.now();
-        if !self.inner.circuit_l2.is_closed(now) {
-            self.enqueue_recovery(full_key, RecoveryAction::Set, now);
-            return;
-        }
-        let ttl = opts.distributed_physical_ttl();
-        if opts.allow_background_distributed_operations() {
-            // Fire-and-forget: don't make the caller wait on L2.
-            let this = self.clone();
-            let full_key = Arc::clone(full_key);
-            let entry = entry.clone();
-            tokio::spawn(async move {
-                this.do_l2_write(&full_key, &entry, ttl).await;
-            });
-        } else {
-            self.do_l2_write(full_key, entry, ttl).await;
-        }
-    }
-
-    async fn do_l2_write(&self, full_key: &Arc<str>, entry: &Entry<V>, ttl: Duration) {
-        match self.inner.l2_write(full_key, entry, ttl).await {
-            Ok(()) => self.close_circuit_l2(),
-            Err(err) => {
-                self.on_l2_error(full_key, &err);
-                self.enqueue_recovery(full_key, RecoveryAction::Set, self.inner.clock.now());
-            }
-        }
-    }
-
-    /// L2 read, gated by the circuit breaker and the appropriate distributed
-    /// timeout (soft when fail-safe + a fallback exists, otherwise hard).
-    /// Returns `Err` only when `rethrow_distributed_exceptions` is set.
-    async fn read_l2_guarded(
-        &self,
-        full_key: &Arc<str>,
-        now: Timestamp,
-        opts: &EntryOptions,
-        has_fallback: bool,
-    ) -> Result<Option<Entry<V>>> {
-        if self.inner.distributed.is_none() || !self.inner.circuit_l2.is_closed(now) {
-            return Ok(None);
-        }
-        let read = self.inner.l2_read(full_key, now);
-        let timeout = opts.appropriate_distributed_timeout(has_fallback);
-        let result = match timeout {
-            Timeout::After(d) => match tokio::time::timeout(d, read).await {
-                Ok(r) => r,
-                Err(_) => {
-                    // A *soft* distributed timeout (fail-safe on + a fallback
-                    // exists) is an expected, benign bail-out to the fallback: it
-                    // must not mark L2 unhealthy. Only a *hard* timeout is a
-                    // genuine L2 failure that trips the circuit breaker.
-                    if opts.is_fail_safe_enabled()
-                        && has_fallback
-                        && timeout == opts.distributed_soft_timeout()
-                    {
-                        return Ok(None);
-                    }
-                    Err(Error::Distributed("l2 read timed out".to_owned()))
-                }
-            },
-            Timeout::Infinite => read.await,
-        };
-        match result {
-            Ok(entry) => {
-                self.close_circuit_l2();
-                Ok(entry)
-            }
-            Err(err) => {
-                self.on_l2_error(full_key, &err);
-                // Serialization/deserialization failures honour
-                // `rethrow_serialization_exceptions`; transport failures honour
-                // `rethrow_distributed_exceptions`. Otherwise an L2 hiccup is a
-                // miss, not an error.
-                let rethrow = match err {
-                    Error::Serialization(_) | Error::Deserialization(_) => {
-                        opts.rethrow_serialization_exceptions()
-                    }
-                    _ => opts.rethrow_distributed_exceptions(),
-                };
-                if rethrow { Err(err) } else { Ok(None) }
-            }
-        }
-    }
-
-    /// L2 remove, gated by the circuit breaker, with auto-recovery on failure.
-    async fn remove_l2_guarded(&self, full_key: &Arc<str>) {
-        if self.inner.distributed.is_none() {
-            return;
-        }
-        let now = self.inner.clock.now();
-        if !self.inner.circuit_l2.is_closed(now) {
-            self.enqueue_recovery(full_key, RecoveryAction::Remove, now);
-            return;
-        }
-        match self.inner.l2_remove(full_key).await {
-            Ok(()) => self.close_circuit_l2(),
-            Err(err) => {
-                self.on_l2_error(full_key, &err);
-                self.enqueue_recovery(full_key, RecoveryAction::Remove, now);
-            }
-        }
-    }
-
-    fn on_l2_error(&self, full_key: &Arc<str>, err: &Error) {
-        match err {
-            Error::Serialization(message) => self.emit(CacheEvent::SerializationError {
-                key: Arc::clone(full_key),
-                message: message.clone(),
-            }),
-            Error::Deserialization(message) => self.emit(CacheEvent::DeserializationError {
-                key: Arc::clone(full_key),
-                message: message.clone(),
-            }),
-            _ => {}
-        }
-        if self.inner.circuit_l2.trip(self.inner.clock.now()) {
-            self.emit(CacheEvent::CircuitBreakerChange {
-                component: CircuitComponent::Distributed,
-                closed: false,
-            });
-        }
-    }
-
-    fn close_circuit_l2(&self) {
-        if self.inner.circuit_l2.close() {
-            self.emit(CacheEvent::CircuitBreakerChange {
-                component: CircuitComponent::Distributed,
-                closed: true,
-            });
-        }
-    }
-
-    fn close_circuit_backplane(&self) {
-        if self.inner.circuit_backplane.close() {
-            self.emit(CacheEvent::CircuitBreakerChange {
-                component: CircuitComponent::Backplane,
-                closed: true,
-            });
-        }
-    }
-
-    fn enqueue_recovery(&self, full_key: &Arc<str>, action: RecoveryAction, now: Timestamp) {
-        if let Some(recovery) = &self.inner.recovery {
-            recovery.enqueue(RecoveryItem {
-                key: Arc::clone(full_key),
-                action,
-                timestamp: now,
-                expires_at: now.saturating_add(RECOVERY_ITEM_TTL),
-                remaining_retries: None,
-            });
-        }
-    }
-
-    /// Publishes a backplane notification, gated by the circuit breaker. Honours
-    /// `allow_background_backplane_operations` (fire-and-forget vs awaited).
-    async fn publish_guarded(
-        &self,
-        action: BackplaneAction,
-        full_key: &Arc<str>,
-        opts: &EntryOptions,
-    ) {
-        if self.inner.backplane.is_none() {
-            return;
-        }
-        let now = self.inner.clock.now();
-        if !self.inner.circuit_backplane.is_closed(now) {
-            self.enqueue_recovery(full_key, recovery_action_of(action), now);
-            return;
-        }
-        if opts.allow_background_backplane_operations() {
-            let this = self.clone();
-            let key = Arc::clone(full_key);
-            tokio::spawn(async move {
-                this.do_publish(action, &key).await;
-            });
-        } else {
-            self.do_publish(action, full_key).await;
-        }
-    }
-
-    async fn do_publish(&self, action: BackplaneAction, full_key: &Arc<str>) {
-        let now = self.inner.clock.now();
-        match self.inner.backplane_send(action, full_key, now).await {
-            Ok(()) => {
-                self.close_circuit_backplane();
-                self.emit(CacheEvent::MessagePublished {
-                    key: Arc::clone(full_key),
-                });
-            }
-            Err(_) => {
-                if self.inner.circuit_backplane.trip(now) {
-                    self.emit(CacheEvent::CircuitBreakerChange {
-                        component: CircuitComponent::Backplane,
-                        closed: false,
-                    });
-                }
-                self.enqueue_recovery(full_key, recovery_action_of(action), now);
-            }
-        }
-    }
-
-    /// Publishes a reserved-key tag/clear marker so peers update their tag
-    /// registry (best-effort, awaited).
-    async fn publish_marker(&self, key: Arc<str>, now: Timestamp) {
-        if self.inner.backplane.is_none() {
-            return;
-        }
-        if let Ok(()) = self
-            .inner
-            .backplane_send(BackplaneAction::Set, &key, now)
-            .await
-        {
-            self.emit(CacheEvent::MessagePublished { key });
-        }
-    }
-
-    /// Applies an incoming backplane notification to the local L1 / tag registry.
-    async fn apply_backplane(&self, message: BackplaneMessage) {
-        if self.inner.ignore_incoming_backplane {
-            return;
-        }
-        self.emit(CacheEvent::MessageReceived {
-            key: Arc::clone(&message.key),
-        });
-        // A received message proves the backplane is healthy.
-        self.close_circuit_backplane();
-
-        // Tag / clear markers ride on `Set` messages with reserved keys.
-        if message.action == BackplaneAction::Set {
-            if let Some(tag) = message.key.strip_prefix(TAG_MARKER_PREFIX) {
-                if let Some(tag) = Tag::new(tag) {
-                    self.inner.tags.mark_tag(tag, message.timestamp);
-                }
-                return;
-            }
-            if &*message.key == CLEAR_EXPIRE_KEY {
-                self.inner.tags.mark_clear_expire(message.timestamp);
-                return;
-            }
-            if &*message.key == CLEAR_REMOVE_KEY {
-                self.inner.tags.mark_clear_remove(message.timestamp);
-                self.inner.memory.invalidate_all();
-                return;
-            }
-        }
-
-        match message.action {
-            BackplaneAction::Remove => {
-                self.inner.memory.remove(&message.key).await;
-            }
-            BackplaneAction::Expire => {
-                if let Some(entry) = self.inner.memory.get(&message.key).await {
-                    let expired = entry.with_logical_expiration(message.timestamp);
-                    self.inner
-                        .memory
-                        .insert(Arc::clone(&message.key), expired)
-                        .await;
-                }
-            }
-            BackplaneAction::Set => {
-                // FusionCache "passive update": a node that already holds the key
-                // in L1 eagerly refreshes it from L2; nodes that don't hold it do
-                // nothing. The refresh runs off the listener so a slow L2 never
-                // stalls processing of other backplane messages.
-                if self.inner.memory.get(&message.key).await.is_some() {
-                    let cache = self.clone();
-                    let key = Arc::clone(&message.key);
-                    tokio::spawn(async move {
-                        cache.refresh_l1_from_l2(&key).await;
-                    });
-                }
-            }
-        }
-    }
-
-    /// Eagerly refreshes a key's L1 entry from L2 — FusionCache's passive update
-    /// on a backplane `Set`. On an L2 miss or error, or when a tag/clear marker
-    /// invalidates the value, the stale L1 copy is dropped so the next read
-    /// re-pulls or re-runs the factory. Honours the same tag evaluation as the
-    /// `get_or_set` L2 read-through.
-    async fn refresh_l1_from_l2(&self, full_key: &Arc<str>) {
-        if self.inner.distributed.is_none() {
-            self.inner.memory.remove(full_key).await;
-            return;
-        }
-        let now = self.inner.clock.now();
-        let opts = self.inner.default_options.clone();
-        match self.read_l2_guarded(full_key, now, &opts, false).await {
-            Ok(Some(entry)) => {
-                match self.evaluate_tags(entry.meta().created(), entry.meta().tags()) {
-                    TagVerdict::Remove => {
-                        self.inner.memory.remove(full_key).await;
-                    }
-                    _ => {
-                        self.inner.memory.insert(Arc::clone(full_key), entry).await;
-                    }
-                }
-            }
-            Ok(None) | Err(_) => {
-                self.inner.memory.remove(full_key).await;
-            }
-        }
-    }
-
-    /// Spawns the background listener that applies remote backplane messages.
-    /// Requires a tokio runtime; only spawned when a backplane is configured.
-    fn spawn_backplane_listener(&self) {
-        let Some(backplane) = &self.inner.backplane else {
-            return;
-        };
-        let mut receiver = backplane.subscribe();
-        let weak: Weak<CacheInner<V>> = Arc::downgrade(&self.inner);
-        let instance_id = Arc::clone(&self.inner.instance_id);
-        tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(message) => {
-                        if message.source_id == instance_id {
-                            continue; // ignore our own notifications
-                        }
-                        match weak.upgrade() {
-                            Some(inner) => Cache { inner }.apply_backplane(message).await,
-                            None => break, // the cache was dropped
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                }
-            }
-        });
-    }
-
-    /// Attempts to serve a stale value (fail-safe). Returns the served value, or
-    /// `None` if fail-safe is disabled or no fallback exists.
-    async fn try_serve_fallback(
-        &self,
-        full_key: &Arc<str>,
-        opts: &EntryOptions,
-        now: Timestamp,
-        stale_entry: Option<&Entry<V>>,
-        fail_safe_default: &MaybeValue<V>,
-    ) -> Option<V> {
-        if !opts.is_fail_safe_enabled() {
-            return None;
-        }
-        if let Some(stale) = stale_entry
-            && let Some(throttled) = Entry::throttled(stale, opts, now)
-        {
-            let value = throttled.value_cloned();
-            if !opts.skip_memory_write() {
-                self.inner
-                    .memory
-                    .insert(Arc::clone(full_key), throttled)
-                    .await;
-            }
-            self.emit_fail_safe(full_key);
-            return Some(value);
-        }
-        if let Some(default) = fail_safe_default.value() {
-            let value = default.clone();
-            if !opts.skip_memory_write() {
-                let entry = Entry::from_fail_safe_default(value.clone(), opts, now);
-                self.inner.memory.insert(Arc::clone(full_key), entry).await;
-            }
-            self.emit_fail_safe(full_key);
-            return Some(value);
-        }
-        None
-    }
-
-    fn emit_fail_safe(&self, full_key: &Arc<str>) {
-        tracing::debug!(
-            cache = %self.inner.name,
-            key = %full_key,
-            "fail-safe activated; serving stale value"
-        );
-        self.emit(CacheEvent::FailSafeActivate {
-            key: Arc::clone(full_key),
-        });
-        self.emit(CacheEvent::Hit {
-            key: Arc::clone(full_key),
-            stale: true,
-        });
-    }
-
-    fn spawn_background_completion(
-        &self,
-        full_key: Arc<str>,
-        handle: JoinHandle<std::result::Result<FactoryProduct<V>, FactoryError>>,
-        guard: LockGuard,
-    ) {
-        let this = self.clone();
-        tokio::spawn(async move {
-            // Hold the single-flight lock until the background factory resolves.
-            let _guard = guard;
-            match handle.await {
-                Ok(Ok(product)) => {
-                    this.store_product(&full_key, product).await;
-                    this.emit(CacheEvent::BackgroundFactorySuccess { key: full_key });
-                }
-                Ok(Err(factory_err)) => {
-                    // Per FusionCache, a background failure does NOT re-activate
-                    // fail-safe; the throttled stale value already returned stands.
-                    this.emit(CacheEvent::BackgroundFactoryError {
-                        key: full_key,
-                        message: factory_err.message().to_owned(),
-                    });
-                }
-                Err(_) => {
-                    this.emit(CacheEvent::BackgroundFactoryError {
-                        key: full_key,
-                        message: "factory task panicked".to_owned(),
-                    });
-                }
-            }
-        });
-    }
-
-    fn spawn_eager_refresh<F, Fut>(
-        &self,
-        full_key: Arc<str>,
-        opts: EntryOptions,
-        current: Entry<V>,
-        factory: F,
-    ) where
-        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
-    {
-        // Non-blocking: if another caller already holds the key, skip silently.
-        let Some(guard) = self.inner.locks.try_lock(&full_key) else {
-            return;
-        };
-        self.emit(CacheEvent::EagerRefresh {
-            key: Arc::clone(&full_key),
-        });
-        let this = self.clone();
-        tokio::spawn(async move {
-            let _guard = guard;
-            let ctx = FactoryContext::new(
-                Arc::clone(&full_key),
-                opts,
-                current.meta().tags().to_vec().into_boxed_slice(),
-                Some(stale_info_of(&current)),
-            );
-            match factory(ctx).await {
-                Ok(product) => {
-                    this.store_product(&full_key, product).await;
-                    this.emit(CacheEvent::BackgroundFactorySuccess { key: full_key });
-                }
-                Err(factory_err) => {
-                    this.emit(CacheEvent::BackgroundFactoryError {
-                        key: full_key,
-                        message: factory_err.message().to_owned(),
-                    });
-                }
-            }
-        });
-    }
-}
-
-impl<V: Clone + Send + Sync + 'static> Default for Cache<V> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
-    /// The L2 storage key (wire-version-prefixed so cache versions can share L2).
-    fn l2_key(&self, full_key: &str) -> String {
-        match self.distributed_key_modifier_mode {
-            KeyModifierMode::Prefix => format!("{}:{}", self.distributed_wire_version, full_key),
-            KeyModifierMode::Suffix => format!("{}:{}", full_key, self.distributed_wire_version),
-            KeyModifierMode::None => full_key.to_owned(),
-        }
-    }
-
-    /// Serializes and writes an entry to L2 with the given physical TTL. `Err` on
-    /// serialize/backend failure.
-    async fn l2_write(&self, full_key: &str, entry: &Entry<V>, ttl: Duration) -> Result<()> {
-        let (Some(l2), Some(serializer)) = (&self.distributed, &self.serializer) else {
+    async fn reconcile_markers(&self, tags: &[Tag]) -> Result<()> {
+        if self.inner.disable_tagging {
             return Ok(());
-        };
-        let dist = DistributedEntry::from_entry(entry);
-        let bytes = serializer.serialize(&dist)?;
-        l2.set(&self.l2_key(full_key), bytes, Some(ttl)).await
-    }
-
-    /// Reads and deserializes an entry from L2, rehydrated relative to `now`.
-    async fn l2_read(&self, full_key: &str, now: Timestamp) -> Result<Option<Entry<V>>> {
-        let (Some(l2), Some(serializer)) = (&self.distributed, &self.serializer) else {
-            return Ok(None);
-        };
-        let Some(bytes) = l2.get(&self.l2_key(full_key)).await? else {
-            return Ok(None);
-        };
-        let dist = serializer.deserialize(&bytes)?;
-        Ok(Some(dist.into_entry(now)))
-    }
-
-    /// Removes an entry from L2.
-    async fn l2_remove(&self, full_key: &str) -> Result<()> {
-        if let Some(l2) = &self.distributed {
-            l2.remove(&self.l2_key(full_key)).await
-        } else {
-            Ok(())
         }
-    }
-
-    /// Publishes a backplane message (awaited). No-op without a backplane.
-    async fn backplane_send(
-        &self,
-        action: BackplaneAction,
-        full_key: &str,
-        ts: Timestamp,
-    ) -> Result<()> {
-        if let Some(backplane) = &self.backplane {
-            backplane
-                .publish(BackplaneMessage {
-                    source_id: Arc::clone(&self.instance_id),
-                    timestamp: ts,
-                    action,
-                    key: Arc::from(full_key),
-                })
-                .await
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[async_trait]
-impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
-    async fn replay(&self, item: &RecoveryItem) -> Result<()> {
-        match item.action {
-            RecoveryAction::Set => {
-                if let Some(entry) = self.memory.get(&item.key).await {
-                    let ttl = entry.backend_ttl();
-                    self.l2_write(&item.key, &entry, ttl).await?;
-                }
-                self.backplane_send(BackplaneAction::Set, &item.key, item.timestamp)
-                    .await?;
-            }
-            RecoveryAction::Remove => {
-                self.l2_remove(&item.key).await?;
-                self.backplane_send(BackplaneAction::Remove, &item.key, item.timestamp)
-                    .await?;
-            }
-            RecoveryAction::Expire => {
-                self.backplane_send(BackplaneAction::Expire, &item.key, item.timestamp)
-                    .await?;
+        if let MarkerAccess::Durable(store) = &self.inner.markers {
+            let mut kinds = Vec::with_capacity(tags.len() + 2);
+            kinds.push(MarkerKind::ClearRemove);
+            kinds.push(MarkerKind::ClearExpire);
+            kinds.extend(tags.iter().cloned().map(MarkerKind::Tag));
+            for marker in store.read_many(&self.inner.scope, &kinds).await? {
+                self.apply_marker(marker);
             }
         }
         Ok(())
     }
+    fn apply_marker(&self, marker: StoredMarker) {
+        // A delayed durable/control marker cannot evict a snapshot created after
+        // that marker. Reads apply the registry verdict to each exact snapshot.
+        self.inner
+            .tags
+            .advance(marker.kind().clone(), marker.version());
+    }
+    fn circuit(&self, component: CircuitComponent) -> bool {
+        let circuit = match component {
+            CircuitComponent::Distributed => &self.inner.circuit_l2,
+            CircuitComponent::Backplane => &self.inner.circuit_backplane,
+        };
+        match circuit.check(self.inner.clock.now()) {
+            CircuitCheck::Open { .. } => false,
+            CircuitCheck::Closed => true,
+            CircuitCheck::ClosedAfterCooldown => {
+                self.emit(CacheEvent::CircuitBreakerChange {
+                    component,
+                    closed: true,
+                });
+                true
+            }
+        }
+    }
+    fn close_circuit(&self, component: CircuitComponent) {
+        let circuit = match component {
+            CircuitComponent::Distributed => &self.inner.circuit_l2,
+            CircuitComponent::Backplane => &self.inner.circuit_backplane,
+        };
+        if circuit.close() {
+            self.emit(CacheEvent::CircuitBreakerChange {
+                component,
+                closed: true,
+            });
+        }
+    }
+    fn failure(&self, key: &Arc<str>, error: &Error) {
+        match error {
+            Error::Serialization(message) => self.emit(CacheEvent::SerializationError {
+                key: Arc::clone(key),
+                message: message.clone(),
+            }),
+            Error::Deserialization(message) => self.emit(CacheEvent::DeserializationError {
+                key: Arc::clone(key),
+                message: message.clone(),
+            }),
+            Error::Distributed(_)
+            | Error::Lease(LeaseError::Backend { .. })
+            | Error::Marker(MarkerError::Backend { .. }) => {
+                self.trip_circuit(CircuitComponent::Distributed)
+            }
+            Error::Backplane(_) => self.trip_circuit(CircuitComponent::Backplane),
+            _ => {}
+        }
+    }
+    fn trip_circuit(&self, component: CircuitComponent) {
+        let circuit = match component {
+            CircuitComponent::Distributed => &self.inner.circuit_l2,
+            CircuitComponent::Backplane => &self.inner.circuit_backplane,
+        };
+        if circuit.trip(self.inner.clock.now()) {
+            self.emit(CacheEvent::CircuitBreakerChange {
+                component,
+                closed: false,
+            });
+        }
+    }
+    async fn read_l2(
+        &self,
+        key: &Arc<str>,
+        opts: &EntryOptions,
+        fallback: FallbackAvailability,
+        policy: L2ReadPolicy,
+    ) -> Result<Option<DistributedLookup<V>>> {
+        let Storage::Hybrid {
+            backend,
+            serializer,
+        } = &self.inner.storage
+        else {
+            return Ok(None);
+        };
+        if opts.skip_distributed_read() {
+            return Ok(None);
+        }
+        if !self.circuit(CircuitComponent::Distributed) {
+            let error = Error::CircuitOpen {
+                component: CircuitComponent::Distributed,
+            };
+            return match policy {
+                L2ReadPolicy::PreserveFailure => Err(error),
+                L2ReadPolicy::FactoryFallback => {
+                    tracing::warn!(%error,key=%key,"legacy/origin lookup skipped an open circuit");
+                    Ok(None)
+                }
+            };
+        }
+        let timeout = opts
+            .appropriate_distributed_timeout(matches!(fallback, FallbackAvailability::Available));
+        let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
+        let result = async {
+            let hydration = self.hydration_fence(key).await;
+            let bytes = backend.get(&self.inner.l2_key(key)).await?;
+            self.close_circuit(CircuitComponent::Distributed);
+            let Some(bytes) = bytes else {
+                return Ok(None);
+            };
+            let snapshot = serializer.deserialize_snapshot(&bytes)?;
+            let source = snapshot.try_into_entry(self.inner.clock.now())?;
+            if source.is_physically_expired(self.inner.clock.now()) {
+                return Ok(None);
+            }
+            self.reconcile_markers(source.meta().tags()).await?;
+            Ok(Some(DistributedLookup {
+                entry: source,
+                hydration,
+            }))
+        }
+        .instrument(span);
+        // Value retrieval, decoding and the required durable marker lookup are
+        // one read. A marker provider cannot escape the caller's chosen budget.
+        let result = match bounded(timeout, result).await {
+            Ok(Some(result)) => result,
+            Ok(None)
+                if policy == L2ReadPolicy::FactoryFallback
+                    && opts.is_fail_safe_enabled()
+                    && matches!(fallback, FallbackAvailability::Available)
+                    && timeout == opts.distributed_soft_timeout() =>
+            {
+                Ok(None)
+            }
+            Ok(None) => Err(Error::Distributed(
+                "distributed read deadline elapsed".into(),
+            )),
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                self.failure(key, &error);
+                if policy.rethrow(opts, &error) {
+                    Err(error)
+                } else {
+                    tracing::warn!(%error,key=%key,"distributed read degraded to miss");
+                    Ok(None)
+                }
+            }
+        }
+    }
+    async fn hydration_fence(&self, key: &str) -> HydrationFence<V> {
+        let lane = self.inner.lanes.get(key);
+        let fence = {
+            let Ok(_guard) = Arc::clone(&lane.lock).try_lock_owned() else {
+                // A read overlapping an already started commit may return its
+                // snapshot, but cannot install it after that commit completes.
+                return HydrationFence::ConcurrentMutation;
+            };
+            lane.snapshot(&self.inner.epoch)
+        };
+        let observed = self.inner.memory.get_at(key, self.inner.clock.now()).await;
+        HydrationFence::Stable { fence, observed }
+    }
+    async fn hydrate(
+        &self,
+        key: &Arc<str>,
+        source: &DistributedLookup<V>,
+        opts: &EntryOptions,
+    ) -> Result<HydrationOutcome> {
+        if opts.skip_memory_write() {
+            return Ok(HydrationOutcome::Skipped(SkipReason::Policy));
+        }
+        let HydrationFence::Stable { fence, observed } = &source.hydration else {
+            return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
+        };
+        let Ok(_guard) = Arc::clone(&fence.lane.lock).try_lock_owned() else {
+            // Hydration is optional. A newer mutation already owning this lane
+            // must not delay the read or install an older snapshot afterward.
+            return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
+        };
+        let verdict = self.tags(&source.entry);
+        if !fence.passive_is_current()
+            || verdict == TagVerdict::Remove
+            || observed.as_ref().is_some_and(|entry| {
+                entry.meta().created() > source.entry.meta().created()
+                    || (entry.meta().created() == source.entry.meta().created()
+                        && (verdict == TagVerdict::Expire
+                            || source.entry.is_logically_expired(self.inner.clock.now())))
+            })
+        {
+            return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
+        }
+        let Some(local) = source
+            .entry
+            .for_memory_hydration(opts, self.inner.clock.now())?
+        else {
+            return Ok(HydrationOutcome::Skipped(SkipReason::PhysicallyExpired));
+        };
+        let local =
+            local.with_hydrated_value(self.copy(local.value(), opts)?, fence.continuity_stamp());
+        if !fence.passive_is_current() {
+            return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
+        }
+        Ok(HydrationOutcome::Evaluated(
+            self.inner
+                .memory
+                .insert_if_unchanged(
+                    Arc::clone(key),
+                    observed.as_ref(),
+                    local,
+                    self.inner.clock.now(),
+                )
+                .await,
+        ))
+    }
+    async fn read(
+        &self,
+        key: LookupKey,
+        options: Option<EntryOptions>,
+        policy: L2ReadPolicy,
+    ) -> Result<Observed<MaybeValue<V>>> {
+        let opts = self.resolve_options(&key.raw, options)?;
+        let key = key.full;
+        self.ensure_health();
+        let mut stale = None;
+        if !opts.skip_memory_read() {
+            match self.read_l1(&key).await {
+                L1Read::Fresh(entry) => {
+                    return self.read_hit(key, entry, &opts, HitKind::Fresh, CacheLevel::Memory);
+                }
+                L1Read::Stale(entry) => stale = Some(ReadStale::Memory(entry)),
+                L1Read::Miss => {}
+            }
+        }
+        if !(stale.is_some() && opts.skip_distributed_read_when_stale())
+            && let Some(entry) = self
+                .read_l2(
+                    &key,
+                    &opts,
+                    if stale.is_some() {
+                        FallbackAvailability::Available
+                    } else {
+                        FallbackAvailability::Unavailable
+                    },
+                    policy,
+                )
+                .await?
+        {
+            match self.tags(&entry.entry) {
+                TagVerdict::Remove => {}
+                verdict => {
+                    self.hydrate(&key, &entry, &opts).await?.observe();
+                    if verdict == TagVerdict::Valid
+                        && entry.entry.freshness(self.inner.clock.now()).is_fresh()
+                    {
+                        return self.read_hit(
+                            key,
+                            entry.entry,
+                            &opts,
+                            HitKind::Fresh,
+                            CacheLevel::Distributed,
+                        );
+                    }
+                    stale = Some(match stale {
+                        Some(previous)
+                            if previous.entry().meta().created()
+                                >= entry.entry.meta().created() =>
+                        {
+                            previous
+                        }
+                        Some(_) | None => ReadStale::Distributed(entry.entry),
+                    });
+                }
+            }
+        }
+        if opts.allow_stale_on_read_only()
+            && let Some(stale) = stale
+            && (policy == L2ReadPolicy::FactoryFallback
+                || (!stale.entry().is_physically_expired(self.inner.clock.now())
+                    && self.tags(stale.entry()) != TagVerdict::Remove))
+        {
+            let (entry, level) = stale.into_parts();
+            return self.read_hit(key, entry, &opts, HitKind::Stale, level);
+        }
+        self.emit(CacheEvent::Miss { key });
+        Ok(Observed::new(
+            MaybeValue::none(),
+            OperationOutcome::Miss,
+            None,
+        ))
+    }
+    fn read_hit(
+        &self,
+        key: Arc<str>,
+        entry: Entry<V>,
+        opts: &EntryOptions,
+        kind: HitKind,
+        level: CacheLevel,
+    ) -> Result<Observed<MaybeValue<V>>> {
+        let value = self.copy(entry.value(), opts)?;
+        self.emit(CacheEvent::Hit {
+            key,
+            stale: kind.is_stale(),
+        });
+        Ok(Observed::new(
+            MaybeValue::from_value(value),
+            kind.outcome(),
+            Some(level),
+        ))
+    }
+    fn served(
+        &self,
+        key: Arc<str>,
+        entry: &Entry<V>,
+        opts: &EntryOptions,
+        level: CacheLevel,
+    ) -> Result<Observed<CacheValue<V>>> {
+        let value = self.copy(entry.value(), opts)?;
+        self.emit(CacheEvent::Hit { key, stale: false });
+        Ok(Observed::new(
+            CacheValue {
+                value,
+                commit: CommitReceipt::Unchanged,
+            },
+            OperationOutcome::Hit,
+            Some(level),
+        ))
+    }
+    async fn acquire_lock(
+        &self,
+        key: &Arc<str>,
+        opts: &EntryOptions,
+        stale: Option<&Entry<V>>,
+    ) -> Result<LockOutcome<V>> {
+        let timeout = if opts.memory_lock_timeout().is_infinite()
+            && opts.is_fail_safe_enabled()
+            && stale.is_some()
+        {
+            opts.factory_soft_timeout()
+        } else {
+            opts.memory_lock_timeout()
+        };
+        let local = match bounded(timeout, self.inner.locks.lock(key)).await? {
+            Some(local) => LocalParticipation::Held(local),
+            None => {
+                if opts.is_fail_safe_enabled()
+                    && let Some(stale) = stale
+                {
+                    self.emit(CacheEvent::Hit {
+                        key: Arc::clone(key),
+                        stale: true,
+                    });
+                    return Ok(LockOutcome::Served(self.copy(stale.value(), opts)?));
+                }
+                LocalParticipation::UnlockedAfterTimeout
+            }
+        };
+        let lease = if opts.skip_distributed_locker() {
+            None
+        } else if let Some(locker) = &self.inner.distributed_locker {
+            let policy = match self.inner.lease_policy {
+                LeasePolicy::Fenced => AcquisitionPolicy::TokenOwned,
+                LeasePolicy::CooperativeLegacy => AcquisitionPolicy::LegacyBackendContract,
+            };
+            let lock_key: Arc<str> = Arc::from(format!("amalgam:lock:{}", self.inner.l2_key(key)));
+            match acquire_owned_supervised(
+                Arc::clone(locker),
+                lock_key,
+                self.inner.lease_ttl,
+                opts.distributed_lock_timeout(),
+                policy,
+                self.lease_owner(key),
+            )
+            .await
+            {
+                Ok(Some(lease)) => Some(lease),
+                Ok(None) => {
+                    return Err(Error::LockTimeout {
+                        elapsed: opts
+                            .distributed_lock_timeout()
+                            .as_duration()
+                            .unwrap_or(Duration::ZERO),
+                    });
+                }
+                Err(error)
+                    if opts.rethrow_distributed_locker_exceptions()
+                        || self.inner.lease_policy == LeasePolicy::Fenced =>
+                {
+                    return Err(error.into());
+                }
+                Err(error) => {
+                    tracing::warn!(%error,"explicit cooperative locker degradation");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let unlocked = matches!(local, LocalParticipation::UnlockedAfterTimeout);
+        let guard = FlightGuard {
+            local,
+            lease,
+            tasks: Arc::clone(&self.inner.tasks),
+            events: self.inner.events.clone(),
+            key: Arc::clone(key),
+            policy: self.inner.lease_policy,
+        };
+        Ok(if unlocked {
+            LockOutcome::UnlockedAfterTimeout(guard)
+        } else {
+            LockOutcome::Acquired(guard)
+        })
+    }
+    async fn get_or_set<F, Fut>(
+        &self,
+        key: LookupKey,
+        factory: F,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        default: MaybeValue<V>,
+        caller: FactoryCancellation,
+    ) -> Result<Observed<CacheValue<V>>>
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        let opts = self.resolve_options(&key.raw, options)?;
+        let key = key.full;
+        self.ensure_health();
+        let mut stale = None;
+        if !opts.skip_memory_read() {
+            match self.read_l1(&key).await {
+                L1Read::Fresh(entry) => {
+                    if entry.should_eager_refresh(self.inner.clock.now()) {
+                        self.eager(Arc::clone(&key), opts.clone(), entry.clone(), factory);
+                    }
+                    return self.served(key, &entry, &opts, CacheLevel::Memory);
+                }
+                L1Read::Stale(entry) => stale = Some(entry),
+                L1Read::Miss => {}
+            }
+        }
+        self.emit(CacheEvent::Miss {
+            key: Arc::clone(&key),
+        });
+        let guard = match self.acquire_lock(&key, &opts, stale.as_ref()).await? {
+            LockOutcome::Acquired(guard) | LockOutcome::UnlockedAfterTimeout(guard) => guard,
+            LockOutcome::Served(value) => {
+                return Ok(Observed::new(
+                    CacheValue {
+                        value,
+                        commit: CommitReceipt::Unchanged,
+                    },
+                    OperationOutcome::StaleHit,
+                    Some(CacheLevel::Memory),
+                ));
+            }
+        };
+        if !opts.skip_memory_read() {
+            match self.read_l1(&key).await {
+                L1Read::Fresh(entry) => {
+                    return self.served(key, &entry, &opts, CacheLevel::Memory);
+                }
+                L1Read::Stale(entry) => stale = Some(entry),
+                L1Read::Miss => {}
+            }
+        }
+        if !(stale.is_some() && opts.skip_distributed_read_when_stale())
+            && let Some(entry) = self
+                .read_l2(
+                    &key,
+                    &opts,
+                    if stale.is_some() || default.has_value() {
+                        FallbackAvailability::Available
+                    } else {
+                        FallbackAvailability::Unavailable
+                    },
+                    L2ReadPolicy::FactoryFallback,
+                )
+                .await?
+        {
+            let verdict = self.tags(&entry.entry);
+            if verdict != TagVerdict::Remove {
+                self.hydrate(&key, &entry, &opts).await?.observe();
+                if verdict == TagVerdict::Valid
+                    && entry.entry.freshness(self.inner.clock.now()).is_fresh()
+                {
+                    return self.served(key, &entry.entry, &opts, CacheLevel::Distributed);
+                }
+                stale = Some(newer_of(stale, entry.entry));
+            }
+        }
+        let timeout = opts.appropriate_factory_timeout(stale.is_some() || default.has_value());
+        let soft = opts.is_fail_safe_enabled()
+            && (stale.is_some() || default.has_value())
+            && timeout == opts.factory_soft_timeout()
+            && timeout != opts.factory_hard_timeout();
+        if matches!(timeout,Timeout::After(duration) if duration.is_zero()) {
+            drop(guard);
+            return self
+                .timeout_fallback(&key, &opts, stale.as_ref(), &default, timeout)
+                .await;
+        }
+        let source = CancellationSource::new();
+        let ctx = FactoryContext::with_cancellation(
+            Arc::clone(&key),
+            opts.clone(),
+            tags,
+            stale
+                .as_ref()
+                .map(|entry| self.stale_info(entry, &opts))
+                .transpose()?,
+            source.token(),
+        );
+        let started = self.inner.clock.now();
+        let worker = self.clone();
+        let flight_key = Arc::clone(&key);
+        let cancelled = source.clone();
+        let lease_state = guard.lease.as_ref().map(DistributedLease::state);
+        let mut execution=self.inner.scopes.execution(async move {
+            let origin=async move {factory(ctx).await};
+            let product=if let Some(mut state)=lease_state {tokio::select! {biased; ()=lease_lost(&mut state)=>{cancelled.cancel_with(Reason::LeaseLost);return Err(Error::FactoryCancelled {reason:Reason::LeaseLost});},product=origin=>product}}else{origin.await};
+            let product=product.map_err(Error::from)?;
+            let result=worker.store_product(flight_key,product,started,guard).await;
+            if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
+        }.instrument(component_span(&self.inner.name,CacheLevel::Origin,"factory",Some(&key))),source);
+        execution.link(&caller, LinkMode::CallerScope);
+        let result = match timeout {
+            Timeout::Infinite => Some(execution.await),
+            Timeout::After(duration) => {
+                tokio::select! {biased;result=&mut execution=>Some(result),()=tokio::time::sleep(duration)=>{
+                    self.emit(CacheEvent::FactorySyntheticTimeout {key:Arc::clone(&key)});
+                    if opts.allow_timed_out_factory_background_completion(){self.background_origin(Arc::clone(&key),execution);}else{execution.cancel(if soft {Reason::SoftTimeout}else{Reason::HardTimeout});}
+                    None
+                }}
+            }
+        };
+        match result {
+            Some(Ok(value)) => Ok(Observed::new(
+                value,
+                OperationOutcome::Stored,
+                Some(CacheLevel::Origin),
+            )),
+            Some(Err(error))
+                if matches!(
+                    &error,
+                    Error::Factory { .. } | Error::FactoryWithSource { .. }
+                ) =>
+            {
+                self.emit(CacheEvent::FactoryError {
+                    key: Arc::clone(&key),
+                    message: error.to_string(),
+                });
+                if let Some(value) = self.fallback(&key, &opts, stale.as_ref(), &default).await? {
+                    Ok(Observed::new(
+                        CacheValue {
+                            value,
+                            commit: CommitReceipt::Unchanged,
+                        },
+                        OperationOutcome::StaleHit,
+                        Some(CacheLevel::Memory),
+                    ))
+                } else {
+                    Err(error)
+                }
+            }
+            Some(Err(error)) => Err(error),
+            None => {
+                self.timeout_fallback(&key, &opts, stale.as_ref(), &default, timeout)
+                    .await
+            }
+        }
+    }
+    async fn timeout_fallback(
+        &self,
+        key: &Arc<str>,
+        opts: &EntryOptions,
+        stale: Option<&Entry<V>>,
+        default: &MaybeValue<V>,
+        timeout: Timeout,
+    ) -> Result<Observed<CacheValue<V>>> {
+        if let Some(value) = self.fallback(key, opts, stale, default).await? {
+            Ok(Observed::new(
+                CacheValue {
+                    value,
+                    commit: CommitReceipt::Unchanged,
+                },
+                OperationOutcome::StaleHit,
+                Some(CacheLevel::Memory),
+            ))
+        } else {
+            Err(Error::FactoryTimeout {
+                elapsed: timeout.as_duration().unwrap_or(Duration::ZERO),
+            })
+        }
+    }
+    async fn fallback(
+        &self,
+        key: &Arc<str>,
+        opts: &EntryOptions,
+        stale: Option<&Entry<V>>,
+        default: &MaybeValue<V>,
+    ) -> Result<Option<V>> {
+        if !opts.is_fail_safe_enabled() {
+            return Ok(None);
+        }
+        let now = self.inner.clock.now();
+        let entry = if let Some(stale) = stale {
+            Entry::try_throttled(stale, opts, now)?
+        } else {
+            None
+        };
+        let entry = match entry {
+            Some(entry) => Some(entry),
+            None => default
+                .value()
+                .map(|value| {
+                    self.copy(value, opts)
+                        .and_then(|value| Entry::try_from_fail_safe_default(value, opts, now))
+                })
+                .transpose()?,
+        };
+        let Some(entry) = entry else {
+            return Ok(None);
+        };
+        let value = self.copy(entry.value(), opts)?;
+        if !opts.skip_memory_write() {
+            self.inner
+                .memory
+                .insert_at(Arc::clone(key), entry, now)
+                .await;
+        }
+        self.emit(CacheEvent::FailSafeActivate {
+            key: Arc::clone(key),
+        });
+        self.emit(CacheEvent::Hit {
+            key: Arc::clone(key),
+            stale: true,
+        });
+        Ok(Some(value))
+    }
+    fn background_origin(&self, key: Arc<str>, execution: Execution<CacheValue<V>>) {
+        let worker = self.clone();
+        let success = Arc::clone(&key);
+        let _receiver = self.inner.tasks.spawn(
+            ShutdownTask::Factory,
+            key,
+            self.inner.events.clone(),
+            async move {
+                let result = execution.await?;
+                worker.emit(CacheEvent::BackgroundFactorySuccess { key: success });
+                drop(result);
+                Ok(())
+            },
+        );
+    }
+    fn eager<F, Fut>(&self, key: Arc<str>, opts: EntryOptions, current: Entry<V>, factory: F)
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        let Some(local) = self.inner.locks.try_lock(&key) else {
+            return;
+        };
+        self.emit(CacheEvent::EagerRefresh {
+            key: Arc::clone(&key),
+        });
+        let worker = self.clone();
+        let background_key = Arc::clone(&key);
+        let source = CancellationSource::new();
+        let token = source.token();
+        let cancelled = source.clone();
+        let execution=self.inner.scopes.execution(async move {
+            let mut guard=FlightGuard {local:LocalParticipation::Held(local),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy};
+            if !opts.skip_distributed_locker()&&let Some(locker)=&worker.inner.distributed_locker {
+                guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::CooperativeLegacy=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
+                if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
+            }
+            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged});}
+            let ctx=FactoryContext::with_cancellation(Arc::clone(&key),opts.clone(),current.meta().tags().into(),Some(worker.stale_info(&current,&opts)?),token);
+            let started=worker.inner.clock.now();
+            let origin=factory(ctx);
+            let product=if let Some(mut state)=guard.lease.as_ref().map(DistributedLease::state) {
+                tokio::select! {biased; ()=lease_lost(&mut state)=>return Err(Error::FactoryCancelled {reason:Reason::LeaseLost}),product=origin=>product}
+            }else{origin.await};
+            let product=product.map_err(Error::from)?;let result=worker.store_product(key,product,started,guard).await;
+            if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
+        },source);
+        self.background_origin(background_key, execution);
+    }
+    async fn store_product(
+        &self,
+        key: Arc<str>,
+        product: FactoryProduct<V>,
+        started: Timestamp,
+        guard: FlightGuard,
+    ) -> Result<CacheValue<V>> {
+        let product = product.into_payload()?;
+        self.validate_options(&product.options)?;
+        guard.proof()?;
+        let value = self.copy(&product.value, &product.options)?;
+        let stored = self.copy(&product.value, &product.options)?;
+        let entry = self.fresh_entry(
+            stored,
+            &product.options,
+            started,
+            product.tags,
+            product.etag,
+            product.last_modified,
+        )?;
+        let receipt = self
+            .write_entry(Arc::clone(&key), entry, product.options, Some(guard))
+            .await?;
+        match product.origin {
+            ProductOrigin::Modified => self.emit(CacheEvent::FactorySuccess {
+                key: Arc::clone(&key),
+            }),
+            ProductOrigin::NotModified => {}
+        }
+        self.emit(CacheEvent::Set { key });
+        Ok(CacheValue {
+            value,
+            commit: CommitReceipt::Mutation(receipt),
+        })
+    }
+    async fn set(
+        &self,
+        raw: Arc<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+    ) -> Result<Observed<MutationReceipt>> {
+        let opts = self.resolve_options(&raw, options)?;
+        let key = self.full_key(&raw);
+        let now = self.inner.clock.now();
+        let entry = self.fresh_entry(self.copy(&value, &opts)?, &opts, now, tags, None, None)?;
+        let receipt = self
+            .write_entry(Arc::clone(&key), entry, opts, None)
+            .await?;
+        self.emit(CacheEvent::Set { key });
+        Ok(Observed::new(receipt, OperationOutcome::Stored, None))
+    }
+    async fn write_entry(
+        &self,
+        key: Arc<str>,
+        entry: Entry<V>,
+        opts: EntryOptions,
+        flight: Option<FlightGuard>,
+    ) -> Result<MutationReceipt> {
+        let data = match &self.inner.storage {
+            Storage::MemoryOnly => PreparedData::Absent,
+            Storage::Hybrid { serializer, .. } if !opts.skip_distributed_write() => {
+                let snapshot = DistributedSnapshot::from_entry_with_options(
+                    &entry,
+                    &opts,
+                    entry.meta().inserted_at(),
+                )?;
+                match serializer.serialize_snapshot(&snapshot) {
+                    Ok(bytes) => PreparedData::Ready(DataMutation::Set {
+                        bytes: bytes.into(),
+                        physical_expiration: Timestamp::from_ticks(
+                            snapshot.entry().physical_expiration_ticks,
+                        ),
+                    }),
+                    Err(error) => {
+                        self.failure(&key, &error);
+                        if opts.rethrow_serialization_exceptions() {
+                            return Err(error);
+                        }
+                        PreparedData::Failed(error)
+                    }
+                }
+            }
+            Storage::Hybrid { .. } => PreparedData::Skipped,
+        };
+        let lane = self.inner.lanes.get(&key);
+        let lane_guard = Arc::clone(&lane.lock).lock_owned().await;
+        if let Some(flight) = &flight {
+            flight.proof()?;
+        }
+        let fence = lane.advance(entry.meta().created(), &self.inner.epoch)?;
+        let local = if opts.skip_memory_write() {
+            LocalCommit::Applied(LocalEffect::Skipped)
+        } else if flight
+            .as_ref()
+            .map(FlightGuard::proof)
+            .transpose()?
+            .flatten()
+            .is_some()
+            && matches!(&data, PreparedData::Ready(_))
+        {
+            // Atomic fenced backend admission must succeed before the value is
+            // visible in L1; a proof observed before an await is insufficient.
+            LocalCommit::Store(entry.clone())
+        } else {
+            LocalCommit::Applied(LocalEffect::Stored(
+                self.inner
+                    .memory
+                    .insert_at(Arc::clone(&key), entry.clone(), self.inner.clock.now())
+                    .await,
+            ))
+        };
+        let command = self.data_command(BackplaneAction::Set, &key, entry.meta().created(), &opts);
+        let worker = self.clone();
+        let task_key = Arc::clone(&key);
+        let mode = if opts.allow_background_distributed_operations()
+            && matches!(self.inner.storage, Storage::Hybrid { .. })
+        {
+            CommitMode::Background
+        } else {
+            CommitMode::Foreground
+        };
+        let work = async move {
+            worker
+                .commit_data(DataCommit {
+                    key: task_key,
+                    data,
+                    command,
+                    opts,
+                    fence,
+                    flight,
+                    local,
+                    lane_guard,
+                })
+                .await
+        };
+        self.pipeline_receipt(key, mode, work).await
+    }
+    fn data_command(
+        &self,
+        action: BackplaneAction,
+        key: &Arc<str>,
+        timestamp: Timestamp,
+        opts: &EntryOptions,
+    ) -> Option<BackplaneCommand> {
+        if opts.skip_backplane_notifications() || self.inner.backplane.is_none() {
+            None
+        } else {
+            Some(BackplaneCommand::Data(BackplaneMessage {
+                source_id: Arc::clone(&self.inner.instance_id),
+                timestamp,
+                action,
+                key: Arc::from(self.inner.l2_key(key)),
+            }))
+        }
+    }
+    async fn commit_receipt(
+        &self,
+        key: Arc<str>,
+        mode: CommitMode,
+        work: impl Future<Output = Result<CommitReport>> + Send + 'static,
+    ) -> Result<MutationReceipt> {
+        match mode {
+            CommitMode::Background => {
+                let execution = self.inner.scopes.execution(work, CancellationSource::new());
+                let receiver = self.inner.tasks.spawn(
+                    ShutdownTask::Distributed,
+                    key,
+                    self.inner.events.clone(),
+                    execution,
+                );
+                Ok(MutationReceipt::Scheduled(CommitCompletion { receiver }))
+            }
+            CommitMode::Foreground => Ok(MutationReceipt::Completed(work.await?)),
+        }
+    }
+    async fn write_data(
+        &self,
+        key: &str,
+        data: &DataMutation,
+        flight: Option<&FlightGuard>,
+    ) -> Result<EffectOutcome> {
+        let Storage::Hybrid { backend, .. } = &self.inner.storage else {
+            return Ok(EffectOutcome::NotConfigured);
+        };
+        let ttl = data.remaining_ttl(self.inner.clock.now());
+        if ttl.is_some_and(|ttl| ttl.is_zero()) {
+            return Ok(EffectOutcome::Skipped(SkipReason::PhysicallyExpired));
+        }
+        if let Some(proof) = flight.map(FlightGuard::proof).transpose()?.flatten() {
+            let mutation = match data {
+                DataMutation::Set { bytes, .. } | DataMutation::Expire { bytes, .. } => {
+                    LeasedMutation::Set {
+                        bytes: bytes.to_vec(),
+                        ttl,
+                    }
+                }
+                DataMutation::Remove => LeasedMutation::Remove,
+            };
+            match backend
+                .write_with_lease(&self.inner.l2_key(key), mutation, &proof)
+                .await?
+            {
+                LeasedWriteOutcome::Committed => {}
+                LeasedWriteOutcome::LeaseLost => return Err(LeaseError::Lost.into()),
+            }
+        } else {
+            match data {
+                DataMutation::Set { bytes, .. } | DataMutation::Expire { bytes, .. } => {
+                    backend
+                        .set(&self.inner.l2_key(key), bytes.to_vec(), ttl)
+                        .await?
+                }
+                DataMutation::Remove => backend.remove(&self.inner.l2_key(key)).await?,
+            }
+        }
+        self.close_circuit(CircuitComponent::Distributed);
+        Ok(EffectOutcome::Applied)
+    }
+    fn enqueue_data(
+        &self,
+        key: &Arc<str>,
+        data: PendingMutation,
+        action: RecoveryAction,
+        at: Timestamp,
+        fence: Arc<Fence>,
+    ) -> Result<bool> {
+        let Some(recovery) = &self.inner.recovery else {
+            return Ok(false);
+        };
+        let expiry = match &data {
+            PendingMutation::Commit {
+                mutation:
+                    DataMutation::Set {
+                        physical_expiration,
+                        ..
+                    }
+                    | DataMutation::Expire {
+                        physical_expiration,
+                        ..
+                    },
+                ..
+            }
+            | PendingMutation::FencedCommit {
+                mutation:
+                    DataMutation::Set {
+                        physical_expiration,
+                        ..
+                    }
+                    | DataMutation::Expire {
+                        physical_expiration,
+                        ..
+                    },
+                ..
+            } => *physical_expiration,
+            _ => at.saturating_add(Duration::from_secs(600)),
+        };
+        let outcome = recovery.enqueue_versioned(
+            RecoveryWork::Data {
+                item: RecoveryItem {
+                    key: Arc::clone(key),
+                    action,
+                    timestamp: at,
+                    expires_at: expiry,
+                    remaining_retries: None,
+                },
+                mutation: data,
+            },
+            fence,
+        )?;
+        Ok(matches!(
+            outcome,
+            EnqueueOutcome::Queued(_) | EnqueueOutcome::Replaced(_)
+        ))
+    }
+    async fn commit_data(&self, work: DataCommit<V>) -> Result<MutationReceipt> {
+        let DataCommit {
+            key,
+            data,
+            command,
+            opts,
+            fence,
+            flight,
+            local,
+            lane_guard,
+        } = work;
+        let at = lock(&fence.lane.timestamp).unwrap_or(self.inner.clock.now());
+        let action = command
+            .as_ref()
+            .and_then(|command| match command {
+                BackplaneCommand::Data(message) => Some(recovery_action(message.action)),
+                BackplaneCommand::Marker(_) => None,
+            })
+            .unwrap_or(RecoveryAction::Set);
+        let distributed = match data {
+            PreparedData::Absent => EffectOutcome::NotConfigured,
+            PreparedData::Skipped => EffectOutcome::Skipped(SkipReason::Policy),
+            PreparedData::Failed(error) => {
+                return Ok(MutationReceipt::Completed(CommitReport {
+                    local: self.commit_local(&key, local, flight.as_ref()).await?,
+                    distributed: EffectOutcome::FailedSuppressed { cause: error },
+                    backplane: EffectOutcome::Skipped(SkipReason::Policy),
+                }));
+            }
+            PreparedData::ColdExpire {
+                cause,
+                logical_expiration,
+            } => {
+                let queued = self.enqueue_data(
+                    &key,
+                    PendingMutation::ColdExpire {
+                        logical_expiration,
+                        notification: command,
+                    },
+                    RecoveryAction::Expire,
+                    at,
+                    Arc::clone(&fence),
+                )?;
+                if opts.rethrow_distributed_exceptions() {
+                    return Err(cause);
+                }
+                return Ok(MutationReceipt::Completed(CommitReport {
+                    local: self.commit_local(&key, local, flight.as_ref()).await?,
+                    distributed: if queued {
+                        EffectOutcome::RecoveryQueued { cause }
+                    } else {
+                        EffectOutcome::FailedSuppressed { cause }
+                    },
+                    backplane: EffectOutcome::Skipped(SkipReason::Policy),
+                }));
+            }
+            PreparedData::Ready(data) => {
+                let strict = flight.as_ref().is_some_and(|flight| {
+                    flight.policy == LeasePolicy::Fenced && flight.lease.is_some()
+                });
+                let result = if self.circuit(CircuitComponent::Distributed) {
+                    self.write_data(&key, &data, flight.as_ref())
+                        .instrument(component_span(
+                            &self.inner.name,
+                            CacheLevel::Distributed,
+                            "commit",
+                            Some(&key),
+                        ))
+                        .await
+                } else {
+                    Err(Error::CircuitOpen {
+                        component: CircuitComponent::Distributed,
+                    })
+                };
+                match result {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        self.failure(&key, &error);
+                        if matches!(&error,Error::Lease(error) if !matches!(error,LeaseError::Backend {..}))
+                        {
+                            return Err(error);
+                        }
+                        let pending = if strict {
+                            PendingMutation::FencedCommit {
+                                mutation: data,
+                                notification: command.clone(),
+                            }
+                        } else {
+                            PendingMutation::Commit {
+                                mutation: data,
+                                notification: command.clone(),
+                            }
+                        };
+                        let queued =
+                            self.enqueue_data(&key, pending, action, at, Arc::clone(&fence))?;
+                        if opts.rethrow_distributed_exceptions() {
+                            return Err(error);
+                        }
+                        return Ok(MutationReceipt::Completed(CommitReport {
+                            local: self.commit_local(&key, local, flight.as_ref()).await?,
+                            distributed: if queued {
+                                EffectOutcome::RecoveryQueued { cause: error }
+                            } else {
+                                EffectOutcome::FailedSuppressed { cause: error }
+                            },
+                            backplane: EffectOutcome::Skipped(SkipReason::Policy),
+                        }));
+                    }
+                }
+            }
+        };
+        let local = self.commit_local(&key, local, flight.as_ref()).await?;
+        if let Some(recovery) = &self.inner.recovery {
+            recovery.supersede_through(&key, fence.generation());
+        }
+        let mode = if opts.allow_background_backplane_operations() && command.is_some() {
+            CommitMode::Background
+        } else {
+            CommitMode::Foreground
+        };
+        let worker = self.clone();
+        let task_key = Arc::clone(&key);
+        let work = async move {
+            let _lane_guard = lane_guard;
+            let backplane = if let Some(command) = command {
+                match worker.publish(command.clone()).await {
+                    Ok(()) => EffectOutcome::Applied,
+                    Err(error) => {
+                        worker.failure(&task_key, &error);
+                        let queued = worker.enqueue_data(
+                            &task_key,
+                            PendingMutation::Notify(command),
+                            action,
+                            at,
+                            fence,
+                        )?;
+                        if opts.rethrow_backplane_exceptions() {
+                            return Err(error);
+                        }
+                        if queued {
+                            EffectOutcome::RecoveryQueued { cause: error }
+                        } else {
+                            EffectOutcome::FailedSuppressed { cause: error }
+                        }
+                    }
+                }
+            } else if worker.inner.backplane.is_none() {
+                EffectOutcome::NotConfigured
+            } else {
+                EffectOutcome::Skipped(SkipReason::Policy)
+            };
+            drop(flight);
+            Ok(CommitReport {
+                local,
+                distributed,
+                backplane,
+            })
+        };
+        self.commit_receipt(key, mode, work).await
+    }
+    async fn commit_local(
+        &self,
+        key: &Arc<str>,
+        local: LocalCommit<V>,
+        flight: Option<&FlightGuard>,
+    ) -> Result<LocalEffect> {
+        match local {
+            LocalCommit::Applied(outcome) => Ok(outcome),
+            LocalCommit::Store(entry) => {
+                if let Some(flight) = flight {
+                    flight.proof()?;
+                }
+                Ok(LocalEffect::Stored(
+                    self.inner
+                        .memory
+                        .insert_at(Arc::clone(key), entry, self.inner.clock.now())
+                        .await,
+                ))
+            }
+        }
+    }
+    async fn pipeline_receipt(
+        &self,
+        key: Arc<str>,
+        mode: CommitMode,
+        work: impl Future<Output = Result<MutationReceipt>> + Send + 'static,
+    ) -> Result<MutationReceipt> {
+        match mode {
+            CommitMode::Background => {
+                self.commit_receipt(key, CommitMode::Background, async move {
+                    work.await?.wait().await
+                })
+                .await
+            }
+            CommitMode::Foreground => work.await,
+        }
+    }
+    async fn publish(&self, command: BackplaneCommand) -> Result<()> {
+        let Some(backplane) = &self.inner.backplane else {
+            return Ok(());
+        };
+        if !self.circuit(CircuitComponent::Backplane) {
+            return Err(Error::CircuitOpen {
+                component: CircuitComponent::Backplane,
+            });
+        }
+        let key = match &command {
+            BackplaneCommand::Data(message) => Arc::clone(&message.key),
+            BackplaneCommand::Marker(command) => {
+                Arc::from(format!("marker:{:?}", command.marker().kind()))
+            }
+        };
+        backplane
+            .publish_command(command)
+            .instrument(component_span(
+                &self.inner.name,
+                CacheLevel::Backplane,
+                "publish",
+                Some(&key),
+            ))
+            .await?;
+        self.close_circuit(CircuitComponent::Backplane);
+        self.emit(CacheEvent::MessagePublished { key });
+        Ok(())
+    }
+    async fn key_mutation(
+        &self,
+        raw: Arc<str>,
+        options: Option<EntryOptions>,
+        mutation: KeyMutation,
+    ) -> Result<Observed<MutationReceipt>> {
+        let opts = self.resolve_options(&raw, options)?;
+        let key = self.full_key(&raw);
+        let lane = self.inner.lanes.get(&key);
+        let lane_guard = Arc::clone(&lane.lock).lock_owned().await;
+        let now = self.inner.clock.now();
+        let fence = lane.advance(now, &self.inner.epoch)?;
+        let local = if opts.skip_memory_write() {
+            LocalEffect::Skipped
+        } else {
+            match mutation {
+                KeyMutation::Remove => {
+                    self.inner.memory.remove(&key).await;
+                    LocalEffect::Removed
+                }
+                KeyMutation::Expire => {
+                    if let Some(entry) = self.inner.memory.get_at(&key, now).await {
+                        let expired = entry.with_logical_expiration(now);
+                        self.inner
+                            .memory
+                            .insert_at(Arc::clone(&key), expired, now)
+                            .await;
+                    }
+                    LocalEffect::Expired
+                }
+            }
+        };
+        let data = if opts.skip_distributed_write() {
+            PreparedData::Skipped
+        } else {
+            match (&self.inner.storage, mutation) {
+                (Storage::MemoryOnly, _) => PreparedData::Absent,
+                (Storage::Hybrid { .. }, KeyMutation::Remove) => {
+                    PreparedData::Ready(DataMutation::Remove)
+                }
+                (
+                    Storage::Hybrid {
+                        backend,
+                        serializer,
+                    },
+                    KeyMutation::Expire,
+                ) => match backend.get(&self.inner.l2_key(&key)).await {
+                    Ok(Some(bytes)) => match serializer.deserialize_snapshot(&bytes) {
+                        Ok(snapshot) => {
+                            let mut payload = snapshot.entry().clone();
+                            payload.logical_expiration_ticks =
+                                payload.logical_expiration_ticks.min(now.ticks());
+                            let expired = DistributedSnapshot::new(
+                                payload,
+                                snapshot.inserted_at(),
+                                snapshot.retention(),
+                            )?;
+                            match serializer.serialize_snapshot(&expired) {
+                                Ok(bytes) => PreparedData::Ready(DataMutation::Expire {
+                                    bytes: bytes.into(),
+                                    physical_expiration: Timestamp::from_ticks(
+                                        expired.entry().physical_expiration_ticks,
+                                    ),
+                                }),
+                                Err(error) => {
+                                    self.failure(&key, &error);
+                                    if opts.rethrow_serialization_exceptions() {
+                                        return Err(error);
+                                    }
+                                    PreparedData::Failed(error)
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            self.failure(&key, &error);
+                            if opts.rethrow_serialization_exceptions() {
+                                return Err(error);
+                            }
+                            PreparedData::Failed(error)
+                        }
+                    },
+                    Ok(None) => PreparedData::Ready(DataMutation::Remove),
+                    Err(error) => {
+                        self.failure(&key, &error);
+                        PreparedData::ColdExpire {
+                            cause: error,
+                            logical_expiration: now,
+                        }
+                    }
+                },
+            }
+        };
+        let action = match mutation {
+            KeyMutation::Remove => BackplaneAction::Remove,
+            KeyMutation::Expire => BackplaneAction::Expire,
+        };
+        let command = self.data_command(action, &key, now, &opts);
+        let worker = self.clone();
+        let task_key = Arc::clone(&key);
+        let mode = if opts.allow_background_distributed_operations()
+            && matches!(self.inner.storage, Storage::Hybrid { .. })
+        {
+            CommitMode::Background
+        } else {
+            CommitMode::Foreground
+        };
+        let work = async move {
+            worker
+                .commit_data(DataCommit {
+                    key: task_key,
+                    data,
+                    command,
+                    opts,
+                    fence,
+                    flight: None,
+                    local: LocalCommit::Applied(local),
+                    lane_guard,
+                })
+                .await
+        };
+        let receipt = self.pipeline_receipt(Arc::clone(&key), mode, work).await?;
+        self.emit(match mutation {
+            KeyMutation::Remove => CacheEvent::Remove { key },
+            KeyMutation::Expire => CacheEvent::Expire { key },
+        });
+        Ok(Observed::new(
+            receipt,
+            match mutation {
+                KeyMutation::Remove => OperationOutcome::Removed,
+                KeyMutation::Expire => OperationOutcome::Expired,
+            },
+            None,
+        ))
+    }
+    async fn mutate_markers(
+        &self,
+        kinds: Vec<MarkerKind>,
+        options: Option<EntryOptions>,
+    ) -> Result<Observed<MutationReceipt>> {
+        let opts = options.unwrap_or_else(|| self.inner.default_options.clone());
+        self.validate_options(&opts)?;
+        if self.inner.disable_tagging || matches!(self.inner.markers, MarkerAccess::Unavailable) {
+            return Err(MarkerError::Unsupported.into());
+        }
+        let now = self.inner.clock.now();
+        let mut commands = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let outcome = self
+                .inner
+                .tags
+                .advance(kind.clone(), MarkerVersion::new(now));
+            let marker = outcome.marker().clone();
+            if matches!(kind, MarkerKind::ClearRemove) {
+                self.inner.memory.invalidate_all();
+            }
+            match &kind {
+                MarkerKind::Tag(tag) => self.emit(CacheEvent::RemoveByTag {
+                    tag: tag.as_str().to_owned(),
+                }),
+                MarkerKind::ClearExpire | MarkerKind::ClearRemove => self.emit(CacheEvent::Clear),
+            }
+            commands.push(MarkerCommand::new(
+                Arc::clone(&self.inner.instance_id),
+                self.inner.scope.clone(),
+                marker,
+            )?);
+            if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
+                self.inner.memory.invalidate_all();
+                commands.push(MarkerCommand::new(
+                    Arc::clone(&self.inner.instance_id),
+                    self.inner.scope.clone(),
+                    StoredMarker::new(MarkerKind::ClearRemove, clear_remove),
+                )?);
+            }
+        }
+        let worker = self.clone();
+        let mode = if opts.allow_background_distributed_operations()
+            && !opts.skip_distributed_write()
+            && matches!(self.inner.markers, MarkerAccess::Durable(_))
+        {
+            CommitMode::Background
+        } else {
+            CommitMode::Foreground
+        };
+        let work = async move {
+            let mut reports = Vec::with_capacity(commands.len());
+            for command in commands {
+                reports.push(worker.commit_marker(command, opts.clone()).await?);
+            }
+            if reports
+                .iter()
+                .any(|receipt| matches!(receipt, MutationReceipt::Scheduled(_)))
+            {
+                let key: Arc<str> = Arc::from("invalidation");
+                worker
+                    .commit_receipt(key, CommitMode::Background, async move {
+                        let mut completed = Vec::with_capacity(reports.len());
+                        for receipt in reports {
+                            completed.push(receipt.wait().await?);
+                        }
+                        Ok(crate::commit::reports(completed))
+                    })
+                    .await
+            } else {
+                let mut completed = Vec::with_capacity(reports.len());
+                for receipt in reports {
+                    completed.push(receipt.wait().await?);
+                }
+                Ok(MutationReceipt::Completed(crate::commit::reports(
+                    completed,
+                )))
+            }
+        };
+        let receipt = self
+            .pipeline_receipt(Arc::from("invalidation"), mode, work)
+            .await?;
+        Ok(Observed::new(receipt, OperationOutcome::Invalidated, None))
+    }
+    async fn commit_marker(
+        &self,
+        mut command: MarkerCommand,
+        opts: EntryOptions,
+    ) -> Result<MutationReceipt> {
+        let lane_guard = Arc::clone(&self.inner.marker_lane).lock_owned().await;
+        let mut notifications = Vec::with_capacity(2);
+        let distributed = match &self.inner.markers {
+            MarkerAccess::Local => EffectOutcome::NotConfigured,
+            MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
+            MarkerAccess::Durable(_) if opts.skip_distributed_write() => {
+                EffectOutcome::Skipped(SkipReason::Policy)
+            }
+            MarkerAccess::Durable(store) => {
+                match store
+                    .advance(
+                        command.scope(),
+                        command.marker().kind().clone(),
+                        command.marker().version(),
+                    )
+                    .await
+                {
+                    Ok(outcome) => {
+                        self.apply_marker(outcome.marker().clone());
+                        command = MarkerCommand::new(
+                            Arc::clone(&self.inner.instance_id),
+                            self.inner.scope.clone(),
+                            outcome.marker().clone(),
+                        )?;
+                        if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
+                            let clear = MarkerCommand::new(
+                                Arc::clone(&self.inner.instance_id),
+                                self.inner.scope.clone(),
+                                StoredMarker::new(MarkerKind::ClearRemove, clear_remove),
+                            )?;
+                            self.apply_marker(clear.marker().clone());
+                            notifications.push(clear);
+                        }
+                        EffectOutcome::Applied
+                    }
+                    Err(error) => {
+                        let queued = self.queue_marker(
+                            command.clone(),
+                            if opts.skip_backplane_notifications() {
+                                MarkerReplay::AdvanceOnly
+                            } else {
+                                MarkerReplay::AdvanceAndNotify
+                            },
+                        )?;
+                        let error = Error::from(error);
+                        self.failure(&Arc::from("invalidation"), &error);
+                        if opts.rethrow_distributed_exceptions() {
+                            return Err(error);
+                        }
+                        return Ok(MutationReceipt::Completed(CommitReport {
+                            local: LocalEffect::Invalidated,
+                            distributed: if queued {
+                                EffectOutcome::RecoveryQueued { cause: error }
+                            } else {
+                                EffectOutcome::FailedSuppressed { cause: error }
+                            },
+                            backplane: EffectOutcome::Skipped(SkipReason::Policy),
+                        }));
+                    }
+                }
+            }
+        };
+        notifications.push(command);
+        let worker = self.clone();
+        let mode = if opts.allow_background_backplane_operations()
+            && !opts.skip_backplane_notifications()
+            && self.inner.backplane.is_some()
+        {
+            CommitMode::Background
+        } else {
+            CommitMode::Foreground
+        };
+        self.commit_receipt(Arc::from("invalidation"), mode, async move {
+            let _lane_guard = lane_guard;
+            let backplane = if opts.skip_backplane_notifications() {
+                EffectOutcome::Skipped(SkipReason::Policy)
+            } else if worker.inner.backplane.is_none() {
+                EffectOutcome::NotConfigured
+            } else {
+                let mut outcomes = Vec::with_capacity(notifications.len());
+                for command in notifications {
+                    if let Err(error) = worker
+                        .publish(BackplaneCommand::Marker(command.clone()))
+                        .await
+                    {
+                        worker.failure(&Arc::from("invalidation"), &error);
+                        let queued = worker.queue_marker(command, MarkerReplay::NotifyOnly)?;
+                        if opts.rethrow_backplane_exceptions() {
+                            return Err(error);
+                        }
+                        outcomes.push(if queued {
+                            EffectOutcome::RecoveryQueued { cause: error }
+                        } else {
+                            EffectOutcome::FailedSuppressed { cause: error }
+                        });
+                    } else {
+                        outcomes.push(EffectOutcome::Applied);
+                    }
+                }
+                crate::commit::effects(outcomes)
+            };
+            Ok(CommitReport {
+                local: LocalEffect::Invalidated,
+                distributed,
+                backplane,
+            })
+        })
+        .await
+    }
+    fn queue_marker(&self, command: MarkerCommand, stage: MarkerReplay) -> Result<bool> {
+        match &self.inner.recovery {
+            Some(recovery) => Ok(matches!(
+                recovery.enqueue_marker(command, stage)?,
+                EnqueueOutcome::Queued(_) | EnqueueOutcome::Replaced(_)
+            )),
+            None => Ok(false),
+        }
+    }
+    fn replay_admitted(&self) -> bool {
+        self.ensure_health();
+        self.inner
+            .backplane
+            .as_ref()
+            .and_then(|backplane| backplane.connection_state())
+            .is_none_or(|state| matches!(*state.borrow(), BackplaneState::Connected { .. }))
+    }
+    async fn reconcile_replay(
+        &self,
+        item: &RecoveryItem,
+        mutation: &PendingMutation,
+    ) -> Result<ReplayOutcome> {
+        // Recovery bypasses an open circuit, but never treats unavailable current
+        // state as safe absence after a missed notification or restart.
+        let Storage::Hybrid {
+            backend,
+            serializer,
+        } = &self.inner.storage
+        else {
+            return Ok(ReplayOutcome::Applied);
+        };
+        if let Some(current) = backend.get(&self.inner.l2_key(&item.key)).await? {
+            let snapshot = serializer.deserialize_snapshot(&current)?;
+            if snapshot.entry().created_ticks > item.timestamp.ticks() {
+                return Ok(ReplayOutcome::Superseded);
+            }
+        }
+        let source = match mutation {
+            PendingMutation::Commit { mutation, .. }
+            | PendingMutation::FencedCommit { mutation, .. } => match mutation {
+                DataMutation::Set { bytes, .. } | DataMutation::Expire { bytes, .. } => Some(
+                    serializer
+                        .deserialize_snapshot(bytes)?
+                        .try_into_entry(self.inner.clock.now())?,
+                ),
+                DataMutation::Remove => None,
+            },
+            PendingMutation::Legacy
+            | PendingMutation::Notify(_)
+            | PendingMutation::ColdExpire { .. } => None,
+        };
+        self.reconcile_markers(source.as_ref().map_or(&[], |entry| entry.meta().tags()))
+            .await?;
+        if source
+            .as_ref()
+            .is_some_and(|source| self.tags(source) != TagVerdict::Valid)
+        {
+            return Ok(ReplayOutcome::Superseded);
+        }
+        Ok(ReplayOutcome::Applied)
+    }
+    async fn expire_current(
+        &self,
+        key: &str,
+        logical_expiration: Timestamp,
+    ) -> Result<ReplayOutcome> {
+        let Storage::Hybrid {
+            backend,
+            serializer,
+        } = &self.inner.storage
+        else {
+            return Ok(ReplayOutcome::Applied);
+        };
+        let Some(bytes) = backend.get(&self.inner.l2_key(key)).await? else {
+            return Ok(ReplayOutcome::Applied);
+        };
+        let snapshot = serializer.deserialize_snapshot(&bytes)?;
+        // A remote newer write can arrive between reconciliation and this read.
+        if snapshot.entry().created_ticks > logical_expiration.ticks() {
+            return Ok(ReplayOutcome::Superseded);
+        }
+        let mut entry = snapshot.entry().clone();
+        entry.logical_expiration_ticks = entry
+            .logical_expiration_ticks
+            .min(logical_expiration.ticks());
+        let expired =
+            DistributedSnapshot::new(entry, snapshot.inserted_at(), snapshot.retention())?;
+        let data = DataMutation::Expire {
+            bytes: serializer.serialize_snapshot(&expired)?.into(),
+            physical_expiration: Timestamp::from_ticks(expired.entry().physical_expiration_ticks),
+        };
+        self.write_data(key, &data, None).await?;
+        Ok(ReplayOutcome::Applied)
+    }
+    async fn replay_owned(&self, ticket: ReplayTicket) -> Result<ReplayOutcome> {
+        let Some(recovery) = &self.inner.recovery else {
+            return Ok(ReplayOutcome::Superseded);
+        };
+        if !self.replay_admitted() {
+            return Ok(ReplayOutcome::Paused);
+        }
+        match ticket.work() {
+            RecoveryWork::Data { item, mutation } => {
+                // Acquire cluster participation before the commit lane: an origin
+                // holding that lease must remain free to finish its own commit.
+                let flight = if matches!(mutation, PendingMutation::FencedCommit { .. }) {
+                    let Some(locker) = &self.inner.distributed_locker else {
+                        return Err(LeaseError::UnsupportedFencing.into());
+                    };
+                    let lease = acquire_owned_supervised(
+                        Arc::clone(locker),
+                        Arc::from(format!("amalgam:lock:{}", self.inner.l2_key(&item.key))),
+                        self.inner.lease_ttl,
+                        self.inner.default_options.distributed_lock_timeout(),
+                        AcquisitionPolicy::TokenOwned,
+                        self.lease_owner(&item.key),
+                    )
+                    .await?
+                    .ok_or(LeaseError::AcquisitionTimeout)?;
+                    Some(FlightGuard {
+                        local: LocalParticipation::ReplayOnly,
+                        lease: Some(lease),
+                        tasks: Arc::clone(&self.inner.tasks),
+                        events: self.inner.events.clone(),
+                        key: Arc::clone(&item.key),
+                        policy: LeasePolicy::Fenced,
+                    })
+                } else {
+                    None
+                };
+                let lane = self.inner.lanes.get(&item.key);
+                let _lane = Arc::clone(&lane.lock).lock_owned().await;
+                if !recovery.is_current(&ticket) {
+                    return Ok(ReplayOutcome::Superseded);
+                }
+                if !self.replay_admitted() {
+                    return Ok(ReplayOutcome::Paused);
+                }
+                let reconciled = self.reconcile_replay(item, mutation).await?;
+                if reconciled != ReplayOutcome::Applied {
+                    return Ok(reconciled);
+                }
+                if !recovery.is_current(&ticket) {
+                    return Ok(ReplayOutcome::Superseded);
+                }
+                if !self.replay_admitted() {
+                    return Ok(ReplayOutcome::Paused);
+                }
+                let command = match mutation {
+                    PendingMutation::Legacy => {
+                        self.inner.replay(item).await?;
+                        None
+                    }
+                    PendingMutation::Notify(command) => Some(command),
+                    PendingMutation::ColdExpire {
+                        logical_expiration,
+                        notification,
+                    } => {
+                        let outcome = self.expire_current(&item.key, *logical_expiration).await?;
+                        if outcome != ReplayOutcome::Applied {
+                            return Ok(outcome);
+                        }
+                        if notification.is_some() {
+                            recovery.notification_stage(&ticket);
+                        }
+                        notification.as_ref()
+                    }
+                    PendingMutation::Commit {
+                        mutation,
+                        notification,
+                    }
+                    | PendingMutation::FencedCommit {
+                        mutation,
+                        notification,
+                    } => {
+                        if mutation
+                            .remaining_ttl(self.inner.clock.now())
+                            .is_some_and(|ttl| ttl.is_zero())
+                        {
+                            return Ok(ReplayOutcome::Expired);
+                        }
+                        self.write_data(&item.key, mutation, flight.as_ref())
+                            .await?;
+                        if notification.is_some() {
+                            recovery.notification_stage(&ticket);
+                        }
+                        notification.as_ref()
+                    }
+                };
+                if !recovery.is_current(&ticket) {
+                    return Ok(ReplayOutcome::Superseded);
+                }
+                if !self.replay_admitted() {
+                    return Ok(ReplayOutcome::Paused);
+                }
+                if let Some(command) = command
+                    && let Some(backplane) = &self.inner.backplane
+                {
+                    backplane.publish_command(command.clone()).await?;
+                    self.close_circuit(CircuitComponent::Backplane);
+                }
+                Ok(ReplayOutcome::Applied)
+            }
+            RecoveryWork::Marker { command, stage } => {
+                let _lane_guard = Arc::clone(&self.inner.marker_lane).lock_owned().await;
+                if !recovery.is_current(&ticket) {
+                    return Ok(ReplayOutcome::Superseded);
+                }
+                if !self.replay_admitted() {
+                    return Ok(ReplayOutcome::Paused);
+                }
+                if matches!(
+                    stage,
+                    MarkerReplay::AdvanceAndNotify | MarkerReplay::AdvanceOnly
+                ) {
+                    match &self.inner.markers {
+                        MarkerAccess::Durable(store) => {
+                            let outcome = store
+                                .advance(
+                                    command.scope(),
+                                    command.marker().kind().clone(),
+                                    command.marker().version(),
+                                )
+                                .await?;
+                            self.apply_marker(outcome.marker().clone());
+                            if *stage == MarkerReplay::AdvanceAndNotify {
+                                recovery.notification_stage(&ticket);
+                            }
+                            if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
+                                let clear = MarkerCommand::new(
+                                    Arc::clone(&self.inner.instance_id),
+                                    self.inner.scope.clone(),
+                                    StoredMarker::new(MarkerKind::ClearRemove, clear_remove),
+                                )?;
+                                self.apply_marker(clear.marker().clone());
+                                if *stage != MarkerReplay::AdvanceOnly {
+                                    self.queue_marker(clear, MarkerReplay::NotifyOnly)?;
+                                }
+                            }
+                        }
+                        MarkerAccess::Local => {}
+                        MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
+                    }
+                }
+                if !recovery.is_current(&ticket) {
+                    return Ok(ReplayOutcome::Superseded);
+                }
+                if !self.replay_admitted() {
+                    return Ok(ReplayOutcome::Paused);
+                }
+                if *stage != MarkerReplay::AdvanceOnly
+                    && let Some(backplane) = &self.inner.backplane
+                {
+                    backplane
+                        .publish_command(BackplaneCommand::Marker(command.clone()))
+                        .await?;
+                    self.close_circuit(CircuitComponent::Backplane);
+                }
+                Ok(ReplayOutcome::Applied)
+            }
+        }
+    }
+    fn continuity_gap(&self) {
+        if self
+            .inner
+            .epoch
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+                epoch.checked_add(1)
+            })
+            .is_err()
+        {
+            tracing::error!("cache continuity generation exhausted");
+            self.inner.close();
+        }
+        self.inner.memory.invalidate_all();
+        if let Some(recovery) = &self.inner.recovery {
+            recovery.suspend();
+        }
+    }
+    fn ensure_health(&self) {
+        let Some(health) = self
+            .inner
+            .backplane
+            .as_ref()
+            .and_then(|backplane| backplane.connection_state())
+        else {
+            return;
+        };
+        let current = *health.borrow();
+        let mut seen = lock(&self.inner.health_seen);
+        if seen.as_ref() == Some(&current) {
+            return;
+        }
+        let previous = seen.replace(current);
+        // Serialize barrier transitions with the observed state. Otherwise a
+        // delayed disconnected caller can suspend replay after a newer ACK.
+        let gap = !matches!(current, BackplaneState::Connected { .. }) || previous.is_some();
+        let exhausted = gap
+            && self
+                .inner
+                .epoch
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+                    epoch.checked_add(1)
+                })
+                .is_err();
+        match current {
+            BackplaneState::Disconnected { .. } | BackplaneState::Stopped => {
+                if let Some(recovery) = &self.inner.recovery {
+                    recovery.suspend();
+                }
+            }
+            BackplaneState::Connected { .. } => {
+                self.inner
+                    .subscription_admitted
+                    .store(true, Ordering::Release);
+                if let Some(recovery) = &self.inner.recovery
+                    && let Err(error) = recovery.pause_after_reconnect()
+                {
+                    tracing::warn!(%error,"recovery reconnect delay rejected");
+                }
+            }
+        }
+        drop(seen);
+        if gap {
+            self.inner.memory.invalidate_all();
+        }
+        if exhausted {
+            tracing::error!("cache continuity generation exhausted");
+            self.inner.close();
+        }
+    }
+    fn start_maintenance(&self) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        if self.inner.maintenance.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let weak = Arc::downgrade(&self.inner);
+        let source = CancellationSource::new();
+        let interval = match self.inner.reconciliation {
+            ReconciliationPolicy::Periodic(interval) => interval.min(Duration::from_secs(1)),
+            ReconciliationPolicy::LocalOnly | ReconciliationPolicy::BackplaneContinuity => {
+                Duration::from_secs(1)
+            }
+        };
+        let execution = self.inner.scopes.execution(
+            async move {
+                loop {
+                    tokio::time::sleep(interval).await;
+                    let Some(inner) = weak.upgrade() else {
+                        return Ok(());
+                    };
+                    inner.memory.run_pending_tasks().await;
+                    inner.locks.clean_idle(256);
+                    inner.lanes.clean(256);
+                    if matches!(inner.reconciliation, ReconciliationPolicy::Periodic(_)) {
+                        let interval = match inner.reconciliation {
+                            ReconciliationPolicy::Periodic(interval) => interval,
+                            ReconciliationPolicy::LocalOnly
+                            | ReconciliationPolicy::BackplaneContinuity => Duration::ZERO,
+                        };
+                        let reconcile = {
+                            let mut last = lock(&inner.last_reconcile);
+                            if last.elapsed() >= interval {
+                                *last = Instant::now();
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if reconcile {
+                            inner.memory.invalidate_all();
+                        }
+                    }
+                }
+            },
+            source,
+        );
+        let _receiver = self.inner.tasks.spawn(
+            ShutdownTask::Maintenance,
+            Arc::from("maintenance"),
+            self.inner.events.clone(),
+            execution,
+        );
+    }
+    fn start_listener(&self) {
+        let Some(backplane) = &self.inner.backplane else {
+            return;
+        };
+        let mut messages = backplane.subscribe();
+        let mut health = backplane.connection_state();
+        let weak = Arc::downgrade(&self.inner);
+        let source = CancellationSource::new();
+        let execution=self.inner.scopes.execution(async move {
+            loop {
+                tokio::select! {
+                    result=messages.recv()=>{
+                        let Some(inner)=weak.upgrade()else{return Ok(());};let worker=Worker {inner};
+                        match result {
+                            Ok(message)=>worker.apply_backplane(message).await?,
+                            Err(broadcast::error::RecvError::Lagged(_))=>{worker.continuity_gap();worker.ensure_health();if let Some(recovery)=&worker.inner.recovery {recovery.pause_after_reconnect()?;}},
+                            Err(broadcast::error::RecvError::Closed)=>{worker.continuity_gap();return Ok(());}
+                        }
+                    },
+                    ()=health_changed(&mut health)=>{
+                        if let Some(inner)=weak.upgrade(){Worker {inner}.ensure_health();}else{return Ok(());}
+                    }
+                }
+            }
+        },source);
+        let _receiver = self.inner.tasks.spawn(
+            ShutdownTask::Backplane,
+            Arc::from("listener"),
+            self.inner.events.clone(),
+            execution,
+        );
+        self.ensure_health();
+    }
+    async fn apply_backplane(&self, message: BackplaneMessage) -> Result<()> {
+        if self.inner.ignore_incoming_backplane {
+            return Ok(());
+        }
+        let command = match BackplaneCommand::from_message(message) {
+            Ok(command) => command,
+            Err(error) => {
+                self.continuity_gap();
+                // A rejected inner frame loses history without disconnecting
+                // the transport. Re-enter reconciliation even at the same ACK.
+                if self.replay_admitted()
+                    && let Some(recovery) = &self.inner.recovery
+                {
+                    recovery.pause_after_reconnect()?;
+                }
+                tracing::warn!(%error,"invalid backplane frame triggered reconciliation");
+                return Ok(());
+            }
+        };
+        if command.source_id() == &*self.inner.instance_id {
+            return Ok(());
+        }
+        self.close_circuit(CircuitComponent::Backplane);
+        match command {
+            BackplaneCommand::Marker(command) => {
+                if command.scope() == &self.inner.scope {
+                    self.apply_marker(command.marker().clone());
+                }
+                Ok(())
+            }
+            BackplaneCommand::Data(message) => {
+                let Some(key) = self.inner.logical_key(&message.key) else {
+                    return Ok(());
+                };
+                self.emit(CacheEvent::MessageReceived {
+                    key: Arc::clone(&key),
+                });
+                let lane = self.inner.lanes.get(&key);
+                let lane_guard = Arc::clone(&lane.lock).lock_owned().await;
+                if lock(&lane.timestamp).is_some_and(|at| at > message.timestamp) {
+                    return Ok(());
+                }
+                let existing = self.inner.memory.get_at(&key, self.inner.clock.now()).await;
+                if existing
+                    .as_ref()
+                    .is_some_and(|entry| entry.meta().created() > message.timestamp)
+                {
+                    return Ok(());
+                }
+                let fence = lane.advance(message.timestamp, &self.inner.epoch)?;
+                if let Some(recovery) = &self.inner.recovery {
+                    recovery.cancel_through(&key, message.timestamp);
+                }
+                match message.action {
+                    BackplaneAction::Remove => {
+                        self.inner.memory.remove(&key).await;
+                    }
+                    BackplaneAction::Expire => {
+                        if let Some(entry) = existing {
+                            let expired = entry.with_logical_expiration(message.timestamp);
+                            self.inner
+                                .memory
+                                .insert_if_unchanged(
+                                    Arc::clone(&key),
+                                    Some(&entry),
+                                    expired,
+                                    self.inner.clock.now(),
+                                )
+                                .await;
+                        }
+                    }
+                    BackplaneAction::Set => {
+                        if let Some(existing) = existing {
+                            drop(lane_guard);
+                            self.passive(key, existing, fence);
+                            return Ok(());
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+    fn passive(&self, key: Arc<str>, expected: Entry<V>, fence: Arc<Fence>) {
+        let worker = self.clone();
+        let task_key = Arc::clone(&key);
+        let execution = self.inner.scopes.execution(
+            async move {
+                let raw = worker
+                    .inner
+                    .key_prefix
+                    .as_ref()
+                    .and_then(|prefix| key.strip_prefix(&**prefix))
+                    .unwrap_or(&key);
+                let opts = worker.resolve_options(raw, None)?;
+                let read = worker
+                    .read_l2(
+                        &key,
+                        &opts,
+                        FallbackAvailability::Unavailable,
+                        L2ReadPolicy::FactoryFallback,
+                    )
+                    .await;
+                let _lane = Arc::clone(&fence.lane.lock).lock_owned().await;
+                if !fence.passive_is_current() {
+                    return Ok(());
+                }
+                match read {
+                    Ok(Some(entry)) if worker.tags(&entry.entry) != TagVerdict::Remove => {
+                        if !opts.skip_memory_write()
+                            && let Some(local) = entry
+                                .entry
+                                .for_memory_hydration(&opts, worker.inner.clock.now())?
+                        {
+                            let local = local.with_hydrated_value(
+                                worker.copy(local.value(), &opts)?,
+                                fence.continuity_stamp(),
+                            );
+                            if !fence.passive_is_current() {
+                                return Ok(());
+                            }
+                            worker
+                                .inner
+                                .memory
+                                .insert_if_unchanged(
+                                    key,
+                                    Some(&expected),
+                                    local,
+                                    worker.inner.clock.now(),
+                                )
+                                .await;
+                        }
+                    }
+                    Ok(Some(_)) | Ok(None) | Err(_) => {
+                        worker.inner.memory.remove_if_same(&key, &expected).await;
+                    }
+                }
+                Ok(())
+            },
+            CancellationSource::new(),
+        );
+        let _receiver = self.inner.tasks.spawn(
+            ShutdownTask::Distributed,
+            task_key,
+            self.inner.events.clone(),
+            execution,
+        );
+    }
 }
 
-/// Reserved key prefix for tag-invalidation markers propagated over the backplane.
-const TAG_MARKER_PREFIX: &str = "__amalgam:t:";
-/// Reserved key for a "clear (expire all)" marker.
-const CLEAR_EXPIRE_KEY: &str = "__amalgam:clear:expire";
-/// Reserved key for a "clear (remove all)" marker.
-const CLEAR_REMOVE_KEY: &str = "__amalgam:clear:remove";
-/// How long a queued auto-recovery item remains eligible for replay.
-const RECOVERY_ITEM_TTL: Duration = Duration::from_secs(600);
-
-/// Maps a backplane action to the equivalent recovery action.
-fn recovery_action_of(action: BackplaneAction) -> RecoveryAction {
+enum PreparedData {
+    Absent,
+    Skipped,
+    Ready(DataMutation),
+    Failed(Error),
+    ColdExpire {
+        cause: Error,
+        logical_expiration: Timestamp,
+    },
+}
+enum LocalCommit<V> {
+    Applied(LocalEffect),
+    Store(Entry<V>),
+}
+struct DataCommit<V> {
+    key: Arc<str>,
+    data: PreparedData,
+    command: Option<BackplaneCommand>,
+    opts: EntryOptions,
+    fence: Arc<Fence>,
+    flight: Option<FlightGuard>,
+    local: LocalCommit<V>,
+    lane_guard: tokio::sync::OwnedMutexGuard<()>,
+}
+async fn lease_lost(state: &mut watch::Receiver<LeaseState>) {
+    loop {
+        if *state.borrow_and_update() != LeaseState::Held {
+            return;
+        }
+        if state.changed().await.is_err() {
+            return;
+        }
+    }
+}
+async fn health_changed(state: &mut Option<watch::Receiver<BackplaneState>>) {
+    match state {
+        Some(state) => {
+            if state.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+fn recovery_action(action: BackplaneAction) -> RecoveryAction {
     match action {
         BackplaneAction::Set => RecoveryAction::Set,
         BackplaneAction::Remove => RecoveryAction::Remove,
         BackplaneAction::Expire => RecoveryAction::Expire,
     }
 }
-
-/// The combined single-flight guard: the local lock plus an optional cross-node
-/// distributed lock. Dropping it releases both.
-struct LockGuard {
-    _local: KeyGuard,
-    _distributed: Option<DistributedReleaseGuard>,
-}
-
-/// Releases a held distributed lock when dropped (best-effort, in the background).
-struct DistributedReleaseGuard {
-    locker: Arc<dyn DistributedLocker>,
-    key: Arc<str>,
-    token: String,
-}
-
-impl Drop for DistributedReleaseGuard {
-    fn drop(&mut self) {
-        let locker = Arc::clone(&self.locker);
-        let key = Arc::clone(&self.key);
-        let token = std::mem::take(&mut self.token);
-        tokio::spawn(async move {
-            let _ = locker.release(&key, &token).await;
-        });
+fn newer_of<V: Clone>(existing: Option<Entry<V>>, candidate: Entry<V>) -> Entry<V> {
+    match existing {
+        Some(existing) if existing.meta().created() >= candidate.meta().created() => existing,
+        _ => candidate,
     }
 }
 
-/// The result of trying to acquire the single-flight lock.
-enum LockOutcome<V> {
-    /// The lock was acquired; proceed to read L2 / run the factory.
-    Acquired(LockGuard),
-    /// The lock timed out but a stale value was served instead.
-    ServedStale(V),
-}
-
-/// The result of running a factory under a (possibly infinite) timeout.
-///
-/// This is a short-lived local return value (one per factory call), never stored
-/// in bulk, so the size gap between variants is irrelevant — boxing the common
-/// `Produced` path would only add a hot-path allocation.
-#[allow(clippy::large_enum_variant)]
-enum FactoryRun<V> {
-    /// The factory completed (successfully or with a failure) within the timeout.
-    Produced(std::result::Result<FactoryProduct<V>, FactoryError>),
-    /// The factory exceeded its timeout. `Some(handle)` when it is still running
-    /// in the background (to be completed later); `None` when it was aborted.
-    TimedOut(Option<JoinHandle<std::result::Result<FactoryProduct<V>, FactoryError>>>),
-}
-
-/// Runs `factory` against `ctx`, enforcing `timeout`.
-///
-/// For a finite timeout the factory is spawned so it can outlive the timeout and
-/// finish in the background (when `allow_background` is set); for an infinite
-/// timeout it runs inline.
-async fn run_factory<V, F, Fut>(
-    factory: F,
-    ctx: FactoryContext<V>,
-    timeout: Timeout,
-    allow_background: bool,
-) -> FactoryRun<V>
-where
-    V: Send + 'static,
-    F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-    Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
-{
-    match timeout {
-        Timeout::Infinite => FactoryRun::Produced(factory(ctx).await),
-        Timeout::After(duration) => {
-            let mut handle = tokio::spawn(factory(ctx));
-            tokio::select! {
-                joined = &mut handle => match joined {
-                    Ok(result) => FactoryRun::Produced(result),
-                    Err(_) => FactoryRun::Produced(Err(FactoryError::new("factory task panicked"))),
-                },
-                () = tokio::time::sleep(duration) => {
-                    if allow_background {
-                        FactoryRun::TimedOut(Some(handle))
-                    } else {
-                        handle.abort();
-                        FactoryRun::TimedOut(None)
-                    }
-                }
-            }
+impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
+    fn l2_key(&self, key: &str) -> String {
+        match self.distributed_key_modifier_mode {
+            KeyModifierMode::Prefix => format!("{}:{key}", self.distributed_wire_version),
+            KeyModifierMode::Suffix => format!("{key}:{}", self.distributed_wire_version),
+            KeyModifierMode::None => key.to_owned(),
         }
     }
+    fn logical_key(&self, physical: &str) -> Option<Arc<str>> {
+        let key = match self.distributed_key_modifier_mode {
+            KeyModifierMode::Prefix => {
+                physical.strip_prefix(&format!("{}:", self.distributed_wire_version))?
+            }
+            KeyModifierMode::Suffix => {
+                physical.strip_suffix(&format!(":{}", self.distributed_wire_version))?
+            }
+            KeyModifierMode::None => physical,
+        };
+        if self
+            .key_prefix
+            .as_ref()
+            .is_some_and(|prefix| !key.starts_with(&**prefix))
+        {
+            return None;
+        }
+        Some(Arc::from(key))
+    }
+    fn close(&self) -> CloseOutcome {
+        let outcome = {
+            let mut lifecycle = lock(&self.lifecycle);
+            match &*lifecycle {
+                Lifecycle::Running => {
+                    *lifecycle = Lifecycle::Closing;
+                    CloseOutcome::Started
+                }
+                Lifecycle::Closing => CloseOutcome::AlreadyClosing,
+                Lifecycle::Closed(_) => CloseOutcome::AlreadyClosed,
+            }
+        };
+        // Another close can be preempted after publishing Closing but before
+        // its scope barrier. Every closer establishes that barrier before an
+        // awaitable shutdown may report drainage.
+        self.scopes.close();
+        if outcome == CloseOutcome::Started {
+            if let Some(recovery) = &self.recovery {
+                recovery.stop();
+            }
+            for error in self.plugins.stop_all() {
+                tracing::warn!(%error,"plugin close failed");
+            }
+        }
+        outcome
+    }
+    async fn shutdown(&self) -> Result<ShutdownReport> {
+        let _shutdown = self.shutdown_gate.lock().await;
+        if let Lifecycle::Closed(result) = &*lock(&self.lifecycle) {
+            return result.clone().map_err(Error::from);
+        }
+        self.close();
+        self.scopes.drained().await;
+        self.tasks.drain().await;
+        let mut failures = self.tasks.take_failures();
+        if let Some(recovery) = &self.recovery
+            && let Err(error) = recovery.shutdown().await
+        {
+            failures.push(ShutdownFailure::Work(error.into()));
+        }
+        failures.extend(
+            self.plugins
+                .shutdown()
+                .await
+                .into_iter()
+                .map(ShutdownFailure::Plugin),
+        );
+        let result = if failures.is_empty() {
+            Ok(ShutdownReport)
+        } else {
+            let mut failures = failures.into_iter();
+            match failures.next() {
+                Some(first) => Err(ShutdownError::new(first, failures)),
+                None => unreachable!("nonempty failure collection"),
+            }
+        };
+        *lock(&self.lifecycle) = Lifecycle::Closed(result.clone());
+        result.map_err(Error::from)
+    }
 }
-
-/// Snapshots a stale entry into the conditional-refresh information handed to a
-/// factory.
-fn stale_info_of<V: Clone>(entry: &Entry<V>) -> StaleInfo<V> {
-    StaleInfo {
-        value: entry.value_cloned(),
-        etag: entry.meta().etag().map(str::to_owned),
-        last_modified: entry.meta().last_modified(),
-        tags: entry.meta().tags().to_vec().into_boxed_slice(),
+#[async_trait]
+impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
+    async fn replay(&self, item: &RecoveryItem) -> Result<()> {
+        // Deliberately explicit old executor adapter. Canonical enqueue captures
+        // bytes/stages and routes through replay_ticket instead.
+        let Storage::Hybrid {
+            backend,
+            serializer,
+        } = &self.storage
+        else {
+            return Ok(());
+        };
+        match item.action {
+            RecoveryAction::Set => {
+                if let Some(entry) = self.memory.get_at(&item.key, self.clock.now()).await {
+                    let snapshot = DistributedSnapshot::from_entry_with_options(
+                        &entry,
+                        &self.default_options,
+                        entry.meta().inserted_at(),
+                    )?;
+                    backend
+                        .set(
+                            &self.l2_key(&item.key),
+                            serializer.serialize_snapshot(&snapshot)?,
+                            Some(snapshot.backend_ttl_at(self.clock.now())),
+                        )
+                        .await?;
+                }
+            }
+            RecoveryAction::Remove => backend.remove(&self.l2_key(&item.key)).await?,
+            RecoveryAction::Expire => {}
+        }
+        Ok(())
+    }
+    async fn replay_ticket(&self, ticket: &ReplayTicket) -> Result<ReplayOutcome> {
+        if self.scopes.is_closed() {
+            return Err(Error::CacheClosed);
+        }
+        let worker = Worker {
+            inner: self.owner.upgrade().ok_or(Error::CacheClosed)?,
+        };
+        let ticket = ticket.clone();
+        self.scopes
+            .execution(
+                async move { worker.replay_owned(ticket).await },
+                CancellationSource::new(),
+            )
+            .await
     }
 }
 
@@ -1404,6 +3935,13 @@ pub struct CacheBuilder<V> {
     default_options: EntryOptions,
     clock: Option<Arc<dyn Clock>>,
     max_capacity: Option<u64>,
+    max_weighted_capacity: Option<u64>,
+    value_cloner: Option<Arc<dyn ValueCloner<V>>>,
+    jitter: Arc<dyn JitterSource>,
+    invalidation_store: Option<Arc<dyn InvalidationStore>>,
+    lease_policy: LeasePolicy,
+    lease_ttl: Duration,
+    reconciliation: Option<ReconciliationPolicy>,
     lock_shards: usize,
     remove_by_tag_behavior: RemoveByTagBehavior,
     events_capacity: usize,
@@ -1434,6 +3972,13 @@ impl<V> CacheBuilder<V> {
             default_options: EntryOptions::default(),
             clock: None,
             max_capacity: None,
+            max_weighted_capacity: None,
+            value_cloner: None,
+            jitter: Arc::new(RandomJitterSource),
+            invalidation_store: None,
+            lease_policy: LeasePolicy::Fenced,
+            lease_ttl: Duration::from_secs(30),
+            reconciliation: None,
             lock_shards: 1024,
             remove_by_tag_behavior: RemoveByTagBehavior::default(),
             events_capacity: 256,
@@ -1447,7 +3992,7 @@ impl<V> CacheBuilder<V> {
             recovery_config: RecoveryConfig::default(),
             default_options_provider: None,
             ignore_incoming_backplane: false,
-            distributed_wire_version: Arc::from("v1"),
+            distributed_wire_version: Arc::from("v2"),
             distributed_key_modifier_mode: KeyModifierMode::default(),
             disable_tagging: false,
             wait_for_initial_backplane_subscribe: true,
@@ -1517,7 +4062,46 @@ impl<V> CacheBuilder<V> {
         self
     }
 
-    /// Sets the number of single-flight lock shards (rounded up to a power of two).
+    /// Caps total admitted L1 weight, independently from the entry count.
+    pub fn max_weighted_capacity(mut self, capacity: u64) -> Self {
+        self.max_weighted_capacity = Some(capacity);
+        self
+    }
+    /// Supplies an explicit deep-copy algorithm for auto-clone options.
+    pub fn value_cloner(mut self, cloner: Arc<dyn ValueCloner<V>>) -> Self {
+        self.value_cloner = Some(cloner);
+        self
+    }
+    /// Supplies expiration jitter outside pure entry construction.
+    pub fn jitter_source(mut self, jitter: Arc<dyn JitterSource>) -> Self {
+        self.jitter = jitter;
+        self
+    }
+    /// Supplies genuine atomic invalidation storage for a custom byte backend.
+    pub fn invalidation_store(mut self, store: Arc<dyn InvalidationStore>) -> Self {
+        self.invalidation_store = Some(store);
+        self
+    }
+    /// Chooses strict native fencing or explicitly cooperative legacy ownership.
+    pub fn lease_policy(mut self, policy: LeasePolicy) -> Self {
+        self.lease_policy = policy;
+        self
+    }
+    /// Sets ownership lease duration independently from entry retention.
+    pub fn lease_ttl(mut self, ttl: Duration) -> Self {
+        self.lease_ttl = ttl;
+        self
+    }
+    /// Declares notification/durable-marker reconciliation behavior.
+    pub fn reconciliation_policy(mut self, policy: ReconciliationPolicy) -> Self {
+        self.reconciliation = Some(policy);
+        self
+    }
+
+    /// Retains the legacy shard setting for source compatibility.
+    ///
+    /// Flights are now per-key; this setting does not serialize distinct keys
+    /// or select the internal lookup map's sharding.
     pub fn lock_shards(mut self, shards: usize) -> Self {
         self.lock_shards = shards;
         self
@@ -1611,15 +4195,11 @@ impl<V> CacheBuilder<V> {
         self
     }
 
-    /// Whether to establish the backplane subscription before [`build`](Self::build)
-    /// returns (FusionCache `WaitForInitialBackplaneSubscribe`, default `true`).
-    ///
-    /// In `amalgam` this is inherently satisfied: the listener calls
-    /// `backplane.subscribe()` synchronously inside `build`, and the Redis backplane
-    /// completes its `SUBSCRIBE` during `connect()` before being handed to the
-    /// builder — so there is no startup window where the node serves while
-    /// unsubscribed. The flag is retained for configuration parity and is queryable
-    /// via [`Cache::wait_for_initial_backplane_subscribe`].
+    /// Gates operations on native subscription acknowledgement (default true).
+    /// Construction installs the local receiver synchronously; use
+    /// `try_build_ready` to await admission before returning the cache. Native
+    /// Redis connect already awaits its first ACK. Healthless custom adapters
+    /// report BestEffort and use bounded periodic durable reconciliation.
     pub fn wait_for_initial_backplane_subscribe(mut self, wait: bool) -> Self {
         self.wait_for_initial_backplane_subscribe = wait;
         self
@@ -1633,40 +4213,175 @@ impl<V> Default for CacheBuilder<V> {
 }
 
 impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
-    /// Builds the cache.
-    #[must_use]
+    /// Async construction that also waits native backplane acknowledgement.
+    pub async fn try_build_ready(self) -> Result<Cache<V>> {
+        let cache = self.try_build()?;
+        cache.ready().await?;
+        Ok(cache)
+    }
+    /// Diagnostic legacy construction adapter. Prefer try_build for expected
+    /// configuration/plugin/runtime rejection.
     pub fn build(self) -> Cache<V> {
+        match self.try_build() {
+            Ok(cache) => cache,
+            Err(error) => panic!("invalid legacy cache construction: {error}"),
+        }
+    }
+    /// Constructs a fully valid cache before starting its services.
+    pub fn try_build(self) -> Result<Cache<V>> {
+        let name = self.name.unwrap_or_else(|| Arc::from("amalgam"));
+        let instance_id = self
+            .instance_id
+            .unwrap_or_else(|| Arc::from(format!("amalgam-{:016x}", fastrand::u64(..))));
+        for (value, field) in [
+            (&*name, IdentityField::CacheName),
+            (&*instance_id, IdentityField::InstanceId),
+            (&*self.distributed_wire_version, IdentityField::WireVersion),
+        ] {
+            if value.trim().is_empty() {
+                return Err(ConfigError::BlankIdentity { field }.into());
+            }
+        }
+        if self.distributed.is_some() && self.serializer.is_none() {
+            return Err(ConfigError::DistributedWithoutSerializer.into());
+        }
+        let cloner = self.value_cloner.or_else(|| {
+            self.serializer
+                .as_ref()
+                .and_then(|serializer| serializer.value_cloner())
+        });
+        self.default_options
+            .validate_with_cloner(cloner.as_deref())?;
+        for timeout in [
+            self.default_options.memory_lock_timeout(),
+            self.default_options.distributed_lock_timeout(),
+            self.default_options.factory_soft_timeout(),
+            self.default_options.factory_hard_timeout(),
+            self.default_options.distributed_soft_timeout(),
+            self.default_options.distributed_hard_timeout(),
+        ] {
+            validate_budget(timeout)?;
+        }
+        let recovery_enabled = self.recovery_config.enabled
+            && (self.distributed.is_some() || self.backplane.is_some());
+        if self.backplane.is_some() && tokio::runtime::Handle::try_current().is_err() {
+            return Err(ConfigError::MissingRuntime {
+                component: RuntimeComponent::Backplane,
+            }
+            .into());
+        }
+        if recovery_enabled && tokio::runtime::Handle::try_current().is_err() {
+            return Err(ConfigError::MissingRuntime {
+                component: RuntimeComponent::Recovery,
+            }
+            .into());
+        }
+        let lease_ttl = LeaseTtl::new(self.lease_ttl)?;
+        let reconciliation = self.reconciliation.unwrap_or_else(|| {
+            if self.backplane.is_none() && self.distributed.is_none() {
+                ReconciliationPolicy::LocalOnly
+            } else if self
+                .backplane
+                .as_ref()
+                .and_then(|backplane| backplane.connection_state())
+                .is_some()
+            {
+                ReconciliationPolicy::BackplaneContinuity
+            } else {
+                ReconciliationPolicy::Periodic(Duration::from_secs(1))
+            }
+        });
+        match reconciliation {
+            ReconciliationPolicy::LocalOnly => {
+                if self.backplane.is_some() || self.distributed.is_some() {
+                    return Err(ConfigError::LocalReconciliationWithExternalStorage.into());
+                }
+            }
+            ReconciliationPolicy::Periodic(interval) => {
+                if interval.is_zero() {
+                    return Err(ConfigError::ZeroReconciliationInterval.into());
+                }
+                validate_budget(Timeout::After(interval))?;
+            }
+            ReconciliationPolicy::BackplaneContinuity => {
+                if self
+                    .backplane
+                    .as_ref()
+                    .and_then(|backplane| backplane.connection_state())
+                    .is_none()
+                {
+                    return Err(ConfigError::UnavailableBackplaneContinuity.into());
+                }
+            }
+        }
+        let scope = CacheScope::new(
+            self.key_prefix.clone().unwrap_or_else(|| Arc::from("")),
+            Arc::clone(&self.distributed_wire_version),
+            self.distributed_key_modifier_mode,
+        )?;
+        let markers = match self.invalidation_store.or_else(|| {
+            self.distributed
+                .as_ref()
+                .and_then(|backend| backend.invalidation_store())
+        }) {
+            Some(store) => MarkerAccess::Durable(store),
+            None if self.distributed.is_some() => MarkerAccess::Unavailable,
+            None => MarkerAccess::Local,
+        };
+        let storage = match (self.distributed, self.serializer) {
+            (Some(backend), Some(serializer)) => Storage::Hybrid {
+                backend,
+                serializer,
+            },
+            (None, _) => Storage::MemoryOnly,
+            (Some(_), None) => return Err(ConfigError::DistributedWithoutSerializer.into()),
+        };
         let clock: Arc<dyn Clock> = self.clock.unwrap_or_else(|| Arc::new(SystemClock));
-        // Auto-recovery only matters when there is an L2 or backplane to recover.
-        let recovery = if self.recovery_config.enabled
-            && (self.distributed.is_some() || self.backplane.is_some())
-        {
-            Some(AutoRecoveryService::new(
+        let recovery = if recovery_enabled {
+            Some(AutoRecoveryService::try_new(
                 self.recovery_config,
                 Arc::clone(&clock),
-            ))
+            )?)
         } else {
             None
         };
         let events = Events::with_capacity(self.events_capacity);
-        let inner = Arc::new(CacheInner {
-            name: self.name.unwrap_or_else(|| Arc::from("amalgam")),
-            instance_id: self.instance_id.unwrap_or_else(generate_instance_id),
-            memory: MemoryStore::new(self.max_capacity, events.clone()),
-            locks: Arc::new(KeyedLock::new(self.lock_shards)),
-            tags: Arc::new(TagRegistry::new()),
+        let plugins = PluginHost::try_new(
+            PluginContext::new(&*name, &*instance_id, events.clone())?,
+            self.plugins,
+        )?;
+        let expiry = match clock.timing_model() {
+            ClockTiming::RealTime => MemoryExpiry::RealTime,
+            ClockTiming::Controlled => MemoryExpiry::ClockDriven,
+        };
+        let inner = Arc::new_cyclic(|owner| CacheInner {
+            owner: owner.clone(),
+            name,
+            instance_id,
+            memory: MemoryStore::with_clock_and_expiry(
+                MemoryLimits::new(self.max_capacity, self.max_weighted_capacity),
+                events.clone(),
+                Arc::clone(&clock),
+                expiry,
+            ),
+            locks: KeyedLock::new(self.lock_shards),
+            lanes: Lanes::new(),
+            tags: TagRegistry::new(),
             events,
             clock,
             default_options: self.default_options,
             key_prefix: self.key_prefix,
             remove_by_tag_behavior: self.remove_by_tag_behavior,
-            distributed: self.distributed,
-            serializer: self.serializer,
+            storage,
+            markers,
+            scope,
             backplane: self.backplane,
             distributed_locker: self.distributed_locker,
+            lease_policy: self.lease_policy,
+            lease_ttl,
             circuit_l2: CircuitBreaker::new(self.distributed_circuit_breaker),
             circuit_backplane: CircuitBreaker::new(self.backplane_circuit_breaker),
-            plugins: PluginHost::new(self.plugins),
+            plugins,
             recovery: recovery.clone(),
             default_options_provider: self.default_options_provider,
             ignore_incoming_backplane: self.ignore_incoming_backplane,
@@ -1674,30 +4389,36 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             distributed_key_modifier_mode: self.distributed_key_modifier_mode,
             disable_tagging: self.disable_tagging,
             wait_for_initial_backplane_subscribe: self.wait_for_initial_backplane_subscribe,
+            cloner,
+            jitter: self.jitter,
+            scopes: Scopes::new(),
+            tasks: Tasks::new(),
+            epoch: Arc::new(AtomicU64::new(0)),
+            maintenance: AtomicBool::new(false),
+            subscription_admitted: AtomicBool::new(false),
+            reconciliation,
+            lifecycle: std::sync::Mutex::new(Lifecycle::Running),
+            shutdown_gate: tokio::sync::Mutex::new(()),
+            marker_lane: Arc::new(tokio::sync::Mutex::new(())),
+            health_seen: std::sync::Mutex::new(None),
+            last_reconcile: std::sync::Mutex::new(Instant::now()),
         });
-        // Wire the recovery executor (the cache) as a Weak so it never keeps the
-        // cache alive, then start the background drain loop.
         if let Some(recovery) = &recovery {
-            let executor: Arc<dyn RecoveryExecutor> =
-                Arc::clone(&inner) as Arc<dyn RecoveryExecutor>;
-            recovery.set_executor(Arc::downgrade(&executor));
-            recovery.spawn();
+            let executor: Arc<dyn RecoveryExecutor> = inner.clone();
+            recovery.try_set_executor(Arc::downgrade(&executor))?;
+            recovery.try_spawn()?;
         }
-        let cache = Cache { inner };
-        cache.spawn_backplane_listener();
-        cache
-    }
-}
-
-/// Generates a random per-instance id for backplane self-filtering.
-fn generate_instance_id() -> Arc<str> {
-    Arc::from(format!("amalgam-{:016x}", fastrand::u64(..)))
-}
-
-/// Picks the entry with the later creation timestamp (the "newer" fallback).
-fn newer_of<V: Clone>(existing: Option<Entry<V>>, candidate: Entry<V>) -> Entry<V> {
-    match existing {
-        Some(existing) if existing.meta().created() >= candidate.meta().created() => existing,
-        _ => candidate,
+        if self.lease_policy == LeasePolicy::CooperativeLegacy && inner.distributed_locker.is_some()
+        {
+            tracing::warn!(cache=%inner.name,"explicit cooperative legacy lease policy: partition fencing is unavailable");
+        }
+        let cache = Cache {
+            lifetime: Arc::new(PublicLifetime {
+                inner: Arc::downgrade(&inner),
+            }),
+            inner,
+        };
+        cache.worker().start_listener();
+        Ok(cache)
     }
 }

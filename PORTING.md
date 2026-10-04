@@ -1,185 +1,62 @@
-# PORTING.md — a C#→Rust porting guide (FusionCache → `amalgam`)
+# Porting the FusionCache model to Rust
 
-This document is the methodology used to port .NET's
-[FusionCache](https://github.com/ZiggyCreatures/FusionCache) to idiomatic Rust as
-the `amalgam` crate. It is a **C#→Rust** adaptation of the approach Bun used to
-port its runtime **Zig→Rust** with AI agents (the `docs/PORTING.md` decision-table
-that drove [oven-sh/bun#30412](https://github.com/oven-sh/bun/pull/30412)). The
-ideas below are re-expressed in our own words and retargeted from Zig→Rust to
-C#→Rust; none of Bun's text is reproduced here.
+Amalgam adapts FusionCache's observable cache behavior rather than copying every C# implementation choice. Source inspection, released-reference experiments and public-API regression tests provide different kinds of evidence; none alone proves universal parity. The exact reference pins and supported behavior are in [PARITY](docs/PARITY.md).
 
-Why borrow that methodology at all? Because a faithful 1:1 port is not "rewrite
-from the description" — it is a *translation* with a behavioural oracle. The Bun
-effort showed that the leverage comes from four cheap, boring conventions, not
-from cleverness:
+Two approaches were considered for the repair: patch individual flag branches, or consolidate causally related ownership and commit decisions. The latter provides shared cancellation, lifecycle, ordering and error policy while keeping codecs, stores, backplanes, plugins and copy strategies extensible.
 
-1. a **deterministic decision table** so every ambiguous construct maps the same
-   way every time;
-2. an **up-front ownership decision** so lifetime/sharing calls are made once;
-3. a **two-pass** flow — mechanical first, idiomatic second — with a small,
-   greppable **flag vocabulary**;
-4. the **original test suite as an immutable oracle** for behavioural equivalence.
+## Invariants before implementation
 
-It also showed the failure mode to engineer *out*: "class-level finds,
-instance-level escapes" — auditing categories of bugs while individual instances
-slip through — plus importing the source language's un-idiomatic shapes (Bun's
-port carried ~13k `unsafe` blocks). We counter both explicitly below.
+- A live origin or distributed lease has one owner. Cancellation releases pending work and guards; explicit handoff transfers that ownership into supervised background work.
+- A successful miss is separate from an operation failure. Expected failure uses a typed result and preserves its original source.
+- A source snapshot's revision time differs from the local insertion instant. Hydration or recovery cannot renew an exhausted source lifetime.
+- L1 and L2 have independent freshness/physical deadlines.
+- A replay owns an exact queue identity, generation and pending stage. Completing old work cannot remove a replacement queue item.
+- Notifications follow committed effects. Same-key local commit lanes order foreground writes and already-started replay; independent nodes need a participating conditional protocol for stronger guarantees.
+- Data and control messages are distinct types. Physical namespaces are injectively encoded and control keys cannot collide with ordinary data.
+- Closed internal states carry only valid state data. Integration behavior stays open through traits.
 
----
+## C# to Rust decisions
 
-## 0. Provenance & ground rules
-
-- **Source of truth:** the FusionCache source and docs. When this guide and the
-  source disagree, the source wins; fix the guide.
-- **Concurrency stance (the biggest C#→Rust flip):** FusionCache is `async`/`Task`
-  first. We commit to **`tokio` + `async`/`await`** and forbid blocking the
-  runtime in cache paths. (Bun *banned* async because the host owned the event
-  loop; we do the opposite, but the doctrine "pin one concurrency model and
-  forbid alternatives" still holds.)
-- **Safety budget:** `#![forbid(unsafe_code)]` at the crate root. We start from a
-  memory-safe source, so we **earn** Rust's guarantees rather than importing
-  unsafety. If a future hot path needs `unsafe`, it gets a `// SAFETY:` block and
-  a test — it does not get a blanket exception.
-- **One file/module per source concept:** a FusionCache type maps to one Rust
-  module (`FusionCacheEntryOptions` → `options.rs`, `MaybeValue<T>` → `maybe.rs`,
-  the backplane → `backplane.rs`, …). Namespaces → module paths.
-
-## 1. The flag vocabulary (small, controlled, greppable)
-
-Every uncertainty is recorded in code with one of these, never left implicit:
-
-| Marker | Meaning |
+| C# concept | Rust adaptation |
 |---|---|
-| `// TODO(port): <reason>` | a construct not yet confidently translated |
-| `// PERF(port): <what>` | a C# perf idiom flattened to plain Rust; revisit under a profiler |
-| `// PORT NOTE: <why>` | a deliberate divergence from the source's shape (so reviewers know it is intentional, not a logic change) |
-| `// SAFETY: <invariant>` | required on any `unsafe` block (none today) |
+| Shared cache reference | Cloneable public handle sharing cache state and an independent last-public-handle lifetime token |
+| Immutable entry | Shared immutable snapshot; expiry/refresh create a new version |
+| Business failure/exception | `Result` with typed error families; source chains retained at boundaries |
+| Successful lookup miss | `MaybeValue::none`, inside a successful fallible read |
+| State discriminator with linked nullable fields | Closed enum with variant-specific data |
+| Infinite timeout sentinel | `Timeout::Infinite`; finite duration is an explicit variant |
+| Cancellation token | Explicit cancellation source/request and origin cancellation context with typed reasons |
+| Disposable ownership | RAII guards, owned leases, supervised work, `close` and awaited `shutdown` |
+| Background task | Owned origin/effect continuation; no detached factory merely to implement a foreground timeout |
+| `IDistributedCache` | Open byte-store trait plus optional atomic invalidation and conditional ownership capabilities |
+| Serializer | Open trait; legacy DTO compatibility plus versioned snapshot frames |
+| AutoClone | Registered fallible copy behavior; `Clone` alone does not isolate `Arc` interior mutability |
+| Memory priority/size | Separate entry-count and weight limits, priority-aware admission and exact removal accounting |
+| Event handlers/plugins | One event route, per-cache plugin attachments and deterministic registration teardown |
+| Time provider | Injected domain clock; timer behavior explicitly distinguishes real monotonic I/O from controlled clocks |
 
-Grep the tree for `TODO(port)`/`PERF(port)` to see all remaining risk at a glance.
+The crate uses its pinned Rust 1.88 minimum and edition 2024. It forbids unsafe code. Constructor/factory validation rejects invalid configuration before background tasks begin; adding a data-state variant intentionally requires reviewing its exhaustive consumers.
 
-## 2. The two-pass flow
+## Ownership and cancellation
 
-- **Pass A — faithful draft.** Mirror the source's control flow and naming
-  (re-cased to `snake_case`). Capture *intent* even if it isn't idiomatic yet.
-  Flag anything unclear instead of guessing.
-- **Pass B — make it Rust.** Resolve flags; replace exception flow with `Result`;
-  replace `enum + nullable fields` with sum types; reshape only where the borrow
-  checker forces it, tagging each reshape with `// PORT NOTE`.
+A caller can own a foreground origin, transfer it after a permitted soft timeout, or cancel it. Hard timeout, caller cancellation, cache shutdown and lease loss are different outcomes. Expected cancellation does not become fail-safe success. Registered scopes allow an explicit token to drop an entered pending origin even while its caller future is parked.
 
-The point of separating them is that Pass A is verifiable against the source
-line-by-line, and Pass B is verifiable against the tests.
+Cache-owned tasks do not own the public lifetime token. Dropping the last public handle initiates cleanup even if diagnostic event handles remain alive. Explicit shutdown waits for owned workers and plugin cleanup and reports failures. An externally supplied shared backplane remains owned by its supplier; detaching one cache does not shut down that shared provider.
 
-## 3. The ownership decision (made once, up front)
+## Distributed ordering and protocols
 
-C# is reference-by-default; Rust forces a choice per field. Decide it *before*
-writing code, not per call site. For `amalgam` the decisions were:
+The effective physical namespace determines tag/clear scope. Durable atomic maximum markers prevent missed notifications from becoming permanent invalidation loss. Marker equality is inclusive: `created <= marker`. Finite marker-cache compaction preserves safety through conservative scope invalidation.
 
-| Concern | Decision |
-|---|---|
-| Shared cache handle | `Cache<V> = Arc<CacheInner<V>>`; cloning shares one instance |
-| Stored entry | immutable `Entry<V> = Arc<EntryInner<V>>`; "mutation" = copy-on-write + re-insert |
-| Background tasks (timeout completion, eager refresh) | factory bound `Send + 'static`; the single-flight guard is an `OwnedMutexGuard` so it can move into a spawned task |
-| Backplane listener | holds a `Weak<CacheInner<V>>` so it never keeps the cache alive (no leak) |
+Recovery retains original serialized bytes, remaining physical lifetime and pending stages. A failed publication after a successful data write retries publication rather than rewriting old data. Queue supersession uses exact identities independently of wall-clock timestamps. A transport circuit breaker does not treat a codec error as a global network outage.
 
-## 4. The idiom map (C# → Rust)
+Owned leases expose their granted token and actual lifetime. Native token-checked release and atomic fenced writes reject replacement-owner races. Unknown custom lease lifetime is not replaced with an invented duration. Explicit legacy coordination is weaker and is documented as such.
 
-The heart of the guide: each ambiguous C# construct has one canonical Rust target.
+The ordinary eight-field legacy DTO remains decodable. A versioned frame adds insertion/retention metadata without assuming that every custom serializer emits a particular format. Unknown or malformed frames fail explicitly. Older running readers still need the [namespace migration](docs/PARITY.md#migrating-from-02).
 
-| C# construct | Rust target | As applied in `amalgam` |
-|---|---|---|
-| `Exception` / `throw` / `try`-`catch` | `Result<T, E>` + `thiserror`; `?` to propagate | `error::Error` (typed, `#[non_exhaustive]`); factories return `Result<_, FactoryError>` |
-| business failure vs bug | `Result` for business outcomes; `panic!` only for contract violations | a cache *miss* is `None`/`MaybeValue::none`, never an error; the factory failing is `Err`, not a panic |
-| nullable `T?` / `out` params | `Option<T>` / tuple or `Result` returns | `MaybeValue<V>` for "value or explicitly none"; no `out` params |
-| `enum Status` + "valid only sometimes" nullable fields | a sum type carrying only the data valid in each state | `Freshness {Fresh, Stale}`; `Timeout {Infinite, After(Duration)}`; `FactoryRun`, `LockOutcome` |
-| `IDisposable` / `using` / `Dispose()` | `impl Drop` / RAII guard | single-flight lock guard releases on drop; background completion holds it until done |
-| `Task` / `ValueTask` / `async`-`await` / `CancellationToken` | `Future` / `async` / `tokio` / timeouts via `tokio::time` | the whole `get_or_set` flow |
-| events / `Action` / `Func` / `event` | `Box<dyn Fn>` or a channel | events as a `tokio::sync::broadcast` of `CacheEvent` (decoupled, non-blocking) |
-| LINQ / `IEnumerable<T>` | iterator adapters | tag collection, fallback selection |
-| generics + `where` constraints | generics + trait bounds | `Cache<V>` / `DistributedSerializer<V>` |
-| `DateTimeOffset.UtcNow`, `Guid.NewGuid()` | injected, never called in domain logic | `Clock` trait (`SystemClock`/`ManualClock`); `Timestamp` newtype in 100ns ticks; ids via injected randomness at the boundary |
-| `IDistributedCache` (byte store) | object-safe `async_trait` | `DistributedCache` (+ `InMemoryDistributedCache` reference) |
-| magic-string keys (`__fc:t:*`) | a typed structure | `TagRegistry` of typed `Tag` markers, not strings smuggled through the value cache |
-| `-1ms` "infinite" sentinel | an explicit variant | `Timeout::Infinite` |
+## Verification method
 
-## 5. Behaviour-preservation gotchas found during this port
+Preserve original observable tests and add controlled interleavings for identified faults. Do not weaken an assertion merely to make a repair green; use the released reference to resolve genuine semantic ambiguity. Real timers, Redis leases, pub/sub reconnection and downstream packages require real integration evidence in addition to injected-clock and in-memory tests.
 
-These are the spots where "obvious" translations are wrong; each is pinned by a
-test in `tests/behavior.rs`:
+Compare performance only after compiling both implementations, with matched ownership/workload and sequential repeated runs. A reference clone and a deep value copy are different experiments. Bounded stress tests, platform CI and security audits complement behavioral tests; they do not prove every external provider or production workload.
 
-- **Physical TTL with fail-safe is `max(duration, fail_safe_max_duration)`, not
-  the sum.** (`options::tests::physical_ttl_uses_max_not_sum`)
-- **The soft timeout only applies when fail-safe is on *and* a fallback exists**;
-  the hard timeout always applies and wins when shorter.
-- **A timed-out factory keeps running** (when background completion is allowed):
-  spawn it as a task and race a timer; *don't* `select!` it inline (that would
-  cancel it on timeout).
-- **A background factory failure does *not* re-activate fail-safe** — the
-  throttled stale value already returned stands.
-- **Tag invalidation is lazy and inclusive** (`entry_created <= marker`); a new
-  entry created in the same tick as a `remove_by_tag` marker is also invalidated.
-- **`rethrow_serialization` defaults to `true`** while every other `rethrow_*`
-  defaults to `false`.
-
-## 6. The oracle (don't let it move)
-
-Behavioural equivalence is judged by tests, not by "looks right":
-
-- `tests/behavior.rs` is the L1 oracle (stampede, fail-safe, timeouts, eager
-  refresh, adaptive, conditional refresh, tagging, events).
-- `tests/multilevel.rs` is the L2 + backplane oracle (read-through, cross-node
-  invalidation).
-- All time-dependent assertions run on an injected `ManualClock`, so they are
-  deterministic — no `sleep`-and-hope for *expiration* logic (only real factory
-  timeouts use the real timer, because those are wall-clock by nature).
-- **Rule:** never weaken a test to make the port "pass". If behaviour must
-  change, change the assertion deliberately and say why.
-
-## 7. What got built in the full-parity pass
-
-The original draft of this guide stopped at "L1 complete; L2/backplane wired with
-reference backends; the rest is roadmap". A follow-up pass closed that gap and the
-crate now implements the **full** FusionCache feature set. The same two-pass /
-idiom-map discipline applied; each new module maps one FusionCache concept to one
-Rust module, and each is wired into the `cache.rs` request flow (not left as a
-dangling trait):
-
-- **`circuit.rs`** — `CircuitBreaker` (time-based, lock-free) gating L2 and
-  backplane ops; trips/auto-closes and drives `CacheEvent::CircuitBreakerChange`.
-  `Duration::ZERO` ⇒ permanently closed (the FusionCache default).
-- **`recovery.rs`** — `AutoRecoveryService` (latest-wins dedup queue, bounded
-  `max_items`/`max_retries`, background drain) + the `RecoveryExecutor` trait, which
-  `CacheInner` implements by re-doing the L2 write / backplane publish.
-- **`distributed_lock.rs`** — the `DistributedLocker` seam (token-based, so a Redis
-  `SET key token NX PX` maps cleanly) + `InMemoryDistributedLocker`; acquired after
-  the local `KeyedLock` for cluster-wide single-flight.
-- **`plugins.rs`** — `Plugin` + `PluginHost`, notified on every `CacheEvent`.
-- **`registry.rs`** — `CacheRegistry` (named caches) + `DefaultEntryOptionsProvider`
-  (per-key dynamic defaults); the Rust-idiomatic substitute for DI keyed caches.
-- **`observability.rs`** — `MetricsPlugin` (feature `metrics`), recording counters
-  via the `metrics` facade as a plugin.
-- **`serializers.rs`** — `MessagePackSerializer` (feature `messagepack`).
-- **`redis_backend.rs`** — `RedisDistributedCache` / `RedisBackplane` /
-  `RedisDistributedLocker` (feature `redis`) on `redis::aio::ConnectionManager`;
-  integration tests are env-gated on `AMALGAM_REDIS_URL`.
-
-Multi-node **tag/clear** invalidation rides reserved-key backplane messages
-(`__amalgam:t:*`, `__amalgam:clear:*`), and L2 keys carry a wire-version prefix
-(`distributed_wire_version`, default `"v1"`).
-
-## 8. Per-module status
-
-Each source module records where it stands. Implemented & tested: `time`,
-`maybe`, `error`, `options`, `tags`, `entry`, `events`, `memory`, `locking`,
-`factory`, `cache` (the full `get_or_set` flow), `circuit`, `recovery`,
-`distributed_lock`, `plugins`, `registry`. Implemented behind feature flags:
-`observability` (`metrics`), `serializers` (`messagepack`), `redis_backend`
-(`redis`). Reference implementations wired into the flow: `distributed` (L2 trait +
-in-memory backend + JSON serializer, read/write-through), `backplane` (trait +
-in-process backend + listener).
-
-Genuinely remaining (see the "Still roadmap" section of `docs/PARITY.md`):
-first-class OpenTelemetry tracing **spans** (today: `tracing` log lines at
-factory-error/fail-safe plus `metrics`-facade counters), a DI-container
-integration (the registry is the Rust-idiomatic stand-in), and serializers beyond
-JSON / MessagePack. These are tracked as `TODO(port)` where they touch existing
-code.
+See [validation](docs/AUDIT.md), the [README](README.md) and [examples](examples).

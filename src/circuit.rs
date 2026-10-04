@@ -8,15 +8,29 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use crate::time::{Timestamp, duration_to_ticks};
+use crate::time::Timestamp;
 
 const CLOSED: i64 = i64::MIN;
+
+/// Admission result, including an observable automatic close transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitCheck {
+    /// Admission was already open to operations.
+    Closed,
+    /// Operations remain blocked until the timestamp.
+    Open {
+        /// End of the blocked window.
+        until: Timestamp,
+    },
+    /// This caller performed the cooldown close transition.
+    ClosedAfterCooldown,
+}
 
 /// A time-based circuit breaker. Cheap, lock-free, shareable.
 #[derive(Debug)]
 pub struct CircuitBreaker {
     /// How long the breaker stays open after a trip; 0 ⇒ disabled (always closed).
-    open_duration_ticks: i64,
+    open_duration: Duration,
     /// The tick at which the breaker re-closes, or [`CLOSED`] when closed.
     reopen_at: AtomicI64,
 }
@@ -27,7 +41,7 @@ impl CircuitBreaker {
     #[must_use]
     pub fn new(open_duration: Duration) -> Self {
         Self {
-            open_duration_ticks: duration_to_ticks(open_duration),
+            open_duration,
             reopen_at: AtomicI64::new(CLOSED),
         }
     }
@@ -35,7 +49,7 @@ impl CircuitBreaker {
     /// `true` if this breaker is disabled (zero open-duration).
     #[must_use]
     pub fn is_disabled(&self) -> bool {
-        self.open_duration_ticks == 0
+        self.open_duration.is_zero()
     }
 
     /// `true` if the breaker is closed (operations may proceed) at `now`.
@@ -43,24 +57,33 @@ impl CircuitBreaker {
     /// If the open window has elapsed, the breaker auto-closes as a side effect.
     #[must_use]
     pub fn is_closed(&self, now: Timestamp) -> bool {
+        !matches!(self.check(now), CircuitCheck::Open { .. })
+    }
+
+    /// Checks admission and reports the single winning cooldown transition.
+    pub fn check(&self, now: Timestamp) -> CircuitCheck {
         if self.is_disabled() {
-            return true;
+            return CircuitCheck::Closed;
         }
-        let reopen = self.reopen_at.load(Ordering::Acquire);
-        if reopen == CLOSED {
-            return true;
-        }
-        if now.ticks() >= reopen {
-            // Window elapsed: auto-close.
-            let _ = self.reopen_at.compare_exchange(
+        loop {
+            let reopen = self.reopen_at.load(Ordering::Acquire);
+            if reopen == CLOSED {
+                return CircuitCheck::Closed;
+            }
+            if now.ticks() < reopen {
+                return CircuitCheck::Open {
+                    until: Timestamp::from_ticks(reopen),
+                };
+            }
+            match self.reopen_at.compare_exchange(
                 reopen,
                 CLOSED,
                 Ordering::AcqRel,
-                Ordering::Relaxed,
-            );
-            true
-        } else {
-            false
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return CircuitCheck::ClosedAfterCooldown,
+                Err(_) => continue,
+            }
         }
     }
 
@@ -72,8 +95,13 @@ impl CircuitBreaker {
         if self.is_disabled() {
             return false;
         }
-        let reopen = now.ticks().saturating_add(self.open_duration_ticks);
-        let previous = self.reopen_at.swap(reopen, Ordering::AcqRel);
+        let reopen = now
+            .saturating_add(self.open_duration)
+            .ticks()
+            .max(now.ticks().saturating_add(1));
+        // Delayed failures from an older clock snapshot cannot shorten a newer
+        // open window. The transition winner still emits exactly one open event.
+        let previous = self.reopen_at.fetch_max(reopen, Ordering::AcqRel);
         previous == CLOSED
     }
 
@@ -117,5 +145,41 @@ mod tests {
         cb.trip(t0);
         assert!(cb.close()); // open -> closed
         assert!(!cb.close()); // already closed
+    }
+
+    #[test]
+    fn concurrent_cooldown_has_one_transition_and_older_failures_do_not_shorten_reopen() {
+        let cb = std::sync::Arc::new(CircuitBreaker::new(Duration::from_secs(1)));
+        cb.trip(Timestamp::from_ticks(0));
+        let now = Timestamp::from_ticks(20_000_000);
+        let handles: Vec<_> = (0..32)
+            .map(|_| {
+                let cb = std::sync::Arc::clone(&cb);
+                std::thread::spawn(move || cb.check(now))
+            })
+            .collect();
+        assert_eq!(
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|check| *check == CircuitCheck::ClosedAfterCooldown)
+                .count(),
+            1
+        );
+        assert!(cb.trip(now));
+        assert!(!cb.trip(Timestamp::from_ticks(0)));
+        assert!(matches!(
+            cb.check(Timestamp::from_ticks(25_000_000)),
+            CircuitCheck::Open { .. }
+        ));
+    }
+
+    #[test]
+    fn large_duration_saturates_at_upper_clock_bound() {
+        let cb = CircuitBreaker::new(Duration::MAX);
+        assert!(cb.trip(Timestamp::MIN));
+        assert!(
+            matches!(cb.check(Timestamp::from_ticks(0)),CircuitCheck::Open {until} if until==Timestamp::MAX)
+        );
     }
 }

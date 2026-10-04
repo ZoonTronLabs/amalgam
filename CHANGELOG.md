@@ -3,11 +3,40 @@
 All notable changes to `amalgam` are documented here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.2.0] — full FusionCache parity
+## [0.3.0] — source version, registry publication pending
 
-The resiliency *and* distributed feature set of .NET FusionCache, end to end.
+### Changed
+
+- Shared typed origin/commit/lifecycle ownership, per-key locks, explicit cancellation and awaited shutdown.
+- Fallible construction and reads, typed mutation receipts and observed background completion; legacy signatures remain adapters.
+- Separate source/insertion ordering and L1/L2 lifetime, eager L2/lease coordination, zero/finite timeout handling.
+- Durable namespaced invalidation, ordinary/passive hydration fences, exact recovery identities/stages, data-before-publication and stronger local replay ordering.
+- Full L2 read deadlines include required marker validation; explicit tag/clear layer skips, honest stale diagnostics and circuit admission preserve policy.
+- Dynamic plugin startup drains with teardown; uncertain known-token leases are cleaned; recovery releases extensions outside queue locks and resumes after malformed connected control frames.
+- Delayed hydration preserves newer L1 identities and preferred stale values; private continuity eligibility survives copying/insertion races. Shutdown waits for the owning plugin session destructor after its last callback.
+- Canonical stale reads recheck retention after I/O; legacy captured-fallback compatibility is tested against actual FusionCache 2.9.
+- Actual fallible clone isolation, count/weight/priority retention, bounded resources and a common event/plugin route.
+- Owned lease capabilities and token-checked fencing; real Redis subscription acknowledgement, reconnect continuity and cleanup.
+- Source-preserving failures, bounded metrics, operation diagnostics and composable transactional OpenTelemetry initialization.
+- Full-range clock arithmetic and minimum-version-compatible patched dependencies.
+- Native portability, individual-feature, mandatory Redis, actual-package consumer and advisory CI gates.
+
+### Migration
+
+- Default distributed keys use the v2 Prefix namespace. New codecs accept legacy raw DTOs; running 0.2 readers cannot read new frames. Use a coordinated fresh namespace.
+- Auto-clone needs a registered `ValueCloner`; ordinary `Clone` may share mutable state.
+- Recovery queue defaults to 1024 items; explicit `max_items: None` retains unlimited admission.
+- Custom atomic invalidation and strict lease guarantees require participating provider capabilities.
+- Package name remains `amalgam-cache`; Rust library name remains `amalgam`.
+
+See [contract and migration](docs/PARITY.md) and [validation](docs/AUDIT.md). Source delivery does not publish crates.io or deploy application consumers.
+
+## [0.2.0] — distributed integrations
+
+Introduced distributed integrations; subsequent audit corrections are recorded in 0.3. Historical feature additions do not establish complete behavioral equivalence.
 
 ### Added
+
 - **Auto-recovery** — `AutoRecoveryService` queues failed L2 / backplane operations
   (latest-wins dedup by key, `max_items`, `max_retries`, background drain) and
   replays them when the dependency recovers. Builder: `.auto_recovery(RecoveryConfig)`.
@@ -37,11 +66,11 @@ The resiliency *and* distributed feature set of .NET FusionCache, end to end.
   `metrics` facade (exporter-agnostic).
 
 ### Notes
-- Auto-clone (`with_enable_auto_clone`) is inherently satisfied in Rust — reads
-  return an owned `V`, so callers cannot mutate the cached copy.
+
+- Historical correction: an owned `V` returned by `Clone` can still share interior mutable state. 0.3 requires an actual copy strategy for auto-clone.
 - Cargo features: `redis`, `messagepack`, `metrics`, and `full` (all three).
 
-## [0.1.0] — faithful L1 core
+## [0.1.0] — L1 core
 
 - `Cache<V>` with `get_or_set` (+ `_with` / `_full`), `set`, `try_get`,
   `get_or_default`, `remove`, `expire`, `remove_by_tag(s)`, `clear`.
