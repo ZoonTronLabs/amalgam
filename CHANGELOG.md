@@ -3,7 +3,7 @@
 All notable changes to `amalgam` are documented here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.3.0] — source version, registry publication pending
+## [0.3.0] — 2026-10-05
 
 ### Changed
 

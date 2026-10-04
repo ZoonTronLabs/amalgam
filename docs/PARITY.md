@@ -6,7 +6,7 @@ The comparison pins are distinct:
 
 - Inspected upstream source: FusionCache commit `af09f81a3ea8d7ed71183b46501946da801a2a22`.
 - Executed reference: published NuGet FusionCache **2.9.0**, binary informational version `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
-- Amalgam: the **0.3.0 source version** in this repository. A source push does not publish a crates.io version.
+- Amalgam: **0.3.0**.
 
 ## Observable behavior
 
@@ -77,7 +77,7 @@ These are selected Amalgam defaults. The pinned FusionCache 2.9 source defaults 
 
 ## Migrating from 0.2
 
-1. Compile consumers against 0.3 using `amalgam = { package = "amalgam-cache", version = "0.3" }` once that registry version is published, or the reviewed source checkout beforehand. The package and imported library names differ.
+1. Compile consumers against 0.3 using `amalgam = { package = "amalgam-cache", version = "0.3" }`. The package and imported library names differ.
 2. Prefer `CacheBuilder::try_build`, fallible `read`/`read_or_default`, typed mutations and their receipts. Existing legacy signatures remain adapters; a signature without an error return cannot expose every failure.
 3. Register an actual `ValueCloner` before enabling auto-clone. Configure count and weight independently and handle refused admission.
 4. Choose participating marker/lease capabilities for the guarantees you need. Unsupported capabilities are typed failures, not successful no-ops.

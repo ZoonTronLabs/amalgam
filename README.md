@@ -14,15 +14,15 @@
 
 An async Rust hybrid cache inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
-This README describes the **0.3.0 source release**. The registry still contains 0.2.0 (checked 2026-10-04). Until 0.3.0 is published, use the reviewed source checkout:
+This README describes **0.3.0**. Install the crate from crates.io:
 
 ```toml
 [dependencies]
-amalgam = { package = "amalgam-cache", version = "0.3", path = "../amalgam" }
+amalgam = { package = "amalgam-cache", version = "0.3" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-The published package is `amalgam-cache`; the Rust library is imported as `amalgam`. After the release is available, replace `path` with the registry dependency using the same package alias.
+The published package is `amalgam-cache`; the Rust library is imported as `amalgam`.
 
 ## Basic use
 
