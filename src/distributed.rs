@@ -398,6 +398,10 @@ where
 ///
 /// Implement this over Redis, Memcached, a database, etc. The cache layer adds
 /// serialization, fail-safe and stampede protection on top.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 emits must_use on boxed futures"
+)]
 #[async_trait]
 pub trait DistributedCache: Send + Sync {
     /// Reads the bytes stored at `key`, if present and unexpired.
@@ -458,6 +462,10 @@ pub enum LeasedWriteOutcome {
 }
 
 /// Durable invalidation storage. `advance` must implement a real atomic max.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 emits must_use on boxed futures"
+)]
 #[async_trait]
 pub trait InvalidationStore: Send + Sync {
     /// Reads one durable maximum from a genuinely separate control area.

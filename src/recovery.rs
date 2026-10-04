@@ -400,6 +400,10 @@ pub enum RecoveryStart {
 }
 
 /// Extensible replay behavior; old data executors compile unchanged.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 emits must_use on boxed futures"
+)]
 #[async_trait]
 pub trait RecoveryExecutor: Send + Sync {
     /// The compatible legacy data replay operation.

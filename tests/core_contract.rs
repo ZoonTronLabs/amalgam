@@ -718,6 +718,8 @@ struct FencedFault {
     first: AtomicBool,
     fenced: AtomicUsize,
     ordinary: AtomicUsize,
+    replay_entered: tokio::sync::Notify,
+    replay_release: tokio::sync::Notify,
 }
 #[async_trait]
 impl DistributedCache for FencedFault {
@@ -743,6 +745,8 @@ impl DistributedCache for FencedFault {
                 "fault before commit",
             )))
         } else {
+            self.replay_entered.notify_one();
+            self.replay_release.notified().await;
             self.inner.write_with_lease(key, mutation, proof).await
         }
     }
@@ -758,6 +762,8 @@ async fn failed_origin_commit_recovery_reacquires_and_uses_native_fenced_write()
         first: AtomicBool::new(true),
         fenced: AtomicUsize::new(0),
         ordinary: AtomicUsize::new(0),
+        replay_entered: tokio::sync::Notify::new(),
+        replay_release: tokio::sync::Notify::new(),
     });
     let locker = Arc::new(InMemoryDistributedLocker::new(clock.clone()));
     let cache = Cache::<i32>::builder()
@@ -770,6 +776,9 @@ async fn failed_origin_commit_recovery_reacquires_and_uses_native_fenced_write()
         .try_build()
         .unwrap();
     assert_eq!(cache.get_or_set_value("k", 7, None).await.unwrap(), 7);
+    tokio::time::timeout(Duration::from_secs(2), backend.replay_entered.notified())
+        .await
+        .expect("recovery must enter the second fenced write");
     assert!(matches!(
         cache.recovery_ticket("k").unwrap().work(),
         RecoveryWork::Data {
@@ -777,6 +786,7 @@ async fn failed_origin_commit_recovery_reacquires_and_uses_native_fenced_write()
             ..
         }
     ));
+    backend.replay_release.notify_one();
     until(|| cache.pending_recovery() == 0).await;
     assert_eq!(backend.fenced.load(Ordering::SeqCst), 2);
     assert_eq!(backend.ordinary.load(Ordering::SeqCst), 0);

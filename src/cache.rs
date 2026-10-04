@@ -3413,6 +3413,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
     }
     fn continuity_gap(&self) {
+        #[allow(
+            deprecated,
+            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+        )]
         if self
             .inner
             .epoch
@@ -3447,6 +3451,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         // Serialize barrier transitions with the observed state. Otherwise a
         // delayed disconnected caller can suspend replay after a newer ACK.
         let gap = !matches!(current, BackplaneState::Connected { .. }) || previous.is_some();
+        #[allow(
+            deprecated,
+            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+        )]
         let exhausted = gap
             && self
                 .inner

@@ -351,7 +351,7 @@
         {
           "file": "tests/core_contract.rs",
           "test": "cold_expire_read_failure_retains_intent_and_original_physical_deadline",
-          "line": 1075
+          "line": 1085
         }
       ],
       "title": "Expire с холодным L1 оставляет L2 свежей",
@@ -432,7 +432,7 @@
         {
           "file": "tests/core_contract.rs",
           "test": "recovered_storage_then_failed_notification_never_rewrites_storage_on_retry",
-          "line": 1149
+          "line": 1159
         }
       ],
       "title": "Неуспешный publish маркера не восстанавливается",
@@ -519,7 +519,7 @@
         {
           "file": "tests/core_contract.rs",
           "test": "delayed_clear_marker_does_not_evict_a_newer_snapshot",
-          "line": 1208
+          "line": 1218
         }
       ],
       "title": "Старый Expire message инвалидирует новую запись",
@@ -899,7 +899,7 @@
         {
           "file": "tests/core_contract.rs",
           "test": "initial_native_ack_gates_operations_and_close_releases_parked_admission",
-          "line": 792
+          "line": 802
         },
         {
           "file": "tests/readiness_options.rs",
@@ -2511,5 +2511,16 @@
     ],
     "source_unchanged": true,
     "scope": "local workload measurements; warm small/shared data slower, owned64KiB faster, cold overhead remains; no universal equal-speed claim"
+  },
+  "ci_compatibility_repair": {
+    "first_source_commit": "56c06b79a88440bf02345b129c59d06b0cb72674",
+    "first_ci_run": 37227020558,
+    "hosted_stable": "1.99.0",
+    "prior_installed_stable": "1.95.0",
+    "cause": "28 new stable diagnostics from renamed atomic API and async-trait-generated must_use plus fixed-size decoding; Windows SystemTime cannot represent1ns; recovery ticket assertion raced a completed worker",
+    "repair": "Statement/trait-scoped reasoned compiler compatibility, safe as_chunks on Rust1.88, representable100ns fixture plus non-Windows sub-tick coverage, controlled parked fenced replay without dropping assertions",
+    "validation": "313 all-feature mandatory live tests, strict1.88 and1.99 Clippy, Rust1.99 fmt and strict1.88 rustdoc passed; exact new commit remote matrix remains required",
+    "evidence": "validation/ci-compatibility/",
+    "performance_association": "Measured C1 hot-path source; compatibility delta changes annotations and equivalent fixed-size control decoder, with no measured hot-path runtime change"
   }
 }

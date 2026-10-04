@@ -194,6 +194,10 @@ impl KeyLane {
         at: Timestamp,
         epoch: &Arc<AtomicU64>,
     ) -> Result<Arc<Fence>> {
+        #[allow(
+            deprecated,
+            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+        )]
         let generation = self
             .generation
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {

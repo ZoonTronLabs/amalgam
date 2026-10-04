@@ -187,6 +187,10 @@ impl ManualClock {
     pub fn advance(&self, duration: Duration) {
         // The closure always returns Some, so fetch_update cannot reject this
         // update. Its retry loop preserves concurrent advances without wrapping.
+        #[allow(
+            deprecated,
+            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+        )]
         let _ = self
             .ticks
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |ticks| {
@@ -319,6 +323,12 @@ mod tests {
             timestamp_from_system_time(UNIX_EPOCH - Duration::from_secs(1)),
             Timestamp::from_ticks(-TICKS_PER_SECOND)
         );
+        assert_eq!(
+            timestamp_from_system_time(UNIX_EPOCH - Duration::from_nanos(100)),
+            Timestamp::from_ticks(-1)
+        );
+        // Windows SystemTime stores 100ns ticks and truncates a 1ns subtraction.
+        #[cfg(not(windows))]
         assert_eq!(
             timestamp_from_system_time(UNIX_EPOCH - Duration::from_nanos(1)),
             Timestamp::from_ticks(-1)

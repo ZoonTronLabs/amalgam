@@ -29,7 +29,7 @@ CI retains the required aggregate `ci` status and verifies:
 - A real packaged `.crate`, extracted and consumed from fresh and historic downstream locks. The package excludes private agent/owner instructions and checks its relative documentation links.
 - RustSec dependency audits without ignored advisories or warnings. A clean library lock alone does not establish the safety of every downstream application's resolved lock.
 
-Use `cargo test --all-features`, `cargo test --no-default-features`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check` and `cargo doc --all-features --no-deps` for local gates. Configure `AMALGAM_REDIS_URL` and `AMALGAM_REQUIRE_REDIS=1` for a required live run. CI additionally runs feature and downstream-package matrices.
+Use `cargo test --all-features`, `cargo test --no-default-features`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check` and `cargo doc --all-features --no-deps` for local gates. Configure `AMALGAM_REDIS_URL` and `AMALGAM_REQUIRE_REDIS=1` for a required live run. CI additionally runs feature and downstream-package matrices. The initial delivery CI exercised Rust 1.99 and Windows and exposed compatibility diagnostics and two scheduling/clock fixture assumptions. Scoped compiler compatibility retains Rust 1.88, fixed-size decoding uses the supported safe slice API, Windows checks a representable 100 ns time boundary, and the native recovery test parks its write before inspecting the pending ticket. No expected commit or cleanup assertion is removed.
 
 ## Reference and performance limits
 

@@ -259,7 +259,9 @@ pub(crate) fn decode_hex(encoded: &str) -> std::result::Result<Vec<u8>, MarkerEr
     }
     encoded
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = (pair[0] as char)
                 .to_digit(16)
@@ -313,6 +315,10 @@ pub enum BackplaneState {
 }
 
 /// An extensible notification provider. Legacy methods remain required unchanged.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 emits must_use on boxed futures"
+)]
 #[async_trait]
 pub trait Backplane: Send + Sync {
     /// Publishes an existing data envelope.

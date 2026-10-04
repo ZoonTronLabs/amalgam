@@ -231,6 +231,10 @@ impl LeaseTaskOwner for StandaloneLeaseOwner {
 }
 
 /// A cross-node locker; legacy methods retain their public signatures.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 emits must_use on boxed futures"
+)]
 #[async_trait]
 pub trait DistributedLocker: Send + Sync {
     /// Attempts one acquisition, waiting at most `timeout` for contention.

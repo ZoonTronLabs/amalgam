@@ -947,6 +947,10 @@ async fn restore_subscriber(
     inner: &BackplaneInner,
     pushes: broadcast::Sender<SubscriberPush>,
 ) -> Result<ContinuityEpoch> {
+    #[allow(
+        deprecated,
+        reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+    )]
     let old = inner
         .incarnation
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
@@ -969,6 +973,10 @@ async fn restore_subscriber(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(subscriber);
     inner.subscriber_id.store(id, Ordering::Release);
+    #[allow(
+        deprecated,
+        reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+    )]
     inner
         .acknowledged
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -1002,6 +1010,10 @@ async fn supervise_subscriber(
                             false
                         }
                         None => {
+                            #[allow(
+                                deprecated,
+                                reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+                            )]
                             inner
                                 .malformed
                                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -1027,6 +1039,10 @@ async fn supervise_subscriber(
                 _ => true,
             },
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                #[allow(
+                    deprecated,
+                    reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+                )]
                 inner
                     .dropped
                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -1071,6 +1087,10 @@ async fn supervise_subscriber(
                             }
                             Ok(_) => {}
                             Err(broadcast::error::TryRecvError::Lagged(skipped)) => {
+                                #[allow(
+                                    deprecated,
+                                    reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+                                )]
                                 inner
                                     .dropped
                                     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
