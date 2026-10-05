@@ -5,6 +5,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+- Add `CachePlugin<V>`, `CachePluginContext<V>` and non-owning `PluginCache<V>` with the complete same-cache async/sync operation surface. Preserve interleaved legacy registration order. Stop uses bounded owned cleanup admission; final-owner closure, deferred startup/callback teardown, source failures and native Redis operations have public regressions. See `docs/PLUGIN_CACHE.md`.
+
 - Add `ReconciliationPolicy::BackplaneBestEffort` to retain local/hydrated fresh and physically retained stale L1 over notification gaps/reconnects. Combined with cooperative ownership and suppressed locker errors it supports ordinary outage availability. Known invalidations, deadlines, cancellation and recovery ownership still apply; strict defaults are unchanged. See `docs/BACKPLANE_OUTAGES.md`.
 
 - Clarify the existing Redis outage contract: strict fenced acquisition rejects errors even with locker rethrow disabled; cooperative foreground suppression and backplane L1 invalidation are separate policies. Add public outage-policy regressions.

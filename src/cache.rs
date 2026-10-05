@@ -4,6 +4,7 @@ mod blocking;
 mod builder;
 mod markers;
 mod origin;
+mod plugin;
 mod read;
 mod recovery;
 mod runtime;
@@ -16,6 +17,8 @@ pub use blocking::{
 };
 pub use builder::CacheBuilder;
 use origin::{CacheOrigin, ConstantOrigin, FactoryOrigin, OriginKind};
+pub use plugin::{CachePlugin, CachePluginContext, PluginCache};
+use plugin::{InitialPlugin, PluginAccess, WorkAdmission};
 
 use crate::backplane::{
     Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState, MarkerCommand,
@@ -171,7 +174,8 @@ enum ExecutorOwnership {
     CacheOwned(BlockingRuntime),
 }
 enum PublicLifetime<V: Clone + Send + Sync + 'static> {
-    External(Weak<CacheInner<V>>),
+    PluginAccess(Arc<PluginAccess>),
+    External(Arc<CacheInner<V>>),
     CacheOwned {
         inner: Arc<CacheInner<V>>,
         executor: BlockingRuntime,
@@ -180,10 +184,9 @@ enum PublicLifetime<V: Clone + Send + Sync + 'static> {
 impl<V: Clone + Send + Sync + 'static> Drop for PublicLifetime<V> {
     fn drop(&mut self) {
         match self {
-            Self::External(owner) => {
-                if let Some(inner) = owner.upgrade() {
-                    inner.close();
-                }
+            Self::PluginAccess(_) => {}
+            Self::External(inner) => {
+                inner.close();
             }
             Self::CacheOwned { inner, executor } => {
                 if inner.close() == CloseOutcome::AlreadyClosed {
@@ -211,11 +214,13 @@ impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
 }
 struct Worker<V: Clone + Send + Sync + 'static> {
     inner: Arc<CacheInner<V>>,
+    admission: WorkAdmission,
 }
 impl<V: Clone + Send + Sync + 'static> Clone for Worker<V> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            admission: self.admission.clone(),
         }
     }
 }

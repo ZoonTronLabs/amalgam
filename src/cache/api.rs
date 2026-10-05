@@ -7,8 +7,8 @@ use super::{
     Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LookupKey, LookupMode,
     LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MutationReceipt,
     ObservationAdmission, Observed, OperationObservation, OperationOutcome, Ordering, OriginKind,
-    Pin, Plugin, ReadyLookup, ReadyValue, ReplayTicket, Result, ShutdownReport, Storage, Tag,
-    TagVerdict, Worker, drive,
+    Pin, Plugin, PublicLifetime, ReadyLookup, ReadyValue, ReplayTicket, Result, ShutdownReport,
+    Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
 };
 
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
@@ -50,11 +50,18 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Starts a dynamic plugin session owned by its registration and this cache.
     /// Dropping or stopping the registration detaches it; shutdown waits callbacks.
     pub fn register_plugin(&self, plugin: Arc<dyn Plugin>) -> Result<crate::PluginRegistration> {
-        let permit = self.inner.scopes.inline();
+        let permit = self.inline();
         permit.admit()?;
         let registration = self.inner.plugins.register(plugin)?;
         permit.status(None)?;
         Ok(registration)
+    }
+    /// Starts a typed plugin with weak operational access to this cache.
+    pub fn register_cache_plugin(
+        &self,
+        plugin: Arc<dyn super::CachePlugin<V>>,
+    ) -> Result<crate::PluginRegistration> {
+        self.register_plugin(super::plugin::adapter(plugin, &self.inner))
     }
     /// Static default options; per-key providers may override them.
     pub fn entry_options(&self) -> EntryOptions {
@@ -79,12 +86,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Waits native subscription admission. Close cancels a parked readiness wait.
     pub async fn ready(&self) -> Result<BackplaneReadiness> {
-        if self.inner.scopes.is_closed() {
+        if self.operation_scopes().is_closed() {
             return Err(Error::CacheClosed);
         }
         let worker = self.worker();
-        self.inner
-            .scopes
+        self.operation_scopes()
             .execution(
                 async move { worker.await_readiness().await },
                 CancellationSource::new(),
@@ -123,6 +129,14 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub(super) fn worker(&self) -> Worker<V> {
         Worker {
             inner: Arc::clone(&self.inner),
+            admission: match &*self.lifetime {
+                PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {
+                    WorkAdmission::Ordinary
+                }
+                PublicLifetime::PluginAccess(access) => {
+                    WorkAdmission::Plugin(access.scopes(&self.inner.scopes))
+                }
+            },
         }
     }
     fn lookup_key(&self, raw: &str, full: Arc<str>) -> LookupKey {
@@ -163,7 +177,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         // creating the small observer future stored in a caller's state.
         let prepared: Result<Execution<T>> = (|| {
             let span = observation.span();
-            if self.inner.scopes.is_closed() {
+            if self.operation_scopes().is_closed() {
                 drop(work);
                 observation.finish(OperationOutcome::from_error(&Error::CacheClosed));
                 return Err(Error::CacheClosed);
@@ -173,7 +187,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             let completion_token = source.token();
             // The scope owns the observer too: a parked caller can be cancelled and
             // finish its logical observation without polling its future again.
-            let execution = self.inner.scopes.execution(
+            let execution = self.operation_scopes().execution(
                 async move {
                     if worker.inner.wait_for_initial_backplane_subscribe
                         && !worker.inner.subscription_admitted.load(Ordering::Acquire)
@@ -230,7 +244,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         operation: CacheOperation,
         mode: LookupMode,
     ) -> LookupStart<'a, V> {
-        let permit = self.inner.scopes.inline();
+        let permit = self.inline();
         let key = match &self.inner.key_prefix {
             Some(prefix) => Cow::Owned(format!("{prefix}{raw}")),
             None => Cow::Borrowed(raw),
@@ -795,7 +809,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         default: V,
         options: Option<EntryOptions>,
     ) -> V {
-        let scopes = Arc::clone(&self.inner.scopes);
+        let scopes = self.operation_scopes();
         match self
             .read_complete(
                 key.as_ref(),
@@ -1185,6 +1199,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Waits execution scopes, supervised effects, cleanup, recovery and plugins.
     pub async fn shutdown(&self) -> Result<ShutdownReport> {
+        self.check_plugin_drain(crate::DrainOperation::Shutdown)?;
         super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::Shutdown)?;
         self.inner.shutdown().await
     }
@@ -1196,6 +1211,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Waits currently scheduled effects and their cleanup without closing the cache.
     pub async fn flush_pending(&self) -> Result<()> {
+        self.check_plugin_drain(crate::DrainOperation::FlushPending)?;
         super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::FlushPending)?;
         self.inner.tasks.flush().await;
         Ok(())

@@ -200,7 +200,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: Arc<str>,
         work: impl Future<Output = Result<CommitReport>> + Send + 'static,
     ) -> MutationReceipt {
-        let execution = self.inner.scopes.execution(work, CancellationSource::new());
+        let execution = self.scopes().execution(work, CancellationSource::new());
         let receiver = self.inner.tasks.spawn(
             ShutdownTask::Distributed,
             key,

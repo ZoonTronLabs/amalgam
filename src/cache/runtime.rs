@@ -131,7 +131,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             | ReconciliationPolicy::BackplaneContinuity
             | ReconciliationPolicy::BackplaneBestEffort => Duration::from_secs(1),
         };
-        let execution = self.inner.scopes.execution(
+        let execution = self.scopes().execution(
             async move {
                 loop {
                     tokio::time::sleep(interval).await;
@@ -184,11 +184,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let mut health = backplane.connection_state();
         let weak = Arc::downgrade(&self.inner);
         let source = CancellationSource::new();
-        let execution=self.inner.scopes.execution(async move {
+        let execution=self.scopes().execution(async move {
             loop {
                 tokio::select! {
                     result=messages.recv()=>{
-                        let Some(inner)=weak.upgrade()else{return Ok(());};let worker=Worker {inner};
+                        let Some(inner)=weak.upgrade()else{return Ok(());};let worker=Worker::ordinary(inner);
                         match result {
                             Ok(message)=>worker.apply_backplane(message).await?,
                             Err(broadcast::error::RecvError::Lagged(_))=>{worker.continuity_gap();worker.ensure_health();if let Some(recovery)=&worker.inner.recovery {recovery.pause_after_reconnect()?;}},
@@ -196,7 +196,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         }
                     },
                     ()=health_changed(&mut health)=>{
-                        if let Some(inner)=weak.upgrade(){Worker {inner}.ensure_health();}else{return Ok(());}
+                        if let Some(inner)=weak.upgrade(){Worker::ordinary(inner).ensure_health();}else{return Ok(());}
                     }
                 }
             }
@@ -300,7 +300,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let task_key = Arc::clone(&key);
         let source = CancellationSource::new();
         let cancellation = source.token();
-        let execution = self.inner.scopes.execution(
+        let execution = self.scopes().execution(
             async move {
                 let raw = worker
                     .inner
@@ -403,6 +403,9 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         }
         self.close();
         self.scopes.drained().await;
+        // Stop hooks may schedule owned cleanup work after ordinary admission
+        // closes. Drain attachments before taking the final task snapshot.
+        let plugin_failures = self.plugins.shutdown().await;
         self.tasks.drain().await;
         let mut failures = self.tasks.take_failures();
         if let Some(recovery) = &self.recovery
@@ -410,13 +413,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         {
             failures.push(ShutdownFailure::Work(error.into()));
         }
-        failures.extend(
-            self.plugins
-                .shutdown()
-                .await
-                .into_iter()
-                .map(ShutdownFailure::Plugin),
-        );
+        failures.extend(plugin_failures.into_iter().map(ShutdownFailure::Plugin));
         let result = if failures.is_empty() {
             Ok(ShutdownReport)
         } else {

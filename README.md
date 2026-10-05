@@ -148,6 +148,8 @@ Recovery defaults to enabled for a configured distributed provider, with a 2-sec
 
 Transport failures trip the corresponding circuit breaker; codec or value-copy failures do not declare every key's transport unhealthy. Default breaker duration is zero, meaning disabled. Read I/O budgets and provider lifecycle budgets are distinct from the intentionally unbounded default cache write/remove contract.
 
+Unreleased `CachePlugin<V>` adds operational access to the same cache through a weak typed context. Start, event handlers and Stop can read, compute and mutate; views do not keep the application lifecycle alive. See [plugin cache operations](docs/PLUGIN_CACHE.md) for lifetime and teardown boundaries.
+
 Each cache has its own plugin sessions, including when a plugin object is shared. Dynamic registration detaches and stops exactly once. One event hub reports reads, misses, admission, eviction, origins, distributed effects and operation outcomes. Use the resilient event subscription when a slow observer must recover from broadcast lag.
 
 Metrics use a bounded cache-name label budget. Keys and instance IDs belong in traces rather than metric labels. OpenTelemetry exposes a composable layer; the convenience global initializer preserves an existing subscriber/provider on failure.

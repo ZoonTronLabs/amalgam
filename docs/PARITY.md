@@ -12,7 +12,7 @@ Unreleased additions are tracked in [the full functionality inventory](FULL_CONT
 They include original/current/stale factory metadata, independent marker policy,
 async snapshot codecs, explicit conditional/expiry choices, and the shared
 synchronous facade. They are not part
-of the published 0.3.1 package. The remaining public-surface gaps stay open.
+of the published 0.3.1 package. The remaining public-surface gaps stay open. Unreleased typed plugin contexts now provide complete same-cache operation access, including operational Stop after ordinary admission closes; see [plugin boundaries](PLUGIN_CACHE.md).
 
 Released 2.9 experiments additionally establish that eager current tags come from
 the triggering request, while stale tags describe the cached source. Its

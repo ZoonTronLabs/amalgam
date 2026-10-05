@@ -551,6 +551,10 @@ impl PluginHost {
         Ok(host)
     }
 
+    pub(crate) fn attach_owned(&self, plugin: Arc<dyn Plugin>) -> Result<(), PluginError> {
+        self.attach(plugin).map(|_| ())
+    }
+
     fn attach(&self, plugin: Arc<dyn Plugin>) -> Result<Arc<PluginSlot>, PluginError> {
         let attachment = self.inner.attachments.inline();
         attachment.admit().map_err(|_| PluginError::HostStopped)?;

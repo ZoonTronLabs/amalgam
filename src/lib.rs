@@ -66,8 +66,8 @@ pub use cache::{
     BackplaneReadiness, BlockingCache, BlockingCacheBuildError, BlockingCacheValue,
     BlockingCommitCompletion, BlockingCommitReceipt, BlockingDispatchError,
     BlockingMutationReceipt, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool, Cache,
-    CacheBuilder, ClearMode, CloseOutcome, DistributedExpirePolicy, LeasePolicy,
-    ReconciliationPolicy, ShutdownReport,
+    CacheBuilder, CachePlugin, CachePluginContext, ClearMode, CloseOutcome,
+    DistributedExpirePolicy, LeasePolicy, PluginCache, ReconciliationPolicy, ShutdownReport,
 };
 pub use circuit::{CircuitBreaker, CircuitCheck};
 pub use commit::{

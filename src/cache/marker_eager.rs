@@ -62,7 +62,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let kind = kind.clone();
         let source = CancellationSource::new();
         let token = source.token();
-        let execution = self.inner.scopes.execution(
+        let execution = self.scopes().execution(
             async move {
                 let _local = local;
                 worker

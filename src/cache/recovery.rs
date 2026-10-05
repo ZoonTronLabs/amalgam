@@ -336,9 +336,7 @@ impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
         if self.scopes.is_closed() {
             return Err(Error::CacheClosed);
         }
-        let worker = Worker {
-            inner: self.owner.upgrade().ok_or(Error::CacheClosed)?,
-        };
+        let worker = Worker::ordinary(self.owner.upgrade().ok_or(Error::CacheClosed)?);
         let item = item.clone();
         let source = CancellationSource::new();
         let cancellation = source.token();
@@ -353,9 +351,7 @@ impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
         if self.scopes.is_closed() {
             return Err(Error::CacheClosed);
         }
-        let worker = Worker {
-            inner: self.owner.upgrade().ok_or(Error::CacheClosed)?,
-        };
+        let worker = Worker::ordinary(self.owner.upgrade().ok_or(Error::CacheClosed)?);
         let ticket = ticket.clone();
         let source = CancellationSource::new();
         let cancellation = source.token();

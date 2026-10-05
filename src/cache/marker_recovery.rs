@@ -164,7 +164,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             LinkMode::Explicit
         };
         let options = options.clone();
-        let execution = self.inner.scopes.execution(
+        let execution = self.scopes().execution(
             async move {
                 worker
                     .populate_marker_commands_owned(
@@ -246,7 +246,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let owner = self.lease_owner(&key);
         let ttl = self.inner.lease_ttl;
         let timeout = work.options().distributed_lock_timeout();
-        let execution = self.inner.scopes.execution(
+        let execution = self.scopes().execution(
             async move {
                 acquire_owned_supervised(locker, key, ttl, timeout, policy, owner)
                     .await

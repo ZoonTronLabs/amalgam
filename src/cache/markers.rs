@@ -500,7 +500,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let token = source.token();
         let scope = self.inner.scope.clone();
         let clock = Arc::clone(&self.inner.clock);
-        let mut execution = self.inner.scopes.execution(
+        let mut execution = self.scopes().execution(
             async move {
                 cache
                     .read_snapshot(&scope, &kind, clock.now(), token)
@@ -735,7 +735,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .await
                 .map_err(Error::from)
         };
-        let execution = self.inner.scopes.execution(work, CancellationSource::new());
+        let execution = self.scopes().execution(work, CancellationSource::new());
         execution.link(cancellation, LinkMode::Explicit);
         let acquired = execution.await;
         cancellation.check()?;
@@ -1056,7 +1056,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let worker = self.clone();
         let cache = Arc::clone(cache);
         let key = MarkerObservations::key(&commit.kind);
-        let execution = self.inner.scopes.execution(
+        let execution = self.scopes().execution(
             async move {
                 let result = worker
                     .commit_control_snapshot(
@@ -1308,7 +1308,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let source = CancellationSource::new();
         let phase = source.token();
         let scope = self.inner.scope.clone();
-        let mut execution = self.inner.scopes.execution(
+        let mut execution = self.scopes().execution(
             async move {
                 store
                     .read_with_cancellation(&scope, &kind, phase)

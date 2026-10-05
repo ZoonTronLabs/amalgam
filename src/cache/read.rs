@@ -77,7 +77,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let phase_cancellation = source.token();
         let worker = self.clone();
         let phase_key = Arc::clone(key);
-        let mut execution = self.inner.scopes.execution(
+        let mut execution = self.scopes().execution(
             async move { worker.fetch_l2(&phase_key, &phase_cancellation).await }.instrument(span),
             source,
         );
@@ -557,7 +557,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let flight_key = Arc::clone(&key);
         let cancelled = source.clone();
         let lease_state = guard.lease.as_ref().map(DistributedLease::state);
-        let mut execution=self.inner.scopes.execution(async move {
+        let mut execution=self.scopes().execution(async move {
             let origin=origin.invoke(ctx);
             let product=if let Some(mut state)=lease_state {tokio::select! {biased; ()=lease_lost(&mut state)=>{cancelled.cancel_with(Reason::LeaseLost);return Err(Error::FactoryCancelled {reason:Reason::LeaseLost});},product=origin=>product}}else{origin.await};
             let product=product.map_err(Error::from)?;
@@ -717,7 +717,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let source = CancellationSource::new();
         let token = source.token();
         let cancelled = source.clone();
-        let execution=self.inner.scopes.execution(async move {
+        let execution=self.scopes().execution(async move {
             let mut guard=FlightGuard {local:LocalParticipation::Held(local),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy};
             if !opts.skip_distributed_locker()&&let Some(locker)=&worker.inner.distributed_locker {
                 guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::CooperativeLegacy=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;

@@ -21,6 +21,9 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         })?;
         Ok(Self { cache, runtime })
     }
+    pub(in crate::cache) fn plugin_view(cache: Cache<V>, runtime: BlockingRuntime) -> Self {
+        Self { cache, runtime }
+    }
     /// Borrows the same cache for asynchronous operations; cloned async handles
     /// retain its executor and participate in the same final-owner lifecycle.
     pub fn as_async(&self) -> &Cache<V> {
@@ -51,6 +54,14 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         self.cache.tags_entry_options()
     }
     /// Registers a plugin under the same cache lifecycle.
+    pub fn register_cache_plugin(
+        &self,
+        plugin: Arc<dyn crate::CachePlugin<V>>,
+    ) -> Result<crate::PluginRegistration> {
+        self.runtime
+            .run(async { self.cache.register_cache_plugin(plugin) })
+    }
+    /// Starts a legacy plugin using this driven executor.
     pub fn register_plugin(&self, plugin: Arc<dyn Plugin>) -> Result<crate::PluginRegistration> {
         self.runtime
             .run(async { self.cache.register_plugin(plugin) })
@@ -238,10 +249,10 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             default_present: fallback.has_value(),
             lineage: self.runtime.lineage(),
         };
-        let inner = Arc::clone(&self.cache.inner);
+        let worker = self.cache.worker();
         let runtime = self.runtime.clone();
         let origin =
-            move |ctx: FactoryContext<V>| run_factory(inner, runtime, dispatch, factory, ctx);
+            move |ctx: FactoryContext<V>| run_factory(worker, runtime, dispatch, factory, ctx);
         self.runtime.run(
             self.cache
                 .get_or_set_impl(key, origin, options, tags, fallback, token),

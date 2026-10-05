@@ -24,6 +24,7 @@ NuGet binary `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
 | Present null versus miss | `Cache<Option<T>>`; `null_value_contract` tests L1/L2/auto-clone, conditional refresh, fail-safe and explicit null default |
 | Warm event overhead | Materialize key/Hit only when an observer/plugin needs it, after user copy/destruction callbacks; `ready_event_contract` covers late attachment |
 | Pristine marker checks | Unmodified registries have a shared atomic read; the first observed marker permanently restores full locked validation. `marker_visibility_contract` verifies minimum revisions, empty compaction and completed concurrent advances |
+| Plugin access to cache operations | Additive `CachePlugin<V>`/`CachePluginContext<V>` and non-owning full `PluginCache<V>` async/sync view. Start/Event/Stop operate on the same cache, including native providers; separate cleanup admission preserves Stop operations after owner close, and callbacks/late attachment/cleanup drain safely. `plugin_cache_contract` and [plugin boundaries](PLUGIN_CACHE.md) document retained views, errors and reentrancy |
 | Backplane outage availability | Additive `ReconciliationPolicy::BackplaneBestEffort` retains local and hydrated L1 and controlled marker observations over gaps/reconnects, within normal deadlines. Combined with cooperative suppressed-locker errors it permits ordinary cold origins. Default strict reconciliation/fencing are unchanged; `locker_outage_contract` and [outage boundaries](BACKPLANE_OUTAGES.md) cover the explicit choice |
 | Cancellation allocations | Closed atomic terminal state plus subscribe-before-check Notify; `cancellation_signal_contract` covers concurrent requests and registration races |
 | Original codec/provider causes | `CodecError`, `TransportError`, preserving constructors and concrete `source`; `original_error_contract` covers native codecs, policy separation and Redis constructor boundaries |
@@ -42,7 +43,6 @@ platform-only simply to close the inventory:
 | Runtime component/default/provider replacement | Configuration is fixed after build |
 | Pluggable L1 and local memory locker | Built-in MemoryStore and KeyedLock only |
 | Full per-layer event surface | Missing distinct layer hit/miss/set/remove, memory expire, complete eviction/backplane payloads |
-| Plugin access to cache operations | Context supplies identity/events/stop state |
 | Logging/tracing/metrics configuration | Category levels, optional tags and full native OTel metric integration incomplete |
 | Supported automatic backplane recovery | Retry-stage/expiry behavior still needs complete comparison. The old `EnableDistributedExpireOnBackplaneAutoRecovery` switch is inactive and `Obsolete(IsError=true)` in official2.9 source and released static DLL metadata; it is not a missing active option |
 | Portable tag/clear over a byte-only store | Requires separate genuine atomic InvalidationStore |

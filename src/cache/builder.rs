@@ -3,12 +3,13 @@ use super::{
     Arc, AtomicBool, AtomicU64, AutoRecoveryService, Backplane, Cache, CacheInner, CacheScope,
     CircuitBreaker, Clock, ClockTiming, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
     DistributedLocker, DistributedSerializer, Duration, EntryOptions, Events, ExecutorOwnership,
-    IdentityField, Instant, InvalidationStore, JitterSource, KeyModifierMode, KeyedLock, Lanes,
-    LeasePolicy, LeaseTtl, Lifecycle, MarkerAccess, MarkerLifecycleAccess, MarkerLifecyclePolicy,
-    MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryExpiry, MemoryLimits, MemoryStore,
-    Plugin, PluginContext, PluginHost, PublicLifetime, RandomJitterSource, ReconciliationPolicy,
-    RecoveryConfig, RecoveryExecutor, RemoveByTagBehavior, Result, RuntimeComponent, Scopes,
-    Storage, SystemClock, TagRegistry, Tasks, Timeout, ValueCloner, validate_budget,
+    IdentityField, InitialPlugin, Instant, InvalidationStore, JitterSource, KeyModifierMode,
+    KeyedLock, Lanes, LeasePolicy, LeaseTtl, Lifecycle, MarkerAccess, MarkerLifecycleAccess,
+    MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryExpiry,
+    MemoryLimits, MemoryStore, Plugin, PluginContext, PluginHost, PublicLifetime,
+    RandomJitterSource, ReconciliationPolicy, RecoveryConfig, RecoveryExecutor,
+    RemoveByTagBehavior, Result, RuntimeComponent, Scopes, Storage, SystemClock, TagRegistry,
+    Tasks, Timeout, ValueCloner, validate_budget,
 };
 
 /// Builder for a [`Cache`].
@@ -50,7 +51,7 @@ pub struct CacheBuilder<V> {
     serialization_mode: crate::distributed::SerializationMode,
     backplane: Option<Arc<dyn Backplane>>,
     distributed_locker: Option<Arc<dyn DistributedLocker>>,
-    plugins: Vec<Arc<dyn Plugin>>,
+    plugins: Vec<InitialPlugin<V>>,
     distributed_circuit_breaker: Duration,
     backplane_circuit_breaker: Duration,
     recovery_config: RecoveryConfig,
@@ -296,7 +297,14 @@ impl<V> CacheBuilder<V> {
 
     /// Registers a [`Plugin`] to observe events and lifecycle.
     pub fn plugin(mut self, plugin: Arc<dyn Plugin>) -> Self {
-        self.plugins.push(plugin);
+        self.plugins.push(InitialPlugin::Legacy(plugin));
+        self
+    }
+
+    /// Registers typed plugin behavior with operational access to this cache.
+    /// Legacy and typed plugins attach in their builder registration order.
+    pub fn cache_plugin(mut self, plugin: Arc<dyn super::CachePlugin<V>>) -> Self {
+        self.plugins.push(InitialPlugin::CacheAware(plugin));
         self
     }
 
@@ -541,7 +549,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         let events = Events::with_capacity(self.events_capacity);
         let plugins = PluginHost::try_new(
             PluginContext::new(&*name, &*instance_id, events.clone())?,
-            self.plugins,
+            Vec::new(),
         )?;
         let expiry = match clock.timing_model() {
             ClockTiming::RealTime => MemoryExpiry::RealTime,
@@ -620,7 +628,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             tracing::warn!(cache=%inner.name,"explicit cooperative legacy lease policy: partition fencing is unavailable");
         }
         let lifetime = match executor {
-            ExecutorOwnership::External => PublicLifetime::External(Arc::downgrade(&inner)),
+            ExecutorOwnership::External => PublicLifetime::External(Arc::clone(&inner)),
             ExecutorOwnership::CacheOwned(executor) => PublicLifetime::CacheOwned {
                 inner: Arc::clone(&inner),
                 executor,
@@ -631,6 +639,12 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             inner,
         };
         cache.worker().start_listener();
+        for plugin in self.plugins {
+            cache
+                .inner
+                .plugins
+                .attach_owned(plugin.bind(&cache.inner))?;
+        }
         Ok(cache)
     }
 }

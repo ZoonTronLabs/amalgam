@@ -122,7 +122,7 @@ impl FactoryDispatch {
 }
 
 async fn run_factory<V, F>(
-    inner: Arc<CacheInner<V>>,
+    worker: Worker<V>,
     runtime: BlockingRuntime,
     dispatch: FactoryDispatch,
     factory: F,
@@ -135,15 +135,15 @@ where
         + 'static,
 {
     if dispatch.inline(&context) {
-        let _callback = runtime::callback_scope(&inner.scopes);
+        let _callback = runtime::callback_scope(worker.scopes());
         return factory(context);
     }
     let key: Arc<str> = Arc::from(context.key());
     let context_invocation = context.invocation();
     let parent = context.cancellation().clone();
     // Registration precedes dispatch, including cancellation before pool start.
-    let scopes = Arc::clone(&inner.scopes);
-    let execution = inner.scopes.execution(
+    let scopes = Arc::clone(worker.scopes());
+    let execution = worker.scopes().execution(
         async move {
             let _callback = runtime::callback_scope(&scopes);
             Ok(factory(context))
@@ -170,10 +170,10 @@ where
             runtime.run(execution)
         }))
     };
-    let receiver = inner.tasks.spawn_blocking(
+    let receiver = worker.inner.tasks.spawn_blocking(
         ShutdownTask::Factory,
         key,
-        inner.events.clone(),
+        worker.inner.events.clone(),
         parent,
         launch,
     );
