@@ -266,12 +266,22 @@ impl MarkerObservations {
         if let Some(entry) = &cached
             && entry.freshness(now).is_fresh()
         {
+            if matches!(self.lifecycle, MarkerLifecycleAccess::CachedSnapshots(_))
+                && entry.should_eager_refresh(now)
+            {
+                return None;
+            }
             return Some(entry.value().outcome());
         }
         if options.skip_distributed_read()
             || cached.is_some() && options.skip_distributed_read_when_stale()
         {
-            Some(MarkerReadOutcome::Skipped)
+            match self.lifecycle {
+                MarkerLifecycleAccess::DurableOnly => Some(MarkerReadOutcome::Skipped),
+                // Skipping the read does not also skip the shared factory or
+                // an independently enabled snapshot write/locker.
+                MarkerLifecycleAccess::CachedSnapshots(_) => None,
+            }
         } else {
             None
         }

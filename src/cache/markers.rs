@@ -12,6 +12,29 @@ use super::{
     acquire_owned_supervised, bounded,
 };
 
+#[path = "marker_eager.rs"]
+mod eager;
+
+#[derive(Clone, Copy)]
+enum MarkerFactoryRead {
+    Read(MarkerSnapshotRead),
+    Unobserved(MarkerUnobservedRead),
+}
+#[derive(Clone, Copy)]
+enum MarkerUnobservedRead {
+    Skipped,
+    Unavailable(MarkerReadFailure),
+}
+#[derive(Clone, Copy)]
+enum MarkerFactoryMode {
+    Foreground,
+    Eager,
+}
+enum MarkerLeaseAcquisition {
+    Acquired(MarkerLease),
+    Contended,
+}
+
 enum MarkerFetch {
     Observed(MarkerPresence),
     Snapshot(MarkerSnapshotRead),
@@ -22,6 +45,7 @@ struct MarkerRefresh<'a> {
     kind: &'a MarkerKind,
     captured: u64,
     cancellation: &'a FactoryCancellation,
+    mode: MarkerFactoryMode,
 }
 enum MarkerSnapshotFetch {
     Read(MarkerSnapshotRead),
@@ -235,6 +259,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if self.marker_clear_shortcut() && self.inner.epoch.load(Ordering::Acquire) == captured {
             observations.initialize_clear(&kind, captured, outcome);
         }
+        self.maybe_eager_control_marker(observations, &kind, captured, cancellation)
+            .await?;
         self.marker_event(&kind, outcome);
         Ok(())
     }
@@ -304,7 +330,20 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if options.skip_distributed_read()
             || cached.is_some() && options.skip_distributed_read_when_stale()
         {
-            return Ok(MarkerReadOutcome::Skipped);
+            return match &observations.lifecycle {
+                MarkerLifecycleAccess::DurableOnly => Ok(MarkerReadOutcome::Skipped),
+                MarkerLifecycleAccess::CachedSnapshots(_) => {
+                    self.resolve_control_snapshot(
+                        observations,
+                        kind,
+                        cached.as_ref(),
+                        MarkerFactoryRead::Unobserved(MarkerUnobservedRead::Skipped),
+                        captured,
+                        cancellation,
+                    )
+                    .await
+                }
+            };
         }
         self.marker_remote(
             observations,
@@ -368,7 +407,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     observations,
                     kind,
                     cached,
-                    snapshot,
+                    MarkerFactoryRead::Read(snapshot),
                     captured,
                     cancellation,
                 )
@@ -379,15 +418,57 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     .await
             }
             Ok(MarkerFetch::Deadline(failure)) => {
-                self.marker_degraded(observations, kind, cached, failure)
-                    .await
+                self.unavailable_control_marker(
+                    observations,
+                    kind,
+                    cached,
+                    captured,
+                    cancellation,
+                    failure,
+                )
+                .await
             }
             Err(Error::Marker(error)) => {
                 let failure = self.suppressed_marker_fault(kind, error)?.read_failure();
+                self.unavailable_control_marker(
+                    observations,
+                    kind,
+                    cached,
+                    captured,
+                    cancellation,
+                    failure,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn unavailable_control_marker(
+        &self,
+        observations: &MarkerObservations,
+        kind: &MarkerKind,
+        cached: Option<&Entry<MarkerObservation>>,
+        captured: u64,
+        cancellation: &FactoryCancellation,
+        failure: MarkerReadFailure,
+    ) -> Result<MarkerReadOutcome> {
+        match &observations.lifecycle {
+            MarkerLifecycleAccess::DurableOnly => {
                 self.marker_degraded(observations, kind, cached, failure)
                     .await
             }
-            Err(error) => Err(error),
+            MarkerLifecycleAccess::CachedSnapshots(_) => {
+                self.resolve_control_snapshot(
+                    observations,
+                    kind,
+                    cached,
+                    MarkerFactoryRead::Unobserved(MarkerUnobservedRead::Unavailable(failure)),
+                    captured,
+                    cancellation,
+                )
+                .await
+            }
         }
     }
 
@@ -441,27 +522,33 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         observations: &MarkerObservations,
         kind: &MarkerKind,
         cached: Option<&Entry<MarkerObservation>>,
-        read: MarkerSnapshotRead,
+        read: MarkerFactoryRead,
         captured: u64,
         cancellation: &FactoryCancellation,
     ) -> Result<MarkerReadOutcome> {
-        if let Some(maximum) = read.maximum() {
-            self.apply_marker(StoredMarker::new(kind.clone(), maximum));
+        if let MarkerFactoryRead::Read(read) = read {
+            if let Some(maximum) = read.maximum() {
+                self.apply_marker(StoredMarker::new(kind.clone(), maximum));
+            }
+            if let MarkerSnapshotRead::Snapshot(snapshot) = read
+                && snapshot.is_fresh(self.inner.clock.now())
+            {
+                return self
+                    .record_control_snapshot(observations, kind, snapshot, captured)
+                    .await;
+            }
         }
-        if let MarkerSnapshotRead::Snapshot(snapshot) = read
-            && snapshot.is_fresh(self.inner.clock.now())
+        let lease = match self
+            .acquire_control_marker_lease(kind, cancellation, MarkerFactoryMode::Foreground)
+            .await?
         {
-            return self
-                .record_control_snapshot(observations, kind, snapshot, captured)
-                .await;
-        }
-        let lease = self
-            .acquire_control_marker_lease(kind, cancellation)
-            .await?;
+            MarkerLeaseAcquisition::Acquired(lease) => lease,
+            MarkerLeaseAcquisition::Contended => return Err(LeaseError::AcquisitionTimeout.into()),
+        };
         let read = if lease.is_held() {
             self.recheck_control_snapshot(kind, cached.is_some(), cancellation)
                 .await?
-                .unwrap_or(read)
+                .map_or(read, MarkerFactoryRead::Read)
         } else {
             read
         };
@@ -473,6 +560,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 kind,
                 captured,
                 cancellation,
+                mode: MarkerFactoryMode::Foreground,
             },
             lease,
         )
@@ -483,7 +571,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         observations: &MarkerObservations,
         cached: Option<&Entry<MarkerObservation>>,
-        read: MarkerSnapshotRead,
+        read: MarkerFactoryRead,
         refresh: MarkerRefresh<'_>,
         lease: MarkerLease,
     ) -> Result<MarkerReadOutcome> {
@@ -491,13 +579,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             kind,
             captured,
             cancellation,
+            mode,
         } = refresh;
         lease.proof()?;
         cancellation.check()?;
         let (observation, stale) = match read {
-            MarkerSnapshotRead::Snapshot(snapshot) => {
+            MarkerFactoryRead::Read(MarkerSnapshotRead::Snapshot(snapshot)) => {
                 self.apply_marker(StoredMarker::new(kind.clone(), snapshot.version()));
-                if snapshot.is_fresh(self.inner.clock.now()) {
+                if matches!(mode, MarkerFactoryMode::Foreground)
+                    && snapshot.is_fresh(self.inner.clock.now())
+                {
                     let result = self
                         .record_control_snapshot(observations, kind, snapshot, captured)
                         .await;
@@ -508,7 +599,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     MarkerFactoryStale::Distributed(snapshot),
                 )
             }
-            MarkerSnapshotRead::Missing { maximum } => {
+            MarkerFactoryRead::Read(MarkerSnapshotRead::Missing { maximum }) => {
                 if let Some(version) = maximum {
                     self.apply_marker(StoredMarker::new(kind.clone(), version));
                 }
@@ -518,9 +609,85 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     cached.map_or(MarkerFactoryStale::Absent, MarkerFactoryStale::Memory),
                 )
             }
+            MarkerFactoryRead::Unobserved(read) => {
+                let Some(observation) = self.known_control_factory_observation(kind, cached) else {
+                    return self
+                        .complete_unobserved_marker_factory(
+                            observations,
+                            cached,
+                            read,
+                            refresh,
+                            lease,
+                        )
+                        .await;
+                };
+                (
+                    observation,
+                    cached.map_or(MarkerFactoryStale::Absent, MarkerFactoryStale::Memory),
+                )
+            }
         };
         let observation = observation.reconcile_maximum(self.inner.tags.marker_version(kind));
         self.complete_control_marker_factory(observations, observation, stale, refresh, lease)
+            .await
+    }
+
+    fn known_control_factory_observation(
+        &self,
+        kind: &MarkerKind,
+        cached: Option<&Entry<MarkerObservation>>,
+    ) -> Option<MarkerObservation> {
+        let cached = cached.and_then(|entry| match entry.value().presence() {
+            MarkerPresence::Present(version) => Some(version),
+            MarkerPresence::Absent => None,
+        });
+        self.inner
+            .tags
+            .marker_version(kind)
+            .into_iter()
+            .chain(cached)
+            .max()
+            .map(MarkerObservation::KnownMaximum)
+    }
+
+    async fn complete_unobserved_marker_factory(
+        &self,
+        observations: &MarkerObservations,
+        cached: Option<&Entry<MarkerObservation>>,
+        read: MarkerUnobservedRead,
+        refresh: MarkerRefresh<'_>,
+        lease: MarkerLease,
+    ) -> Result<MarkerReadOutcome> {
+        let stale = cached.map_or(MarkerFactoryStale::Absent, MarkerFactoryStale::Memory);
+        let excluded = match self.excluded_marker_factory(stale, refresh.mode) {
+            Ok(excluded) => excluded,
+            Err(error) => {
+                return self
+                    .finish_control_marker_lease(refresh.kind, lease, Err(error))
+                    .await;
+            }
+        };
+        let result = if let Some(failure) = excluded {
+            self.retain_excluded_marker_factory(
+                observations,
+                refresh.kind,
+                MarkerPresence::Absent,
+                stale,
+                refresh.captured,
+                failure,
+            )
+            .await
+        } else {
+            // A completed zero selection is not a confirmed durable absence.
+            // Skips/faults cannot install a fresh negative observation.
+            Ok(match read {
+                MarkerUnobservedRead::Skipped => MarkerReadOutcome::Skipped,
+                MarkerUnobservedRead::Unavailable(failure) => {
+                    MarkerReadOutcome::Unavailable(failure)
+                }
+            })
+        };
+        self.finish_control_marker_lease(refresh.kind, lease, result)
             .await
     }
 
@@ -528,14 +695,17 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         kind: &MarkerKind,
         cancellation: &FactoryCancellation,
-    ) -> Result<MarkerLease> {
+        mode: MarkerFactoryMode,
+    ) -> Result<MarkerLeaseAcquisition> {
         cancellation.check()?;
         let options = &self.inner.tags_default_options;
-        if options.skip_distributed_locker() {
-            return Ok(MarkerLease::Unleased);
+        if options.skip_distributed_locker()
+            || options.skip_distributed_read() && options.skip_distributed_write()
+        {
+            return Ok(MarkerLeaseAcquisition::Acquired(MarkerLease::Unleased));
         }
         let Some(locker) = &self.inner.distributed_locker else {
-            return Ok(MarkerLease::Unleased);
+            return Ok(MarkerLeaseAcquisition::Acquired(MarkerLease::Unleased));
         };
         let key = MarkerLeaseKey::new(&self.inner.scope, kind).into_arc();
         let policy = match self.inner.lease_policy {
@@ -544,7 +714,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let locker = Arc::clone(locker);
         let ttl = self.inner.lease_ttl;
-        let timeout = options.distributed_lock_timeout();
+        let timeout = match mode {
+            MarkerFactoryMode::Foreground => options.distributed_lock_timeout(),
+            MarkerFactoryMode::Eager => Timeout::After(Duration::ZERO),
+        };
         let owner = self.lease_owner(&key);
         let work = async move {
             acquire_owned_supervised(locker, key, ttl, timeout, policy, owner)
@@ -556,27 +729,42 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let acquired = execution.await;
         cancellation.check()?;
         match acquired {
-            Ok(Some(lease)) => Ok(match self.inner.lease_policy {
-                LeasePolicy::Fenced => MarkerLease::Fenced(lease),
-                LeasePolicy::CooperativeLegacy => MarkerLease::Cooperative(lease),
-            }),
-            Ok(None) => self.control_marker_contention(),
-            Err(Error::Lease(LeaseError::AcquisitionTimeout)) => self.control_marker_contention(),
+            Ok(Some(lease)) => Ok(MarkerLeaseAcquisition::Acquired(
+                match self.inner.lease_policy {
+                    LeasePolicy::Fenced => MarkerLease::Fenced(lease),
+                    LeasePolicy::CooperativeLegacy => MarkerLease::Cooperative(lease),
+                },
+            )),
+            Ok(None) | Err(Error::Lease(LeaseError::AcquisitionTimeout)) => {
+                self.control_marker_contention(mode)
+            }
             Err(Error::Lease(error @ LeaseError::Backend { .. }))
                 if self.inner.lease_policy == LeasePolicy::CooperativeLegacy
                     && !options.rethrow_distributed_locker_exceptions() =>
             {
                 tracing::warn!(%error, "explicit cooperative marker locker degradation");
-                Ok(MarkerLease::Unleased)
+                match mode {
+                    MarkerFactoryMode::Foreground => {
+                        Ok(MarkerLeaseAcquisition::Acquired(MarkerLease::Unleased))
+                    }
+                    MarkerFactoryMode::Eager => Ok(MarkerLeaseAcquisition::Contended),
+                }
             }
             Err(error) => Err(error),
         }
     }
 
-    fn control_marker_contention(&self) -> Result<MarkerLease> {
-        match self.inner.lease_policy {
-            LeasePolicy::Fenced => Err(LeaseError::AcquisitionTimeout.into()),
-            LeasePolicy::CooperativeLegacy => Ok(MarkerLease::Unleased),
+    fn control_marker_contention(&self, mode: MarkerFactoryMode) -> Result<MarkerLeaseAcquisition> {
+        match (mode, self.inner.lease_policy) {
+            (MarkerFactoryMode::Foreground, LeasePolicy::Fenced) => {
+                Err(LeaseError::AcquisitionTimeout.into())
+            }
+            (MarkerFactoryMode::Foreground, LeasePolicy::CooperativeLegacy) => {
+                Ok(MarkerLeaseAcquisition::Acquired(MarkerLease::Unleased))
+            }
+            (MarkerFactoryMode::Eager, LeasePolicy::Fenced | LeasePolicy::CooperativeLegacy) => {
+                Ok(MarkerLeaseAcquisition::Contended)
+            }
         }
     }
 
@@ -677,11 +865,20 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             kind,
             captured,
             cancellation,
+            mode,
         } = refresh;
         cancellation.check()?;
         lease.proof()?;
         let options = &self.inner.tags_default_options;
-        if let Some(failure) = self.excluded_marker_factory(stale)? {
+        let excluded = match self.excluded_marker_factory(stale, mode) {
+            Ok(excluded) => excluded,
+            Err(error) => {
+                return self
+                    .finish_control_marker_lease(kind, lease, Err(error))
+                    .await;
+            }
+        };
+        if let Some(failure) = excluded {
             let result = self
                 .retain_excluded_marker_factory(
                     observations,
@@ -763,7 +960,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     fn excluded_marker_factory(
         &self,
         stale: MarkerFactoryStale<'_>,
+        mode: MarkerFactoryMode,
     ) -> Result<Option<MarkerReadFailure>> {
+        if matches!(mode, MarkerFactoryMode::Eager) {
+            return Ok(None);
+        }
         let options = &self.inner.tags_default_options;
         let has_fallback = self.marker_factory_fallback_eligible(stale);
         let timeout = options.appropriate_factory_timeout(has_fallback);

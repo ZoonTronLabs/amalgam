@@ -353,6 +353,10 @@ mod imp {
     impl PluginSession for MetricsSession {
         fn on_event(&self, event: &CacheEvent) -> Result<(), PluginError> {
             let counter = match event {
+                CacheEvent::MarkerEagerRefresh { .. } => {
+                    metrics::counter!("amalgam_marker_eager_refresh_total", "cache_name" => self.label.to_string()).increment(1);
+                    None
+                }
                 CacheEvent::MarkerSnapshotWrite { outcome, .. } => {
                     let outcome = match outcome {
                         crate::MarkerSnapshotWriteOutcome::Stored => "stored",

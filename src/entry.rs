@@ -282,6 +282,24 @@ impl<V> Entry<V> {
         }
     }
 
+    /// Consumes one eager attempt without extending any source deadline.
+    pub(crate) fn without_eager_refresh(&self) -> Self
+    where
+        V: Clone,
+    {
+        let mut meta = self.meta().clone();
+        if let EntryOrigin::Fresh { eager_refresh_at } = &mut meta.origin {
+            *eager_refresh_at = None;
+        }
+        Self {
+            inner: Arc::new(EntryInner {
+                value: self.value().clone(),
+                meta,
+                eligibility: self.inner.eligibility.clone(),
+            }),
+        }
+    }
+
     /// Changes only a private orchestration payload, preserving its read fence.
     pub(crate) fn with_value(&self, value: V) -> Self {
         Self {

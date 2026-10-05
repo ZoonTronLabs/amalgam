@@ -252,6 +252,11 @@ impl OperationOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CacheEvent {
+    /// A fresh control observation began an owned, nonblocking eager refresh.
+    MarkerEagerRefresh {
+        /// The control identity; ordinary value factories are not involved.
+        kind: crate::MarkerKind,
+    },
     /// An expiring control snapshot write finished, separate from invalidation.
     MarkerSnapshotWrite {
         /// The scoped marker category; ordinary value keys are not parsed.

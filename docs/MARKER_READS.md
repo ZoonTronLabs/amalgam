@@ -87,7 +87,7 @@ use the same expiring cache as tags.
 | FailSafeThrottleDuration | Fault fallback throttle, capped by the source's original physical deadline |
 | SkipMemoryCacheRead / Write | Observation reads/admission; neither erases the ledger nor changes ordinary value L1 flags |
 | SkipDistributedCacheRead | Explicitly skip the control provider, without fabricating absence |
-| SkipDistributedCacheReadWhenStale | Applies to an existing stale marker observation, not a stale value |
+| SkipDistributedCacheReadWhenStale | Applies to an existing marker observation during stale repair and eager preflight; ordinary value staleness is independent |
 | DistributedSoftTimeout / HardTimeout | Independent per-marker provider phase; cold markers ignore soft timeout |
 | ReThrowDistributedCacheExceptions | Controls actual marker backend faults |
 | ReThrowSerializationExceptions | Controls typed marker protocol faults; control reads do not invoke `Serializer<V>` |
@@ -102,10 +102,12 @@ factory. Opt-in [CachedSnapshots](MARKER_SNAPSHOTS.md) adds nonzero renewal/repa
 independent remote deadlines, zero factory-budget handling and owned foreground/
 background writes. Participating marker repair now has separately owned
 distributed acquisition/recheck/release with independent tag defaults; see
-[the ownership contract](MARKER_SNAPSHOTS.md#marker-repair-ownership). Marker eager
-refresh, late factory completion, snapshot recovery and the remaining skip/fault
-combinations remain open. EagerRefreshThreshold metadata
-alone does not start a marker eager refresh. SkipAutoCloneForImmutableObjects
+[the ownership contract](MARKER_SNAPSHOTS.md#marker-repair-ownership). CachedSnapshots
+also schedules owned marker eager refresh; fresh peer hydration precedes a
+zero-wait lease attempt. Skipped or suppressed failed reads can run its independent
+factory over known revisions without confirming an unknown absence. Snapshot
+recovery/population and remaining option combinations stay open. DurableOnly
+does not schedule marker eager work. SkipAutoCloneForImmutableObjects
 does not force an ordinary value serializer over typed markers.
 
 DistributedDuration and DistributedFailSafeMaxDuration do not expire durable

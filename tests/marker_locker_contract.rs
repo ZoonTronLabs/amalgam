@@ -55,6 +55,16 @@ impl Gate {
     }
 }
 #[derive(Clone)]
+enum Read {
+    Pass,
+    Backend,
+    Protocol,
+    Park(Arc<Gate>),
+}
+#[derive(Debug, thiserror::Error)]
+#[error("original marker snapshot read fault")]
+struct ReadCause;
+#[derive(Clone)]
 enum Write {
     Pass,
     Park(Arc<Gate>),
@@ -66,6 +76,8 @@ struct Snapshots {
     writes: Mutex<Vec<(MarkerKind, bool)>>,
     tokens: Mutex<Vec<FactoryCancellation>>,
     mode: Mutex<Write>,
+    read_mode: Mutex<Read>,
+    read_tokens: Mutex<Vec<FactoryCancellation>>,
 }
 impl Snapshots {
     fn reads(&self) -> usize {
@@ -113,6 +125,16 @@ impl MarkerSnapshotCache for Snapshots {
         cancellation: FactoryCancellation,
     ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
         self.reads.lock().unwrap().push(kind.clone());
+        if *kind == group() {
+            self.read_tokens.lock().unwrap().push(cancellation.clone());
+            let mode = self.read_mode.lock().unwrap().clone();
+            match mode {
+                Read::Pass => {}
+                Read::Backend => return Err(MarkerError::backend(ReadCause).into()),
+                Read::Protocol => return Err(MarkerError::protocol(ReadCause).into()),
+                Read::Park(gate) => gate.park().await,
+            }
+        }
         self.inner
             .read_snapshot(scope, kind, now, cancellation)
             .await
@@ -324,6 +346,8 @@ async fn fixture(options: EntryOptions, policy: LeasePolicy, prefix: &str) -> Fi
             writes: Mutex::new(Vec::new()),
             tokens: Mutex::new(Vec::new()),
             mode: Mutex::new(Write::Pass),
+            read_mode: Mutex::new(Read::Pass),
+            read_tokens: Mutex::new(Vec::new()),
         }),
     });
     store
@@ -703,4 +727,530 @@ async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
     }
     first.cache.shutdown().await.unwrap();
     second.cache.shutdown().await.unwrap();
+}
+
+fn eager_options() -> EntryOptions {
+    options()
+        .with_memory_duration(Duration::from_secs(10))
+        .with_distributed_duration(Duration::from_secs(10))
+        .with_eager_refresh(EagerThreshold::new(0.5))
+}
+async fn until(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !condition() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+async fn seed_known_without_remote_read(f: &Fixture) {
+    f.clock.set(time(1));
+    f.cache
+        .try_remove_by_tag(Tag::new("group").unwrap())
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    f.clock.set(time(10));
+}
+#[tokio::test]
+async fn skipped_read_still_runs_known_factory_and_independent_locker_or_write() {
+    for skip_locker in [false, true] {
+        let f = fixture(
+            options()
+                .with_skip_distributed(true, false)
+                .with_skip_distributed_locker(skip_locker),
+            LeasePolicy::Fenced,
+            "",
+        )
+        .await;
+        seed_known_without_remote_read(&f).await;
+        found(&f.cache).await;
+        assert_eq!(
+            f.store.snapshots.reads(),
+            0,
+            "read remains skipped, including leased recheck"
+        );
+        assert_eq!(
+            f.store.snapshots.writes(),
+            1,
+            "known revision renews despite skipped read"
+        );
+        assert_eq!(f.locker.acquisitions(), usize::from(!skip_locker));
+        assert_eq!(f.locker.releases(), usize::from(!skip_locker));
+        let snapshot = f
+            .store
+            .snapshots
+            .inner
+            .read_snapshot(&scope(""), &group(), time(10), new_token())
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        assert_eq!(
+            (snapshot.version(), snapshot.created()),
+            (version(1), time(10))
+        );
+        assert_eq!(
+            f.store.read(&scope(""), &group()).await.unwrap(),
+            Some(version(1))
+        );
+        f.cache.shutdown().await.unwrap();
+    }
+    let f = fixture(
+        options().with_skip_distributed(true, true),
+        LeasePolicy::Fenced,
+        "",
+    )
+    .await;
+    seed_known_without_remote_read(&f).await;
+    found(&f.cache).await;
+    assert_eq!(
+        (
+            f.store.snapshots.reads(),
+            f.store.snapshots.writes(),
+            f.locker.acquisitions()
+        ),
+        (0, 0, 0)
+    );
+    f.cache.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn a_cold_skipped_or_failed_read_never_becomes_fresh_negative_authority() {
+    for skipped in [true, false] {
+        let f = fixture(
+            options()
+                .with_skip_distributed(skipped, false)
+                .with_skip_distributed_locker(true),
+            LeasePolicy::Fenced,
+            "",
+        )
+        .await;
+        if !skipped {
+            *f.store.snapshots.read_mode.lock().unwrap() = Read::Backend;
+        }
+        let mut events = f.cache.events().subscribe();
+        found(&f.cache).await;
+        found(&f.cache).await;
+        assert_eq!(f.store.snapshots.writes(), 0);
+        assert_eq!(
+            f.store.snapshots.reads(),
+            if skipped { 0 } else { 2 },
+            "failed absence must be retried"
+        );
+        let mut outcomes = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let CacheEvent::MarkerRead { kind, outcome } = event
+                && kind == group()
+            {
+                outcomes.push(outcome);
+            }
+        }
+        let expected = if skipped {
+            MarkerReadOutcome::Skipped
+        } else {
+            MarkerReadOutcome::Unavailable(MarkerReadFailure::Backend)
+        };
+        assert_eq!(outcomes, vec![expected, expected]);
+        f.cache.shutdown().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn suppressed_read_fault_renews_known_fact_even_without_fail_safe() {
+    for fail_safe in [true, false] {
+        for protocol in [false, true] {
+            let f = fixture(
+                options().with_fail_safe(fail_safe, Some(Duration::from_secs(20)), None),
+                LeasePolicy::Fenced,
+                "",
+            )
+            .await;
+            found(&f.cache).await;
+            f.clock.set(time(12));
+            *f.store.snapshots.read_mode.lock().unwrap() = if protocol {
+                Read::Protocol
+            } else {
+                Read::Backend
+            };
+            found(&f.cache).await;
+            assert_eq!(
+                (f.store.snapshots.reads(), f.store.snapshots.writes()),
+                (4, 2)
+            );
+            assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 2));
+            let snapshot = f
+                .store
+                .snapshots
+                .inner
+                .read_snapshot(&scope(""), &group(), time(12), new_token())
+                .await
+                .unwrap()
+                .snapshot()
+                .unwrap();
+            assert_eq!(
+                (snapshot.version(), snapshot.created()),
+                (version(1), time(12))
+            );
+            found(&f.cache).await;
+            assert_eq!(f.store.snapshots.reads(), 4);
+            f.cache.shutdown().await.unwrap();
+        }
+    }
+}
+#[tokio::test]
+async fn propagated_marker_read_fault_stops_before_locker_and_preserves_cause() {
+    for protocol in [false, true] {
+        let f = fixture(
+            options()
+                .with_rethrow_distributed_exceptions(!protocol)
+                .with_rethrow_serialization_exceptions(protocol),
+            LeasePolicy::Fenced,
+            "",
+        )
+        .await;
+        *f.store.snapshots.read_mode.lock().unwrap() = if protocol {
+            Read::Protocol
+        } else {
+            Read::Backend
+        };
+        let error = f.cache.read("key", None).await.unwrap_err();
+        let Error::Marker(error) = error else {
+            panic!("expected original marker error")
+        };
+        assert!(std::error::Error::source(&error).unwrap().is::<ReadCause>());
+        assert_eq!(
+            (f.locker.acquisitions(), f.store.snapshots.writes()),
+            (0, 0)
+        );
+        f.cache.shutdown().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn excluded_foreground_marker_factory_awaits_release_before_error() {
+    let f = fixture(
+        options()
+            .with_fail_safe(false, None, None)
+            .with_factory_timeouts(Timeout::Infinite, Timeout::After(Duration::ZERO), false),
+        LeasePolicy::Fenced,
+        "",
+    )
+    .await;
+    assert!(matches!(
+        f.cache.read("key", None).await,
+        Err(Error::FactoryTimeout { .. })
+    ));
+    assert_eq!(f.locker.acquired.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.locker.released.lock().unwrap().len(),
+        1,
+        "release completes before error reaches caller"
+    );
+    f.cache.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn due_marker_eager_refresh_returns_immediately_and_owns_one_fenced_write() {
+    let f = fixture(eager_options(), LeasePolicy::Fenced, "").await;
+    found(&f.cache).await;
+    f.clock.set(time(16));
+    let gate = Gate::new();
+    *f.store.snapshots.mode.lock().unwrap() = Write::Park(gate.clone());
+    found(&f.cache).await;
+    gate.entered().await;
+    for _ in 0..8 {
+        found(&f.cache).await;
+    }
+    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 1));
+    assert_eq!(
+        f.locker
+            .acquired
+            .lock()
+            .unwrap()
+            .iter()
+            .rfind(|(key, _, _)| tag_lock(key))
+            .unwrap()
+            .2,
+        Timeout::After(Duration::ZERO)
+    );
+    gate.allow();
+    until(|| f.locker.releases() == 2).await;
+    assert_eq!(f.store.snapshots.writes(), 2);
+    let snapshot = f
+        .store
+        .snapshots
+        .inner
+        .read_snapshot(&scope(""), &group(), time(16), new_token())
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_eq!(
+        (snapshot.version(), snapshot.created()),
+        (version(1), time(16))
+    );
+    assert_eq!(
+        f.store.read(&scope(""), &group()).await.unwrap(),
+        Some(version(1))
+    );
+    f.cache.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn a_newer_fresh_peer_snapshot_hydrates_eager_without_locker_or_duplicate_write() {
+    let f = fixture(eager_options(), LeasePolicy::Fenced, "").await;
+    found(&f.cache).await;
+    let peer = MarkerSnapshot::new(version(1), time(15), time(25), time(35)).unwrap();
+    f.store
+        .snapshots
+        .inner
+        .renew_snapshot(&scope(""), &group(), peer, time(15), new_token())
+        .await
+        .unwrap();
+    f.clock.set(time(16));
+    found(&f.cache).await;
+    until(|| f.store.snapshots.reads() == 3).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        (f.locker.acquisitions(), f.store.snapshots.writes()),
+        (1, 1)
+    );
+    f.clock.set(time(20));
+    found(&f.cache).await;
+    assert_eq!(
+        f.store.snapshots.reads(),
+        3,
+        "peer hydration extends only to peer source lifetime"
+    );
+    f.cache.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn eager_contention_stops_and_consumes_attempt_for_both_lease_policies() {
+    for policy in [LeasePolicy::Fenced, LeasePolicy::CooperativeLegacy] {
+        let f = fixture(eager_options(), policy, "").await;
+        found(&f.cache).await;
+        *f.locker.acquisition.lock().unwrap() = Acquire::Contended;
+        f.clock.set(time(16));
+        found(&f.cache).await;
+        until(|| f.locker.acquisitions() == 2).await;
+        tokio::task::yield_now().await;
+        for _ in 0..4 {
+            found(&f.cache).await;
+        }
+        assert_eq!(
+            (f.store.snapshots.reads(), f.store.snapshots.writes()),
+            (3, 1)
+        );
+        assert_eq!(f.locker.acquisitions(), 2);
+        f.cache.shutdown().await.unwrap();
+    }
+}
+#[tokio::test]
+async fn eager_ignores_factory_zero_and_disabled_timed_out_completion() {
+    let f = fixture(
+        eager_options().with_factory_timeouts(
+            Timeout::After(Duration::ZERO),
+            Timeout::After(Duration::ZERO),
+            false,
+        ),
+        LeasePolicy::Fenced,
+        "",
+    )
+    .await;
+    for kind in [MarkerKind::ClearRemove, group(), MarkerKind::ClearExpire] {
+        f.store
+            .advance(&scope(""), kind.clone(), version(1))
+            .await
+            .unwrap();
+        f.store
+            .snapshots
+            .inner
+            .renew_snapshot(
+                &scope(""),
+                &kind,
+                MarkerSnapshot::new(version(1), time(9), time(19), time(29)).unwrap(),
+                time(10),
+                new_token(),
+            )
+            .await
+            .unwrap();
+    }
+    found(&f.cache).await;
+    assert_eq!(
+        f.store.snapshots.writes(),
+        0,
+        "fresh snapshots avoid foreground factory"
+    );
+    f.clock.set(time(15));
+    found(&f.cache).await;
+    until(|| f.locker.releases() == 1).await;
+    assert_eq!(
+        f.store.snapshots.writes(),
+        1,
+        "eager runs independently of foreground factory deadlines"
+    );
+    assert_eq!(
+        f.store
+            .snapshots
+            .inner
+            .read_snapshot(&scope(""), &group(), time(15), new_token())
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .created(),
+        time(15)
+    );
+    f.cache.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn shutdown_cancels_eager_preflight_read_without_acquiring_or_writing() {
+    let f = fixture(eager_options(), LeasePolicy::Fenced, "").await;
+    found(&f.cache).await;
+    let gate = Gate::new();
+    *f.store.snapshots.read_mode.lock().unwrap() = Read::Park(gate.clone());
+    f.clock.set(time(16));
+    found(&f.cache).await;
+    gate.entered().await;
+    f.cache.shutdown().await.unwrap();
+    assert_eq!(
+        (f.locker.acquisitions(), f.store.snapshots.writes()),
+        (1, 1)
+    );
+    assert!(matches!(
+        f.store
+            .snapshots
+            .read_tokens
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .check(),
+        Err(Error::OperationCancelled {
+            reason: FactoryCancellationReason::CacheShutdown
+        })
+    ));
+}
+#[tokio::test]
+async fn shutdown_cancels_eager_write_and_drains_its_native_lease() {
+    let f = fixture(eager_options(), LeasePolicy::Fenced, "").await;
+    found(&f.cache).await;
+    let gate = Gate::new();
+    *f.store.snapshots.mode.lock().unwrap() = Write::Park(gate.clone());
+    f.clock.set(time(16));
+    found(&f.cache).await;
+    gate.entered().await;
+    f.cache.shutdown().await.unwrap();
+    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 2));
+    assert!(matches!(
+        f.store
+            .snapshots
+            .tokens
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .check(),
+        Err(Error::OperationCancelled {
+            reason: FactoryCancellationReason::CacheShutdown
+        })
+    ));
+    assert_eq!(
+        f.store
+            .snapshots
+            .inner
+            .read_snapshot(&scope(""), &group(), time(16), new_token())
+            .await
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .created(),
+        time(10)
+    );
+}
+
+#[tokio::test]
+async fn same_created_longer_l2_lifetime_hydrates_eager_without_duplicate_factory() {
+    let f = fixture(
+        options()
+            .with_distributed_duration(Duration::from_secs(10))
+            .with_eager_refresh(EagerThreshold::new(0.5)),
+        LeasePolicy::Fenced,
+        "",
+    )
+    .await;
+    found(&f.cache).await;
+    assert_eq!(
+        (f.store.snapshots.reads(), f.store.snapshots.writes()),
+        (2, 1)
+    );
+    f.clock.set(time(11));
+    found(&f.cache).await;
+    until(|| f.store.snapshots.reads() >= 3).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        (f.locker.acquisitions(), f.store.snapshots.writes()),
+        (1, 1)
+    );
+    f.clock.set(time(12));
+    found(&f.cache).await;
+    assert_eq!(
+        f.store.snapshots.reads(),
+        3,
+        "L2 hydration extends only the local deadline"
+    );
+    let snapshot = f
+        .store
+        .snapshots
+        .inner
+        .read_snapshot(&scope(""), &group(), time(12), new_token())
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_eq!(
+        (
+            snapshot.version(),
+            snapshot.created(),
+            snapshot.logical_expiration()
+        ),
+        (version(1), time(10), time(20))
+    );
+    f.cache.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn skip_when_stale_also_suppresses_eager_preflight_and_owned_recheck() {
+    let f = fixture(
+        eager_options()
+            .with_skip_distributed_read_when_stale(true)
+            .with_rethrow_distributed_exceptions(true),
+        LeasePolicy::Fenced,
+        "",
+    )
+    .await;
+    found(&f.cache).await;
+    assert_eq!(f.store.snapshots.reads(), 2);
+    *f.store.snapshots.read_mode.lock().unwrap() = Read::Backend;
+    f.clock.set(time(16));
+    found(&f.cache).await;
+    until(|| f.locker.releases() == 2).await;
+    assert_eq!(
+        (f.store.snapshots.reads(), f.store.snapshots.writes()),
+        (2, 2)
+    );
+    assert_eq!(f.locker.acquisitions(), 2);
+    let snapshot = f
+        .store
+        .snapshots
+        .inner
+        .read_snapshot(&scope(""), &group(), time(16), new_token())
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_eq!(
+        (snapshot.version(), snapshot.created()),
+        (version(1), time(16))
+    );
+    f.cache.shutdown().await.unwrap();
 }

@@ -46,7 +46,8 @@ operation and one owned read deadline. A live snapshot is also reconciled with
 the durable maximum. Expiry, deletion or eviction of a snapshot cannot erase an
 invalidation fact or revive a value invalidated by that fact.
 
-Fresh L1 observations need no provider read. A fresh L2 snapshot hydrates L1
+Fresh L1 observations need no foreground provider read; a due eager threshold
+can schedule an owned background check. A fresh L2 snapshot hydrates L1
 within its remaining source lifetime and never renews L2. Missing or logically
 stale L2 snapshots select the strongest confirmed revision, admit a fresh L1
 observation when allowed, and renew a nonzero remote snapshot when writes are
@@ -60,10 +61,11 @@ no backplane invalidation and does not advance or compact the journal.
 | FailSafeMaxDuration / DistributedFailSafeMaxDuration | Independent local/remote physical retention, normalized above the respective logical duration |
 | FailSafeThrottleDuration | Excluded-factory fallback throttle, capped by the retained source's physical deadline |
 | SkipMemoryRead / Write | Independent observation lookup/admission |
-| SkipDistributedRead / ReadWhenStale | Existing explicit read bypass, without fabricated absence or renewal |
+| SkipDistributedRead / ReadWhenStale | Read bypass never fabricates absence; a known revision can still run the independent factory/write. ReadWhenStale also bypasses eager preflight when a memory observation exists |
 | SkipDistributedWrite | Suppresses renewal without changing the durable fact |
 | FactorySoftTimeout / HardTimeout | The shared selection is immediate; zero excludes it, and soft timeout requires a retained marker with fail-safe |
 | AllowBackgroundDistributedOperations | Owned renewal can outlive foreground completion; shutdown cancels and drains it |
+| EagerRefreshThreshold | Fresh due observations consume one attempt and schedule independently owned preflight/lease/renewal |
 | ReThrowDistributedCacheExceptions / ReThrowSerializationExceptions | Independent backend/protocol write-fault policy, preserving the original cause |
 
 Positive factory budgets do not describe a delayed user callback: the shared
@@ -98,9 +100,11 @@ implementation returns `UnsupportedFencing`. Strict marker repair defers fresh
 L1 authority until this atomic fence accepts the actual renewal.
 
 `CacheEvent::MarkerSnapshotWrite` records actual stored/newer/expired or suppressed
-backend/protocol results; optional metrics use finite outcome labels. Failed reads
-retain the existing explicitly degraded authority rather than claiming durable
-absence or a successful factory renewal.
+backend/protocol results; optional metrics use finite outcome labels. Suppressed
+read faults can run the shared immediate factory over a known nonzero maximum.
+Only an actual provider observation confirms absence; an unknown skipped or failed
+read returns explicit degraded authority and never installs a fresh negative.
+Strict rethrow policies still preserve the original backend/protocol cause.
 
 ## Marker repair ownership
 
@@ -127,10 +131,35 @@ against a genuine native locker/snapshot provider, replaces a real Redis token
 while renewal is parked, verifies atomic rejection and preserves the replacement
 lease across old-owner cleanup.
 
+## Owned eager refresh and independent factory selection
+
+Eager work returns the current value immediately and uses the same bounded
+observation cache to consume one attempt, including on contention. A fresh peer
+snapshot with a newer creation time **or longer logical deadline** hydrates L1
+without another factory, write or distributed lease. Other attempts acquire the
+marker lease with zero wait; contention stops eager work under either lease policy.
+SkipDistributedRead and ReadWhenStale govern preflight and any owned recheck.
+
+Eager factory selection is independent of foreground soft/hard factory budgets
+and AllowTimedOutFactoryBackgroundCompletion. Preflight and write carry real owned
+cancellation; shutdown cancels and drains them and releases the actual lease.
+CacheEvent::MarkerEagerRefresh and its optional finite-label metric report an
+accepted scheduled attempt, which may stop at peer hydration or contention.
+
+Public tests cover single flight, parked reads/writes, shutdown, fresh peer
+hydration, same-created longer-L2 lifetime, contention, zero foreground budgets
+and skipped/faulted read selection. The released FusionCache2.9 executable oracle
+confirms nine corresponding scenarios independently. A deliberate improvement:
+Amalgam can renew a known revision while distributed reads are skipped even
+without a locker/backplane. FusionCache's RequiresDistributedOperations disables
+that write when no such component participates. Neither path invents a remote zero.
+Amalgam's permanent journal and owned eager cancellation remain explicit differences.
+
 ## Remaining contract
 
-Marker eager refresh, late marker-factory completion, snapshot recovery replay
-and the remaining skipped/failed read plus locker combinations remain open. Explicit
+Snapshot recovery replay/population and the remaining factory-budget/read/locker
+option combinations remain open. The shared factory is a pure immediate selection;
+there is no public replaceable delayed marker callback. Explicit
 tag/clear mutations keep the existing durable mutation/backplane protocol and
 do not immediately populate this remote snapshot namespace. Timestamp equality
 uses Amalgam's existing expiration boundary. These limits and permanent facts

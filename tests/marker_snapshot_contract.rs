@@ -481,7 +481,7 @@ async fn all_observations_expiring_cannot_resurrect_an_invalidated_value() {
 }
 
 #[tokio::test]
-async fn explicit_write_skip_and_read_degradation_do_not_renew() {
+async fn explicit_write_skip_prevents_renewal_but_suppressed_read_fault_runs_known_factory() {
     let (_, _, store, cache) = fixture(tags().with_skip_distributed(false, true), true).await;
     cache.read("key", None).await.unwrap();
     assert_eq!(store.cache.count(), 0);
@@ -493,9 +493,17 @@ async fn explicit_write_skip_and_read_degradation_do_not_renew() {
     cache.read("key", None).await.unwrap();
     assert_eq!(
         store.cache.count(),
-        1,
-        "a read fail-safe result is not a successful shared factory"
+        2,
+        "suppressed read fault does not prevent a successful known marker factory"
     );
+    {
+        let writes = store.cache.writes.lock().unwrap();
+        assert_eq!(writes[0].version(), writes[1].version());
+        assert_eq!(
+            (writes[0].created(), writes[1].created()),
+            (time(10), time(12))
+        );
+    }
     cache.shutdown().await.unwrap();
 }
 

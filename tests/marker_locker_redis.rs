@@ -136,12 +136,24 @@ impl InvalidationStore for Store {
     }
 }
 struct Fixture {
+    clock: Arc<ManualClock>,
     cache: Cache<u64>,
     scope: CacheScope,
     store: Arc<Store>,
     locker: Arc<RedisDistributedLocker>,
 }
 async fn fixture(url: &str, test: &str) -> Fixture {
+    fixture_with_options(
+        url,
+        test,
+        EntryOptions::tag_defaults()
+            .with_memory_duration(Duration::from_secs(2))
+            .with_distributed_duration(Duration::from_secs(5))
+            .with_skip_distributed_locker(false),
+    )
+    .await
+}
+async fn fixture_with_options(url: &str, test: &str, options: EntryOptions) -> Fixture {
     let scope = CacheScope::new(
         format!("marker-core-{test}-{}:", SystemClock.now().ticks()),
         "v2",
@@ -186,17 +198,12 @@ async fn fixture(url: &str, test: &str) -> Fixture {
     });
     let locker = Arc::new(RedisDistributedLocker::connect(url).await.unwrap());
     let cache = Cache::builder()
-        .clock(clock)
+        .clock(clock.clone())
         .key_prefix(scope.prefix())
         .distributed(backend)
         .invalidation_store(store.clone())
         .serializer(Arc::new(JsonSerializer))
-        .tags_default_options(
-            EntryOptions::tag_defaults()
-                .with_memory_duration(Duration::from_secs(2))
-                .with_distributed_duration(Duration::from_secs(5))
-                .with_skip_distributed_locker(false),
-        )
+        .tags_default_options(options)
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
         .distributed_locker(locker.clone())
@@ -206,6 +213,7 @@ async fn fixture(url: &str, test: &str) -> Fixture {
         .try_build()
         .unwrap();
     Fixture {
+        clock,
         cache,
         scope,
         store,
@@ -310,6 +318,62 @@ async fn native_core_replaced_token_cannot_repair_or_create_fresh_local_authorit
         snapshot(&f).await.snapshot().unwrap().version(),
         MarkerVersion::new(time(1))
     );
+    assert_eq!(
+        f.store.read(&f.scope, &kind()).await.unwrap(),
+        Some(MarkerVersion::new(time(1)))
+    );
+    f.cache.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_eager_returns_before_fenced_write_and_releases_actual_redis_token() {
+    let Some(url) = support::redis_fixture::redis_url() else {
+        return;
+    };
+    let f = fixture_with_options(
+        &url,
+        "eager",
+        EntryOptions::tag_defaults()
+            .with_memory_duration(Duration::from_secs(10))
+            .with_distributed_duration(Duration::from_secs(10))
+            .with_eager_refresh(EagerThreshold::new(0.5))
+            .with_skip_distributed_locker(false),
+    )
+    .await;
+    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    let gate = Gate::new();
+    *f.store.snapshots.write.lock().unwrap() = Write::Park(gate.clone());
+    f.clock.set(time(16));
+    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    gate.entered().await;
+    for _ in 0..4 {
+        assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    }
+    assert_eq!(f.store.snapshots.proofs.lock().unwrap().len(), 2);
+    assert_eq!(f.store.snapshots.reads.load(Ordering::SeqCst), 3);
+    gate.allow();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let read = f
+                .store
+                .snapshots
+                .inner
+                .read_snapshot(&f.scope, &kind(), time(16), token())
+                .await
+                .unwrap();
+            if read
+                .snapshot()
+                .is_some_and(|snapshot| snapshot.created() == time(16))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let next = replacement(&f, &f.store.snapshots.last_proof()).await;
+    next.release().await.unwrap();
     assert_eq!(
         f.store.read(&f.scope, &kind()).await.unwrap(),
         Some(MarkerVersion::new(time(1)))
