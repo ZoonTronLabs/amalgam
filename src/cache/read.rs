@@ -1,14 +1,13 @@
 //! Value reads, same-key origin work, fail-safe and eager refresh.
 use super::{
-    AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheValue, CancellationSource,
+    AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CancellationSource,
     CircuitComponent, CommitReceipt, DistributedLease, DistributedLookup, Duration, Entry,
-    EntryOptions, Error, Execution, FactoryCancellation, FactoryContext, FactoryError,
-    FactoryProduct, FallbackAvailability, FlightGuard, Future, HitKind, HydrationFence,
-    HydrationOutcome, Instrument, L1Read, L2ReadPolicy, LeaseError, LeasePolicy, LinkMode,
-    LocalParticipation, LockOutcome, LookupKey, MarkerReadPolicy, MaybeValue, Observed,
-    OperationOutcome, Ordering, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage, Tag,
-    TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded, component_span, lease_lost,
-    newer_of,
+    EntryOptions, Error, Execution, FactoryCancellation, FactoryContext, FallbackAvailability,
+    FlightGuard, HitKind, HydrationFence, HydrationOutcome, Instrument, L1Read, L2ReadPolicy,
+    LeaseError, LeasePolicy, LinkMode, LocalParticipation, LockOutcome, LookupKey,
+    MarkerReadPolicy, MaybeValue, Observed, OperationOutcome, Ordering, OriginKind, ReadStale,
+    Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict, Timeout, Worker,
+    acquire_owned_supervised, bounded, component_span, lease_lost, newer_of,
 };
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
@@ -429,19 +428,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             LockOutcome::Acquired(guard)
         })
     }
-    pub(super) async fn get_or_set<F, Fut>(
+    pub(super) async fn get_or_set<O: CacheOrigin<V>>(
         &self,
         key: LookupKey,
-        factory: F,
+        origin: O,
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
         default: MaybeValue<V>,
         caller: FactoryCancellation,
-    ) -> Result<Observed<CacheValue<V>>>
-    where
-        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
-    {
+    ) -> Result<Observed<CacheValue<V>>> {
         let opts = self.resolve_options(&key.raw, options)?;
         let raw_key = key.raw;
         let key = key.full;
@@ -450,7 +445,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if !opts.skip_memory_read() {
             match self.read_l1(&key, &caller).await? {
                 L1Read::Fresh(entry) => {
-                    if entry.should_eager_refresh(self.inner.clock.now()) {
+                    if matches!(O::KIND, OriginKind::Factory)
+                        && entry.should_eager_refresh(self.inner.clock.now())
+                    {
                         self.eager(
                             LookupKey {
                                 raw: raw_key,
@@ -459,7 +456,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                             opts.clone(),
                             entry.clone(),
                             tags,
-                            factory,
+                            origin,
                         );
                     }
                     return self.served(key, &entry, &opts, CacheLevel::Memory);
@@ -519,11 +516,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 stale = Some(newer_of(stale, entry.entry));
             }
         }
-        let timeout = opts.appropriate_factory_timeout(stale.is_some() || default.has_value());
-        let soft = opts.is_fail_safe_enabled()
-            && (stale.is_some() || default.has_value())
-            && timeout == opts.factory_soft_timeout()
-            && timeout != opts.factory_hard_timeout();
+        let (timeout, soft, operation) = match O::KIND {
+            OriginKind::Factory => {
+                let timeout =
+                    opts.appropriate_factory_timeout(stale.is_some() || default.has_value());
+                let soft = opts.is_fail_safe_enabled()
+                    && (stale.is_some() || default.has_value())
+                    && timeout == opts.factory_soft_timeout()
+                    && timeout != opts.factory_hard_timeout();
+                (timeout, soft, "factory")
+            }
+            OriginKind::Constant => (Timeout::Infinite, false, "constant"),
+        };
         if matches!(timeout,Timeout::After(duration) if duration.is_zero()) {
             drop(guard);
             return self
@@ -539,10 +543,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             },
             opts.clone(),
             tags,
-            stale
-                .as_ref()
-                .map(|entry| self.stale_info(entry, &opts))
-                .transpose()?,
+            match O::KIND {
+                OriginKind::Factory => stale
+                    .as_ref()
+                    .map(|entry| self.stale_info(entry, &opts))
+                    .transpose()?,
+                OriginKind::Constant => None,
+            },
             origin_cancellation.clone(),
         );
         let started = self.inner.clock.now();
@@ -551,12 +558,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let cancelled = source.clone();
         let lease_state = guard.lease.as_ref().map(DistributedLease::state);
         let mut execution=self.inner.scopes.execution(async move {
-            let origin=async move {factory(ctx).await};
+            let origin=origin.invoke(ctx);
             let product=if let Some(mut state)=lease_state {tokio::select! {biased; ()=lease_lost(&mut state)=>{cancelled.cancel_with(Reason::LeaseLost);return Err(Error::FactoryCancelled {reason:Reason::LeaseLost});},product=origin=>product}}else{origin.await};
             let product=product.map_err(Error::from)?;
             let result=worker.store_product(flight_key,product,started,guard,&origin_cancellation).await;
             if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
-        }.instrument(component_span(&self.inner.name,CacheLevel::Origin,"factory",Some(&key))),source);
+        }.instrument(component_span(&self.inner.name,CacheLevel::Origin,operation,Some(&key))),source);
         execution.link(&caller, LinkMode::CallerScope);
         let result = match timeout {
             Timeout::Infinite => Some(execution.await),
@@ -572,7 +579,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             Some(Ok(value)) => Ok(Observed::new(
                 value,
                 OperationOutcome::Stored,
-                Some(CacheLevel::Origin),
+                match O::KIND {
+                    OriginKind::Factory => Some(CacheLevel::Origin),
+                    OriginKind::Constant => None,
+                },
             )),
             Some(Err(error))
                 if matches!(
@@ -687,17 +697,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             },
         );
     }
-    fn eager<F, Fut>(
+    fn eager<O: CacheOrigin<V>>(
         &self,
         keys: LookupKey,
         opts: EntryOptions,
         current: Entry<V>,
         tags: Box<[Tag]>,
-        factory: F,
-    ) where
-        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
-    {
+        origin: O,
+    ) {
         let key = Arc::clone(&keys.full);
         let Some(local) = self.inner.locks.try_lock(&key) else {
             return;
@@ -717,9 +724,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
             if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged});}
-            let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone());
+            let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone()).with_invocation(crate::factory::FactoryInvocation::EagerRefresh);
             let started=worker.inner.clock.now();
-            let origin=factory(ctx);
+            let origin=origin.invoke(ctx);
             let product=if let Some(mut state)=guard.lease.as_ref().map(DistributedLease::state) {
                 tokio::select! {biased; ()=lease_lost(&mut state)=>return Err(Error::FactoryCancelled {reason:Reason::LeaseLost}),product=origin=>product}
             }else{origin.await};

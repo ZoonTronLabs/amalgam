@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/unsafe-forbidden-success.svg" alt="forbid unsafe">
 </p>
 
-An async Rust hybrid cache inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
+A Rust hybrid cache with async operations, inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
 This README describes **0.3.1**. Install the crate from crates.io:
 
@@ -64,6 +64,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use fallible APIs for new callers. `read` distinguishes a successful miss from a storage, copy or configuration failure. A mutation returns a `MutationReceipt`: `Completed` contains its stage report; `Scheduled` contains awaitable cache-owned completion. `wait()` observes actual completion, including a requested error rethrow. A completed report can also record skipped stages, suppressed failures and work admitted to recovery, according to the configured policy.
 
 Legacy `build`, `set`, `try_get`, `remove`, `expire` and `clear(bool)` signatures remain compatibility adapters. Their original signatures cannot return every newly modeled failure; diagnostics retain observed failures. Prefer `try_build`, fallible reads/mutations and explicit shutdown when handling those failures matters.
+
+
+## Synchronous use (unreleased source)
+
+`BlockingCache<V>` provides caller-thread operations and `as_async()` for the
+same entries and lifecycle. Timed/cancellable/eager factories use owned,
+bounded callback pools. Mutation receipts expose actual completion.
+[Dispatch, resource bounds and lifecycle](docs/SYNC.md) describe the tested
+contracts and intentional differences. This addition is available in the
+source tree; the published package has not been updated by this work.
 
 ## Freshness, origin work and cancellation
 

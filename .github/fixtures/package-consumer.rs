@@ -1,6 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use amalgam::{Cache, ClearMode, EntryOptions, InMemoryDistributedCache, JsonSerializer, SystemClock};
+use amalgam::{
+    Cache, ClearMode, EntryOptions, InMemoryDistributedCache, JsonSerializer, SystemClock,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,5 +28,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!first.read("answer", None).await?.has_value());
     first.shutdown().await?;
     cold.shutdown().await?;
+
+    let native = amalgam::BlockingCache::<Option<u64>>::new()?;
+    let value = native.get_or_set_value_full_with_commit_cancellable(
+        "null",
+        None,
+        None,
+        Box::from([]),
+        amalgam::CancellationSource::new().token(),
+    )?;
+    assert_eq!(value.value, None);
+    if let amalgam::BlockingCommitReceipt::Mutation(receipt) = value.commit {
+        receipt.wait()?;
+    }
+    let asynchronous = native.as_async().clone();
+    drop(native);
+    assert_eq!(
+        asynchronous.read("null", None).await?.into_value(),
+        Some(None)
+    );
+    asynchronous.shutdown().await?;
     Ok(())
 }

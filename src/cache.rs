@@ -1,13 +1,21 @@
 //! Multi-level orchestration with fallible boundaries and owned work.
 mod api;
+mod blocking;
 mod builder;
 mod markers;
+mod origin;
 mod read;
 mod recovery;
 mod runtime;
 mod write;
 
+pub use blocking::{
+    BlockingCache, BlockingCacheBuildError, BlockingCacheValue, BlockingCommitCompletion,
+    BlockingCommitReceipt, BlockingDispatchError, BlockingMutationReceipt, BlockingRuntime,
+    BlockingRuntimeError, BlockingThreadPool,
+};
 pub use builder::CacheBuilder;
+use origin::{CacheOrigin, ConstantOrigin, FactoryOrigin, OriginKind};
 
 use crate::backplane::{
     Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState, MarkerCommand,
@@ -143,13 +151,38 @@ pub struct Cache<V: Clone + Send + Sync + 'static> {
     inner: Arc<CacheInner<V>>,
     lifetime: Arc<PublicLifetime<V>>,
 }
-struct PublicLifetime<V: Clone + Send + Sync + 'static> {
-    inner: Weak<CacheInner<V>>,
+enum ExecutorOwnership {
+    External,
+    CacheOwned(BlockingRuntime),
+}
+enum PublicLifetime<V: Clone + Send + Sync + 'static> {
+    External(Weak<CacheInner<V>>),
+    CacheOwned {
+        inner: Arc<CacheInner<V>>,
+        executor: BlockingRuntime,
+    },
 }
 impl<V: Clone + Send + Sync + 'static> Drop for PublicLifetime<V> {
     fn drop(&mut self) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.close();
+        match self {
+            Self::External(owner) => {
+                if let Some(inner) = owner.upgrade() {
+                    inner.close();
+                }
+            }
+            Self::CacheOwned { inner, executor } => {
+                if inner.close() == CloseOutcome::AlreadyClosed {
+                    return;
+                }
+                let inner = Arc::clone(inner);
+                let retained = executor.clone();
+                executor.handle().spawn(async move {
+                    if let Err(error) = inner.shutdown().await {
+                        tracing::warn!(%error, "cache-owned executor drainage failed");
+                    }
+                    drop(retained);
+                });
+            }
         }
     }
 }
@@ -358,6 +391,7 @@ enum CommitMode {
 enum LookupMode {
     Read,
     GetOrSet,
+    ConstantValue,
 }
 struct ReadyValue<'key, V> {
     value: V,

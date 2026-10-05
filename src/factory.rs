@@ -29,6 +29,10 @@ impl TagRequest {
 }
 #[derive(Debug)]
 enum FactoryOutput<V> {
+    Constant {
+        value: V,
+        tags: Result<Box<[Tag]>, TagError>,
+    },
     Modified {
         value: V,
         etag: Option<String>,
@@ -50,12 +54,20 @@ impl<V> FactoryProduct<V> {
     /// Borrows the produced value.
     pub fn value(&self) -> &V {
         match &self.output {
-            FactoryOutput::Modified { value, .. } => value,
+            FactoryOutput::Modified { value, .. } | FactoryOutput::Constant { value, .. } => value,
             FactoryOutput::NotModified { stale, .. } => &stale.value,
         }
     }
     pub(crate) fn into_payload(self) -> crate::Result<FactoryPayload<V>> {
         match self.output {
+            FactoryOutput::Constant { value, tags } => Ok(FactoryPayload {
+                value,
+                options: self.options,
+                tags: tags?,
+                etag: None,
+                last_modified: None,
+                origin: ProductOrigin::Constant,
+            }),
             FactoryOutput::Modified {
                 value,
                 etag,
@@ -81,6 +93,7 @@ impl<V> FactoryProduct<V> {
     }
 }
 pub(crate) enum ProductOrigin {
+    Constant,
     Modified,
     NotModified,
 }
@@ -92,9 +105,18 @@ pub(crate) struct FactoryPayload<V> {
     pub(crate) tags: Box<[Tag]>,
     pub(crate) origin: ProductOrigin,
 }
+/// Why the cache initiated this origin callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryInvocation {
+    /// A caller initiated ordinary retrieval; it may later hand off timed work.
+    Foreground,
+    /// An existing value initiated background eager refresh.
+    EagerRefresh,
+}
 /// Origin context. Optional stale data forms one complete snapshot.
 #[derive(Debug)]
 pub struct FactoryContext<V> {
+    invocation: FactoryInvocation,
     keys: FactoryKeys,
     options: EntryOptions,
     call_tags: Box<[Tag]>,
@@ -111,6 +133,7 @@ impl<V> FactoryContext<V> {
         cancellation: FactoryCancellation,
     ) -> Self {
         Self {
+            invocation: FactoryInvocation::Foreground,
             keys,
             options,
             call_tags,
@@ -118,6 +141,14 @@ impl<V> FactoryContext<V> {
             stale,
             cancellation,
         }
+    }
+    pub(crate) fn with_invocation(mut self, invocation: FactoryInvocation) -> Self {
+        self.invocation = invocation;
+        self
+    }
+    /// Original foreground/eager cause, independent of the polling thread.
+    pub fn invocation(&self) -> FactoryInvocation {
+        self.invocation
     }
     /// The prefixed data key.
     pub fn key(&self) -> &str {
@@ -198,6 +229,15 @@ impl<V> FactoryContext<V> {
                 TagRequest::Rejected(error)
             }
         };
+    }
+    pub(crate) fn constant(self, value: V) -> FactoryProduct<V> {
+        FactoryProduct {
+            output: FactoryOutput::Constant {
+                value,
+                tags: self.adaptive_tags.resolve(self.call_tags),
+            },
+            options: self.options,
+        }
     }
     /// Produces a modified value using current options/tags.
     pub fn value(self, value: V) -> FactoryProduct<V> {

@@ -46,7 +46,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             ProductOrigin::Modified => self.emit(CacheEvent::FactorySuccess {
                 key: Arc::clone(&key),
             }),
-            ProductOrigin::NotModified => {}
+            ProductOrigin::NotModified | ProductOrigin::Constant => {}
         }
         self.emit(CacheEvent::Set { key });
         Ok(CacheValue {

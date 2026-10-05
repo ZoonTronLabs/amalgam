@@ -161,6 +161,7 @@ impl OperationOutcome {
     #[must_use]
     pub fn from_error(error: &crate::Error) -> Self {
         match error {
+            crate::Error::ReentrantDrain { .. } => Self::Rejected,
             crate::Error::CircuitOpen { component } => match component {
                 CircuitComponent::Distributed => Self::DistributedError,
                 CircuitComponent::Backplane => Self::BackplaneError,

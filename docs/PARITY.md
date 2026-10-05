@@ -10,7 +10,8 @@ The comparison pins are distinct:
 
 Unreleased additions are tracked in [the full functionality inventory](FULL_CONTRACT.md).
 They include original/current/stale factory metadata, independent marker policy,
-async snapshot codecs and explicit conditional/expiry choices. They are not part
+async snapshot codecs, explicit conditional/expiry choices, and the shared
+synchronous facade. They are not part
 of the published 0.3.1 package. The remaining public-surface gaps stay open.
 
 Released 2.9 experiments additionally establish that eager current tags come from
@@ -41,9 +42,10 @@ including fresh L1 hits. [The marker field matrix](MARKER_READS.md) describes
 remaining lifecycle gaps and deliberate stronger boundaries. Additional opt-in
 [CachedSnapshots](MARKER_SNAPSHOTS.md) supports expiring remote observations and
 nonzero repair with atomic maxima, independent deadlines and owned writes;
-the journal stays permanent. Provider fencing is available, while marker locker
-orchestration/eager/recovery still require implementation and evidence. Async codecs
-receive the actual owned cooperative operation signal through additive hooks.
+the journal stays permanent. Owned marker locker orchestration, eager preflight
+and original-policy staged recovery are implemented with native acceptance.
+Remaining budget/read/locker combinations stay open in the inventory. Async
+codecs receive the actual owned cooperative operation signal through additive hooks.
 
 New codec/provider error envelopes preserve the concrete source for downcasting.
 Rust's typed envelope is an idiomatic diagnostic adaptation; it does not expose
@@ -52,6 +54,14 @@ variants cannot reconstruct a cause already converted into text. The sealed
 `ImmutableValue` capability permits codec-free copy for supported built-in types;
 custom values continue through their chosen `ValueCloner`. Providers may now use
 `options_for_with_defaults` to inspect the owning cache's current defaults.
+
+The [synchronous facade](SYNC.md) and its async view share the same cache and
+final-owner lifetime. Its explicit thread/depth bounds and fail-safe default
+soft-budget behavior are Rust differences. Supplied values are now distinct
+from user factories in both views: zero factory deadlines do not reject them,
+eager refresh does not overwrite a warm value, and factory events are absent.
+These outcomes were executed against released FusionCache 2.9 and reproduced
+as Rust regressions before repair.
 
 ## Observable behavior
 

@@ -40,28 +40,65 @@ impl Tasks {
         events: Events,
         work: impl Future<Output = Result<T>> + Send + 'static,
     ) -> oneshot::Receiver<TaskResult<T>> {
-        let (sender, receiver) = oneshot::channel();
-        let runtime = match self
+        match self.executor() {
+            Ok(runtime) => {
+                let worker = runtime.spawn(work);
+                self.supervise(runtime, worker, task, key, events)
+            }
+            Err(error) => Self::rejected(error),
+        }
+    }
+    pub(crate) fn spawn_blocking<T: Send + 'static>(
+        self: &Arc<Self>,
+        task: ShutdownTask,
+        key: Arc<str>,
+        events: Events,
+        cancellation: crate::FactoryCancellation,
+        launch: impl Future<Output = Result<tokio::task::JoinHandle<Result<T>>>> + Send + 'static,
+    ) -> oneshot::Receiver<TaskResult<T>> {
+        match self.executor() {
+            Ok(runtime) => self.supervise(
+                runtime,
+                wait_blocking(launch, cancellation),
+                task,
+                key,
+                events,
+            ),
+            Err(error) => Self::rejected(error),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn tracked_count(&self) -> usize {
+        lock(&self.handles).len()
+    }
+    fn executor(&self) -> Result<tokio::runtime::Handle> {
+        let runtime = self
             .runtime
             .get()
             .cloned()
             .or_else(|| tokio::runtime::Handle::try_current().ok())
-        {
-            Some(runtime) => {
-                let _ = self.runtime.set(runtime.clone());
-                runtime
-            }
-            None => {
-                let _ = sender.send(TaskResult::Completed(Err(
-                    crate::ConfigError::MissingRuntime {
-                        component: crate::RuntimeComponent::Execution,
-                    }
-                    .into(),
-                )));
-                return receiver;
-            }
-        };
-        let worker = runtime.spawn(work);
+            .ok_or(crate::ConfigError::MissingRuntime {
+                component: crate::RuntimeComponent::Execution,
+            })?;
+        let _ = self.runtime.set(runtime.clone());
+        Ok(runtime)
+    }
+    fn rejected<T>(error: Error) -> oneshot::Receiver<TaskResult<T>> {
+        let (sender, receiver) = oneshot::channel();
+        let _ = sender.send(TaskResult::Completed(Err(error)));
+        receiver
+    }
+    fn supervise<T: Send + 'static>(
+        self: &Arc<Self>,
+        runtime: tokio::runtime::Handle,
+        worker: impl Future<Output = std::result::Result<Result<T>, tokio::task::JoinError>>
+        + Send
+        + 'static,
+        task: ShutdownTask,
+        key: Arc<str>,
+        events: Events,
+    ) -> oneshot::Receiver<TaskResult<T>> {
+        let (sender, receiver) = oneshot::channel();
         let tasks = Arc::clone(self);
         let (finished, completion) = watch::channel(false);
         let supervisor = runtime.spawn(async move {
@@ -199,5 +236,33 @@ impl Tasks {
     }
     pub(crate) fn take_failures(&self) -> Vec<ShutdownFailure> {
         std::mem::take(&mut *lock(&self.failures))
+    }
+}
+
+async fn wait_blocking<T: Send + 'static>(
+    launch: impl Future<Output = Result<tokio::task::JoinHandle<Result<T>>>>,
+    cancellation: crate::FactoryCancellation,
+) -> std::result::Result<Result<T>, tokio::task::JoinError> {
+    let mut launch = std::pin::pin!(launch);
+    let mut worker = tokio::select! {
+        biased;
+        reason = cancellation.cancelled() => return Ok(Err(Error::OperationCancelled { reason })),
+        result = &mut launch => match result {
+            Ok(worker) => worker,
+            Err(error) => return Ok(Err(error)),
+        }
+    };
+    tokio::select! {
+        biased;
+        result = &mut worker => result,
+        reason = cancellation.cancelled() => {
+            // Dispatch has its own permit; unrelated work cannot indefinitely
+            // occupy this callback's pool slot. A started callback must join.
+            worker.abort();
+            match worker.await {
+                Err(error) if error.is_cancelled() => Ok(Err(Error::OperationCancelled { reason })),
+                result => result,
+            }
+        }
     }
 }

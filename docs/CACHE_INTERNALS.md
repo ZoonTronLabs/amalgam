@@ -9,6 +9,10 @@ into private modules so complete workflows can be read and reviewed together.
 | [cache.rs](../src/cache.rs) | Public handles, shared private states and common operation policies |
 | [api.rs](../src/cache/api.rs) | Public calls, ready-hit admission and observed execution boundaries |
 | [builder.rs](../src/cache/builder.rs) | Configuration, invariant validation and construction |
+| [origin.rs](../src/cache/origin.rs) | Static factory versus supplied-value strategy; no additional erased dispatch |
+| [blocking.rs](../src/cache/blocking.rs) | Synchronous handles, completion types and owned factory supervision |
+| [blocking/api.rs](../src/cache/blocking/api.rs) | Synchronous delegation to the same operation engine |
+| [blocking/runtime.rs](../src/cache/blocking/runtime.rs) | Driven I/O, bounded callback admission, global depth and drain guards |
 | [read.rs](../src/cache/read.rs) | Value reads, origin ownership, fail-safe and eager refresh |
 | [write.rs](../src/cache/write.rs) | Value mutation admission and owned commit pipelines |
 | [markers.rs](../src/cache/markers.rs) | Tag/clear observations, scoped repair ownership and marker mutations |
@@ -23,8 +27,8 @@ establish a performance improvement.
 
 Keep shared closed states near their consumers; expose internal methods only
 within this cache module when another workflow needs them. Extensible provider
-behavior continues to use the existing traits. Avoid adding a parallel public
-cache API or a public handle inside owned workers.
+behavior continues to use the existing traits. Synchronous facades delegate to
+that same engine; avoid duplicate orchestration or public handles inside workers.
 
 The mechanical extraction preserves operation bodies, closed states and
 `CacheInner` fields. Existing contract/stack tests, mandatory native acceptance,

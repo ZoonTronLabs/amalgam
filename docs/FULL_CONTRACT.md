@@ -10,6 +10,8 @@ NuGet binary `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
 
 | Capability | Implementation and useful public evidence |
 |---|---|
+| Native synchronous and async views | `BlockingCache`, driven `BlockingRuntime`, shared final-owner lifetime, caller affinity, deadlines/cancellation, depth-ordered callback admission and actual receipts; runtime/mixed/scheduling and mandatory `blocking_redis` contracts. [Bounds and differences](SYNC.md) remain explicit; full option-combination coverage remains open; verification records identify their exact source tree |
+| Supplied value differs from user factory | Static `ConstantOrigin`; factory budgets/eager value work/events do not apply. `constant_origin_contract` contains four genuine regressions; independently executed released reference agrees |
 | Factory original/processed key; current and stale tags | `original_key`, `tags`, `stale_tags`; `factory_context_contract` tests prefix ambiguity, cold L2 and eager |
 | Eager request tags | Passed from the triggering call, distinct from stale tags; matches released reference |
 | Separate marker mutation policy | `tags_default_options`, `tags_entry_options`, `EntryOptions::tag_defaults`; `marker_defaults_contract` tests explicit override and provider independence |
@@ -33,7 +35,7 @@ platform-only simply to close the inventory:
 
 | Capability | Current limitation |
 |---|---|
-| Native synchronous operations | Data operations are async |
+| Full sync option-combination evidence | Native operations and mixed views are implemented; broader option/provider matrices, final delivery/package/performance evidence remain open |
 | Heterogeneous values per cache and registry | A `Cache<V>` holds one value type |
 | Runtime component/default/provider replacement | Configuration is fixed after build |
 | Pluggable L1 and local memory locker | Built-in MemoryStore and KeyedLock only |
@@ -42,7 +44,7 @@ platform-only simply to close the inventory:
 | Logging/tracing/metrics configuration | Category levels, optional tags and full native OTel metric integration incomplete |
 | Supported automatic backplane recovery | Retry-stage/expiry behavior still needs complete comparison. The old `EnableDistributedExpireOnBackplaneAutoRecovery` switch is inactive and `Obsolete(IsError=true)` in official2.9 source and released static DLL metadata; it is not a missing active option |
 | Portable tag/clear over a byte-only store | Requires separate genuine atomic InvalidationStore |
-| Full marker factory/renewal options | Independent reads and optional expiring snapshot renewal/repair are implemented. Participating repair has owned acquisition/recheck/fenced renewal/release, with `marker_locker_contract` and mandatory `marker_locker_redis` evidence. Owned eager preflight/zero-wait lease/write and skipped/suppressed-fault known factories are implemented. The main working tree contains original-policy snapshot population/recovery and bounded preservation of a committed compacted clear across durable and notification-only supersession. Public queue-bound/stage probes, actual native recovery/TTL/fence tests and eleven released-reference scenarios passed; full delivery/package/performance gates are pending. Remaining factory-budget/read/locker combinations are open. Durable facts deliberately never expire |
+| Full marker factory/renewal options | Independent reads and optional expiring snapshot renewal/repair are implemented. Participating repair has owned acquisition/recheck/fenced renewal/release, with `marker_locker_contract` and mandatory `marker_locker_redis` evidence. Owned eager preflight/zero-wait lease/write and skipped/suppressed-fault known factories are implemented. Original-policy snapshot population/recovery, bounded committed-clear preservation and authoritative clear compaction are delivered on main through `49c1e23`. Public/native gates passed (462 full runtime tests, six doc tests, all 15 exact-source CI jobs); paired timings cover preceding `ada2a41`, not a later source. Remaining factory-budget/read/locker combinations are open. Durable facts deliberately never expire |
 | Full option-combination evidence | Stale-layer skips and locker degradation/bypass need a larger public matrix |
 
 .NET ABI, Microsoft service containers, HybridCache and ASP.NET OutputCaching

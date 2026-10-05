@@ -7,6 +7,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Native `BlockingCache` and `BlockingRuntime` share cache state, coalescing, providers and final-owner lifetime with the async view. Caller-thread factories, bounded offloaded callbacks, cancellation, actual mutation receipts and awaited shutdown are supported; see `docs/SYNC.md` for explicit limits and reference differences.
+- Typed runtime resource limits and synchronous factory nesting admission. Self-draining shutdown/flush returns `ReentrantDrain` before closing the cache; nested calls across runtimes use strictly increasing callback depths.
 - Factory original key, current tags and stale tags; instance/provider inspection.
 - Independent tag/clear defaults (`tags_default_options`) and default policy factory.
 - Opt-in `MarkerReadPolicy::OptionsControlled`: independent secondary read options and observation bounds, per-marker deadlines/cancellation, typed control authority and peer-command events. CAS admission preserves newer facts, continuity fences reject old observations, and control checks stop at the first invalidation; see the field matrix in `docs/MARKER_READS.md`.
@@ -33,6 +35,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Supplied values use a constant origin: factory timeouts, eager origin work and factory events no longer apply. Factory-origin results retain the existing policies; four public regressions are checked against released FusionCache 2.9.0.
+- Cache-owned executor lifetime remains valid after converting a native handle to an async view and dropping the native handle. Concurrent final drops drain actual work; cancelled queued callbacks release admission without waiting for another cache's running factory.
 - Eager factories receive triggering request tags separately from saved stale tags.
 - Redis backplane connection failures are classified as backplane failures, retaining the original Redis/timeout cause.
 - Typed control-frame errors retain parsing/validation causes; malformed incoming Redis frames retain and log typed JSON/UTF-8/numeric failures before continuity reconciliation.

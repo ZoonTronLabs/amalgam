@@ -2,9 +2,9 @@
 use super::{
     Arc, AtomicBool, AtomicU64, AutoRecoveryService, Backplane, Cache, CacheInner, CacheScope,
     CircuitBreaker, Clock, ClockTiming, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
-    DistributedLocker, DistributedSerializer, Duration, EntryOptions, Events, IdentityField,
-    Instant, InvalidationStore, JitterSource, KeyModifierMode, KeyedLock, Lanes, LeasePolicy,
-    LeaseTtl, Lifecycle, MarkerAccess, MarkerLifecycleAccess, MarkerLifecyclePolicy,
+    DistributedLocker, DistributedSerializer, Duration, EntryOptions, Events, ExecutorOwnership,
+    IdentityField, Instant, InvalidationStore, JitterSource, KeyModifierMode, KeyedLock, Lanes,
+    LeasePolicy, LeaseTtl, Lifecycle, MarkerAccess, MarkerLifecycleAccess, MarkerLifecyclePolicy,
     MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryExpiry, MemoryLimits, MemoryStore,
     Plugin, PluginContext, PluginHost, PublicLifetime, RandomJitterSource, ReconciliationPolicy,
     RecoveryConfig, RecoveryExecutor, RemoveByTagBehavior, Result, RuntimeComponent, Scopes,
@@ -387,6 +387,9 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
     }
     /// Constructs a fully valid cache before starting its services.
     pub fn try_build(self) -> Result<Cache<V>> {
+        self.try_build_with_executor(ExecutorOwnership::External)
+    }
+    pub(super) fn try_build_with_executor(self, executor: ExecutorOwnership) -> Result<Cache<V>> {
         let name = self.name.unwrap_or_else(|| Arc::from("amalgam"));
         let instance_id = self
             .instance_id
@@ -601,10 +604,15 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         {
             tracing::warn!(cache=%inner.name,"explicit cooperative legacy lease policy: partition fencing is unavailable");
         }
+        let lifetime = match executor {
+            ExecutorOwnership::External => PublicLifetime::External(Arc::downgrade(&inner)),
+            ExecutorOwnership::CacheOwned(executor) => PublicLifetime::CacheOwned {
+                inner: Arc::clone(&inner),
+                executor,
+            },
+        };
         let cache = Cache {
-            lifetime: Arc::new(PublicLifetime {
-                inner: Arc::downgrade(&inner),
-            }),
+            lifetime: Arc::new(lifetime),
             inner,
         };
         cache.worker().start_listener();

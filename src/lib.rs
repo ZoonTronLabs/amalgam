@@ -1,4 +1,4 @@
-//! `amalgam` — an async hybrid cache for Rust, inspired by .NET
+//! `amalgam` — a hybrid cache with async and native sync APIs for Rust, inspired by .NET
 //! [FusionCache](https://github.com/ZiggyCreatures/FusionCache).
 //!
 //! Local caching combines optional distributed storage, fail-safe retention,
@@ -63,8 +63,11 @@ pub use backplane::{
     ContinuityEpoch, InProcessBackplane, MarkerCommand,
 };
 pub use cache::{
-    BackplaneReadiness, Cache, CacheBuilder, ClearMode, CloseOutcome, DistributedExpirePolicy,
-    LeasePolicy, ReconciliationPolicy, ShutdownReport,
+    BackplaneReadiness, BlockingCache, BlockingCacheBuildError, BlockingCacheValue,
+    BlockingCommitCompletion, BlockingCommitReceipt, BlockingDispatchError,
+    BlockingMutationReceipt, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool, Cache,
+    CacheBuilder, ClearMode, CloseOutcome, DistributedExpirePolicy, LeasePolicy,
+    ReconciliationPolicy, ShutdownReport,
 };
 pub use circuit::{CircuitBreaker, CircuitCheck};
 pub use commit::{
@@ -84,9 +87,9 @@ pub use distributed_lock::{
     acquire_owned_supervised,
 };
 pub use error::{
-    CloneError, CodecError, ConfigError, Error, FactoryCancellationReason, FactoryError,
-    IdentityField, Result, RuntimeComponent, ShutdownError, ShutdownFailure, ShutdownTask,
-    TransportError,
+    CloneError, CodecError, ConfigError, DrainOperation, Error, FactoryCancellationReason,
+    FactoryError, IdentityField, Result, RuntimeComponent, ShutdownError, ShutdownFailure,
+    ShutdownTask, TransportError,
 };
 pub use events::{
     CacheEvent, CacheLevel, CacheOperation, CircuitComponent, EventEmission, EventStreamClosed,
@@ -94,8 +97,8 @@ pub use events::{
 };
 pub use execution::{CancellationRequest, CancellationSource, FactoryCancellation};
 pub use factory::{
-    ConditionalRefreshError, FactoryContext, FactoryProduct, ModifiedBuilder, NotModifiedBuilder,
-    ValidatorUpdate,
+    ConditionalRefreshError, FactoryContext, FactoryInvocation, FactoryProduct, ModifiedBuilder,
+    NotModifiedBuilder, ValidatorUpdate,
 };
 pub use marker_reads::{MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy};
 pub use marker_snapshots::{

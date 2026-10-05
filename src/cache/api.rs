@@ -1,13 +1,14 @@
 //! Public operations and their observed execution boundaries.
 use super::{
-    Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheValue,
-    CancellationSource, ClearMode, CloseOutcome, CommitReceipt, Cow, DistributedCache,
-    DistributedExpirePolicy, DistributedLocker, EntryOptions, Error, Events, FactoryCancellation,
-    FactoryContext, FactoryError, FactoryProduct, Future, InlinePermit, Instrument, KeyMutation,
-    L2ReadPolicy, LookupKey, LookupMode, LookupStart, MarkerKind, MarkerLifecyclePolicy,
-    MarkerReadPolicy, MaybeValue, MutationReceipt, ObservationAdmission, Observed,
-    OperationObservation, OperationOutcome, Ordering, Pin, Plugin, ReadyLookup, ReadyValue,
-    ReplayTicket, Result, ShutdownReport, Storage, Tag, TagVerdict, Worker, drive,
+    Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
+    CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
+    DistributedCache, DistributedExpirePolicy, DistributedLocker, EntryOptions, Error, Events,
+    FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, FactoryProduct, Future,
+    InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LookupKey, LookupMode, LookupStart,
+    MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MutationReceipt,
+    ObservationAdmission, Observed, OperationObservation, OperationOutcome, Ordering, OriginKind,
+    Pin, Plugin, ReadyLookup, ReadyValue, ReplayTicket, Result, ShutdownReport, Storage, Tag,
+    TagVerdict, Worker, drive,
 };
 
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
@@ -296,12 +297,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         if !worker.marker_reads_ready(entry.meta().tags(), now) {
             return Ok(None);
         }
-        if matches!(mode, LookupMode::GetOrSet) {
-            let eager = entry.should_eager_refresh(self.inner.clock.now());
-            permit.status(token)?;
-            if eager {
-                return Ok(None);
+        match mode {
+            LookupMode::GetOrSet => {
+                let eager = entry.should_eager_refresh(self.inner.clock.now());
+                permit.status(token)?;
+                if eager {
+                    return Ok(None);
+                }
             }
+            LookupMode::Read | LookupMode::ConstantValue => {}
         }
         let value = worker.copy(entry.value(), opts);
         permit.status(token)?;
@@ -340,19 +344,92 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         )
         .await
     }
-    /// Constant-value retrieval through the same coordination pipeline.
+    /// Retrieves an existing value or stores the supplied value. User-factory
+    /// timeouts, success events and eager refresh do not apply to this origin.
     pub async fn get_or_set_value(
         &self,
         key: impl AsRef<str>,
         value: V,
         options: Option<EntryOptions>,
     ) -> Result<V> {
-        self.get_or_set_full(
-            key,
-            move |ctx| async move { Ok(ctx.value(value)) },
+        self.get_or_set_value_full(key, value, options, Box::from([]))
+            .await
+    }
+    /// Supplied-value retrieval with explicit tags and per-entry options.
+    pub async fn get_or_set_value_full(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+    ) -> Result<V> {
+        Ok(self
+            .get_or_set_origin_impl(
+                key.as_ref(),
+                ConstantOrigin::new(value),
+                options,
+                tags,
+                MaybeValue::none(),
+                None,
+            )
+            .await?
+            .value)
+    }
+    /// Supplied-value retrieval with tags and explicit caller cancellation.
+    pub async fn get_or_set_value_full_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        cancellation: FactoryCancellation,
+    ) -> Result<V> {
+        Ok(self
+            .get_or_set_origin_impl(
+                key.as_ref(),
+                ConstantOrigin::new(value),
+                options,
+                tags,
+                MaybeValue::none(),
+                Some(cancellation),
+            )
+            .await?
+            .value)
+    }
+    /// Supplied-value retrieval with observation of the actual mutation.
+    pub async fn get_or_set_value_full_with_commit(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+    ) -> Result<CacheValue<V>> {
+        self.get_or_set_origin_impl(
+            key.as_ref(),
+            ConstantOrigin::new(value),
             options,
-            Box::from([]),
+            tags,
             MaybeValue::none(),
+            None,
+        )
+        .await
+    }
+    /// Cancellable supplied-value retrieval with its actual mutation receipt.
+    pub async fn get_or_set_value_full_with_commit_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        value: V,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        cancellation: FactoryCancellation,
+    ) -> Result<CacheValue<V>> {
+        self.get_or_set_origin_impl(
+            key.as_ref(),
+            ConstantOrigin::new(value),
+            options,
+            tags,
+            MaybeValue::none(),
+            Some(cancellation),
         )
         .await
     }
@@ -405,6 +482,30 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         )
         .await
     }
+    /// Full cancellable factory retrieval with its actual mutation receipt.
+    pub async fn get_or_set_full_with_commit_cancellable<F, Fut>(
+        &self,
+        key: impl AsRef<str>,
+        factory: F,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fail_safe_default: MaybeValue<V>,
+        cancellation: FactoryCancellation,
+    ) -> Result<CacheValue<V>>
+    where
+        F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
+        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    {
+        self.get_or_set_impl(
+            key.as_ref(),
+            factory,
+            options,
+            tags,
+            fail_safe_default,
+            Some(cancellation),
+        )
+        .await
+    }
     /// Retrieval with an explicit caller cancellation request.
     pub async fn get_or_set_cancellable<F, Fut>(
         &self,
@@ -452,7 +553,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             .await?
             .value)
     }
-    async fn get_or_set_impl<F, Fut>(
+    pub(in crate::cache) async fn get_or_set_impl<F, Fut>(
         &self,
         key: &str,
         factory: F,
@@ -465,19 +566,41 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
     {
+        self.get_or_set_origin_impl(
+            key,
+            FactoryOrigin::new(factory),
+            options,
+            tags,
+            fallback,
+            cancellation,
+        )
+        .await
+    }
+    async fn get_or_set_origin_impl<O: CacheOrigin<V>>(
+        &self,
+        key: &str,
+        origin: O,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fallback: MaybeValue<V>,
+        cancellation: Option<FactoryCancellation>,
+    ) -> Result<CacheValue<V>> {
         let (observation, full, permit) = match self.start_lookup(
             key,
             options.as_ref(),
             cancellation.as_ref(),
             CacheOperation::GetOrSet,
-            LookupMode::GetOrSet,
+            match O::KIND {
+                OriginKind::Factory => LookupMode::GetOrSet,
+                OriginKind::Constant => LookupMode::ConstantValue,
+            },
         ) {
             LookupStart::Ready(ready) => {
                 // These captures can execute user Drop code; keep them within
                 // the same counted operation before its final cancellation check.
                 let span = ready.observation.span();
                 let _entered = span.enter();
-                drop((factory, tags, fallback, options));
+                drop((origin, tags, fallback, options));
                 return ready
                     .finish(
                         cancellation.as_ref(),
@@ -506,7 +629,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             ObservationAdmission::Inline(permit),
             async move {
                 worker
-                    .get_or_set(key, factory, options, tags, fallback, caller)
+                    .get_or_set(key, origin, options, tags, fallback, caller)
                     .await
             },
         )
@@ -1057,6 +1180,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Waits execution scopes, supervised effects, cleanup, recovery and plugins.
     pub async fn shutdown(&self) -> Result<ShutdownReport> {
+        super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::Shutdown)?;
         self.inner.shutdown().await
     }
     /// Runs explicit memory maintenance; does not claim background commit completion.
@@ -1067,6 +1191,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Waits currently scheduled effects and their cleanup without closing the cache.
     pub async fn flush_pending(&self) -> Result<()> {
+        super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::FlushPending)?;
         self.inner.tasks.flush().await;
         Ok(())
     }

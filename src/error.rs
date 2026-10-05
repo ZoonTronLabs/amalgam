@@ -7,6 +7,15 @@
 
 use std::time::Duration;
 
+/// Cache drainage operations that cannot await their own synchronous factory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainOperation {
+    /// Close the cache and wait for all owned work.
+    Shutdown,
+    /// Wait for currently scheduled commits and factories.
+    FlushPending,
+}
+
 /// A rejected cache configuration. Configuration is checked before work starts.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
@@ -308,6 +317,13 @@ impl std::error::Error for ShutdownError {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A synchronous callback would wait for its own cache execution to finish.
+    #[error("a factory cannot {operation:?} its own cache before returning")]
+    ReentrantDrain {
+        /// The rejected operation; no close or drainage was started.
+        operation: DrainOperation,
+    },
+
     /// A raw tag boundary rejected invalid input.
     #[error(transparent)]
     Tag(#[from] crate::tags::TagError),
