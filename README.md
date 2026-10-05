@@ -93,7 +93,7 @@ Default healthy L1 reads stay local. Cold L2 reads reconcile durable tag/clear m
 
 Unreleased [expiring marker snapshots](docs/MARKER_SNAPSHOTS.md) add independent remote lifetimes and nonzero read repair through an optional atomic provider capability. Snapshot expiry preserves the durable invalidation fact; this addition does not close the remaining marker eager/locker/recovery contract.
 
-A backplane continuity gap, queue overflow or changed connection epoch requires reconciliation. Native Redis becomes connected only after a matching subscription acknowledgement. `ready()` and `try_build_ready()` expose that admission; the default initial-wait policy gates operations. A healthless adapter explicitly reports `BackplaneReadiness::BestEffort`. Custom backplanes without a health stream use the documented conservative reconciliation policy.
+By default, a backplane continuity gap, queue overflow or changed connection epoch requires reconciliation. Native Redis becomes connected only after a matching subscription acknowledgement. `ready()` and `try_build_ready()` expose that admission; the default initial-wait policy gates operations. A healthless adapter explicitly reports `BackplaneReadiness::BestEffort`. Custom backplanes without a health stream default to periodic reconciliation. Unreleased `ReconciliationPolicy::BackplaneBestEffort` explicitly retains L1 over gaps with either provider kind; see [backplane outage policies](docs/BACKPLANE_OUTAGES.md).
 
 Distributed lease capabilities are explicit. Native owned acquisition, renewal and token-checked release prevent abandoned ownership. Strict stale-owner commit rejection additionally requires an atomic backend ownership check; renewal alone cannot provide it during a partition. An explicitly selected legacy provider mode carries weaker guarantees; an opaque acquisition that never completes cannot promise bounded cancellation drainage. A finite lock timeout, deliberate lock skipping or another writer outside the protocol can also permit duplicate origin work.
 
@@ -105,20 +105,21 @@ locker cannot acquire ownership, including when
 `with_rethrow_distributed_locker_exceptions(false)` is set. Ordinary fresh L1
 hits remain local if the value store or locker alone is unavailable.
 
-A native backplane disconnect discards L1, including retained fail-safe values,
+By default, a native backplane disconnect discards L1, including retained fail-safe values,
 because invalidations may have been missed. A previously warm key then needs
 L2 or the origin. With a failing fenced locker this returns `Error::Lease`;
 without a locker the origin may run again. Reconnection also reconciles L1.
 This default prioritizes invalidation correctness and does not provide the same
 outage availability as FusionCache's ordinary suppressed-locker-error path.
 
-To permit ordinary origin work after a locker acquisition failure, explicitly
-select cooperative ownership:
+For FusionCache-style ordinary outage availability in the unreleased source,
+select best-effort notification reconciliation and cooperative ownership:
 
 ```rust
-use amalgam::{Cache, EntryOptions, LeasePolicy};
+use amalgam::{Cache, EntryOptions, LeasePolicy, ReconciliationPolicy};
 
 let builder = Cache::<String>::builder()
+    .reconciliation_policy(ReconciliationPolicy::BackplaneBestEffort)
     .lease_policy(LeasePolicy::CooperativeLegacy)
     .default_options(EntryOptions::default()
         .with_rethrow_distributed_locker_exceptions(false));
@@ -126,8 +127,10 @@ let builder = Cache::<String>::builder()
 
 Keep the Redis providers on that builder. This permits duplicate origin work
 across nodes during an outage and gives up strict stale-owner commit fencing.
-It does not preserve pre-disconnect L1 values. Explicit cancellation remains
-an error. Supervised acquisition cleanup can also make `shutdown()` report
+The selected backplane mode keeps pre-disconnect fresh/stale L1 within its
+normal deadlines; missed peer invalidations can leave old values until expiration.
+It requires a configured backplane and is absent from published **0.3.1**.
+Explicit cancellation remains an error. Supervised acquisition cleanup can also make `shutdown()` report
 outage failures after Redis has recovered; the rethrow option does not erase
 those owned-work diagnostics.
 

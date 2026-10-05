@@ -25,6 +25,9 @@ pub enum ConfigError {
     /// Strict continuity requires an acknowledged health stream.
     #[error("backplane continuity policy requires a connection-state provider")]
     UnavailableBackplaneContinuity,
+    /// Best-effort notification reconciliation requires a configured backplane.
+    #[error("best-effort backplane reconciliation requires a backplane")]
+    BestEffortReconciliationWithoutBackplane,
     /// A finite timer cannot be represented by the monotonic runtime clock.
     #[error("finite deadline exceeds the monotonic clock range")]
     DeadlineOutOfRange,

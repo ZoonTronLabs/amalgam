@@ -121,6 +121,21 @@ pub enum ReconciliationPolicy {
     Periodic(Duration),
     /// Trust an acknowledged continuous native backplane; gaps still discard L1.
     BackplaneContinuity,
+    /// Retain L1 over notification gaps, as in FusionCache's best-effort backplane.
+    ///
+    /// Requires a backplane, with or without a health stream. Received
+    /// invalidations still apply; missed invalidations can leave an old value
+    /// readable until its normal expiration. No periodic L1 discard is added.
+    /// Lease admission remains governed separately by [`LeasePolicy`].
+    BackplaneBestEffort,
+}
+impl ReconciliationPolicy {
+    fn invalidates_on_gap(self) -> bool {
+        match self {
+            Self::LocalOnly | Self::Periodic(_) | Self::BackplaneContinuity => true,
+            Self::BackplaneBestEffort => false,
+        }
+    }
 }
 /// Result of requesting close.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

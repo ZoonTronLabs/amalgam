@@ -5,6 +5,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+- Add `ReconciliationPolicy::BackplaneBestEffort` to retain local/hydrated fresh and physically retained stale L1 over notification gaps/reconnects. Combined with cooperative ownership and suppressed locker errors it supports ordinary outage availability. Known invalidations, deadlines, cancellation and recovery ownership still apply; strict defaults are unchanged. See `docs/BACKPLANE_OUTAGES.md`.
+
 - Clarify the existing Redis outage contract: strict fenced acquisition rejects errors even with locker rethrow disabled; cooperative foreground suppression and backplane L1 invalidation are separate policies. Add public outage-policy regressions.
 
 - Avoid the local marker mutex until the first marker is observed. Publish that transition before changing marker state; tag/clear maxima and conservative compaction remain fully checked afterward. Public contracts cover the first revision, compacted clear fences and concurrent visibility.

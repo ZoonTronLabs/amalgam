@@ -41,7 +41,7 @@ ledger. Expiring/evicting an observation never erases a known invalidation.
 Successful absence is distinct from a skipped or failed check. Observation
 admission atomically merges maxima; a delayed response cannot overwrite a newer
 peer observation, and a degraded fallback cannot replace a concurrent refresh.
-Continuity generations fence observations and value hydration across gaps.
+By default, continuity generations fence observations and value hydration across gaps. Explicit `ReconciliationPolicy::BackplaneBestEffort` keeps their generation and existing lifetimes over notification gaps instead; received invalidations still apply, while missed peer changes can remain unseen. See [outage policies](BACKPLANE_OUTAGES.md).
 
 `CacheEvent::MarkerRead` reports the actual authority: `Observed`, `Cached`,
 `KnownMaximum`, `Skipped`, `StaleFallback(reason)` or `Unavailable(reason)`.

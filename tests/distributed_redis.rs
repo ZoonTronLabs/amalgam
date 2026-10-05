@@ -711,3 +711,156 @@ async fn live_bounded_push_overflow_and_malformed_wire_create_new_continuity_epo
     await_no_clients(&mut connection, &format!("{name}:subscriber")).await;
     await_no_clients(&mut connection, &format!("{name}:publish")).await;
 }
+
+#[tokio::test]
+async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber_gap() {
+    use amalgam::{Cache, EntryOptions, JsonSerializer, ReconciliationPolicy, RecoveryConfig};
+    let Some(url) = fixture::redis_url() else {
+        return;
+    };
+    let mut connection = admin(&url).await;
+    let user = unique("availability_acl");
+    let password = unique("availability_nonce");
+    let prefix = unique("availability_data");
+    let name = unique("availability_subscriber");
+    acl(&mut connection, &user, &password, true).await;
+    let backplane = Arc::new(
+        RedisBackplane::connect_named(
+            user_url(&url, &user, &password),
+            unique("availability_channel"),
+            name,
+            16,
+            io(),
+        )
+        .await
+        .unwrap(),
+    );
+    let backend = Arc::new(RedisDistributedCache::connect(url.clone()).await.unwrap());
+    let recovery = RecoveryConfig {
+        enabled: false,
+        ..RecoveryConfig::default()
+    };
+    let opts = EntryOptions::new(Duration::from_secs(60));
+    let writer = Cache::<u64>::builder()
+        .key_prefix(&prefix)
+        .distributed(backend.clone())
+        .serializer(Arc::new(JsonSerializer))
+        .default_options(opts.clone())
+        .auto_recovery(recovery.clone())
+        .try_build()
+        .unwrap();
+    let cache = Cache::<u64>::builder()
+        .key_prefix(&prefix)
+        .distributed(backend.clone())
+        .serializer(Arc::new(JsonSerializer))
+        .backplane(backplane.clone())
+        .reconciliation_policy(ReconciliationPolicy::BackplaneBestEffort)
+        .default_options(opts.clone())
+        .auto_recovery(recovery)
+        .try_build_ready()
+        .await
+        .unwrap();
+    cache
+        .try_set("local", 42)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    writer
+        .try_set("hydrated", 41)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(
+        cache
+            .get_or_set("hydrated", |_| async { panic!("L2 must hydrate") })
+            .await
+            .unwrap(),
+        41
+    );
+    let mut health = backplane.connection_state().unwrap();
+    let epoch = await_connected(&mut health, 0).await;
+    let id = backplane.subscriber_client_id().unwrap();
+    acl(&mut connection, &user, &password, false).await;
+    let killed: i64 = redis::cmd("CLIENT")
+        .arg("KILL")
+        .arg("ID")
+        .arg(id.value())
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(killed, 1);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !matches!(
+            *health.borrow_and_update(),
+            BackplaneState::Disconnected { .. }
+        ) {
+            health.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    // Missed removes cannot be read back from L2 and must not provoke an origin.
+    for key in ["local", "hydrated"] {
+        backend.remove(&format!("v2:{prefix}{key}")).await.unwrap();
+    }
+    for key in ["local", "hydrated"] {
+        let expected = if key == "local" { 42 } else { 41 };
+        assert_eq!(
+            cache
+                .get_or_set(key, |_| async { panic!("gap must retain L1") })
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    acl(&mut connection, &user, &password, true).await;
+    await_connected(&mut health, epoch).await;
+    for key in ["local", "hydrated"] {
+        let expected = if key == "local" { 42 } else { 41 };
+        assert_eq!(
+            cache
+                .get_or_set(key, |_| async { panic!("reconnect must retain L1") })
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    backplane
+        .publish(BackplaneMessage {
+            source_id: "remote".into(),
+            timestamp: Timestamp::MAX,
+            action: BackplaneAction::Remove,
+            key: format!("v2:{prefix}local").into(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while cache
+            .read(
+                "local",
+                Some(opts.clone().with_skip_distributed(true, false)),
+            )
+            .await
+            .unwrap()
+            .has_value()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cache.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+    backplane.shutdown().await.unwrap();
+    await_no_clients(&mut connection, &backplane.subscriber_name()).await;
+    redis::cmd("ACL")
+        .arg("DELUSER")
+        .arg(&user)
+        .query_async::<i64>(&mut connection)
+        .await
+        .unwrap();
+}

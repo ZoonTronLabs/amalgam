@@ -255,6 +255,12 @@ impl<V> CacheBuilder<V> {
         self
     }
     /// Declares notification/durable-marker reconciliation behavior.
+    ///
+    /// Native backplanes default to [`ReconciliationPolicy::BackplaneContinuity`],
+    /// discarding L1 after a gap. [`ReconciliationPolicy::BackplaneBestEffort`]
+    /// preserves normal L1 freshness/fail-safe retention across gaps instead;
+    /// missed peer invalidations then remain undetected until expiration.
+    /// This does not relax the independent [`LeasePolicy`] on a cold miss.
     pub fn reconciliation_policy(mut self, policy: ReconciliationPolicy) -> Self {
         self.reconciliation = Some(policy);
         self
@@ -470,6 +476,11 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                     return Err(ConfigError::ZeroReconciliationInterval.into());
                 }
                 validate_budget(Timeout::After(interval))?;
+            }
+            ReconciliationPolicy::BackplaneBestEffort => {
+                if self.backplane.is_none() {
+                    return Err(ConfigError::BestEffortReconciliationWithoutBackplane.into());
+                }
             }
             ReconciliationPolicy::BackplaneContinuity => {
                 if self

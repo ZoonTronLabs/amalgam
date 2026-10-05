@@ -35,23 +35,25 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
     }
     fn continuity_gap(&self) {
-        #[allow(
-            deprecated,
-            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
-        )]
-        if self
-            .inner
-            .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
-                epoch.checked_add(1)
-            })
-            .is_err()
-        {
-            tracing::error!("cache continuity generation exhausted");
-            self.inner.close();
+        if self.inner.reconciliation.invalidates_on_gap() {
+            #[allow(
+                deprecated,
+                reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+            )]
+            if self
+                .inner
+                .epoch
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+                    epoch.checked_add(1)
+                })
+                .is_err()
+            {
+                tracing::error!("cache continuity generation exhausted");
+                self.inner.close();
+            }
+            self.inner.memory.invalidate_all();
+            self.inner.marker_reads.invalidate();
         }
-        self.inner.memory.invalidate_all();
-        self.inner.marker_reads.invalidate();
         if let Some(recovery) = &self.inner.recovery {
             recovery.suspend();
         }
@@ -74,11 +76,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         // Serialize barrier transitions with the observed state. Otherwise a
         // delayed disconnected caller can suspend replay after a newer ACK.
         let gap = !matches!(current, BackplaneState::Connected { .. }) || previous.is_some();
+        let invalidate = gap && self.inner.reconciliation.invalidates_on_gap();
         #[allow(
             deprecated,
             reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
         )]
-        let exhausted = gap
+        let exhausted = invalidate
             && self
                 .inner
                 .epoch
@@ -104,7 +107,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         }
         drop(seen);
-        if gap {
+        if invalidate {
             self.inner.memory.invalidate_all();
             self.inner.marker_reads.invalidate();
         }
@@ -124,9 +127,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let source = CancellationSource::new();
         let interval = match self.inner.reconciliation {
             ReconciliationPolicy::Periodic(interval) => interval.min(Duration::from_secs(1)),
-            ReconciliationPolicy::LocalOnly | ReconciliationPolicy::BackplaneContinuity => {
-                Duration::from_secs(1)
-            }
+            ReconciliationPolicy::LocalOnly
+            | ReconciliationPolicy::BackplaneContinuity
+            | ReconciliationPolicy::BackplaneBestEffort => Duration::from_secs(1),
         };
         let execution = self.inner.scopes.execution(
             async move {
@@ -146,7 +149,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         let interval = match inner.reconciliation {
                             ReconciliationPolicy::Periodic(interval) => interval,
                             ReconciliationPolicy::LocalOnly
-                            | ReconciliationPolicy::BackplaneContinuity => Duration::ZERO,
+                            | ReconciliationPolicy::BackplaneContinuity
+                            | ReconciliationPolicy::BackplaneBestEffort => Duration::ZERO,
                         };
                         let reconcile = {
                             let mut last = lock(&inner.last_reconcile);

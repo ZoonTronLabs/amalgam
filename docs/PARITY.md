@@ -104,11 +104,11 @@ Four actual NuGet 2.9 experiments also reproduce an already-started recovery wri
 
 A distributed lease reports its ownership token, lifetime and renewal capability. Native in-memory and Redis providers support token-checked release. An atomic backend ownership check is required to reject a stale owner's data commit; renewal alone cannot guarantee that during a partition. The explicitly selected legacy lease mode provides weaker coordination. An opaque backend-selected acquisition that never completes cannot promise bounded cancellation drainage; that limitation belongs to the provider contract.
 
-Circuit refusal is an admission outcome, not a new transport failure; skipped operations do not restart cooldown. Known caller-selected acquisition tokens receive supervised compare-release after uncertain error replies. Recovery validates representable reconnect delays before starting and invokes/drops external fence behavior outside its queue mutex. A malformed inner control envelope triggers conservative reconciliation and a post-gap barrier when the retained connection is still healthy.
+Circuit refusal is an admission outcome, not a new transport failure; skipped operations do not restart cooldown. Known caller-selected acquisition tokens receive supervised compare-release after uncertain error replies. Recovery validates representable reconnect delays before starting and invokes/drops external fence behavior outside its queue mutex. A malformed inner control envelope triggers a post-gap recovery barrier when the retained connection is still healthy; conservative policies also discard L1, while explicit best-effort reconciliation retains it.
 
 Durable tag/clear operations require an atomic invalidation store. Existing custom byte stores remain usable for ordinary L2 reads/writes without that optional capability. A custom implementation cannot silently claim atomic markers or fencing that it does not provide.
 
-Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers. OptionsControlled may revalidate markers on L1 hits according to independent tag defaults. Backplane continuity gaps, broadcast overflow and changed Redis connection epochs trigger reconciliation; Redis reports connected only after a matching subscription acknowledgement. `ready()` or `try_build_ready()` can await admission; healthless adapters report an explicit `BestEffort` outcome. A healthless custom backplane uses its selected conservative reconciliation policy. Timestamp-based marker ordering assumes a sufficiently consistent clock across participating nodes; injected clocks make local logic testable and do not solve distributed clock skew.
+Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers. OptionsControlled may revalidate markers on L1 hits according to independent tag defaults. By default, backplane continuity gaps, broadcast overflow and changed Redis connection epochs discard L1; Redis reports connected only after a matching subscription acknowledgement. `ready()` or `try_build_ready()` can await admission; healthless adapters report an explicit `BestEffort` outcome. A healthless custom backplane defaults to periodic reconciliation. Explicit `BackplaneBestEffort` retains L1 for either kind; see [outage policies](BACKPLANE_OUTAGES.md). Timestamp-based marker ordering assumes a sufficiently consistent clock across participating nodes; injected clocks make local logic testable and do not solve distributed clock skew.
 
 
 ### Redis outage boundary (0.3.1 and current source)
@@ -121,7 +121,7 @@ The pinned FusionCache accessor instead suppresses an ordinary acquisition
 exception when its rethrow option is false and permits origin work; these
 contracts are not equivalent by default.
 
-A Redis backplane continuity gap discards all L1 entries, including retained
+By default, a Redis backplane continuity gap discards all L1 entries, including retained
 fail-safe values. The next read is a miss; it either computes through the
 origin or fails on the configured fenced locker. Losing only L2 or the locker
 without a backplane gap does not invalidate an otherwise fresh L1 hit. This is
@@ -129,10 +129,20 @@ a deliberate correctness/availability tradeoff, not universal resiliency parity.
 An owned cleanup failure during the outage can remain in `shutdown()` after
 reconnection regardless of the acquisition rethrow option.
 
-`locker_outage_contract` exercises default strict rejection, cooperative
-suppression/rethrow, untouched hot L1 and notification gaps without external
-process timing. The independent registry-pinned 0.3.1 outage reproduction also
-covers real Redis-compatible transport interruption, restart and recovery.
+The unreleased `ReconciliationPolicy::BackplaneBestEffort` preserves fresh and
+physically retained stale L1 over notification gaps and reconnects, without
+periodic discarding. Received/local invalidations, expiry and cancellation still
+apply. Combined with `CooperativeLegacy` and locker rethrow disabled, ordinary
+cold misses may compute during an outage. Selecting it does not relax `Fenced`
+miss admission. Missed peer changes can remain invisible until expiration;
+existing independent marker read/repair admission still applies.
+
+`locker_outage_contract` exercises both policies, local and hydrated L1 in
+bounded/unbounded storage, fail-safe/physical expiry, cancellation, received and
+local invalidations, and healthless-provider defaults. The independent
+registry-pinned 0.3.1 reproduction covers the older real Redis outage behavior;
+the new enum variant is absent from that package. [Outage policies](BACKPLANE_OUTAGES.md)
+keep these package and source boundaries explicit.
 
 ## Selected defaults
 
