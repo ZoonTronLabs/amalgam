@@ -124,3 +124,24 @@ These are selected Amalgam defaults. The pinned FusionCache 2.9 source defaults 
 6. Adopt explicit cancellation and `shutdown` for observed drainage. Dropping the last public handle initiates cancellation; retaining an external event handle does not retain the cache.
 
 Source compatibility, legacy decoding and mixed-version runtime compatibility are different claims. Performance depends on value ownership, configured guarantees, providers and workload. See [validation](AUDIT.md), the [README](../README.md) and [porting design](../PORTING.md).
+
+### Cooperative async codec lifetime (unreleased)
+
+The additive `serialize_snapshot_with_cancellation` and
+`deserialize_snapshot_with_cancellation` hooks forward the signal of their
+actual owned execution. The default hooks preserve old implementations and
+check cancellation before and after their await. Cancellation always retains
+its typed channel, independently of codec error-suppression policy. L2 reads
+have a linked child scope, so a read timeout signals `SoftTimeout`/`HardTimeout`
+before the codec is destroyed and does not cancel a subsequent factory.
+Permitted timed-out factories retain their original scope after the caller
+returns; eager, passive and recovery have independent scopes. Shutdown cancels
+and drains all owned work. `FactoryCancellation::check` exposes the exact reason;
+successful scope completion signals `ScopeFinished` as in existing factories.
+
+The upstream 2.9 reference passes operation tokens to foreground codecs but
+uses no caller token for late commit/passive decode. Its distributed timeout
+covers backend get rather than decode/markers; its disposal is less strongly
+owned. Amalgam retains its stronger combined deadlines and drainage. Twelve
+public cooperative contracts and three existing codec-model contracts verify
+this adaptation; source-only review is recorded separately.

@@ -294,7 +294,11 @@ impl L2ReadPolicy {
                 Error::Serialization(_) | Error::Deserialization(_) | Error::Codec(_) => {
                     options.rethrow_serialization_exceptions()
                 }
-                Error::Config(_) | Error::Clone(_) | Error::Tag(_) => true,
+                Error::Config(_)
+                | Error::Clone(_)
+                | Error::Tag(_)
+                | Error::OperationCancelled { .. }
+                | Error::FactoryCancelled { .. } => true,
                 _ => options.rethrow_distributed_exceptions(),
             },
         }
@@ -962,13 +966,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         };
         let worker = self.worker();
         let key = self.lookup_key(key, full);
+        let source = CancellationSource::new();
+        let cancellation = source.token();
         self.execute_observed(
             observation,
             token,
-            CancellationSource::new(),
+            source,
             ObservationAdmission::Inline(permit),
             async move {
-                let result = worker.read(key, options, policy).await?;
+                let result = worker.read(key, options, policy, &cancellation).await?;
                 Ok(Observed::new(
                     complete(result.value),
                     result.outcome,
@@ -1108,9 +1114,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let worker = self.worker();
         let raw: Arc<str> = Arc::from(key);
         let full = worker.full_key(key);
-        self.observed(CacheOperation::Set, Some(full), token, async move {
-            worker.set(raw, value, options, tags).await
-        })
+        let source = CancellationSource::new();
+        let cancellation = source.token();
+        self.observed_using(
+            CacheOperation::Set,
+            Some(full),
+            token,
+            source,
+            Box::pin(async move { worker.set(raw, value, options, tags, &cancellation).await }),
+        )
         .await
     }
     /// Legacy unit adapter. Prefer try_set to inspect actual completion.
@@ -1227,9 +1239,19 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             KeyMutation::Remove => CacheOperation::Remove,
             KeyMutation::Expire(_) => CacheOperation::Expire,
         };
-        self.observed(operation, Some(full), token, async move {
-            worker.key_mutation(raw, options, mutation).await
-        })
+        let source = CancellationSource::new();
+        let cancellation = source.token();
+        self.observed_using(
+            operation,
+            Some(full),
+            token,
+            source,
+            Box::pin(async move {
+                worker
+                    .key_mutation(raw, options, mutation, &cancellation)
+                    .await
+            }),
+        )
         .await
     }
     /// Legacy unit remove adapter.
@@ -1801,14 +1823,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         opts: &EntryOptions,
         fallback: FallbackAvailability,
         policy: L2ReadPolicy,
+        cancellation: &FactoryCancellation,
     ) -> Result<Option<DistributedLookup<V>>> {
-        let Storage::Hybrid {
-            backend,
-            serializer,
-        } = &self.inner.storage
-        else {
+        if matches!(self.inner.storage, Storage::MemoryOnly) {
             return Ok(None);
-        };
+        }
         if opts.skip_distributed_read() {
             return Ok(None);
         }
@@ -1827,42 +1846,43 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let timeout = opts
             .appropriate_distributed_timeout(matches!(fallback, FallbackAvailability::Available));
         let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
-        let result = async {
-            let hydration = self.hydration_fence(key).await;
-            let bytes = backend.get(&self.inner.l2_key(key)).await?;
-            self.close_circuit(CircuitComponent::Distributed);
-            let Some(bytes) = bytes else {
-                return Ok(None);
-            };
-            let snapshot = serializer
-                .decode(&bytes, self.inner.serialization_mode)
-                .await?;
-            let source = snapshot.try_into_entry(self.inner.clock.now())?;
-            if source.is_physically_expired(self.inner.clock.now()) {
-                return Ok(None);
-            }
-            self.reconcile_markers(source.meta().tags()).await?;
-            Ok(Some(DistributedLookup {
-                entry: source,
-                hydration,
-            }))
-        }
-        .instrument(span);
+        let source = CancellationSource::new();
+        let phase_cancellation = source.token();
+        let worker = self.clone();
+        let phase_key = Arc::clone(key);
+        let mut execution = self.inner.scopes.execution(
+            async move { worker.fetch_l2(&phase_key, &phase_cancellation).await }.instrument(span),
+            source,
+        );
+        execution.link(cancellation, LinkMode::Explicit);
+        let soft = opts.is_fail_safe_enabled()
+            && matches!(fallback, FallbackAvailability::Available)
+            && timeout == opts.distributed_soft_timeout()
+            && timeout != opts.distributed_hard_timeout();
         // Value retrieval, decoding and the required durable marker lookup are
         // one read. A marker provider cannot escape the caller's chosen budget.
-        let result = match bounded(timeout, result).await {
+        // Borrow execution through the deadline wrapper so we publish the exact
+        // phase reason before dropping its codec, independently of the caller.
+        let result = match bounded(timeout, &mut execution).await {
             Ok(Some(result)) => result,
-            Ok(None)
+            Ok(None) => {
+                execution.cancel(if soft {
+                    Reason::SoftTimeout
+                } else {
+                    Reason::HardTimeout
+                });
                 if policy == L2ReadPolicy::FactoryFallback
                     && opts.is_fail_safe_enabled()
                     && matches!(fallback, FallbackAvailability::Available)
-                    && timeout == opts.distributed_soft_timeout() =>
-            {
-                Ok(None)
+                    && timeout == opts.distributed_soft_timeout()
+                {
+                    Ok(None)
+                } else {
+                    Err(Error::Distributed(
+                        "distributed read deadline elapsed".into(),
+                    ))
+                }
             }
-            Ok(None) => Err(Error::Distributed(
-                "distributed read deadline elapsed".into(),
-            )),
             Err(error) => Err(error),
         };
         match result {
@@ -1877,6 +1897,36 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }
             }
         }
+    }
+    async fn fetch_l2(
+        &self,
+        key: &Arc<str>,
+        cancellation: &FactoryCancellation,
+    ) -> Result<Option<DistributedLookup<V>>> {
+        let Storage::Hybrid {
+            backend,
+            serializer,
+        } = &self.inner.storage
+        else {
+            return Ok(None);
+        };
+        cancellation.check()?;
+        let hydration = self.hydration_fence(key).await;
+        let bytes = backend.get(&self.inner.l2_key(key)).await?;
+        self.close_circuit(CircuitComponent::Distributed);
+        let Some(bytes) = bytes else { return Ok(None) };
+        let snapshot = serializer
+            .decode(&bytes, self.inner.serialization_mode, cancellation)
+            .await?;
+        let source = snapshot.try_into_entry(self.inner.clock.now())?;
+        if source.is_physically_expired(self.inner.clock.now()) {
+            return Ok(None);
+        }
+        self.reconcile_markers(source.meta().tags()).await?;
+        Ok(Some(DistributedLookup {
+            entry: source,
+            hydration,
+        }))
     }
     async fn hydration_fence(&self, key: &str) -> HydrationFence<V> {
         let lane = self.inner.lanes.get(key);
@@ -1948,6 +1998,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: LookupKey,
         options: Option<EntryOptions>,
         policy: L2ReadPolicy,
+        cancellation: &FactoryCancellation,
     ) -> Result<Observed<MaybeValue<V>>> {
         let opts = self.resolve_options(&key.raw, options)?;
         let key = key.full;
@@ -1973,6 +2024,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         FallbackAvailability::Unavailable
                     },
                     policy,
+                    cancellation,
                 )
                 .await?
         {
@@ -2216,6 +2268,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         FallbackAvailability::Unavailable
                     },
                     L2ReadPolicy::FactoryFallback,
+                    &caller,
                 )
                 .await?
         {
@@ -2242,6 +2295,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .await;
         }
         let source = CancellationSource::new();
+        let origin_cancellation = source.token();
         let ctx = FactoryContext::with_cancellation(
             LookupKey {
                 raw: raw_key,
@@ -2253,7 +2307,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .as_ref()
                 .map(|entry| self.stale_info(entry, &opts))
                 .transpose()?,
-            source.token(),
+            origin_cancellation.clone(),
         );
         let started = self.inner.clock.now();
         let worker = self.clone();
@@ -2264,7 +2318,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let origin=async move {factory(ctx).await};
             let product=if let Some(mut state)=lease_state {tokio::select! {biased; ()=lease_lost(&mut state)=>{cancelled.cancel_with(Reason::LeaseLost);return Err(Error::FactoryCancelled {reason:Reason::LeaseLost});},product=origin=>product}}else{origin.await};
             let product=product.map_err(Error::from)?;
-            let result=worker.store_product(flight_key,product,started,guard).await;
+            let result=worker.store_product(flight_key,product,started,guard,&origin_cancellation).await;
             if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
         }.instrument(component_span(&self.inner.name,CacheLevel::Origin,"factory",Some(&key))),source);
         execution.link(&caller, LinkMode::CallerScope);
@@ -2426,14 +2480,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::CooperativeLegacy=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
                 if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
-            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged});}
-            let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token);
+            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged});}
+            let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone());
             let started=worker.inner.clock.now();
             let origin=factory(ctx);
             let product=if let Some(mut state)=guard.lease.as_ref().map(DistributedLease::state) {
                 tokio::select! {biased; ()=lease_lost(&mut state)=>return Err(Error::FactoryCancelled {reason:Reason::LeaseLost}),product=origin=>product}
             }else{origin.await};
-            let product=product.map_err(Error::from)?;let result=worker.store_product(key,product,started,guard).await;
+            let product=product.map_err(Error::from)?;let result=worker.store_product(key,product,started,guard,&token).await;
             if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
         },source);
         self.background_origin(background_key, execution);
@@ -2444,6 +2498,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         product: FactoryProduct<V>,
         started: Timestamp,
         guard: FlightGuard,
+        cancellation: &FactoryCancellation,
     ) -> Result<CacheValue<V>> {
         let product = product.into_payload()?;
         self.validate_options(&product.options)?;
@@ -2459,7 +2514,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             product.last_modified,
         )?;
         let receipt = self
-            .write_entry(Arc::clone(&key), entry, product.options, Some(guard))
+            .write_entry(
+                Arc::clone(&key),
+                entry,
+                product.options,
+                Some(guard),
+                cancellation,
+            )
             .await?;
         match product.origin {
             ProductOrigin::Modified => self.emit(CacheEvent::FactorySuccess {
@@ -2479,13 +2540,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         value: V,
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
+        cancellation: &FactoryCancellation,
     ) -> Result<Observed<MutationReceipt>> {
         let opts = self.resolve_options(&raw, options)?;
         let key = self.full_key(&raw);
         let now = self.inner.clock.now();
         let entry = self.fresh_entry(self.copy(&value, &opts)?, &opts, now, tags, None, None)?;
         let receipt = self
-            .write_entry(Arc::clone(&key), entry, opts, None)
+            .write_entry(Arc::clone(&key), entry, opts, None, cancellation)
             .await?;
         self.emit(CacheEvent::Set { key });
         Ok(Observed::new(receipt, OperationOutcome::Stored, None))
@@ -2496,6 +2558,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         entry: Entry<V>,
         opts: EntryOptions,
         flight: Option<FlightGuard>,
+        cancellation: &FactoryCancellation,
     ) -> Result<MutationReceipt> {
         let data = match &self.inner.storage {
             Storage::MemoryOnly => PreparedData::Absent,
@@ -2506,7 +2569,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     entry.meta().inserted_at(),
                 )?;
                 match serializer
-                    .encode(&snapshot, self.inner.serialization_mode)
+                    .encode(&snapshot, self.inner.serialization_mode, cancellation)
                     .await
                 {
                     Ok(bytes) => PreparedData::Ready(DataMutation::Set {
@@ -2517,7 +2580,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     }),
                     Err(error) => {
                         self.failure(&key, &error);
-                        if opts.rethrow_serialization_exceptions() {
+                        if matches!(
+                            error,
+                            Error::OperationCancelled { .. } | Error::FactoryCancelled { .. }
+                        ) || opts.rethrow_serialization_exceptions()
+                        {
                             return Err(error);
                         }
                         PreparedData::Failed(error)
@@ -2946,6 +3013,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         raw: Arc<str>,
         options: Option<EntryOptions>,
         mutation: KeyMutation,
+        cancellation: &FactoryCancellation,
     ) -> Result<Observed<MutationReceipt>> {
         let opts = self.resolve_options(&raw, options)?;
         let key = self.full_key(&raw);
@@ -2990,7 +3058,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     KeyMutation::Expire(DistributedExpirePolicy::RetainStale),
                 ) => match backend.get(&self.inner.l2_key(&key)).await {
                     Ok(Some(bytes)) => match serializer
-                        .decode(&bytes, self.inner.serialization_mode)
+                        .decode(&bytes, self.inner.serialization_mode, cancellation)
                         .await
                     {
                         Ok(snapshot) => {
@@ -3003,7 +3071,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                 snapshot.retention(),
                             )?;
                             match serializer
-                                .encode(&expired, self.inner.serialization_mode)
+                                .encode(&expired, self.inner.serialization_mode, cancellation)
                                 .await
                             {
                                 Ok(bytes) => PreparedData::Ready(DataMutation::Expire {
@@ -3014,7 +3082,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                 }),
                                 Err(error) => {
                                     self.failure(&key, &error);
-                                    if opts.rethrow_serialization_exceptions() {
+                                    if matches!(
+                                        error,
+                                        Error::OperationCancelled { .. }
+                                            | Error::FactoryCancelled { .. }
+                                    ) || opts.rethrow_serialization_exceptions()
+                                    {
                                         return Err(error);
                                     }
                                     PreparedData::Failed(error)
@@ -3023,7 +3096,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         }
                         Err(error) => {
                             self.failure(&key, &error);
-                            if opts.rethrow_serialization_exceptions() {
+                            if matches!(
+                                error,
+                                Error::OperationCancelled { .. } | Error::FactoryCancelled { .. }
+                            ) || opts.rethrow_serialization_exceptions()
+                            {
                                 return Err(error);
                             }
                             PreparedData::Failed(error)
@@ -3297,10 +3374,54 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .and_then(|backplane| backplane.connection_state())
             .is_none_or(|state| matches!(*state.borrow(), BackplaneState::Connected { .. }))
     }
+    async fn replay_legacy(
+        &self,
+        item: &RecoveryItem,
+        cancellation: &FactoryCancellation,
+    ) -> Result<()> {
+        // Deliberately explicit old executor adapter. Canonical enqueue captures
+        // bytes/stages and routes through replay_ticket instead.
+        let Storage::Hybrid {
+            backend,
+            serializer,
+        } = &self.inner.storage
+        else {
+            return Ok(());
+        };
+        match item.action {
+            RecoveryAction::Set => {
+                if let Some(entry) = self
+                    .inner
+                    .memory
+                    .get_at(&item.key, self.inner.clock.now())
+                    .await
+                {
+                    let snapshot = DistributedSnapshot::from_entry_with_options(
+                        &entry,
+                        &self.inner.default_options,
+                        entry.meta().inserted_at(),
+                    )?;
+                    backend
+                        .set(
+                            &self.inner.l2_key(&item.key),
+                            serializer
+                                .encode(&snapshot, self.inner.serialization_mode, cancellation)
+                                .await?,
+                            Some(snapshot.backend_ttl_at(self.inner.clock.now())),
+                        )
+                        .await?;
+                }
+            }
+            RecoveryAction::Remove => backend.remove(&self.inner.l2_key(&item.key)).await?,
+            RecoveryAction::Expire => {}
+        }
+        Ok(())
+    }
     async fn reconcile_replay(
         &self,
         item: &RecoveryItem,
         mutation: &PendingMutation,
+        cancellation: &FactoryCancellation,
     ) -> Result<ReplayOutcome> {
         // Recovery bypasses an open circuit, but never treats unavailable current
         // state as safe absence after a missed notification or restart.
@@ -3313,7 +3434,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         if let Some(current) = backend.get(&self.inner.l2_key(&item.key)).await? {
             let snapshot = serializer
-                .decode(&current, self.inner.serialization_mode)
+                .decode(&current, self.inner.serialization_mode, cancellation)
                 .await?;
             if snapshot.entry().created_ticks > item.timestamp.ticks() {
                 return Ok(ReplayOutcome::Superseded);
@@ -3324,7 +3445,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             | PendingMutation::FencedCommit { mutation, .. } => match mutation {
                 DataMutation::Set { bytes, .. } | DataMutation::Expire { bytes, .. } => Some(
                     serializer
-                        .decode(bytes, self.inner.serialization_mode)
+                        .decode(bytes, self.inner.serialization_mode, cancellation)
                         .await?
                         .try_into_entry(self.inner.clock.now())?,
                 ),
@@ -3348,6 +3469,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         key: &str,
         logical_expiration: Timestamp,
+        cancellation: &FactoryCancellation,
     ) -> Result<ReplayOutcome> {
         let Storage::Hybrid {
             backend,
@@ -3360,7 +3482,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(ReplayOutcome::Applied);
         };
         let snapshot = serializer
-            .decode(&bytes, self.inner.serialization_mode)
+            .decode(&bytes, self.inner.serialization_mode, cancellation)
             .await?;
         // A remote newer write can arrive between reconciliation and this read.
         if snapshot.entry().created_ticks > logical_expiration.ticks() {
@@ -3374,7 +3496,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             DistributedSnapshot::new(entry, snapshot.inserted_at(), snapshot.retention())?;
         let data = DataMutation::Expire {
             bytes: serializer
-                .encode(&expired, self.inner.serialization_mode)
+                .encode(&expired, self.inner.serialization_mode, cancellation)
                 .await?
                 .into(),
             physical_expiration: Timestamp::from_ticks(expired.entry().physical_expiration_ticks),
@@ -3382,7 +3504,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         self.write_data(key, &data, None).await?;
         Ok(ReplayOutcome::Applied)
     }
-    async fn replay_owned(&self, ticket: ReplayTicket) -> Result<ReplayOutcome> {
+    async fn replay_owned(
+        &self,
+        ticket: ReplayTicket,
+        cancellation: &FactoryCancellation,
+    ) -> Result<ReplayOutcome> {
         let Some(recovery) = &self.inner.recovery else {
             return Ok(ReplayOutcome::Superseded);
         };
@@ -3426,7 +3552,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if !self.replay_admitted() {
                     return Ok(ReplayOutcome::Paused);
                 }
-                let reconciled = self.reconcile_replay(item, mutation).await?;
+                let reconciled = self.reconcile_replay(item, mutation, cancellation).await?;
                 if reconciled != ReplayOutcome::Applied {
                     return Ok(reconciled);
                 }
@@ -3438,7 +3564,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }
                 let command = match mutation {
                     PendingMutation::Legacy => {
-                        self.inner.replay(item).await?;
+                        self.replay_legacy(item, cancellation).await?;
                         None
                     }
                     PendingMutation::Notify(command) => Some(command),
@@ -3446,7 +3572,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         logical_expiration,
                         notification,
                     } => {
-                        let outcome = self.expire_current(&item.key, *logical_expiration).await?;
+                        let outcome = self
+                            .expire_current(&item.key, *logical_expiration, cancellation)
+                            .await?;
                         if outcome != ReplayOutcome::Applied {
                             return Ok(outcome);
                         }
@@ -3801,6 +3929,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     fn passive(&self, key: Arc<str>, expected: Entry<V>, fence: Arc<Fence>) {
         let worker = self.clone();
         let task_key = Arc::clone(&key);
+        let source = CancellationSource::new();
+        let cancellation = source.token();
         let execution = self.inner.scopes.execution(
             async move {
                 let raw = worker
@@ -3816,6 +3946,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         &opts,
                         FallbackAvailability::Unavailable,
                         L2ReadPolicy::FactoryFallback,
+                        &cancellation,
                     )
                     .await;
                 let _lane = Arc::clone(&fence.lane.lock).lock_owned().await;
@@ -3848,13 +3979,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                 .await;
                         }
                     }
+                    Err(
+                        error @ (Error::OperationCancelled { .. } | Error::FactoryCancelled { .. }),
+                    ) => {
+                        return Err(error);
+                    }
                     Ok(Some(_)) | Ok(None) | Err(_) => {
                         worker.inner.memory.remove_if_same(&key, &expected).await;
                     }
                 }
                 Ok(())
             },
-            CancellationSource::new(),
+            source,
         );
         let _receiver = self.inner.tasks.spawn(
             ShutdownTask::Distributed,
@@ -4013,38 +4149,21 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
 #[async_trait]
 impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
     async fn replay(&self, item: &RecoveryItem) -> Result<()> {
-        // Deliberately explicit old executor adapter. Canonical enqueue captures
-        // bytes/stages and routes through replay_ticket instead.
-        let Storage::Hybrid {
-            backend,
-            serializer,
-        } = &self.storage
-        else {
-            return Ok(());
-        };
-        match item.action {
-            RecoveryAction::Set => {
-                if let Some(entry) = self.memory.get_at(&item.key, self.clock.now()).await {
-                    let snapshot = DistributedSnapshot::from_entry_with_options(
-                        &entry,
-                        &self.default_options,
-                        entry.meta().inserted_at(),
-                    )?;
-                    backend
-                        .set(
-                            &self.l2_key(&item.key),
-                            serializer
-                                .encode(&snapshot, self.serialization_mode)
-                                .await?,
-                            Some(snapshot.backend_ttl_at(self.clock.now())),
-                        )
-                        .await?;
-                }
-            }
-            RecoveryAction::Remove => backend.remove(&self.l2_key(&item.key)).await?,
-            RecoveryAction::Expire => {}
+        if self.scopes.is_closed() {
+            return Err(Error::CacheClosed);
         }
-        Ok(())
+        let worker = Worker {
+            inner: self.owner.upgrade().ok_or(Error::CacheClosed)?,
+        };
+        let item = item.clone();
+        let source = CancellationSource::new();
+        let cancellation = source.token();
+        self.scopes
+            .execution(
+                async move { worker.replay_legacy(&item, &cancellation).await },
+                source,
+            )
+            .await
     }
     async fn replay_ticket(&self, ticket: &ReplayTicket) -> Result<ReplayOutcome> {
         if self.scopes.is_closed() {
@@ -4054,10 +4173,12 @@ impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
             inner: self.owner.upgrade().ok_or(Error::CacheClosed)?,
         };
         let ticket = ticket.clone();
+        let source = CancellationSource::new();
+        let cancellation = source.token();
         self.scopes
             .execution(
-                async move { worker.replay_owned(ticket).await },
-                CancellationSource::new(),
+                async move { worker.replay_owned(ticket, &cancellation).await },
+                source,
             )
             .await
     }

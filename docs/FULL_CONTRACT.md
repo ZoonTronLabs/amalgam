@@ -13,7 +13,7 @@ NuGet binary `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
 | Factory original/processed key; current and stale tags | `original_key`, `tags`, `stale_tags`; `factory_context_contract` tests prefix ambiguity, cold L2 and eager |
 | Eager request tags | Passed from the triggering call, distinct from stale tags; matches released reference |
 | Separate marker mutation policy | `tags_default_options`, `tags_entry_options`, `EntryOptions::tag_defaults`; `marker_defaults_contract` tests explicit override and provider independence. Control-read fields are still unavailable, below |
-| Async complete-snapshot codecs | `AsyncDistributedSerializer`, `SerializationMode`; `async_serializer_contract` tests both models, pending cancellation and legacy snapshot overrides |
+| Async complete-snapshot codecs | `AsyncDistributedSerializer`, `SerializationMode`; model/legacy tests plus additive cooperative hooks receive the actual owned scope signal. `cooperative_codec_contract` covers both directions, deadline reasons, expiry, eager/passive/replay, background completion, synchronous callbacks and direct legacy adapters |
 | Conditional validator replacement/clear | `not_modified_builder`, `ValidatorUpdate`, typed `ConditionalRefreshError`; `conditional_metadata_contract` verifies stored metadata on a cold L2 node |
 | Distributed expire choice | `DistributedExpirePolicy::Remove` matches FC L2 removal with stale L1; `RetainStale` keeps existing Rust behavior; `expire_policy_contract` tests both and skips/cancellation |
 | Instance and provider inspection | `instance_id`, `distributed_cache`, `backplane`, `distributed_locker` |
@@ -40,7 +40,6 @@ platform-only simply to close the inventory:
 | Logging/tracing/metrics configuration | Category levels, optional tags and full native OTel metric integration incomplete |
 | Optional distributed-expire-on-backplane-recovery | Exact replay policy only |
 | Portable tag/clear over a byte-only store | Requires separate genuine atomic InvalidationStore |
-| Cooperative codec cancellation | Async codec futures are owned/dropped, but no operation signal is forwarded to codecs yet |
 | Marker control-read options | Durable validation currently ignores independent marker read skips/budgets; only mutation defaults are implemented |
 | Full option-combination evidence | Stale-layer skips and locker degradation/bypass need a larger public matrix |
 
@@ -58,3 +57,15 @@ newly verified reference outcomes without changing those old adapters.
 All tests and performance reports must identify their actual source hash.
 Intermediate measurements do not describe a later release. See [contract and
 migration](PARITY.md) and [validation](AUDIT.md).
+
+Async codecs receive `FactoryCancellation` through the additive snapshot hooks;
+legacy implementations retain default adapters. Cancellation is checked before
+and after codec work and never suppressed or queued as a serialization failure.
+A distributed read has its own owned deadline scope: timeout signals the exact
+soft/hard reason before dropping the codec, without cancelling a subsequent
+origin. This preserves Amalgam's existing combined get/decode/marker budget;
+FusionCache 2.9 times only the backend read and decodes afterward. Background,
+eager, passive and recovery work retain their own cancellation ownership and
+cache shutdown drains them. Successful scope completion also ends its token.
+These are explicit Rust lifetime/deadline adaptations, not literal .NET token
+or timeout identity.

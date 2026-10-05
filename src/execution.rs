@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 
-/// Read-only cancellation state carried into an origin factory.
+/// Read-only cancellation state carried into owned cache work and origin factories.
 #[derive(Clone, Debug)]
 pub struct FactoryCancellation {
     request: Arc<Request>,
@@ -60,6 +60,16 @@ impl FactoryCancellation {
     /// Whether this execution scope has ended or was cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.reason().is_some()
+    }
+    /// Checks the owning scope without waiting, preserving its terminal reason.
+    ///
+    /// Successful scope completion also ends the token. A background continuation
+    /// receives its own scope token, which remains active until that work ends.
+    pub fn check(&self) -> Result<()> {
+        match self.reason() {
+            Some(reason) => Err(Error::OperationCancelled { reason }),
+            None => Ok(()),
+        }
     }
     /// Waits for a precise execution-scope reason.
     pub async fn cancelled(&self) -> Reason {

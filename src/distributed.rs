@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::distributed_lock::{LeaseError, LeaseProof};
 use crate::entry::Entry;
 use crate::error::{Error, Result};
+use crate::execution::FactoryCancellation;
 use crate::options::{EntryOptions, EntryWeight, Priority};
 use crate::tags::{
     CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerState, MarkerStoreLimits,
@@ -402,6 +403,43 @@ pub trait AsyncDistributedSerializer<V>: Send + Sync {
     async fn deserialize_snapshot(&self, bytes: &[u8]) -> Result<DistributedSnapshot<V>>
     where
         V: Send + Sync;
+    /// Encodes with the cancellation signal of the work owning this snapshot.
+    ///
+    /// Override to pass the signal into cooperative codec I/O. Existing codecs
+    /// retain their methods through this adapter; their futures are still owned
+    /// and dropped on cancellation. Returning cancellation never degrades to a
+    /// successful local-only write, regardless of serialization error policy.
+    async fn serialize_snapshot_with_cancellation(
+        &self,
+        snapshot: &DistributedSnapshot<V>,
+        cancellation: FactoryCancellation,
+    ) -> Result<Vec<u8>>
+    where
+        V: Send + Sync,
+    {
+        cancellation.check()?;
+        let result = self.serialize_snapshot(snapshot).await;
+        cancellation.check()?;
+        result
+    }
+    /// Decodes with the owning read, eager, passive or recovery work's signal.
+    ///
+    /// Foreground caller cancellation and cache shutdown end the owning scope.
+    /// Permitted background work has an independent token; a completed caller
+    /// does not cancel it. Successful completion ends that token as well.
+    async fn deserialize_snapshot_with_cancellation(
+        &self,
+        bytes: &[u8],
+        cancellation: FactoryCancellation,
+    ) -> Result<DistributedSnapshot<V>>
+    where
+        V: Send + Sync,
+    {
+        cancellation.check()?;
+        let result = self.deserialize_snapshot(bytes).await;
+        cancellation.check()?;
+        result
+    }
     /// Optional synchronous counterpart used by [`SerializationMode::SyncPreferred`].
     fn sync_serializer(&self) -> Option<&dyn DistributedSerializer<V>> {
         None
@@ -434,27 +472,43 @@ impl<V> Serializer<V> {
         &self,
         snapshot: &DistributedSnapshot<V>,
         mode: SerializationMode,
+        cancellation: &FactoryCancellation,
     ) -> Result<Vec<u8>>
     where
         V: Send + Sync,
     {
-        match self.model(mode) {
+        cancellation.check()?;
+        let result = match self.model(mode) {
             CodecModel::Sync(codec) => codec.serialize_snapshot(snapshot),
-            CodecModel::Async(codec) => codec.serialize_snapshot(snapshot).await,
-        }
+            CodecModel::Async(codec) => {
+                codec
+                    .serialize_snapshot_with_cancellation(snapshot, cancellation.clone())
+                    .await
+            }
+        };
+        cancellation.check()?;
+        result
     }
     pub(crate) async fn decode(
         &self,
         bytes: &[u8],
         mode: SerializationMode,
+        cancellation: &FactoryCancellation,
     ) -> Result<DistributedSnapshot<V>>
     where
         V: Send + Sync,
     {
-        match self.model(mode) {
+        cancellation.check()?;
+        let result = match self.model(mode) {
             CodecModel::Sync(codec) => codec.deserialize_snapshot(bytes),
-            CodecModel::Async(codec) => codec.deserialize_snapshot(bytes).await,
-        }
+            CodecModel::Async(codec) => {
+                codec
+                    .deserialize_snapshot_with_cancellation(bytes, cancellation.clone())
+                    .await
+            }
+        };
+        cancellation.check()?;
+        result
     }
 
     fn model(&self, mode: SerializationMode) -> CodecModel<'_, V> {
