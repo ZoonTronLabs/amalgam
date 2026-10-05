@@ -5,6 +5,7 @@
 //! domain; an ordinary cache key never becomes an invalidation command.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -443,6 +444,7 @@ impl MarkerState {
 #[derive(Debug)]
 pub struct TagRegistry {
     state: Mutex<MarkerState>,
+    marker_observed: AtomicBool,
     capacity: usize,
 }
 
@@ -450,6 +452,7 @@ impl Default for TagRegistry {
     fn default() -> Self {
         Self {
             state: Mutex::new(MarkerState::default()),
+            marker_observed: AtomicBool::new(false),
             capacity: 4096,
         }
     }
@@ -469,16 +472,22 @@ impl TagRegistry {
         }
         Ok(Self {
             state: Mutex::new(MarkerState::default()),
+            marker_observed: AtomicBool::new(false),
             capacity,
         })
     }
 
     /// Merges an observed marker, returning any safe compaction fence.
     pub fn advance(&self, kind: MarkerKind, at: MarkerVersion) -> MarkerAdvanceOutcome {
-        self.state
+        let mut state = self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .advance(kind, at, self.capacity)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Publish under the guard before changing state. Readers either precede
+        // this first advance or wait for its complete marker/compaction result.
+        // The witness never resets, even when per-tag tombstones are compacted.
+        self.marker_observed.store(true, Ordering::Release);
+        state.advance(kind, at, self.capacity)
     }
 
     /// Legacy local invalidation adapter.
@@ -523,6 +532,9 @@ impl TagRegistry {
         tags: &[Tag],
         behavior: RemoveByTagBehavior,
     ) -> TagVerdict {
+        if !self.marker_observed.load(Ordering::Acquire) {
+            return TagVerdict::Valid;
+        }
         let state = self
             .state
             .lock()

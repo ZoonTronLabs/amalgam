@@ -23,6 +23,7 @@ NuGet binary `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
 | Instance and provider inspection | `instance_id`, `distributed_cache`, `backplane`, `distributed_locker` |
 | Present null versus miss | `Cache<Option<T>>`; `null_value_contract` tests L1/L2/auto-clone, conditional refresh, fail-safe and explicit null default |
 | Warm event overhead | Materialize key/Hit only when an observer/plugin needs it, after user copy/destruction callbacks; `ready_event_contract` covers late attachment |
+| Pristine marker checks | Unmodified registries have a shared atomic read; the first observed marker permanently restores full locked validation. `marker_visibility_contract` verifies minimum revisions, empty compaction and completed concurrent advances |
 | Cancellation allocations | Closed atomic terminal state plus subscribe-before-check Notify; `cancellation_signal_contract` covers concurrent requests and registration races |
 | Original codec/provider causes | `CodecError`, `TransportError`, preserving constructors and concrete `source`; `original_error_contract` covers native codecs, policy separation and Redis constructor boundaries |
 | Immutable copy capability | `immutable_values`, sealed `ImmutableValue`; `immutable_copy_contract` covers isolated owned containers, shared immutable allocation identity and explicit later strategy precedence; compile-fail docs reject shared mutable containers |

@@ -5,6 +5,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+- Avoid the local marker mutex until the first marker is observed. Publish that transition before changing marker state; tag/clear maxima and conservative compaction remain fully checked afterward. Public contracts cover the first revision, compacted clear fences and concurrent visibility.
+
 - Sample custom L1 maintenance clocks before taking the retention mutex, so a clock can safely reenter storage. A public regression checks actual completion.
 
 
