@@ -235,7 +235,32 @@ impl Scopes {
             waker: Mutex::new(None),
             source,
             registry: Arc::clone(self),
+            checkpoint: AtomicBool::new(false),
         });
+        self.register_scope(scope)
+    }
+    /// A weak progress signal shares the already owned execution allocation.
+    /// It records one internal checkpoint independently of terminal cancellation.
+    pub(crate) fn execution_with_checkpoint<T: Send + 'static, F>(
+        self: &Arc<Self>,
+        work: impl FnOnce(ExecutionCheckpoint<T>) -> F,
+        source: CancellationSource,
+    ) -> Execution<T>
+    where
+        F: Future<Output = Result<T>> + Send + 'static,
+    {
+        let scope = Arc::new_cyclic(|scope| Scope {
+            state: Mutex::new(State::Pending(Box::pin(work(ExecutionCheckpoint {
+                scope: scope.clone(),
+            })))),
+            waker: Mutex::new(None),
+            source,
+            registry: Arc::clone(self),
+            checkpoint: AtomicBool::new(false),
+        });
+        self.register_scope(scope)
+    }
+    fn register_scope<T: Send + 'static>(self: &Arc<Self>, scope: Arc<Scope<T>>) -> Execution<T> {
         let erased: Arc<dyn CancelWork> = scope.clone();
         let closed = {
             let mut scopes = lock(&self.scopes);
@@ -346,6 +371,18 @@ struct Scope<T> {
     waker: Mutex<Option<Waker>>,
     source: CancellationSource,
     registry: Arc<Scopes>,
+    checkpoint: AtomicBool,
+}
+/// Work observes progress without owning its parent or creating a strong cycle.
+pub(crate) struct ExecutionCheckpoint<T> {
+    scope: Weak<Scope<T>>,
+}
+impl<T> ExecutionCheckpoint<T> {
+    pub(crate) fn record(&self) {
+        if let Some(scope) = self.scope.upgrade() {
+            scope.checkpoint.store(true, Ordering::Release);
+        }
+    }
 }
 impl<T: Send + 'static> CancelWork for Scope<T> {
     fn cancel(&self, reason: Reason) {
@@ -384,6 +421,9 @@ pub(crate) struct Execution<T: Send + 'static> {
     scope: Arc<Scope<T>>,
 }
 impl<T: Send + 'static> Execution<T> {
+    pub(crate) fn checkpoint_reached(&self) -> bool {
+        self.scope.checkpoint.load(Ordering::Acquire)
+    }
     pub(crate) fn cancel(&self, reason: Reason) {
         self.scope.cancel(reason);
     }

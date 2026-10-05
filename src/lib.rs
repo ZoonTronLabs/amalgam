@@ -92,8 +92,9 @@ pub use error::{
     ShutdownTask, TransportError,
 };
 pub use events::{
-    CacheEvent, CacheLevel, CacheOperation, CircuitComponent, EventEmission, EventStreamClosed,
-    EventSubscription, Events, OperationOutcome,
+    BackplaneEvent, CacheEvent, CacheLevel, CacheOperation, CircuitComponent, DistributedEvent,
+    EventEmission, EventStreamClosed, EventSubscription, Events, LayerEvent,
+    LayerEventSubscription, MemoryEvent, OperationOutcome,
 };
 pub use execution::{CancellationRequest, CancellationSource, FactoryCancellation};
 pub use factory::{

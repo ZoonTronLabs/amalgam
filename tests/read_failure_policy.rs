@@ -188,11 +188,11 @@ async fn canonical_stale_read_preserves_timeout_while_legacy_read_serves_configu
     clock.advance(Duration::from_secs(2));
     assert!(matches!(
         cache.read("k", None).await,
-        Err(Error::Distributed(_))
+        Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
     ));
     assert!(matches!(
         cache.read_or_default("k", 42, None).await,
-        Err(Error::Distributed(_))
+        Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
     ));
     assert_eq!(cache.try_get("k", None).await.into_value(), Some(7));
     assert_eq!(cache.get_or_default("k", 42, None).await, 7);
@@ -212,7 +212,7 @@ async fn canonical_hard_read_timeout_never_becomes_successful_default() {
         .unwrap();
     assert!(matches!(
         cache.read_or_default("k", 42, None).await,
-        Err(Error::Distributed(_))
+        Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
     ));
     assert_eq!(cache.get_or_default("k", 42, None).await, 42);
     cache.shutdown().await.unwrap();

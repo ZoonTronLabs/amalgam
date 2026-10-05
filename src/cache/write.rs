@@ -1,10 +1,11 @@
 //! Value mutations and owned local/distributed commit pipelines.
 use super::{
-    Arc, BackplaneAction, BackplaneCommand, BackplaneMessage, CacheEvent, CacheLevel, CacheValue,
-    CancellationSource, CircuitComponent, CommitCompletion, CommitMode, CommitReceipt,
-    CommitReport, DataCommit, DataMutation, DistributedExpirePolicy, DistributedSnapshot, Duration,
-    EffectOutcome, EnqueueOutcome, Entry, EntryOptions, Error, FactoryCancellation, FactoryProduct,
-    Fence, FlightGuard, Future, Instrument, KeyMutation, LeaseError, LeasePolicy, LeasedMutation,
+    Arc, BackplaneAction, BackplaneCommand, BackplaneEvent, BackplaneMessage, CacheEvent,
+    CacheLevel, CacheValue, CancellationSource, CircuitComponent, CommitCompletion, CommitMode,
+    CommitReceipt, CommitReport, DataCommit, DataMutation, DistributedEvent,
+    DistributedExpirePolicy, DistributedSnapshot, Duration, EffectOutcome, EnqueueOutcome, Entry,
+    EntryOptions, Error, FactoryCancellation, FactoryProduct, Fence, FlightGuard, Future,
+    Instrument, KeyMutation, LayerEvent, LeaseError, LeasePolicy, LeasedMutation,
     LeasedWriteOutcome, LocalCommit, LocalEffect, MutationReceipt, Observed, OperationOutcome,
     PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryItem, RecoveryWork,
     Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker, lock, recovery_action,
@@ -250,6 +251,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         }
         self.close_circuit(CircuitComponent::Distributed);
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Distributed(match data {
+                DataMutation::Set { .. } | DataMutation::Expire { .. } => DistributedEvent::Set {
+                    key: Arc::from(key),
+                },
+                DataMutation::Remove => DistributedEvent::Remove {
+                    key: Arc::from(key),
+                },
+            })
+        });
         Ok(EffectOutcome::Applied)
     }
     fn enqueue_data(
@@ -519,6 +530,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 Arc::from(format!("marker:{:?}", command.marker().kind()))
             }
         };
+        let published = command.clone();
         backplane
             .publish_command(command)
             .instrument(component_span(
@@ -529,6 +541,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             ))
             .await?;
         self.close_circuit(CircuitComponent::Backplane);
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Backplane(BackplaneEvent::MessagePublished { command: published })
+        });
         self.emit(CacheEvent::MessagePublished { key });
         Ok(())
     }
@@ -558,7 +573,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         let expired = entry.with_logical_expiration(now);
                         self.inner
                             .memory
-                            .insert_at(Arc::clone(&key), expired, now)
+                            .expire_if_unchanged(Arc::clone(&key), &entry, expired, now)
                             .await;
                     }
                     LocalEffect::Expired

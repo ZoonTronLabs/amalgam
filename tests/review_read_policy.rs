@@ -58,7 +58,7 @@ async fn distributed_hard_read_budget_includes_required_marker_read() {
         tokio::time::timeout(Duration::from_secs(1), cache.read("key", Some(options))).await;
     cache.shutdown().await.unwrap();
     assert!(
-        matches!(result, Ok(Err(Error::Distributed(_)))),
+        matches!(result, Ok(Err(Error::DistributedTimeout { elapsed })) if elapsed == Duration::from_millis(5)),
         "the selected hard deadline must also bound required marker I/O: {result:?}"
     );
 }

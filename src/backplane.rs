@@ -29,7 +29,7 @@ pub enum BackplaneAction {
 }
 
 /// Compatible data notification DTO. Control decoding is a separate boundary.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackplaneMessage {
     /// The publishing instance's identity.
     pub source_id: Arc<str>,
@@ -88,7 +88,7 @@ impl MarkerCommand {
 }
 
 /// Closed notification commands, independent from legacy data action variants.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackplaneCommand {
     /// An ordinary data-key operation.
     Data(BackplaneMessage),

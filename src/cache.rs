@@ -42,10 +42,12 @@ use crate::error::{
     RuntimeComponent, ShutdownError, ShutdownFailure, ShutdownTask,
 };
 use crate::events::{
-    CacheEvent, CacheLevel, CacheOperation, CircuitComponent, Events, OperationOutcome,
+    BackplaneEvent, CacheEvent, CacheLevel, CacheOperation, CircuitComponent, DistributedEvent,
+    Events, LayerEvent, MemoryEvent, OperationOutcome,
 };
 use crate::execution::{
-    CancellationSource, Execution, FactoryCancellation, InlinePermit, LinkMode, Scopes, lock,
+    CancellationSource, Execution, ExecutionCheckpoint, FactoryCancellation, InlinePermit,
+    LinkMode, Scopes, lock,
 };
 use crate::factory::{FactoryContext, FactoryProduct, ProductOrigin, StaleInfo};
 use crate::lifecycle::Tasks;
@@ -701,6 +703,33 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         )?)
     }
     fn emit(&self, event: CacheEvent) {
+        if let CacheEvent::CircuitBreakerChange { component, closed } = &event {
+            self.inner.events.emit_layer_lazy(|| match component {
+                CircuitComponent::Distributed => {
+                    LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange {
+                        closed: *closed,
+                    })
+                }
+                CircuitComponent::Backplane => {
+                    LayerEvent::Backplane(BackplaneEvent::CircuitBreakerChange { closed: *closed })
+                }
+            });
+        }
+        match &event {
+            CacheEvent::SerializationError { key, .. } => self.inner.events.emit_layer_lazy(|| {
+                LayerEvent::Distributed(DistributedEvent::SerializationError {
+                    key: Arc::clone(key),
+                })
+            }),
+            CacheEvent::DeserializationError { key, .. } => {
+                self.inner.events.emit_layer_lazy(|| {
+                    LayerEvent::Distributed(DistributedEvent::DeserializationError {
+                        key: Arc::clone(key),
+                    })
+                })
+            }
+            _ => {}
+        }
         self.inner.events.emit(event);
     }
     #[inline]

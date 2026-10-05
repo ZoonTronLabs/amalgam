@@ -1,22 +1,42 @@
 //! Value reads, same-key origin work, fail-safe and eager refresh.
 use super::{
     AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CancellationSource,
-    CircuitComponent, CommitReceipt, DistributedLease, DistributedLookup, Duration, Entry,
-    EntryOptions, Error, Execution, FactoryCancellation, FactoryContext, FallbackAvailability,
-    FlightGuard, HitKind, HydrationFence, HydrationOutcome, Instrument, L1Read, L2ReadPolicy,
-    LeaseError, LeasePolicy, LinkMode, LocalParticipation, LockOutcome, LookupKey,
-    MarkerReadPolicy, MaybeValue, Observed, OperationOutcome, Ordering, OriginKind, ReadStale,
-    Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict, Timeout, Worker,
-    acquire_owned_supervised, bounded, component_span, lease_lost, newer_of,
+    CircuitComponent, CommitReceipt, DistributedEvent, DistributedLease, DistributedLookup,
+    Duration, Entry, EntryOptions, Error, Execution, ExecutionCheckpoint, FactoryCancellation,
+    FactoryContext, FallbackAvailability, FlightGuard, HitKind, HydrationFence, HydrationOutcome,
+    Instrument, L1Read, L2ReadPolicy, LayerEvent, LeaseError, LeasePolicy, LinkMode,
+    LocalParticipation, LockOutcome, LookupKey, MarkerReadPolicy, MaybeValue, MemoryEvent,
+    Observed, OperationOutcome, Ordering, OriginKind, ReadStale, Reason, Result, ShutdownTask,
+    SkipReason, Storage, Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded,
+    component_span, lease_lost, newer_of,
 };
 
+// Physical completion remains visible after a later marker timeout. The weak
+// checkpoint shares the existing owned scope and never creates a strong cycle.
+type DistributedCheckpoint<V> = ExecutionCheckpoint<Option<DistributedLookup<V>>>;
+
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
-    async fn read_l1(&self, key: &str, cancellation: &FactoryCancellation) -> Result<L1Read<V>> {
+    async fn read_l1(
+        &self,
+        key: &Arc<str>,
+        cancellation: &FactoryCancellation,
+    ) -> Result<L1Read<V>> {
         let captured = self.inner.epoch.load(Ordering::Acquire);
         let now = self.inner.clock.now();
         let Some(entry) = self.inner.memory.get_at(key, now).await else {
+            self.inner.events.emit_layer_lazy(|| {
+                LayerEvent::Memory(MemoryEvent::Miss {
+                    key: Arc::clone(key),
+                })
+            });
             return Ok(L1Read::Miss);
         };
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Memory(MemoryEvent::Hit {
+                key: Arc::clone(key),
+                stale: entry.is_logically_expired(now),
+            })
+        });
         self.reconcile_controlled_markers(&entry, cancellation)
             .await?;
         self.ensure_health();
@@ -30,7 +50,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         Ok(match self.tags(&entry) {
             TagVerdict::Remove => {
-                self.inner.memory.remove_if_same(key, &entry).await;
+                if self
+                    .inner
+                    .memory
+                    .remove_if_same(key, &entry)
+                    .await
+                    .is_some()
+                {
+                    self.inner.events.emit_layer_lazy(|| {
+                        LayerEvent::Memory(MemoryEvent::Remove {
+                            key: Arc::clone(key),
+                        })
+                    });
+                }
                 L1Read::Miss
             }
             TagVerdict::Expire => L1Read::Stale(entry),
@@ -77,8 +109,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let phase_cancellation = source.token();
         let worker = self.clone();
         let phase_key = Arc::clone(key);
-        let mut execution = self.scopes().execution(
-            async move { worker.fetch_l2(&phase_key, &phase_cancellation).await }.instrument(span),
+        let mut execution = self.scopes().execution_with_checkpoint(
+            move |checkpoint| {
+                async move {
+                    worker
+                        .fetch_l2(&phase_key, &phase_cancellation, &checkpoint)
+                        .await
+                }
+                .instrument(span)
+            },
             source,
         );
         execution.link(cancellation, LinkMode::Explicit);
@@ -105,15 +144,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 {
                     Ok(None)
                 } else {
-                    Err(Error::Distributed(
-                        "distributed read deadline elapsed".into(),
-                    ))
+                    Err(Error::DistributedTimeout {
+                        elapsed: timeout.as_duration().unwrap_or(Duration::ZERO),
+                    })
                 }
             }
             Err(error) => Err(error),
         };
         match result {
             Ok(value) => {
+                if value.is_none() && !execution.checkpoint_reached() {
+                    self.distributed_miss(key);
+                }
                 if let Some(entry) = &value {
                     self.reconcile_controlled_markers(&entry.entry, cancellation)
                         .await?;
@@ -126,15 +168,26 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     Err(error)
                 } else {
                     tracing::warn!(%error,key=%key,"distributed read degraded to miss");
+                    if !execution.checkpoint_reached() {
+                        self.distributed_miss(key);
+                    }
                     Ok(None)
                 }
             }
         }
     }
+    fn distributed_miss(&self, key: &Arc<str>) {
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Distributed(DistributedEvent::Miss {
+                key: Arc::clone(key),
+            })
+        });
+    }
     async fn fetch_l2(
         &self,
         key: &Arc<str>,
         cancellation: &FactoryCancellation,
+        observation: &DistributedCheckpoint<V>,
     ) -> Result<Option<DistributedLookup<V>>> {
         let Storage::Hybrid {
             backend,
@@ -147,14 +200,27 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let hydration = self.hydration_fence(key).await;
         let bytes = backend.get(&self.inner.l2_key(key)).await?;
         self.close_circuit(CircuitComponent::Distributed);
-        let Some(bytes) = bytes else { return Ok(None) };
+        let Some(bytes) = bytes else {
+            observation.record();
+            self.distributed_miss(key);
+            return Ok(None);
+        };
         let snapshot = serializer
             .decode(&bytes, self.inner.serialization_mode, cancellation)
             .await?;
         let source = snapshot.try_into_entry(self.inner.clock.now())?;
-        if source.is_physically_expired(self.inner.clock.now()) {
+        let now = self.inner.clock.now();
+        observation.record();
+        if source.is_physically_expired(now) {
+            self.distributed_miss(key);
             return Ok(None);
         }
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Distributed(DistributedEvent::Hit {
+                key: Arc::clone(key),
+                stale: source.is_logically_expired(now),
+            })
+        });
         if self.inner.marker_reads.policy() == MarkerReadPolicy::DurableRequired {
             self.reconcile_markers(source.meta().tags()).await?;
         }

@@ -150,6 +150,8 @@ Transport failures trip the corresponding circuit breaker; codec or value-copy f
 
 Unreleased `CachePlugin<V>` adds operational access to the same cache through a weak typed context. Start, event handlers and Stop can read, compute and mutate; views do not keep the application lifecycle alive. See [plugin cache operations](docs/PLUGIN_CACHE.md) for lifetime and teardown boundaries.
 
+Unreleased `subscribe_layers()` exposes typed memory, distributed and backplane facts independently of logical outcomes. Full peer payloads, physical hit eligibility and typed read-deadline behavior are documented in [component events](docs/LAYER_EVENTS.md). Original-value eviction and handler policy remain open.
+
 Each cache has its own plugin sessions, including when a plugin object is shared. Dynamic registration detaches and stops exactly once. One event hub reports reads, misses, admission, eviction, origins, distributed effects and operation outcomes. Use the resilient event subscription when a slow observer must recover from broadcast lag.
 
 Metrics use a bounded cache-name label budget. Keys and instance IDs belong in traces rather than metric labels. OpenTelemetry exposes a composable layer; the convenience global initializer preserves an existing subscriber/provider on failure.

@@ -1,10 +1,11 @@
 //! Backplane continuity, maintenance and deterministic shutdown.
 use super::{
-    Arc, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneReadiness, BackplaneState,
-    CacheEvent, CacheInner, CancellationSource, CircuitComponent, CloseOutcome, Duration, Entry,
-    Error, FallbackAvailability, Fence, Instant, L2ReadPolicy, Lifecycle, MarkerReads, Ordering,
-    ReconciliationPolicy, Result, ShutdownError, ShutdownFailure, ShutdownReport, ShutdownTask,
-    TagVerdict, Worker, broadcast, health_changed, lock,
+    Arc, BackplaneAction, BackplaneCommand, BackplaneEvent, BackplaneMessage, BackplaneReadiness,
+    BackplaneState, CacheEvent, CacheInner, CancellationSource, CircuitComponent, CloseOutcome,
+    Duration, Entry, Error, FallbackAvailability, Fence, Instant, L2ReadPolicy, LayerEvent,
+    Lifecycle, MarkerReads, MemoryEvent, Ordering, ReconciliationPolicy, Result, ShutdownError,
+    ShutdownFailure, ShutdownReport, ShutdownTask, TagVerdict, Worker, broadcast, health_changed,
+    lock,
 };
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
@@ -213,9 +214,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if self.inner.ignore_incoming_backplane {
             return Ok(());
         }
+        let received = message.clone();
         let command = match BackplaneCommand::from_message(message) {
             Ok(command) => command,
             Err(error) => {
+                if received.source_id.as_ref() != self.inner.instance_id.as_ref() {
+                    self.close_circuit(CircuitComponent::Backplane);
+                    self.inner.events.emit_layer_lazy(|| {
+                        LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: received })
+                    });
+                }
                 self.continuity_gap();
                 // A rejected inner frame loses history without disconnecting
                 // the transport. Re-enter reconciliation even at the same ACK.
@@ -232,6 +240,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         }
         self.close_circuit(CircuitComponent::Backplane);
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: received })
+        });
         match command {
             BackplaneCommand::Marker(command) => {
                 if command.scope() == &self.inner.scope {
@@ -254,7 +265,21 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if lock(&lane.timestamp).is_some_and(|at| at > message.timestamp) {
                     return Ok(());
                 }
-                let existing = self.inner.memory.get_at(&key, self.inner.clock.now()).await;
+                let now = self.inner.clock.now();
+                let existing = self.inner.memory.get_at(&key, now).await;
+                if message.action == BackplaneAction::Set {
+                    self.inner.events.emit_layer_lazy(|| {
+                        LayerEvent::Memory(match &existing {
+                            Some(entry) => MemoryEvent::Hit {
+                                key: Arc::clone(&key),
+                                stale: entry.is_logically_expired(now),
+                            },
+                            None => MemoryEvent::Miss {
+                                key: Arc::clone(&key),
+                            },
+                        })
+                    });
+                }
                 if existing
                     .as_ref()
                     .is_some_and(|entry| entry.meta().created() > message.timestamp)
@@ -274,9 +299,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                             let expired = entry.with_logical_expiration(message.timestamp);
                             self.inner
                                 .memory
-                                .insert_if_unchanged(
+                                .expire_if_unchanged(
                                     Arc::clone(&key),
-                                    Some(&entry),
+                                    &entry,
                                     expired,
                                     self.inner.clock.now(),
                                 )

@@ -405,7 +405,7 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
         } else {
             assert!(matches!(
                 cache.read("key", None).await,
-                Err(Error::Distributed(_))
+                Err(Error::DistributedTimeout { .. })
             ));
             assert_cancelled(
                 &recorder.token(Direction::Decode),

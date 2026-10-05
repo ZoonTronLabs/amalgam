@@ -422,6 +422,14 @@ pub enum Error {
         elapsed: Duration,
     },
 
+    /// The cache-owned distributed read budget elapsed. This is distinct from
+    /// a provider transport fault and does not trip its circuit breaker.
+    #[error("distributed read timed out after {elapsed:?}")]
+    DistributedTimeout {
+        /// The budget granted to the combined entry/decode/control read.
+        elapsed: Duration,
+    },
+
     /// A value could not be serialized for the distributed (L2) cache.
     /// Legacy message-only adapter; use [`Error::serialization`] to retain a source.
     #[error("serialization failed: {0}")]

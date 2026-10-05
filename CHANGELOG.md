@@ -5,6 +5,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+- Add independent typed component event subscriptions with actual memory/L2 effects, complete backplane commands/envelopes, lazy payloads and explicit loss accounting. Preserve the existing logical event/plugin stream. Distinguish `DistributedTimeout` from transport failure so the selected read budget does not trip the Redis breaker; canonical deadline errors stay typed. Original-value eviction and configurable handler policy remain open; see `docs/LAYER_EVENTS.md`.
+
 - Add `CachePlugin<V>`, `CachePluginContext<V>` and non-owning `PluginCache<V>` with the complete same-cache async/sync operation surface. Preserve interleaved legacy registration order. Stop uses bounded owned cleanup admission; final-owner closure, deferred startup/callback teardown, source failures and native Redis operations have public regressions. See `docs/PLUGIN_CACHE.md`.
 
 - Add `ReconciliationPolicy::BackplaneBestEffort` to retain local/hydrated fresh and physically retained stale L1 over notification gaps/reconnects. Combined with cooperative ownership and suppressed locker errors it supports ordinary outage availability. Known invalidations, deadlines, cancellation and recovery ownership still apply; strict defaults are unchanged. See `docs/BACKPLANE_OUTAGES.md`.

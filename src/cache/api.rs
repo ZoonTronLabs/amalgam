@@ -4,11 +4,11 @@ use super::{
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
     DistributedCache, DistributedExpirePolicy, DistributedLocker, EntryOptions, Error, Events,
     Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, FactoryProduct,
-    Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LookupKey, LookupMode,
-    LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MutationReceipt,
-    ObservationAdmission, Observed, OperationObservation, OperationOutcome, Ordering, OriginKind,
-    Pin, Plugin, PublicLifetime, ReadyLookup, ReadyValue, ReplayTicket, Result, ShutdownReport,
-    Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
+    Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LayerEvent, LookupKey, LookupMode,
+    LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MemoryEvent,
+    MutationReceipt, ObservationAdmission, Observed, OperationObservation, OperationOutcome,
+    Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyLookup, ReadyValue, ReplayTicket,
+    Result, ShutdownReport, Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
 };
 
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
@@ -327,6 +327,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             LookupMode::Read | LookupMode::ConstantValue => {}
         }
         let value = worker.copy(entry.value(), opts);
+        self.inner.events.emit_layer_lazy(|| {
+            LayerEvent::Memory(MemoryEvent::Hit {
+                key: Arc::from(key),
+                stale: false,
+            })
+        });
         permit.status(token)?;
         let value = value?;
         worker.marker_ready_events(entry.meta().tags(), now);

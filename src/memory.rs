@@ -16,7 +16,7 @@ use moka::notification::RemovalCause;
 use moka::ops::compute::{CompResult, Op};
 
 use crate::entry::Entry;
-use crate::events::{CacheEvent, Events};
+use crate::events::{CacheEvent, Events, LayerEvent, MemoryEvent};
 use crate::options::Priority;
 use crate::time::{Clock, Timestamp};
 
@@ -126,6 +126,12 @@ impl<V: Send + Sync + 'static> Expiry<Arc<str>, Entry<V>> for EntryExpiry {
     ) -> Option<Duration> {
         self.expire_after_create(key, value, updated_at)
     }
+}
+
+#[derive(Clone, Copy)]
+enum MemoryWriteEvent {
+    Set,
+    Expire,
 }
 
 enum Backend<V: Clone + Send + Sync + 'static> {
@@ -298,7 +304,8 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         entry: Entry<V>,
         now: Timestamp,
     ) -> MemoryAdmission {
-        self.insert_internal(key, entry, now, Expected::Any).await
+        self.insert_internal(key, entry, now, Expected::Any, MemoryWriteEvent::Set)
+            .await
     }
 
     /// Commits only while the current representation is unchanged. None expects
@@ -314,7 +321,25 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             Some(entry) => Expected::Same(entry),
             None => Expected::Absent,
         };
-        self.insert_internal(key, entry, now, expected).await
+        self.insert_internal(key, entry, now, expected, MemoryWriteEvent::Set)
+            .await
+    }
+
+    pub(crate) async fn expire_if_unchanged(
+        &self,
+        key: Arc<str>,
+        expected: &Entry<V>,
+        entry: Entry<V>,
+        now: Timestamp,
+    ) -> MemoryAdmission {
+        self.insert_internal(
+            key,
+            entry,
+            now,
+            Expected::Same(expected),
+            MemoryWriteEvent::Expire,
+        )
+        .await
     }
 
     async fn insert_internal(
@@ -323,6 +348,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         entry: Entry<V>,
         now: Timestamp,
         expected: Expected<'_, V>,
+        event: MemoryWriteEvent,
     ) -> MemoryAdmission {
         if entry.is_physically_expired(now) {
             return self.rejected(key, CapacityRejection::PhysicallyExpired);
@@ -330,7 +356,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         // Cloning V may execute caller code. Prepare outside storage locks and
         // keep this handle alive so a rejected candidate cannot be dropped there.
         let prepared = entry.at_insertion(now);
-        match &self.backend {
+        let admission = match &self.backend {
             Backend::Unbounded(cache) => {
                 let result = cache
                     .entry(key.clone())
@@ -347,7 +373,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                     CompResult::Inserted(_) => MemoryAdmission::Admitted,
                     CompResult::ReplacedWith(_) => MemoryAdmission::Replaced,
                     CompResult::Unchanged(_) | CompResult::StillNone(_) => {
-                        self.rejected(key, CapacityRejection::VersionChanged)
+                        self.rejected(Arc::clone(&key), CapacityRejection::VersionChanged)
                     }
                     CompResult::Removed(_) => unreachable!("insertion only uses Put or Nop"),
                 }
@@ -358,11 +384,27 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                     self.retire(retired);
                 }
                 match commit.admission {
-                    MemoryAdmission::Rejected(reason) => self.rejected(key, reason),
+                    MemoryAdmission::Rejected(reason) => self.rejected(Arc::clone(&key), reason),
                     MemoryAdmission::Admitted | MemoryAdmission::Replaced => commit.admission,
                 }
             }
+        };
+        match admission {
+            MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
+                self.events.emit_layer_lazy(|| {
+                    LayerEvent::Memory(match event {
+                        MemoryWriteEvent::Set => MemoryEvent::Set {
+                            key: Arc::clone(&key),
+                        },
+                        MemoryWriteEvent::Expire => MemoryEvent::Expire {
+                            key: Arc::clone(&key),
+                        },
+                    })
+                });
+            }
+            MemoryAdmission::Rejected(_) => {}
         }
+        admission
     }
 
     fn rejected(&self, key: Arc<str>, reason: CapacityRejection) -> MemoryAdmission {
@@ -394,10 +436,16 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
 
     /// Removes a value explicitly, including a pinned value.
     pub async fn remove(&self, key: &str) -> Option<Entry<V>> {
-        match &self.backend {
+        let removed = match &self.backend {
             Backend::Unbounded(cache) => cache.remove(key).await,
             Backend::Retained(store) => lock(store).remove(key).map(|stored| stored.entry),
-        }
+        };
+        self.events.emit_layer_lazy(|| {
+            LayerEvent::Memory(MemoryEvent::Remove {
+                key: Arc::from(key),
+            })
+        });
+        removed
     }
 
     /// Removes only the expected representation, preserving concurrent writes.

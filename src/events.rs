@@ -6,6 +6,9 @@
 //! [`CacheEvent`]s without blocking the cache's hot path, and handler execution
 //! is naturally decoupled from the operation that produced the event.
 
+mod layers;
+pub use layers::{BackplaneEvent, DistributedEvent, LayerEvent, MemoryEvent};
+
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
@@ -236,9 +239,9 @@ impl OperationOutcome {
             }
             crate::Error::CacheClosed => Self::CacheClosed,
             crate::Error::Shutdown(_) => Self::ShutdownError,
-            crate::Error::FactoryTimeout { .. } | crate::Error::LockTimeout { .. } => {
-                Self::TimedOut
-            }
+            crate::Error::FactoryTimeout { .. }
+            | crate::Error::LockTimeout { .. }
+            | crate::Error::DistributedTimeout { .. } => Self::TimedOut,
             crate::Error::Serialization(_)
             | crate::Error::Deserialization(_)
             | crate::Error::Codec(_) => Self::CodecError,
@@ -437,6 +440,8 @@ pub struct Events {
 
 struct EventHub {
     sender: broadcast::Sender<CacheEvent>,
+    layers: OnceLock<broadcast::Sender<LayerEvent>>,
+    capacity: usize,
     plugins: OnceLock<Weak<PluginHostInner>>,
 }
 
@@ -482,6 +487,34 @@ impl EventSubscription {
     }
 }
 
+/// A component event stream whose loss accounting survives buffer lag.
+#[derive(Debug)]
+pub struct LayerEventSubscription {
+    receiver: broadcast::Receiver<LayerEvent>,
+    lost_events: u64,
+}
+
+impl LayerEventSubscription {
+    /// Receives the next component fact, continuing after lag.
+    pub async fn recv(&mut self) -> Result<LayerEvent, EventStreamClosed> {
+        loop {
+            match self.receiver.recv().await {
+                Ok(event) => return Ok(event),
+                Err(broadcast::error::RecvError::Lagged(lost)) => {
+                    self.lost_events = self.lost_events.saturating_add(lost);
+                }
+                Err(broadcast::error::RecvError::Closed) => return Err(EventStreamClosed),
+            }
+        }
+    }
+
+    /// Total facts lost while this receiver was lagging.
+    #[must_use]
+    pub fn lost_events(&self) -> u64 {
+        self.lost_events
+    }
+}
+
 impl Events {
     /// Creates a hub with the given subscriber buffer capacity.
     #[must_use]
@@ -490,6 +523,8 @@ impl Events {
         Self {
             inner: Arc::new(EventHub {
                 sender,
+                layers: OnceLock::new(),
+                capacity: capacity.max(1),
                 plugins: OnceLock::new(),
             }),
         }
@@ -511,6 +546,46 @@ impl Events {
         EventSubscription {
             receiver: self.subscribe(),
             lost_events: 0,
+        }
+    }
+
+    /// Subscribes to physical component facts without changing the existing
+    /// logical stream or inline plugin callbacks. The channel is allocated only
+    /// on subscription; keys/payloads are built only while it has receivers.
+    #[must_use]
+    pub fn subscribe_layers(&self) -> broadcast::Receiver<LayerEvent> {
+        self.inner
+            .layers
+            .get_or_init(|| {
+                let (sender, _) = broadcast::channel(self.inner.capacity);
+                sender
+            })
+            .subscribe()
+    }
+
+    /// Subscribes to component facts with lag recovery and explicit loss counts.
+    #[must_use]
+    pub fn subscribe_layers_resilient(&self) -> LayerEventSubscription {
+        LayerEventSubscription {
+            receiver: self.subscribe_layers(),
+            lost_events: 0,
+        }
+    }
+
+    /// Emits a component fact to its independent stream. Zero receivers is a
+    /// normal lifecycle outcome. Inline logical plugin dispatch is unchanged.
+    pub fn emit_layer(&self, event: LayerEvent) -> usize {
+        self.inner
+            .layers
+            .get()
+            .map_or(0, |sender| sender.send(event).unwrap_or(0))
+    }
+
+    pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
+        if let Some(sender) = self.inner.layers.get()
+            && sender.receiver_count() > 0
+        {
+            let _ = sender.send(make());
         }
     }
 
@@ -576,5 +651,35 @@ impl std::fmt::Debug for Events {
 impl Default for Events {
     fn default() -> Self {
         Self::with_capacity(256)
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    #[test]
+    fn layer_payloads_are_lazy_and_late_subscription_sees_only_new_facts() {
+        let hub = Events::default();
+        hub.emit_layer_lazy(|| panic!("no receiver must not build a payload"));
+        assert!(hub.inner.layers.get().is_none());
+        let mut receiver = hub.subscribe_layers();
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        hub.emit_layer_lazy(|| {
+            LayerEvent::Memory(MemoryEvent::Miss {
+                key: Arc::from("after"),
+            })
+        });
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            LayerEvent::Memory(MemoryEvent::Miss {
+                key: Arc::from("after")
+            })
+        );
+        drop(receiver);
+        hub.emit_layer_lazy(|| panic!("last receiver dropped must not build a payload"));
     }
 }
