@@ -77,6 +77,8 @@ for index = 1, #fields, 2 do
     redis.call('hdel', KEYS[1], fields[index])
   end
 end
+-- A requested hard clear already is the promoted fence; publish it only once.
+if ARGV[2] == 'r' then return {through, ''} end
 return {revision, through}
 "#;
 

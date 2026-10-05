@@ -422,6 +422,12 @@ impl MarkerState {
         let clear_remove = self.clear_remove.map_or(through, |old| old.max(through));
         self.clear_remove = Some(clear_remove);
         self.tags.retain(|_, at| *at > clear_remove);
+        if *marker.kind() == MarkerKind::ClearRemove {
+            return MarkerAdvanceOutcome::Advanced(StoredMarker::new(
+                MarkerKind::ClearRemove,
+                clear_remove,
+            ));
+        }
         MarkerAdvanceOutcome::Compacted {
             marker,
             clear_remove,
@@ -589,6 +595,35 @@ mod tests {
             registry.evaluate(at, &[Tag::new("a").unwrap()], RemoveByTagBehavior::Expire),
             TagVerdict::Remove
         );
+    }
+
+    #[test]
+    fn lowered_capacity_clear_reports_one_actual_maximum() {
+        for candidate in [10, 30] {
+            let mut state = MarkerState::default();
+            for (tag, ticks) in [("one", 20), ("two", 21)] {
+                state.advance(
+                    MarkerKind::Tag(Tag::new(tag).unwrap()),
+                    MarkerVersion::new(Timestamp::from_ticks(ticks)),
+                    2,
+                );
+            }
+            let outcome = state.advance(
+                MarkerKind::ClearRemove,
+                MarkerVersion::new(Timestamp::from_ticks(candidate)),
+                1,
+            );
+            assert_eq!(
+                Some(outcome.marker().version()),
+                state.read(&MarkerKind::ClearRemove)
+            );
+            assert_eq!(
+                outcome.marker().version().timestamp().ticks(),
+                candidate.max(21)
+            );
+            assert!(matches!(outcome, MarkerAdvanceOutcome::Advanced(_)));
+            assert_eq!(state.tag_count(), 0);
+        }
     }
 
     #[test]
