@@ -481,8 +481,9 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                 cache.run_pending_tasks().await;
             }
             Backend::Retained(store) => {
-                let expired =
-                    lock(store).remove_expired(self.clock.as_ref().map(|clock| clock.now()));
+                // A supplied clock can reenter storage. Sample it before the guard.
+                let now = self.clock.as_ref().map(|clock| clock.now());
+                let expired = { lock(store).remove_expired(now) };
                 for retired in expired {
                     self.retire(retired);
                 }

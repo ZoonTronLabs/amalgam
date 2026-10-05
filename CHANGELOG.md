@@ -5,6 +5,9 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+- Sample custom L1 maintenance clocks before taking the retention mutex, so a clock can safely reenter storage. A public regression checks actual completion.
+
+
 ### Added
 
 - Native `BlockingCache` and `BlockingRuntime` share cache state, coalescing, providers and final-owner lifetime with the async view. Caller-thread factories, bounded offloaded callbacks, cancellation, actual mutation receipts and awaited shutdown are supported; see `docs/SYNC.md` for explicit limits and reference differences.
