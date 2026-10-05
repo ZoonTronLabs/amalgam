@@ -26,6 +26,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Observed operations transfer owned work before awaiting, keeping lookup futures small. Background pipelines start their owned receipt scope directly instead of embedding an unused foreground receipt future. Cancellation, completion events and shutdown drainage retain the same ownership.
+
 - Cache orchestration is split into private API, builder, read, write, marker, recovery and runtime modules. Public `cache::Cache`/`cache::CacheBuilder` paths and cache field layout are preserved; see `docs/CACHE_INTERNALS.md`.
 
 - Tag/clear operations now use separate marker defaults with foreground backplane completion rather than ordinary value defaults or key providers. Explicit operation options still take precedence. Durable marker lifetime is unchanged.

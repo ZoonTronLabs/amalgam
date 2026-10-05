@@ -3,9 +3,9 @@ use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
     DistributedCache, DistributedExpirePolicy, DistributedLocker, EntryOptions, Error, Events,
-    FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, FactoryProduct, Future,
-    InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LookupKey, LookupMode, LookupStart,
-    MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MutationReceipt,
+    Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, FactoryProduct,
+    Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LookupKey, LookupMode,
+    LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MutationReceipt,
     ObservationAdmission, Observed, OperationObservation, OperationOutcome, Ordering, OriginKind,
     Pin, Plugin, ReadyLookup, ReadyValue, ReplayTicket, Result, ShutdownReport, Storage, Tag,
     TagVerdict, Worker, drive,
@@ -151,71 +151,76 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.execute_observed(observation, token, source, ObservationAdmission::New, work)
             .await
     }
-    async fn execute_observed<T: Send + 'static>(
+    fn execute_observed<T: Send + 'static>(
         &self,
         mut observation: OperationObservation,
         token: Option<FactoryCancellation>,
         source: CancellationSource,
         admission: ObservationAdmission<'_>,
         work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
-    ) -> Result<T> {
-        let span = observation.span();
-        if self.inner.scopes.is_closed() {
-            drop(work);
-            observation.finish(OperationOutcome::from_error(&Error::CacheClosed));
-            return Err(Error::CacheClosed);
-        }
-        self.worker().start_maintenance();
-        let worker = self.worker();
-        let completion_token = source.token();
-        // The scope owns the observer too: a parked caller can be cancelled and
-        // finish its logical observation without polling its future again.
-        let execution = self.inner.scopes.execution(
-            async move {
-                if worker.inner.wait_for_initial_backplane_subscribe
-                    && !worker.inner.subscription_admitted.load(Ordering::Acquire)
-                {
-                    if let Err(error) = worker.await_readiness().await {
-                        observation.finish(OperationOutcome::from_error(&error));
-                        return Err(error);
-                    }
-                    worker
-                        .inner
-                        .subscription_admitted
-                        .store(true, Ordering::Release);
-                }
-                let result = work.await;
-                // Synchronous completion/destruction can close or explicitly
-                // cancel this scope while it is polling. Attribute that reason
-                // before finishing its single logical observation.
-                let result = match completion_token.reason() {
-                    Some(reason) => Err(Error::OperationCancelled { reason }),
-                    None => result,
-                };
-                match result {
-                    Ok(result) => {
-                        if let Some(level) = result.level {
-                            observation.set_level(level);
-                        }
-                        observation.finish(result.outcome);
-                        Ok(result.value)
-                    }
-                    Err(error) => {
-                        observation.finish(OperationOutcome::from_error(&error));
-                        Err(error)
-                    }
-                }
+    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        // Transfer the large cold-path work into its owned scope before
+        // creating the small observer future stored in a caller's state.
+        let prepared: Result<Execution<T>> = (|| {
+            let span = observation.span();
+            if self.inner.scopes.is_closed() {
+                drop(work);
+                observation.finish(OperationOutcome::from_error(&Error::CacheClosed));
+                return Err(Error::CacheClosed);
             }
-            .instrument(span),
-            source,
-        );
-        // Registration owns the observer and all caller work before the ready
-        // path's permit is released, closing the transfer gap against shutdown.
-        match admission {
-            ObservationAdmission::New => {}
-            ObservationAdmission::Inline(permit) => drop(permit),
-        }
-        drive(execution, token).await
+            self.worker().start_maintenance();
+            let worker = self.worker();
+            let completion_token = source.token();
+            // The scope owns the observer too: a parked caller can be cancelled and
+            // finish its logical observation without polling its future again.
+            let execution = self.inner.scopes.execution(
+                async move {
+                    if worker.inner.wait_for_initial_backplane_subscribe
+                        && !worker.inner.subscription_admitted.load(Ordering::Acquire)
+                    {
+                        if let Err(error) = worker.await_readiness().await {
+                            observation.finish(OperationOutcome::from_error(&error));
+                            return Err(error);
+                        }
+                        worker
+                            .inner
+                            .subscription_admitted
+                            .store(true, Ordering::Release);
+                    }
+                    let result = work.await;
+                    // Synchronous completion/destruction can close or explicitly
+                    // cancel this scope while it is polling. Attribute that reason
+                    // before finishing its single logical observation.
+                    let result = match completion_token.reason() {
+                        Some(reason) => Err(Error::OperationCancelled { reason }),
+                        None => result,
+                    };
+                    match result {
+                        Ok(result) => {
+                            if let Some(level) = result.level {
+                                observation.set_level(level);
+                            }
+                            observation.finish(result.outcome);
+                            Ok(result.value)
+                        }
+                        Err(error) => {
+                            observation.finish(OperationOutcome::from_error(&error));
+                            Err(error)
+                        }
+                    }
+                }
+                .instrument(span),
+                source,
+            );
+            // Registration owns the observer and all caller work before the ready
+            // path's permit is released, closing the transfer gap against shutdown.
+            match admission {
+                ObservationAdmission::New => {}
+                ObservationAdmission::Inline(permit) => drop(permit),
+            }
+            Ok(execution)
+        })();
+        async move { drive(prepared?, token).await }
     }
     fn start_lookup<'a>(
         &'a self,

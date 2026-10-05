@@ -23,6 +23,29 @@ fn ordinary_mutation_futures_fit_within_a_small_stack_budget() {
     }
 }
 
+#[test]
+fn ordinary_lookup_futures_fit_within_a_small_stack_budget() {
+    let cache: Cache<u64> = Cache::builder().try_build().unwrap();
+    const MAX_FUTURE_BYTES: usize = 4 * 1024;
+    let sizes = [
+        ("read", size_of_val(&cache.read("x", None))),
+        (
+            "get_or_set",
+            size_of_val(&cache.get_or_set("x", |ctx| std::future::ready(Ok(ctx.value(42))))),
+        ),
+        (
+            "get_or_set_value",
+            size_of_val(&cache.get_or_set_value("x", 42, None)),
+        ),
+    ];
+    for (operation, size) in sizes {
+        assert!(
+            size <= MAX_FUTURE_BYTES,
+            "{operation} embeds {size} bytes before even reading L1; budget {MAX_FUTURE_BYTES}"
+        );
+    }
+}
+
 #[tracing::instrument(skip_all)]
 async fn refresh(cache: &Cache<u64>, value: u64) {
     cache.set("x", value).await;

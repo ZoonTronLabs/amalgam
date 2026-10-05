@@ -191,18 +191,23 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         work: impl Future<Output = Result<CommitReport>> + Send + 'static,
     ) -> Result<MutationReceipt> {
         match mode {
-            CommitMode::Background => {
-                let execution = self.inner.scopes.execution(work, CancellationSource::new());
-                let receiver = self.inner.tasks.spawn(
-                    ShutdownTask::Distributed,
-                    key,
-                    self.inner.events.clone(),
-                    execution,
-                );
-                Ok(MutationReceipt::Scheduled(CommitCompletion { receiver }))
-            }
+            CommitMode::Background => Ok(self.schedule_receipt(key, work)),
             CommitMode::Foreground => Ok(MutationReceipt::Completed(work.await?)),
         }
+    }
+    fn schedule_receipt(
+        &self,
+        key: Arc<str>,
+        work: impl Future<Output = Result<CommitReport>> + Send + 'static,
+    ) -> MutationReceipt {
+        let execution = self.inner.scopes.execution(work, CancellationSource::new());
+        let receiver = self.inner.tasks.spawn(
+            ShutdownTask::Distributed,
+            key,
+            self.inner.events.clone(),
+            execution,
+        );
+        MutationReceipt::Scheduled(CommitCompletion { receiver })
     }
     pub(super) async fn write_data(
         &self,
@@ -491,11 +496,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         work: impl Future<Output = Result<MutationReceipt>> + Send + 'static,
     ) -> Result<MutationReceipt> {
         match mode {
+            // Starting an owned background scope does not suspend. Keep the
+            // unused foreground receipt future out of this operation's state.
             CommitMode::Background => {
-                self.commit_receipt(key, CommitMode::Background, async move {
-                    work.await?.wait().await
-                })
-                .await
+                Ok(self.schedule_receipt(key, async move { work.await?.wait().await }))
             }
             CommitMode::Foreground => work.await,
         }
