@@ -119,7 +119,7 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 
 The default distributed namespace is **v2 with Prefix**. New codecs read legacy raw payloads, but running 0.2 nodes cannot read 0.3 framed snapshots. Use a coordinated fresh namespace. `KeyModifierMode::None` or intentional reuse of v1 requires a fresh physical prefix or a coordinated migration; it does not make a mixed-version rollout safe.
 
-See [migration and tested FusionCache contract](docs/PARITY.md), [validation and limits](docs/AUDIT.md), [porting design](PORTING.md), [examples](examples) and the [changelog](CHANGELOG.md). These documents describe supported contracts and evidence; they do not claim universal one-to-one parity or equal performance for every workload.
+See [migration and tested FusionCache contract](docs/PARITY.md), [validation and limits](docs/AUDIT.md), [porting design](PORTING.md), [examples](examples), [cache internals](docs/CACHE_INTERNALS.md) and the [changelog](CHANGELOG.md). These documents describe supported contracts and evidence; they do not claim universal one-to-one parity or equal performance for every workload.
 
 ## Acknowledgements
 

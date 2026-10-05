@@ -10,7 +10,7 @@ on [Keep a Changelog](https://keepachangelog.com/).
 - Factory original key, current tags and stale tags; instance/provider inspection.
 - Independent tag/clear defaults (`tags_default_options`) and default policy factory.
 - Opt-in `MarkerReadPolicy::OptionsControlled`: independent secondary read options and observation bounds, per-marker deadlines/cancellation, typed control authority and peer-command events. CAS admission preserves newer facts, continuity fences reject old observations, and control checks stop at the first invalidation; see the field matrix in `docs/MARKER_READS.md`.
-- Additional `MarkerLifecyclePolicy::CachedSnapshots`: validated expiring control observations, an optional atomic provider facet, nonzero miss/stale repair, independent L1/L2 lifetimes and zero factory budgets. Native memory/Redis renewals preserve newer facts and snapshot ages; Redis uses real TTL and exact integer frames. Foreground/background writes retain owned cancellation and drainage, original fault causes, finite outcome events and metrics. Durable journal facts never expire; marker eager, locker orchestration and recovery remain open.
+- Additional `MarkerLifecyclePolicy::CachedSnapshots`: validated expiring control observations, an optional atomic provider facet, nonzero miss/stale repair, independent L1/L2 lifetimes and zero factory budgets. Native memory/Redis renewals preserve newer facts and snapshot ages; Redis uses real TTL and exact integer frames. Foreground/background writes retain owned cancellation and drainage, original fault causes, finite outcome events and metrics. Durable journal facts never expire; marker eager, late completion, recovery and remaining read/locker combinations remain open. Participating repair now owns independent scoped acquisition, peer recheck and foreground/background release; strict repair cannot admit fresh L1 authority before atomic fencing succeeds.
 - Async complete-snapshot serializer contract and explicit sync/async preference, used by all L2/expire/replay paths. Existing synchronous codec implementations and snapshot overrides remain supported.
 - Additive cooperative snapshot-codec hooks and `FactoryCancellation::check`. Every codec receives its owned operation signal; a linked L2 deadline scope publishes the exact timeout before dropping work without cancelling a later origin. Background factory/eager/passive/replay signals survive caller completion and end on owned shutdown.
 - Cancellation returned by a codec is always propagated, independently of serialization/transport suppression policies; synchronous callbacks cannot commit after cancelling their caller.
@@ -22,6 +22,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 - Per-key providers can derive options from the owning cache's current default snapshot using `options_for_with_defaults`; legacy hooks remain supported.
 
 ### Changed
+
+- Cache orchestration is split into private API, builder, read, write, marker, recovery and runtime modules. Public `cache::Cache`/`cache::CacheBuilder` paths and cache field layout are preserved; see `docs/CACHE_INTERNALS.md`.
 
 - Tag/clear operations now use separate marker defaults with foreground backplane completion rather than ordinary value defaults or key providers. Explicit operation options still take precedence. Durable marker lifetime is unchanged.
 - Ready hits avoid key/event materialization without listeners; late plugin attachment during user callbacks remains observable.

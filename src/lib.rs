@@ -38,6 +38,7 @@ mod execution;
 pub mod factory;
 mod lifecycle;
 pub mod locking;
+mod marker_leases;
 pub mod marker_reads;
 pub mod marker_snapshots;
 pub mod maybe;

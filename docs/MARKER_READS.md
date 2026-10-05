@@ -100,8 +100,11 @@ use the same expiring cache as tags.
 The default `MarkerLifecyclePolicy::DurableOnly` does not run a secondary marker
 factory. Opt-in [CachedSnapshots](MARKER_SNAPSHOTS.md) adds nonzero renewal/repair,
 independent remote deadlines, zero factory-budget handling and owned foreground/
-background writes. Marker eager refresh, distributed locking, late factory
-completion and snapshot recovery remain open. EagerRefreshThreshold metadata
+background writes. Participating marker repair now has separately owned
+distributed acquisition/recheck/release with independent tag defaults; see
+[the ownership contract](MARKER_SNAPSHOTS.md#marker-repair-ownership). Marker eager
+refresh, late factory completion, snapshot recovery and the remaining skip/fault
+combinations remain open. EagerRefreshThreshold metadata
 alone does not start a marker eager refresh. SkipAutoCloneForImmutableObjects
 does not force an ordinary value serializer over typed markers.
 

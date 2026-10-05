@@ -40,9 +40,9 @@ platform-only simply to close the inventory:
 | Full per-layer event surface | Missing distinct layer hit/miss/set/remove, memory expire, complete eviction/backplane payloads |
 | Plugin access to cache operations | Context supplies identity/events/stop state |
 | Logging/tracing/metrics configuration | Category levels, optional tags and full native OTel metric integration incomplete |
-| Optional distributed-expire-on-backplane-recovery | Exact replay policy only |
+| Supported automatic backplane recovery | Retry-stage/expiry behavior still needs complete comparison. The old `EnableDistributedExpireOnBackplaneAutoRecovery` switch is inactive and `Obsolete(IsError=true)` in official2.9 source and released static DLL metadata; it is not a missing active option |
 | Portable tag/clear over a byte-only store | Requires separate genuine atomic InvalidationStore |
-| Full marker factory/renewal options | Independent reads and optional expiring snapshot renewal/repair are implemented. Marker eager/late factory, distributed locker orchestration, snapshot recovery and the remaining option combinations are open. Durable facts deliberately never expire |
+| Full marker factory/renewal options | Independent reads and optional expiring snapshot renewal/repair are implemented. Participating repair has owned acquisition/recheck/fenced renewal/release, with `marker_locker_contract` and mandatory `marker_locker_redis` evidence. Marker eager/late factory, snapshot recovery and the remaining skipped/failed read plus locker combinations are open. Durable facts deliberately never expire |
 | Full option-combination evidence | Stale-layer skips and locker degradation/bypass need a larger public matrix |
 
 .NET ABI, Microsoft service containers, HybridCache and ASP.NET OutputCaching

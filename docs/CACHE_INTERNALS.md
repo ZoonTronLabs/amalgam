@@ -1,0 +1,31 @@
+# Cache implementation layout
+
+The public cache remains `amalgam::Cache<V>` and `amalgam::cache::Cache<V>`.
+The builder is re-exported at its existing paths. Its implementation is split
+into private modules so complete workflows can be read and reviewed together.
+
+| File | Responsibility |
+|---|---|
+| [cache.rs](../src/cache.rs) | Public handles, shared private states and common operation policies |
+| [api.rs](../src/cache/api.rs) | Public calls, ready-hit admission and observed execution boundaries |
+| [builder.rs](../src/cache/builder.rs) | Configuration, invariant validation and construction |
+| [read.rs](../src/cache/read.rs) | Value reads, origin ownership, fail-safe and eager refresh |
+| [write.rs](../src/cache/write.rs) | Value mutation admission and owned commit pipelines |
+| [markers.rs](../src/cache/markers.rs) | Tag/clear observations, scoped repair ownership and marker mutations |
+| [recovery.rs](../src/cache/recovery.rs) | Captured stage-aware mutation replay |
+| [runtime.rs](../src/cache/runtime.rs) | Backplane continuity, maintenance and deterministic shutdown |
+
+Group new code by the workflow it implements. An arbitrary line-count split
+would scatter decisions about the same operation. Module boundaries are for
+navigation and responsibility; they do not create another runtime layer or
+establish a performance improvement.
+
+Keep shared closed states near their consumers; expose internal methods only
+within this cache module when another workflow needs them. Extensible provider
+behavior continues to use the existing traits. Avoid adding a parallel public
+cache API or a public handle inside owned workers.
+
+The mechanical extraction preserves operation bodies, closed states and
+`CacheInner` fields. Existing contract/stack tests, mandatory native acceptance,
+packaged consumers and separate release measurements verify each resulting
+checkpoint. Merely having smaller files does not prove full FusionCache parity.
