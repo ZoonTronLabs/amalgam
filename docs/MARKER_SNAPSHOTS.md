@@ -155,16 +155,84 @@ without a locker/backplane. FusionCache's RequiresDistributedOperations disables
 that write when no such component participates. Neither path invents a remote zero.
 Amalgam's permanent journal and owned eager cancellation remain explicit differences.
 
+## Original-policy population and recovery candidate
+
+The current main working tree additionally populates snapshots after explicit
+tag/clear advancement. It captures the original mutation options and creation
+time, including when distributed execution is deferred. Retry cannot renew the
+original absolute physical deadline. A finite snapshot repair never advances or
+publishes an invalidation; the permanent journal obligation remains independent.
+
+Captured durable work uses closed Advance, Populate and Notify stages. An atomic
+advance retains its actual maximum and any compacted clear before provider
+population. Storage errors on retry stay errors, irrespective of the original
+suppression flags; only real failures consume the retry budget. Notification
+retry cannot redo an acknowledged durable advance or snapshot population.
+Expired observations skip provider I/O while the committed fact can still be
+published. Disabled recovery, skipped writes and rejected admission remain
+explicit outcomes, retaining original failure causes in receipts.
+
+Superseding a tag ticket retains a pending committed global clear. A validating
+factory admits at most one inherited clear with no further inherited child, so
+this obligation does not create an unbounded tree or another tracking map. Its
+original age/options and population/notification stage remain independent from
+the newer tag operation. Exact queue identities still prevent an older completion
+from deleting or decrementing its replacement.
+
+A failed fenced factory renewal captures authority participation rather than an
+expired lease. Retry must reacquire a fresh token, atomically renew under its
+actual proof, and release that token. Explicit population carries its actual
+owned mutation cancellation source; background handoff preserves ownership, and
+shutdown reaches the real provider signal before the future is dropped.
+
+`marker_recovery_contract` and the additional `marker_locker_contract` probe
+exercise these candidate behaviors through public cache/provider APIs. Shutdown,
+durable supersession and notification-only supersession probes reproduced faults
+before fixes. A newer notification, including after a strict population failure,
+retains the previous committed clear within the same single queue slot. Failed
+inherited publication remains notification-only and does not redo population.
+
+Mandatory `marker_recovery_redis` injects genuine wrong-type and malformed-frame
+failures into unique native Redis keys. Tag and both clear modes preserve their
+durable fact; replay keeps original age and uses actual remaining backend TTL.
+`marker_locker_redis` also verifies a failed fenced repair reacquires a new native
+token and releases it without extending the original deadlines.
+
+An independent executable oracle using the released FusionCache 2.9 binary and
+only public cache/provider/serializer APIs passed eleven population/recovery
+scenarios: tag and both clear modes, captured policy/age, strict and suppressed
+faults, disabled recovery, write exclusion, expiry, same-key replacement and read
+exclusion with/without a backplane. Several guarantees deliberately improve on
+that reference:
+
+- FusionCache preserves logical age during replay but renews physical backend
+  expiration; Amalgam retains the original absolute physical deadline.
+- A strict FusionCache distributed write throw does not enqueue that failed
+  write; Amalgam preserves recovery before returning the original typed cause.
+- FusionCache defers invalidation notification after failed marker storage.
+  Amalgam can notify after the independent permanent fact has committed even if
+  its expendable snapshot fails.
+- With distributed reads excluded, FusionCache's replay can skip a failed marker
+  write and publish only its notification. Amalgam keeps write repair independent
+  of read exclusion.
+
+These are deliberate behavioral differences, not evidence of exact equivalence.
+Complete archive/performance/delivery validation remains required; new evidence
+is not reassigned to previously pushed source651e5b8 or its CI/performance.
+
+`RecoveryWork` and `RecoveryError` have new closed variants; downstream exhaustive
+matches must be deliberately updated. RecoveryAction, RecoveryItem and MarkerReplay
+remain unchanged. Legacy custom executors reject typed marker work explicitly.
+All additions remain unreleased; no registry/consumer rollout is implied.
+
 ## Remaining contract
 
-Snapshot recovery replay/population and the remaining factory-budget/read/locker
-option combinations remain open. The shared factory is a pure immediate selection;
-there is no public replaceable delayed marker callback. Explicit
-tag/clear mutations keep the existing durable mutation/backplane protocol and
-do not immediately populate this remote snapshot namespace. Timestamp equality
-uses Amalgam's existing expiration boundary. These limits and permanent facts
-are deliberate distinctions from FusionCache 2.9, whose control entries can
-physically expire. This feature does not establish full FusionCache parity.
+Complete source/archive/native-provider/reference/performance verification of
+the recovery candidate and the remaining factory-budget/read/locker matrix remain
+open. The shared factory is a pure immediate selection, with no public replaceable
+delayed marker callback. Timestamp equality uses Amalgam's existing expiration
+boundary. Permanent facts deliberately differ from FusionCache 2.9, whose control
+entries can physically expire. This feature does not establish full parity.
 
 Public `marker_snapshot_contract` probes cover deadlines, repair, physical
 expiration, absent results, fault flags/causes, race admission, cancellation,

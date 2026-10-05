@@ -262,6 +262,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }
                 Ok(ReplayOutcome::Applied)
             }
+            RecoveryWork::MarkerMutation(work) => {
+                self.replay_marker_mutation(&ticket, work, cancellation)
+                    .await
+            }
+            RecoveryWork::MarkerSnapshot(work) => {
+                self.replay_marker_snapshot(&ticket, work, cancellation)
+                    .await
+            }
             RecoveryWork::Marker { command, stage } => {
                 let _lane_guard = Arc::clone(&self.inner.marker_lane).lock_owned().await;
                 if !recovery.is_current(&ticket) {

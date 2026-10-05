@@ -47,6 +47,7 @@ impl Gate {
 #[derive(Clone)]
 enum Write {
     Pass,
+    Backend,
     Park(Arc<Gate>),
 }
 struct Snapshots {
@@ -102,6 +103,12 @@ impl MarkerSnapshotCache for Snapshots {
             let mode = self.write.lock().unwrap().clone();
             match mode {
                 Write::Pass => {}
+                Write::Backend => {
+                    return Err(MarkerError::backend(std::io::Error::other(
+                        "injected fenced population failure",
+                    ))
+                    .into());
+                }
                 Write::Park(gate) => gate.park().await,
             }
         }
@@ -378,5 +385,61 @@ async fn native_eager_returns_before_fenced_write_and_releases_actual_redis_toke
         f.store.read(&f.scope, &kind()).await.unwrap(),
         Some(MarkerVersion::new(time(1)))
     );
+    f.cache.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_failed_repair_reacquires_token_and_preserves_original_deadlines() {
+    let Some(url) = support::redis_fixture::redis_url() else {
+        return;
+    };
+    let f = fixture_with_options(
+        &url,
+        "recovery",
+        EntryOptions::tag_defaults()
+            .with_memory_duration(Duration::from_secs(2))
+            .with_distributed_duration(Duration::from_secs(5))
+            .with_fail_safe(false, None, None)
+            .with_skip_distributed_locker(false)
+            .with_rethrow_distributed_exceptions(false),
+    )
+    .await;
+    *f.store.snapshots.write.lock().unwrap() = Write::Backend;
+    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    let original = f.store.snapshots.last_proof();
+    let queued = f.cache.marker_snapshot_recovery_ticket(&kind()).unwrap();
+    let RecoveryWork::MarkerSnapshot(work) = queued.work() else {
+        panic!("snapshot work required");
+    };
+    assert_eq!(work.participation(), MarkerSnapshotParticipation::Fenced);
+    assert_eq!(work.snapshot().created(), time(10));
+    assert_eq!(work.snapshot().physical_expiration(), time(15));
+    let next = replacement(&f, &original).await;
+    next.release().await.unwrap();
+    f.clock.set(time(12));
+    *f.store.snapshots.write.lock().unwrap() = Write::Pass;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while f.cache.pending_recovery() != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let repaired = f
+        .store
+        .snapshots
+        .inner
+        .read_snapshot(&f.scope, &kind(), time(12), token())
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_eq!(repaired.version(), MarkerVersion::new(time(1)));
+    assert_eq!(repaired.created(), time(10));
+    assert_eq!(repaired.logical_expiration(), time(15));
+    assert_eq!(repaired.physical_expiration(), time(15));
+    assert_ne!(f.store.snapshots.last_proof().token(), original.token());
+    let next = replacement(&f, &f.store.snapshots.last_proof()).await;
+    next.release().await.unwrap();
     f.cache.shutdown().await.unwrap();
 }

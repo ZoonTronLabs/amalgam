@@ -105,6 +105,20 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             .as_ref()
             .and_then(|recovery| recovery.snapshot(&key))
     }
+    /// Immutable pending tag/clear durable, observation-population or notification stage.
+    pub fn marker_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
+        self.inner
+            .recovery
+            .as_ref()
+            .and_then(|recovery| recovery.marker_work(&self.inner.scope, kind))
+    }
+    /// Immutable finite observation repair, distinct from durable tag/clear work.
+    pub fn marker_snapshot_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
+        self.inner
+            .recovery
+            .as_ref()
+            .and_then(|recovery| recovery.marker_snapshot_work(&self.inner.scope, kind))
+    }
     pub(super) fn worker(&self) -> Worker<V> {
         Worker {
             inner: Arc::clone(&self.inner),
@@ -117,24 +131,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             Arc::from(raw)
         };
         LookupKey { raw, full }
-    }
-    fn observed<T: Send + 'static>(
-        &self,
-        operation: CacheOperation,
-        key: Option<Arc<str>>,
-        token: Option<FactoryCancellation>,
-        work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
-    ) -> impl Future<Output = Result<T>> + Send + '_ {
-        // The scope will own this work on the heap. Erase it before composing
-        // the observer futures, so callers do not embed the complete mutation
-        // state machine in every async adapter and tracing layer.
-        self.observed_using(
-            operation,
-            key,
-            token,
-            CancellationSource::new(),
-            Box::pin(work),
-        )
     }
     async fn observed_using<T: Send + 'static>(
         &self,
@@ -1002,9 +998,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<FactoryCancellation>,
     ) -> Result<MutationReceipt> {
         let worker = self.worker();
-        self.observed(operation, None, token, async move {
-            worker.mutate_markers(kinds, options).await
-        })
+        let source = CancellationSource::new();
+        let cancellation = source.token();
+        self.observed_using(
+            operation,
+            None,
+            token,
+            source,
+            Box::pin(async move { worker.mutate_markers(kinds, options, cancellation).await }),
+        )
         .await
     }
     /// Legacy raw-tag/unit adapter. Invalid requests are diagnosed.

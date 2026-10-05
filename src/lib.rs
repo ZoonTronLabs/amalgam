@@ -116,7 +116,8 @@ pub use plugins::{
     PluginStopOutcome,
 };
 pub use recovery::{
-    AutoRecoveryService, DataMutation, EnqueueOutcome, MarkerReplay, OperationGeneration,
+    AutoRecoveryService, DataMutation, EnqueueOutcome, MarkerMutationRecovery, MarkerMutationStage,
+    MarkerReplay, MarkerSnapshotParticipation, MarkerSnapshotReplay, OperationGeneration,
     PendingMutation, RecoveryAction, RecoveryConfig, RecoveryError, RecoveryExecutor,
     RecoveryFence, RecoveryId, RecoveryItem, RecoveryStageTransition, RecoveryStart, RecoveryWork,
     ReplayOutcome, ReplayTicket, SupersedeOutcome,

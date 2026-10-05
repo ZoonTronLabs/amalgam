@@ -17,6 +17,11 @@ use crate::error::Result;
 use crate::tags::{CacheScope, MarkerKind};
 use crate::time::{Clock, Timestamp};
 
+mod marker_snapshots;
+pub use marker_snapshots::{
+    MarkerMutationRecovery, MarkerMutationStage, MarkerSnapshotParticipation, MarkerSnapshotReplay,
+};
+
 /// The compatible legacy data replay discriminants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryAction {
@@ -91,6 +96,15 @@ pub enum RecoveryError {
     /// The old executor only knows the unchanged RecoveryItem data API.
     #[error("legacy recovery executor cannot replay typed marker work")]
     UnsupportedMarkerExecutor,
+    /// A repair cannot override an explicit exclusion of distributed writes.
+    #[error("marker repair cannot capture skipped snapshot writes")]
+    SnapshotWritesSkipped,
+    /// A stage transition changed the namespace, kind or committed revision.
+    #[error("marker recovery identity changed")]
+    MarkerIdentityChanged,
+    /// A requested transition does not follow the captured protocol stage.
+    #[error("invalid marker recovery stage transition")]
+    InvalidMarkerStage,
     /// A reconnect barrier cannot be represented safely.
     #[error("recovery barrier is outside the monotonic clock range")]
     InvalidBarrier,
@@ -248,6 +262,10 @@ pub enum RecoveryWork {
         /// The exact remaining protocol stage.
         stage: MarkerReplay,
     },
+    /// Captured mutation policy and exact durable/population/publication stage.
+    MarkerMutation(Arc<MarkerMutationRecovery>),
+    /// Expendable observation repair with its original absolute lifetime.
+    MarkerSnapshot(Arc<MarkerSnapshotReplay>),
 }
 
 impl RecoveryWork {
@@ -256,7 +274,7 @@ impl RecoveryWork {
     pub fn item(&self) -> Option<&RecoveryItem> {
         match self {
             Self::Data { item, .. } => Some(item),
-            Self::Marker { .. } => None,
+            Self::Marker { .. } | Self::MarkerMutation(_) | Self::MarkerSnapshot(_) => None,
         }
     }
 
@@ -266,6 +284,13 @@ impl RecoveryWork {
             Self::Marker { command, .. } => {
                 RecoveryKey::Marker(command.scope().clone(), command.marker().kind().clone())
             }
+            Self::MarkerMutation(work) => RecoveryKey::Marker(
+                work.command().scope().clone(),
+                work.command().marker().kind().clone(),
+            ),
+            Self::MarkerSnapshot(work) => {
+                RecoveryKey::MarkerSnapshot(work.scope().clone(), work.kind().clone())
+            }
         }
     }
 
@@ -273,13 +298,28 @@ impl RecoveryWork {
         match self {
             Self::Data { item, .. } => item.timestamp,
             Self::Marker { command, .. } => command.marker().version().timestamp(),
+            Self::MarkerMutation(work) => work.command().marker().version().timestamp(),
+            Self::MarkerSnapshot(work) => work.snapshot().version().timestamp(),
         }
     }
 
     fn expires_at(&self) -> Option<Timestamp> {
         match self {
             Self::Data { item, .. } => Some(item.expires_at),
-            Self::Marker { .. } => None,
+            Self::Marker { .. } | Self::MarkerMutation(_) => None,
+            Self::MarkerSnapshot(work) => Some(work.snapshot().physical_expiration()),
+        }
+    }
+
+    fn supersedes(&self, previous: &Self) -> bool {
+        match self {
+            Self::MarkerSnapshot(work) => match previous {
+                Self::MarkerSnapshot(previous) => work.snapshot().supersedes(previous.snapshot()),
+                Self::Data { .. } | Self::Marker { .. } | Self::MarkerMutation(_) => false,
+            },
+            Self::Data { .. } | Self::Marker { .. } | Self::MarkerMutation(_) => {
+                self.timestamp() > previous.timestamp()
+            }
         }
     }
 }
@@ -288,6 +328,7 @@ impl RecoveryWork {
 enum RecoveryKey {
     Data(Arc<str>),
     Marker(CacheScope, MarkerKind),
+    MarkerSnapshot(CacheScope, MarkerKind),
 }
 
 /// An exact queue identity, never reused even when the same key is replaced.
@@ -419,7 +460,11 @@ pub trait RecoveryExecutor: Send + Sync {
             RecoveryWork::Data { item, .. } => {
                 self.replay(item).await.map(|()| ReplayOutcome::Applied)
             }
-            RecoveryWork::Marker { .. } => Err(RecoveryError::UnsupportedMarkerExecutor.into()),
+            RecoveryWork::Marker { .. }
+            | RecoveryWork::MarkerMutation(_)
+            | RecoveryWork::MarkerSnapshot(_) => {
+                Err(RecoveryError::UnsupportedMarkerExecutor.into())
+            }
         }
     }
 }
@@ -582,9 +627,23 @@ impl AutoRecoveryService {
         self.enqueue_work(RecoveryWork::Marker { command, stage }, None)
     }
 
+    pub(crate) fn enqueue_marker_mutation(
+        &self,
+        work: MarkerMutationRecovery,
+    ) -> std::result::Result<EnqueueOutcome, RecoveryError> {
+        self.enqueue_work(RecoveryWork::MarkerMutation(Arc::new(work)), None)
+    }
+
+    pub(crate) fn enqueue_marker_snapshot(
+        &self,
+        work: MarkerSnapshotReplay,
+    ) -> std::result::Result<EnqueueOutcome, RecoveryError> {
+        self.enqueue_work(RecoveryWork::MarkerSnapshot(Arc::new(work)), None)
+    }
+
     fn enqueue_work(
         &self,
-        work: RecoveryWork,
+        mut work: RecoveryWork,
         fence: Option<Arc<dyn RecoveryFence>>,
     ) -> std::result::Result<EnqueueOutcome, RecoveryError> {
         if !self.config.enabled {
@@ -624,10 +683,33 @@ impl AutoRecoveryService {
                 Some(generation) if existing.ticket.fence.is_some() => {
                     generation <= existing.ticket.generation
                 }
-                Some(_) | None => work.timestamp() <= existing.ticket.work.timestamp(),
+                Some(_) | None => !work.supersedes(&existing.ticket.work),
             };
             if older {
                 return Ok(EnqueueOutcome::Superseded);
+            }
+            if let RecoveryWork::MarkerMutation(previous) = &existing.ticket.work {
+                match &mut work {
+                    RecoveryWork::MarkerMutation(next) => {
+                        *next = Arc::new(next.inherit_compaction(previous)?);
+                    }
+                    RecoveryWork::Marker {
+                        command,
+                        stage: MarkerReplay::NotifyOnly,
+                    } => {
+                        let next = MarkerMutationRecovery::committed_notification(command.clone())
+                            .inherit_compaction(previous)?;
+                        if next.pending_compaction().is_some() {
+                            work = RecoveryWork::MarkerMutation(Arc::new(next));
+                        }
+                    }
+                    RecoveryWork::Data { .. }
+                    | RecoveryWork::Marker {
+                        stage: MarkerReplay::AdvanceOnly | MarkerReplay::AdvanceAndNotify,
+                        ..
+                    }
+                    | RecoveryWork::MarkerSnapshot(_) => {}
+                }
             }
         }
         let replaced = queue.entries.contains_key(&key);
@@ -787,8 +869,68 @@ impl AutoRecoveryService {
                     return RecoveryStageTransition::Unchanged;
                 }
             },
+            RecoveryWork::MarkerMutation(work) => match work.stage() {
+                MarkerMutationStage::Populate { options, .. }
+                    if !options.skip_backplane_notifications() =>
+                {
+                    let Ok(next) = work.notification() else {
+                        return RecoveryStageTransition::Unchanged;
+                    };
+                    *work = Arc::new(next);
+                }
+                MarkerMutationStage::Advance { .. }
+                | MarkerMutationStage::Populate { .. }
+                | MarkerMutationStage::Notify { .. } => return RecoveryStageTransition::Unchanged,
+            },
+            RecoveryWork::MarkerSnapshot(_) => return RecoveryStageTransition::Unchanged,
         }
         RecoveryStageTransition::Advanced
+    }
+
+    pub(crate) fn marker_population_stage(
+        &self,
+        ticket: &ReplayTicket,
+        work: MarkerMutationRecovery,
+    ) -> RecoveryStageTransition {
+        let mut queue = self
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(queued) = queue
+            .entries
+            .get_mut(&ticket.work.key())
+            .filter(|queued| queued.ticket.id == ticket.id)
+        else {
+            return RecoveryStageTransition::Superseded;
+        };
+        queued.ticket.work = RecoveryWork::MarkerMutation(Arc::new(work));
+        RecoveryStageTransition::Advanced
+    }
+
+    /// Owned diagnostic snapshot of pending durable/population/publication work.
+    #[must_use]
+    pub fn marker_work(&self, scope: &CacheScope, kind: &MarkerKind) -> Option<ReplayTicket> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .get(&RecoveryKey::Marker(scope.clone(), kind.clone()))
+            .map(|queued| queued.ticket.clone())
+    }
+
+    /// Owned diagnostic snapshot of a finite observation repair, separate from durable work.
+    #[must_use]
+    pub fn marker_snapshot_work(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+    ) -> Option<ReplayTicket> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .get(&RecoveryKey::MarkerSnapshot(scope.clone(), kind.clone()))
+            .map(|queued| queued.ticket.clone())
     }
 
     /// Owned snapshot strongly retains the original lane across asynchronous work.

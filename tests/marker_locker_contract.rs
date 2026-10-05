@@ -69,6 +69,7 @@ enum Write {
     Pass,
     Park(Arc<Gate>),
     Unsupported,
+    Backend,
 }
 struct Snapshots {
     inner: InMemoryInvalidationStore,
@@ -110,6 +111,7 @@ impl Snapshots {
                 Write::Pass => {}
                 Write::Park(gate) => gate.park().await,
                 Write::Unsupported => return Err(LeaseError::UnsupportedFencing.into()),
+                Write::Backend => return Err(MarkerError::backend(Cause).into()),
             }
         }
         Ok(())
@@ -767,6 +769,11 @@ async fn skipped_read_still_runs_known_factory_and_independent_locker_or_write()
         )
         .await;
         seed_known_without_remote_read(&f).await;
+        let populated = f.store.snapshots.writes();
+        assert_eq!(
+            populated, 1,
+            "explicit tag mutation populates its observation"
+        );
         found(&f.cache).await;
         assert_eq!(
             f.store.snapshots.reads(),
@@ -775,8 +782,8 @@ async fn skipped_read_still_runs_known_factory_and_independent_locker_or_write()
         );
         assert_eq!(
             f.store.snapshots.writes(),
-            1,
-            "known revision renews despite skipped read"
+            populated + 1,
+            "known revision renews independently after explicit population"
         );
         assert_eq!(f.locker.acquisitions(), usize::from(!skip_locker));
         assert_eq!(f.locker.releases(), usize::from(!skip_locker));
@@ -1252,5 +1259,60 @@ async fn skip_when_stale_also_suppresses_eager_preflight_and_owned_recheck() {
         (snapshot.version(), snapshot.created()),
         (version(1), time(16))
     );
+    f.cache.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() {
+    let f = fixture(
+        options().with_rethrow_distributed_exceptions(false),
+        LeasePolicy::Fenced,
+        "marker-recovery",
+    )
+    .await;
+    *f.store.snapshots.mode.lock().unwrap() = Write::Backend;
+    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    let ticket = f.cache.marker_snapshot_recovery_ticket(&group()).unwrap();
+    let RecoveryWork::MarkerSnapshot(work) = ticket.work() else {
+        panic!("expected captured snapshot");
+    };
+    assert_eq!(work.participation(), MarkerSnapshotParticipation::Fenced);
+    let captured = work.snapshot();
+    let original_token = f.locker.last_tag().1;
+    assert_eq!(f.locker.releases(), 1);
+    f.clock.set(time(12));
+    *f.store.snapshots.mode.lock().unwrap() = Write::Pass;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while f.cache.pending_recovery() != 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_ne!(f.locker.last_tag().1, original_token);
+    assert_eq!(f.locker.releases(), 2);
+    assert!(
+        f.store
+            .snapshots
+            .writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(kind, _)| *kind == group())
+            .all(|(_, fenced)| *fenced)
+    );
+    let actual = f
+        .store
+        .snapshots
+        .inner
+        .read_snapshot(&scope("marker-recovery"), &group(), time(12), new_token())
+        .await
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    assert_eq!(actual.created(), captured.created());
+    assert_eq!(actual.logical_expiration(), captured.logical_expiration());
+    assert_eq!(actual.physical_expiration(), captured.physical_expiration());
     f.cache.shutdown().await.unwrap();
 }

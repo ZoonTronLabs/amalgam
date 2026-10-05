@@ -14,6 +14,16 @@ use super::{
 
 #[path = "marker_eager.rs"]
 mod eager;
+#[path = "marker_recovery.rs"]
+mod recovery;
+
+use crate::recovery::{MarkerMutationRecovery, MarkerSnapshotParticipation, MarkerSnapshotReplay};
+
+#[derive(Clone, Copy)]
+enum MarkerSnapshotWritePolicy {
+    Operation,
+    Replay,
+}
 
 #[derive(Clone, Copy)]
 enum MarkerFactoryRead {
@@ -82,6 +92,7 @@ enum MarkerLocalCommit {
 struct MarkerSnapshotCommit {
     kind: MarkerKind,
     snapshot: MarkerSnapshot,
+    options: EntryOptions,
     captured: u64,
     lease: MarkerLease,
     local: MarkerLocalCommit,
@@ -929,6 +940,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 MarkerSnapshotCommit {
                     kind: kind.clone(),
                     snapshot: MarkerSnapshot::fresh(version, options, created),
+                    options: options.clone(),
                     captured,
                     lease,
                     local,
@@ -1038,6 +1050,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let MarkerLifecycleAccess::CachedSnapshots(cache) = &observations.lifecycle else {
             return Ok(());
         };
+        let background = commit.options.allow_background_distributed_operations();
         let source = CancellationSource::new();
         let token = source.token();
         let worker = self.clone();
@@ -1045,17 +1058,21 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let key = MarkerObservations::key(&commit.kind);
         let execution = self.inner.scopes.execution(
             async move {
-                let result = worker.commit_control_snapshot(cache, &commit, token).await;
+                let result = worker
+                    .commit_control_snapshot(
+                        cache,
+                        &commit,
+                        token,
+                        MarkerSnapshotWritePolicy::Operation,
+                    )
+                    .await
+                    .map(|_| ());
                 worker
                     .finish_control_marker_lease(&commit.kind, commit.lease, result)
                     .await
             },
             source,
         );
-        let background = self
-            .inner
-            .tags_default_options
-            .allow_background_distributed_operations();
         execution.link(
             cancellation,
             if background {
@@ -1082,12 +1099,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         cache: Arc<dyn MarkerSnapshotCache>,
         commit: &MarkerSnapshotCommit,
         cancellation: FactoryCancellation,
-    ) -> Result<()> {
+        policy: MarkerSnapshotWritePolicy,
+    ) -> Result<EffectOutcome> {
         let kind = &commit.kind;
         let captured = commit.captured;
         cancellation.check()?;
         if self.inner.epoch.load(Ordering::Acquire) != captured {
-            return Ok(());
+            return Ok(EffectOutcome::Skipped(SkipReason::Superseded));
         }
         // Like the reference Set, this owned write has no distributed-read
         // timeout. Provider I/O bounds and explicit cancellation still apply.
@@ -1118,7 +1136,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         .map_err(Error::from);
         cancellation.check()?;
-        let outcome = match result {
+        let (outcome, effect) = match result {
             Ok(renewal) => {
                 let (snapshot, outcome) = match renewal {
                     MarkerSnapshotRenewal::Stored(snapshot) => {
@@ -1133,7 +1151,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 };
                 if let Some(snapshot) = snapshot {
                     self.apply_marker(StoredMarker::new(kind.clone(), snapshot.version()));
-                    if !self.inner.tags_default_options.skip_memory_write()
+                    if !commit.options.skip_memory_write()
                         && let MarkerReads::OptionsControlled(observations) =
                             &self.inner.marker_reads
                     {
@@ -1161,7 +1179,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                     .store(
                                         kind,
                                         observation.reconcile_maximum(Some(snapshot.version())),
-                                        &self.inner.tags_default_options,
+                                        &commit.options,
                                         created,
                                         jitter,
                                         ContinuityStamp::new(
@@ -1174,9 +1192,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         }
                     }
                 }
-                outcome
+                let effect = if snapshot.is_some() {
+                    EffectOutcome::Applied
+                } else {
+                    EffectOutcome::Skipped(SkipReason::PhysicallyExpired)
+                };
+                (outcome, effect)
             }
-            Err(Error::Marker(error)) => self.suppressed_marker_fault(kind, error)?.write_outcome(),
+            Err(Error::Marker(error)) => {
+                return self.marker_snapshot_failure(commit, error, policy);
+            }
             Err(error) => return Err(error),
         };
         self.inner
@@ -1185,7 +1210,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 kind: kind.clone(),
                 outcome,
             });
-        Ok(())
+        Ok(effect)
     }
 
     async fn record_control_observation(
@@ -1366,6 +1391,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         kinds: Vec<MarkerKind>,
         options: Option<EntryOptions>,
+        cancellation: FactoryCancellation,
     ) -> Result<Observed<MutationReceipt>> {
         let opts = options.unwrap_or_else(|| self.inner.tags_default_options.clone());
         self.validate_marker_options(&opts)?;
@@ -1421,7 +1447,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let work = async move {
             let mut reports = Vec::with_capacity(commands.len());
             for command in commands {
-                reports.push(worker.commit_marker(command, opts.clone()).await?);
+                reports.push(
+                    worker
+                        .commit_marker(command, opts.clone(), now, &cancellation)
+                        .await?,
+                );
             }
             if reports
                 .iter()
@@ -1456,6 +1486,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         mut command: MarkerCommand,
         opts: EntryOptions,
+        created: Timestamp,
+        cancellation: &FactoryCancellation,
     ) -> Result<MutationReceipt> {
         let lane_guard = Arc::clone(&self.inner.marker_lane).lock_owned().await;
         let mut notifications = Vec::with_capacity(2);
@@ -1495,14 +1527,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         EffectOutcome::Applied
                     }
                     Err(error) => {
-                        let queued = self.queue_marker(
-                            command.clone(),
-                            if opts.skip_backplane_notifications() {
-                                MarkerReplay::AdvanceOnly
-                            } else {
-                                MarkerReplay::AdvanceAndNotify
-                            },
-                        )?;
+                        let queued =
+                            self.queue_marker_mutation(command.clone(), opts.clone(), created)?;
                         let error = Error::from(error);
                         self.failure(&Arc::from("invalidation"), &error);
                         if opts.rethrow_distributed_exceptions() {
@@ -1522,6 +1548,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         };
         notifications.push(command);
+        let distributed = self
+            .populate_marker_mutation(&notifications, &opts, created, distributed, cancellation)
+            .await?;
         let worker = self.clone();
         let mode = if opts.allow_background_backplane_operations()
             && !opts.skip_backplane_notifications()

@@ -211,7 +211,10 @@ impl OperationOutcome {
                 crate::recovery::RecoveryError::GenerationExhausted
                 | crate::recovery::RecoveryError::IdentityExhausted
                 | crate::recovery::RecoveryError::ExecutorAlreadyConfigured
-                | crate::recovery::RecoveryError::Stopped => Self::Rejected,
+                | crate::recovery::RecoveryError::Stopped
+                | crate::recovery::RecoveryError::SnapshotWritesSkipped
+                | crate::recovery::RecoveryError::MarkerIdentityChanged
+                | crate::recovery::RecoveryError::InvalidMarkerStage => Self::Rejected,
                 crate::recovery::RecoveryError::ZeroDelay
                 | crate::recovery::RecoveryError::MissingRuntime
                 | crate::recovery::RecoveryError::UnsupportedMarkerExecutor
