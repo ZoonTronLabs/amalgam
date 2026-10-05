@@ -1,6 +1,9 @@
 //! Extensible plugins with per-cache sessions and deterministic teardown.
 
-use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
+use std::sync::{
+    Arc, Mutex, MutexGuard, RwLock, Weak,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use tokio::sync::{Notify, watch};
 
@@ -400,11 +403,29 @@ enum HostState {
 pub(crate) struct PluginHostInner {
     context: PluginContext,
     slots: RwLock<HostState>,
+    // Published under the slots write lock. Counts potential recipients,
+    // including draining slots; actual admission still belongs to each slot.
+    listeners: AtomicUsize,
     attachments: Arc<Scopes>,
 }
 
 impl PluginHostInner {
+    pub(crate) fn has_listeners(&self) -> bool {
+        self.listeners.load(Ordering::Acquire) != 0
+    }
+
+    fn publish_listeners(&self, state: &HostState) {
+        let count = match state {
+            HostState::Running(slots) => slots.len(),
+            HostState::Stopped(_) => 0,
+        };
+        self.listeners.store(count, Ordering::Release);
+    }
+
     pub(crate) fn notify(&self, event: &CacheEvent) -> Vec<PluginError> {
+        if !self.has_listeners() {
+            return Vec::new();
+        }
         let callback = self.attachments.inline();
         if callback.admit().is_err() {
             return Vec::new();
@@ -443,6 +464,7 @@ impl PluginHostInner {
             HostState::Running(slots) => {
                 let slots = slots.clone();
                 *state = HostState::Stopped(slots.clone());
+                self.publish_listeners(&state);
                 slots
             }
             HostState::Stopped(slots) => slots.clone(),
@@ -475,6 +497,7 @@ impl PluginHostInner {
                     }
                 }
             }
+            self.publish_listeners(&state);
             retired
         };
         drop(retired);
@@ -517,6 +540,7 @@ impl PluginHost {
             inner: Arc::new(PluginHostInner {
                 context,
                 slots: RwLock::new(HostState::Running(Vec::with_capacity(plugins.len()))),
+                listeners: AtomicUsize::new(0),
                 attachments: Scopes::new(),
             }),
         };
@@ -584,7 +608,7 @@ impl PluginHost {
                 .slots
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match &mut *state {
+            let attached = match &mut *state {
                 HostState::Running(slots) => {
                     slots.push(Arc::clone(&slot));
                     true
@@ -595,7 +619,9 @@ impl PluginHost {
                     slots.push(Arc::clone(&slot));
                     false
                 }
-            }
+            };
+            self.inner.publish_listeners(&state);
+            attached
         };
         if !attached {
             slot.request_stop()?;

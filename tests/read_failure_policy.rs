@@ -1,8 +1,8 @@
 //! Canonical absence must not disguise provider failure or an open circuit.
 
 use amalgam::{
-    Cache, CircuitComponent, DistributedCache, EntryOptions, Error, InMemoryDistributedCache,
-    JsonSerializer, ManualClock, RecoveryConfig, Result, Timeout,
+    Cache, CircuitComponent, CodecError, DistributedCache, EntryOptions, Error,
+    InMemoryDistributedCache, JsonSerializer, ManualClock, RecoveryConfig, Result, Timeout,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -114,11 +114,11 @@ async fn canonical_reads_preserve_suppressed_codec_error() {
         .unwrap();
     assert!(matches!(
         cache.read("k", None).await,
-        Err(Error::Deserialization(_))
+        Err(Error::Codec(CodecError::Deserialization { .. }))
     ));
     assert!(matches!(
         cache.read_or_default("k", 42, None).await,
-        Err(Error::Deserialization(_))
+        Err(Error::Codec(CodecError::Deserialization { .. }))
     ));
     cache.shutdown().await.unwrap();
 }

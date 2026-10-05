@@ -262,7 +262,7 @@ fn frame_snapshot<V>(snapshot: &DistributedSnapshot<V>, payload: Vec<u8>) -> Res
         inserted_ticks: snapshot.inserted_at.ticks(),
         retention,
     })
-    .map_err(|error| Error::Serialization(error.to_string()))?;
+    .map_err(Error::serialization)?;
     let length = u32::try_from(header.len())
         .map_err(|_| Error::Serialization("snapshot header is too large".into()))?;
     let mut bytes = Vec::with_capacity(
@@ -292,8 +292,7 @@ fn unframe_snapshot(bytes: &[u8]) -> Result<Option<(SnapshotHeader, &[u8])>> {
         .checked_add(length)
         .filter(|end| *end <= bytes.len())
         .ok_or_else(|| Error::Deserialization("truncated snapshot header".into()))?;
-    let header = serde_json::from_slice(&bytes[13..end])
-        .map_err(|error| Error::Deserialization(error.to_string()))?;
+    let header = serde_json::from_slice(&bytes[13..end]).map_err(Error::deserialization)?;
     Ok(Some((header, &bytes[end..])))
 }
 
@@ -373,6 +372,107 @@ pub trait DistributedSerializer<V>: Send + Sync {
     }
 }
 
+/// Selects the preferred codec model without removing the other capability.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SerializationMode {
+    /// Use an available synchronous codec directly. Existing caches keep this default.
+    #[default]
+    SyncPreferred,
+    /// Use the asynchronous snapshot codec when configured.
+    AsyncPreferred,
+}
+
+/// An asynchronous codec for the complete validated L2 snapshot.
+///
+/// Implementations may await compression, encryption or other codec work. The
+/// cache owns and cancels the future with the calling operation. Synchronous
+/// codecs remain source compatible through [`DistributedSerializer`]. Snapshot
+/// deadlines and tags are validated before hydration regardless of the codec.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait adds must_use to futures"
+)]
+#[async_trait]
+pub trait AsyncDistributedSerializer<V>: Send + Sync {
+    /// Encodes a complete snapshot, preserving its deadlines and retention.
+    async fn serialize_snapshot(&self, snapshot: &DistributedSnapshot<V>) -> Result<Vec<u8>>
+    where
+        V: Send + Sync;
+    /// Decodes a complete snapshot. Invalid data must produce a typed failure.
+    async fn deserialize_snapshot(&self, bytes: &[u8]) -> Result<DistributedSnapshot<V>>
+    where
+        V: Send + Sync;
+    /// Optional synchronous counterpart used by [`SerializationMode::SyncPreferred`].
+    fn sync_serializer(&self) -> Option<&dyn DistributedSerializer<V>> {
+        None
+    }
+    /// Optional isolated value-copy strategy; auto-clone stays synchronous.
+    fn value_cloner(&self) -> Option<Arc<dyn crate::serializers::ValueCloner<V>>> {
+        self.sync_serializer()
+            .and_then(DistributedSerializer::value_cloner)
+    }
+}
+
+pub(crate) enum Serializer<V> {
+    Sync(Arc<dyn DistributedSerializer<V>>),
+    Async(Arc<dyn AsyncDistributedSerializer<V>>),
+}
+
+enum CodecModel<'a, V> {
+    Sync(&'a dyn DistributedSerializer<V>),
+    Async(&'a dyn AsyncDistributedSerializer<V>),
+}
+
+impl<V> Serializer<V> {
+    pub(crate) fn value_cloner(&self) -> Option<Arc<dyn crate::serializers::ValueCloner<V>>> {
+        match self {
+            Self::Sync(codec) => codec.value_cloner(),
+            Self::Async(codec) => codec.value_cloner(),
+        }
+    }
+    pub(crate) async fn encode(
+        &self,
+        snapshot: &DistributedSnapshot<V>,
+        mode: SerializationMode,
+    ) -> Result<Vec<u8>>
+    where
+        V: Send + Sync,
+    {
+        match self.model(mode) {
+            CodecModel::Sync(codec) => codec.serialize_snapshot(snapshot),
+            CodecModel::Async(codec) => codec.serialize_snapshot(snapshot).await,
+        }
+    }
+    pub(crate) async fn decode(
+        &self,
+        bytes: &[u8],
+        mode: SerializationMode,
+    ) -> Result<DistributedSnapshot<V>>
+    where
+        V: Send + Sync,
+    {
+        match self.model(mode) {
+            CodecModel::Sync(codec) => codec.deserialize_snapshot(bytes),
+            CodecModel::Async(codec) => codec.deserialize_snapshot(bytes).await,
+        }
+    }
+
+    fn model(&self, mode: SerializationMode) -> CodecModel<'_, V> {
+        match (self, mode) {
+            (Self::Sync(codec), _) => CodecModel::Sync(codec.as_ref()),
+            (Self::Async(codec), SerializationMode::AsyncPreferred) => {
+                CodecModel::Async(codec.as_ref())
+            }
+            (Self::Async(codec), SerializationMode::SyncPreferred) => {
+                match codec.sync_serializer() {
+                    Some(sync) => CodecModel::Sync(sync),
+                    None => CodecModel::Async(codec.as_ref()),
+                }
+            }
+        }
+    }
+}
+
 /// A JSON serializer built on `serde_json`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct JsonSerializer;
@@ -386,11 +486,11 @@ where
     }
 
     fn serialize(&self, entry: &DistributedEntry<V>) -> Result<Vec<u8>> {
-        serde_json::to_vec(entry).map_err(|e| Error::Serialization(e.to_string()))
+        serde_json::to_vec(entry).map_err(Error::serialization)
     }
 
     fn deserialize(&self, bytes: &[u8]) -> Result<DistributedEntry<V>> {
-        serde_json::from_slice(bytes).map_err(|e| Error::Deserialization(e.to_string()))
+        serde_json::from_slice(bytes).map_err(Error::deserialization)
     }
 }
 

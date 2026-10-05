@@ -156,6 +156,44 @@ impl CloneError {
     }
 }
 
+/// A distributed codec failure with its original concrete source.
+#[derive(Debug, thiserror::Error)]
+pub enum CodecError {
+    /// Encoding a value or its snapshot metadata failed.
+    #[error("serialization failed: {source}")]
+    Serialization {
+        /// The codec's unchanged failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// Decoding a value or its snapshot metadata failed.
+    #[error("deserialization failed: {source}")]
+    Deserialization {
+        /// The codec's unchanged failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+/// An external storage or notification failure with its original source.
+#[derive(Debug, thiserror::Error)]
+pub enum TransportError {
+    /// Value storage failed.
+    #[error("distributed cache error: {source}")]
+    Distributed {
+        /// The provider's unchanged failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// Peer notification failed.
+    #[error("backplane error: {source}")]
+    Backplane {
+        /// The provider's unchanged failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 /// The crate-wide result alias.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -360,12 +398,17 @@ pub enum Error {
     },
 
     /// A value could not be serialized for the distributed (L2) cache.
+    /// Legacy message-only adapter; use [`Error::serialization`] to retain a source.
     #[error("serialization failed: {0}")]
     Serialization(String),
 
     /// A value could not be deserialized from the distributed (L2) cache.
     #[error("deserialization failed: {0}")]
     Deserialization(String),
+
+    /// Encoding or decoding failed with its original concrete cause.
+    #[error(transparent)]
+    Codec(#[from] CodecError),
 
     /// The distributed (L2) cache backend returned an error.
     #[error("distributed cache error: {0}")]
@@ -374,6 +417,44 @@ pub enum Error {
     /// The backplane backend returned an error.
     #[error("backplane error: {0}")]
     Backplane(String),
+
+    /// External storage or notification failed with its original concrete cause.
+    #[error(transparent)]
+    Transport(#[from] TransportError),
+}
+
+impl Error {
+    /// Preserves an encoding failure instead of converting it into a message.
+    pub fn serialization(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        CodecError::Serialization {
+            source: Box::new(source),
+        }
+        .into()
+    }
+
+    /// Preserves a decoding failure instead of converting it into a message.
+    pub fn deserialization(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        CodecError::Deserialization {
+            source: Box::new(source),
+        }
+        .into()
+    }
+
+    /// Preserves a value-storage failure at the provider boundary.
+    pub fn distributed(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        TransportError::Distributed {
+            source: Box::new(source),
+        }
+        .into()
+    }
+
+    /// Preserves a peer-notification failure at the provider boundary.
+    pub fn backplane(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        TransportError::Backplane {
+            source: Box::new(source),
+        }
+        .into()
+    }
 }
 
 /// The error a user-supplied factory returns to signal failure.

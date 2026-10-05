@@ -67,6 +67,16 @@ pub enum ClearMode {
     /// Remove cached values.
     Remove,
 }
+
+/// The distributed effect of logically expiring a key. L1 remains stale in both modes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DistributedExpirePolicy {
+    /// Preserve the physically live L2 snapshot for fail-safe. Existing Rust default.
+    #[default]
+    RetainStale,
+    /// Physically remove L2 while expiring L1, matching FusionCache 2.9.
+    Remove,
+}
 /// Explicit cluster-lock compatibility contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeasePolicy {
@@ -146,7 +156,7 @@ enum Storage<V> {
     MemoryOnly,
     Hybrid {
         backend: Arc<dyn DistributedCache>,
-        serializer: Arc<dyn DistributedSerializer<V>>,
+        serializer: crate::distributed::Serializer<V>,
     },
 }
 enum MarkerAccess {
@@ -170,9 +180,11 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     events: Events,
     clock: Arc<dyn Clock>,
     default_options: EntryOptions,
+    tags_default_options: EntryOptions,
     key_prefix: Option<Arc<str>>,
     remove_by_tag_behavior: RemoveByTagBehavior,
     storage: Storage<V>,
+    serialization_mode: crate::distributed::SerializationMode,
     markers: MarkerAccess,
     scope: CacheScope,
     backplane: Option<Arc<dyn Backplane>>,
@@ -279,7 +291,7 @@ impl L2ReadPolicy {
         match self {
             Self::PreserveFailure => true,
             Self::FactoryFallback => match error {
-                Error::Serialization(_) | Error::Deserialization(_) => {
+                Error::Serialization(_) | Error::Deserialization(_) | Error::Codec(_) => {
                     options.rethrow_serialization_exceptions()
                 }
                 Error::Config(_) | Error::Clone(_) | Error::Tag(_) => true,
@@ -318,18 +330,15 @@ enum LookupMode {
     Read,
     GetOrSet,
 }
-struct ReadyValue<V> {
+struct ReadyValue<'key, V> {
     value: V,
-    key: Arc<str>,
+    key: Cow<'key, str>,
 }
-struct LookupKey {
-    raw: Arc<str>,
-    full: Arc<str>,
-}
+type LookupKey = crate::factory::FactoryKeys;
 // Ready operations cannot park. Their counted permit covers all synchronous
 // user code, including unused factory/fallback destructors and event callbacks.
 struct ReadyLookup<'a, V> {
-    result: Result<ReadyValue<V>>,
+    result: Result<ReadyValue<'a, V>>,
     observation: OperationObservation,
     permit: InlinePermit<'a>,
 }
@@ -373,8 +382,8 @@ impl<V> ReadyLookup<'_, V> {
             result => permit.status(token).and(result),
         }
         .and_then(|ready| {
-            events.emit(CacheEvent::Hit {
-                key: ready.key,
+            events.emit_lazy(|| CacheEvent::Hit {
+                key: Arc::from(ready.key.as_ref()),
                 stale: false,
             });
             permit.status(token)?;
@@ -405,6 +414,25 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub fn name(&self) -> &str {
         &self.inner.name
     }
+    /// This instance's diagnostic and backplane sender identity.
+    pub fn instance_id(&self) -> &str {
+        &self.inner.instance_id
+    }
+    /// The configured distributed byte store, when L2 is enabled.
+    pub fn distributed_cache(&self) -> Option<&Arc<dyn DistributedCache>> {
+        match &self.inner.storage {
+            Storage::MemoryOnly => None,
+            Storage::Hybrid { backend, .. } => Some(backend),
+        }
+    }
+    /// The configured backplane, when attached.
+    pub fn backplane(&self) -> Option<&Arc<dyn Backplane>> {
+        self.inner.backplane.as_ref()
+    }
+    /// The configured distributed locker, when attached.
+    pub fn distributed_locker(&self) -> Option<&Arc<dyn DistributedLocker>> {
+        self.inner.distributed_locker.as_ref()
+    }
     /// Unified event route, including eviction and plugins.
     pub fn events(&self) -> &Events {
         &self.inner.events
@@ -421,6 +449,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Static default options; per-key providers may override them.
     pub fn entry_options(&self) -> EntryOptions {
         self.inner.default_options.clone()
+    }
+    /// Independent tag/clear operation defaults; key providers do not affect them.
+    pub fn tags_entry_options(&self) -> EntryOptions {
+        self.inner.tags_default_options.clone()
     }
     /// Configured subscription readiness policy.
     pub fn wait_for_initial_backplane_subscribe(&self) -> bool {
@@ -602,7 +634,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 permit,
             },
             Ok(Some(value)) => LookupStart::Ready(ReadyLookup {
-                result: Ok(value),
+                result: Ok(ReadyValue { value, key }),
                 observation,
                 permit,
             }),
@@ -620,7 +652,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<&FactoryCancellation>,
         mode: LookupMode,
         permit: &InlinePermit<'_>,
-    ) -> Result<Option<ReadyValue<V>>> {
+    ) -> Result<Option<V>> {
         permit.status(token)?;
         let worker = self.worker();
         worker.start_maintenance();
@@ -656,10 +688,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
         let value = worker.copy(entry.value(), opts);
         permit.status(token)?;
-        Ok(Some(ReadyValue {
-            value: value?,
-            key: Arc::from(key),
-        }))
+        Ok(Some(value?))
     }
     /// Returns a value or produces it. Background write policy is observable;
     /// use get_or_set_full_with_commit when its actual completion is required.
@@ -1135,8 +1164,13 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         key: impl AsRef<str>,
         options: Option<EntryOptions>,
     ) -> Result<MutationReceipt> {
-        self.key_mutation(key.as_ref(), options, KeyMutation::Expire, None)
-            .await
+        self.key_mutation(
+            key.as_ref(),
+            options,
+            KeyMutation::Expire(DistributedExpirePolicy::RetainStale),
+            None,
+        )
+        .await
     }
     /// Cancellable expiration.
     pub async fn try_expire_with_cancellable(
@@ -1145,8 +1179,39 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         options: Option<EntryOptions>,
         token: FactoryCancellation,
     ) -> Result<MutationReceipt> {
-        self.key_mutation(key.as_ref(), options, KeyMutation::Expire, Some(token))
+        self.key_mutation(
+            key.as_ref(),
+            options,
+            KeyMutation::Expire(DistributedExpirePolicy::RetainStale),
+            Some(token),
+        )
+        .await
+    }
+    /// Expires L1 and selects the distributed retention/removal contract explicitly.
+    pub async fn try_expire_with_policy(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+        policy: DistributedExpirePolicy,
+    ) -> Result<MutationReceipt> {
+        self.key_mutation(key.as_ref(), options, KeyMutation::Expire(policy), None)
             .await
+    }
+    /// Explicit expiration policy with caller cancellation through ownership transfer.
+    pub async fn try_expire_with_policy_cancellable(
+        &self,
+        key: impl AsRef<str>,
+        options: Option<EntryOptions>,
+        policy: DistributedExpirePolicy,
+        token: FactoryCancellation,
+    ) -> Result<MutationReceipt> {
+        self.key_mutation(
+            key.as_ref(),
+            options,
+            KeyMutation::Expire(policy),
+            Some(token),
+        )
+        .await
     }
     async fn key_mutation(
         &self,
@@ -1160,7 +1225,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let full = worker.full_key(key);
         let operation = match mutation {
             KeyMutation::Remove => CacheOperation::Remove,
-            KeyMutation::Expire => CacheOperation::Expire,
+            KeyMutation::Expire(_) => CacheOperation::Expire,
         };
         self.observed(operation, Some(full), token, async move {
             worker.key_mutation(raw, options, mutation).await
@@ -1370,7 +1435,7 @@ impl<V: Clone + Send + Sync + 'static> Default for Cache<V> {
 #[derive(Clone, Copy)]
 enum KeyMutation {
     Remove,
-    Expire,
+    Expire(DistributedExpirePolicy),
 }
 async fn drive<T: Send + 'static>(
     mut execution: Execution<T>,
@@ -1511,7 +1576,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 self.inner
                     .default_options_provider
                     .as_ref()
-                    .and_then(|provider| provider.options_for(key))
+                    .and_then(|provider| {
+                        provider.options_for_with_defaults(key, &self.inner.default_options)
+                    })
             })
             .unwrap_or_else(|| self.inner.default_options.clone());
         self.validate_options(&opts)?;
@@ -1685,12 +1752,34 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 key: Arc::clone(key),
                 message: message.clone(),
             }),
+            Error::Codec(error) => match error {
+                crate::CodecError::Serialization { source } => {
+                    self.emit(CacheEvent::SerializationError {
+                        key: Arc::clone(key),
+                        message: source.to_string(),
+                    })
+                }
+                crate::CodecError::Deserialization { source } => {
+                    self.emit(CacheEvent::DeserializationError {
+                        key: Arc::clone(key),
+                        message: source.to_string(),
+                    })
+                }
+            },
             Error::Distributed(_)
             | Error::Lease(LeaseError::Backend { .. })
             | Error::Marker(MarkerError::Backend { .. }) => {
                 self.trip_circuit(CircuitComponent::Distributed)
             }
             Error::Backplane(_) => self.trip_circuit(CircuitComponent::Backplane),
+            Error::Transport(error) => match error {
+                crate::TransportError::Distributed { .. } => {
+                    self.trip_circuit(CircuitComponent::Distributed)
+                }
+                crate::TransportError::Backplane { .. } => {
+                    self.trip_circuit(CircuitComponent::Backplane)
+                }
+            },
             _ => {}
         }
     }
@@ -1745,7 +1834,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let Some(bytes) = bytes else {
                 return Ok(None);
             };
-            let snapshot = serializer.deserialize_snapshot(&bytes)?;
+            let snapshot = serializer
+                .decode(&bytes, self.inner.serialization_mode)
+                .await?;
             let source = snapshot.try_into_entry(self.inner.clock.now())?;
             if source.is_physically_expired(self.inner.clock.now()) {
                 return Ok(None);
@@ -2064,6 +2155,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
     {
         let opts = self.resolve_options(&key.raw, options)?;
+        let raw_key = key.raw;
         let key = key.full;
         self.ensure_health();
         let mut stale = None;
@@ -2071,7 +2163,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             match self.read_l1(&key).await {
                 L1Read::Fresh(entry) => {
                     if entry.should_eager_refresh(self.inner.clock.now()) {
-                        self.eager(Arc::clone(&key), opts.clone(), entry.clone(), factory);
+                        self.eager(
+                            LookupKey {
+                                raw: raw_key,
+                                full: Arc::clone(&key),
+                            },
+                            opts.clone(),
+                            entry.clone(),
+                            tags,
+                            factory,
+                        );
                     }
                     return self.served(key, &entry, &opts, CacheLevel::Memory);
                 }
@@ -2142,7 +2243,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         let source = CancellationSource::new();
         let ctx = FactoryContext::with_cancellation(
-            Arc::clone(&key),
+            LookupKey {
+                raw: raw_key,
+                full: Arc::clone(&key),
+            },
             opts.clone(),
             tags,
             stale
@@ -2293,11 +2397,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             },
         );
     }
-    fn eager<F, Fut>(&self, key: Arc<str>, opts: EntryOptions, current: Entry<V>, factory: F)
-    where
+    fn eager<F, Fut>(
+        &self,
+        keys: LookupKey,
+        opts: EntryOptions,
+        current: Entry<V>,
+        tags: Box<[Tag]>,
+        factory: F,
+    ) where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
     {
+        let key = Arc::clone(&keys.full);
         let Some(local) = self.inner.locks.try_lock(&key) else {
             return;
         };
@@ -2316,7 +2427,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
             if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged});}
-            let ctx=FactoryContext::with_cancellation(Arc::clone(&key),opts.clone(),current.meta().tags().into(),Some(worker.stale_info(&current,&opts)?),token);
+            let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token);
             let started=worker.inner.clock.now();
             let origin=factory(ctx);
             let product=if let Some(mut state)=guard.lease.as_ref().map(DistributedLease::state) {
@@ -2394,7 +2505,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     &opts,
                     entry.meta().inserted_at(),
                 )?;
-                match serializer.serialize_snapshot(&snapshot) {
+                match serializer
+                    .encode(&snapshot, self.inner.serialization_mode)
+                    .await
+                {
                     Ok(bytes) => PreparedData::Ready(DataMutation::Set {
                         bytes: bytes.into(),
                         physical_expiration: Timestamp::from_ticks(
@@ -2847,7 +2961,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     self.inner.memory.remove(&key).await;
                     LocalEffect::Removed
                 }
-                KeyMutation::Expire => {
+                KeyMutation::Expire(_) => {
                     if let Some(entry) = self.inner.memory.get_at(&key, now).await {
                         let expired = entry.with_logical_expiration(now);
                         self.inner
@@ -2864,17 +2978,21 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         } else {
             match (&self.inner.storage, mutation) {
                 (Storage::MemoryOnly, _) => PreparedData::Absent,
-                (Storage::Hybrid { .. }, KeyMutation::Remove) => {
-                    PreparedData::Ready(DataMutation::Remove)
-                }
+                (
+                    Storage::Hybrid { .. },
+                    KeyMutation::Remove | KeyMutation::Expire(DistributedExpirePolicy::Remove),
+                ) => PreparedData::Ready(DataMutation::Remove),
                 (
                     Storage::Hybrid {
                         backend,
                         serializer,
                     },
-                    KeyMutation::Expire,
+                    KeyMutation::Expire(DistributedExpirePolicy::RetainStale),
                 ) => match backend.get(&self.inner.l2_key(&key)).await {
-                    Ok(Some(bytes)) => match serializer.deserialize_snapshot(&bytes) {
+                    Ok(Some(bytes)) => match serializer
+                        .decode(&bytes, self.inner.serialization_mode)
+                        .await
+                    {
                         Ok(snapshot) => {
                             let mut payload = snapshot.entry().clone();
                             payload.logical_expiration_ticks =
@@ -2884,7 +3002,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                 snapshot.inserted_at(),
                                 snapshot.retention(),
                             )?;
-                            match serializer.serialize_snapshot(&expired) {
+                            match serializer
+                                .encode(&expired, self.inner.serialization_mode)
+                                .await
+                            {
                                 Ok(bytes) => PreparedData::Ready(DataMutation::Expire {
                                     bytes: bytes.into(),
                                     physical_expiration: Timestamp::from_ticks(
@@ -2921,7 +3042,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let action = match mutation {
             KeyMutation::Remove => BackplaneAction::Remove,
-            KeyMutation::Expire => BackplaneAction::Expire,
+            KeyMutation::Expire(_) => BackplaneAction::Expire,
         };
         let command = self.data_command(action, &key, now, &opts);
         let worker = self.clone();
@@ -2950,13 +3071,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let receipt = self.pipeline_receipt(Arc::clone(&key), mode, work).await?;
         self.emit(match mutation {
             KeyMutation::Remove => CacheEvent::Remove { key },
-            KeyMutation::Expire => CacheEvent::Expire { key },
+            KeyMutation::Expire(_) => CacheEvent::Expire { key },
         });
         Ok(Observed::new(
             receipt,
             match mutation {
                 KeyMutation::Remove => OperationOutcome::Removed,
-                KeyMutation::Expire => OperationOutcome::Expired,
+                KeyMutation::Expire(_) => OperationOutcome::Expired,
             },
             None,
         ))
@@ -2966,7 +3087,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         kinds: Vec<MarkerKind>,
         options: Option<EntryOptions>,
     ) -> Result<Observed<MutationReceipt>> {
-        let opts = options.unwrap_or_else(|| self.inner.default_options.clone());
+        let opts = options.unwrap_or_else(|| self.inner.tags_default_options.clone());
         self.validate_options(&opts)?;
         if self.inner.disable_tagging || matches!(self.inner.markers, MarkerAccess::Unavailable) {
             return Err(MarkerError::Unsupported.into());
@@ -3191,7 +3312,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(ReplayOutcome::Applied);
         };
         if let Some(current) = backend.get(&self.inner.l2_key(&item.key)).await? {
-            let snapshot = serializer.deserialize_snapshot(&current)?;
+            let snapshot = serializer
+                .decode(&current, self.inner.serialization_mode)
+                .await?;
             if snapshot.entry().created_ticks > item.timestamp.ticks() {
                 return Ok(ReplayOutcome::Superseded);
             }
@@ -3201,7 +3324,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             | PendingMutation::FencedCommit { mutation, .. } => match mutation {
                 DataMutation::Set { bytes, .. } | DataMutation::Expire { bytes, .. } => Some(
                     serializer
-                        .deserialize_snapshot(bytes)?
+                        .decode(bytes, self.inner.serialization_mode)
+                        .await?
                         .try_into_entry(self.inner.clock.now())?,
                 ),
                 DataMutation::Remove => None,
@@ -3235,7 +3359,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let Some(bytes) = backend.get(&self.inner.l2_key(key)).await? else {
             return Ok(ReplayOutcome::Applied);
         };
-        let snapshot = serializer.deserialize_snapshot(&bytes)?;
+        let snapshot = serializer
+            .decode(&bytes, self.inner.serialization_mode)
+            .await?;
         // A remote newer write can arrive between reconciliation and this read.
         if snapshot.entry().created_ticks > logical_expiration.ticks() {
             return Ok(ReplayOutcome::Superseded);
@@ -3247,7 +3373,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let expired =
             DistributedSnapshot::new(entry, snapshot.inserted_at(), snapshot.retention())?;
         let data = DataMutation::Expire {
-            bytes: serializer.serialize_snapshot(&expired)?.into(),
+            bytes: serializer
+                .encode(&expired, self.inner.serialization_mode)
+                .await?
+                .into(),
             physical_expiration: Timestamp::from_ticks(expired.entry().physical_expiration_ticks),
         };
         self.write_data(key, &data, None).await?;
@@ -3904,7 +4033,9 @@ impl<V: Clone + Send + Sync + 'static> RecoveryExecutor for CacheInner<V> {
                     backend
                         .set(
                             &self.l2_key(&item.key),
-                            serializer.serialize_snapshot(&snapshot)?,
+                            serializer
+                                .encode(&snapshot, self.serialization_mode)
+                                .await?,
                             Some(snapshot.backend_ttl_at(self.clock.now())),
                         )
                         .await?;
@@ -3950,6 +4081,7 @@ pub struct CacheBuilder<V> {
     instance_id: Option<Arc<str>>,
     key_prefix: Option<Arc<str>>,
     default_options: EntryOptions,
+    tags_default_options: EntryOptions,
     clock: Option<Arc<dyn Clock>>,
     max_capacity: Option<u64>,
     max_weighted_capacity: Option<u64>,
@@ -3963,7 +4095,8 @@ pub struct CacheBuilder<V> {
     remove_by_tag_behavior: RemoveByTagBehavior,
     events_capacity: usize,
     distributed: Option<Arc<dyn DistributedCache>>,
-    serializer: Option<Arc<dyn DistributedSerializer<V>>>,
+    serializer: Option<crate::distributed::Serializer<V>>,
+    serialization_mode: crate::distributed::SerializationMode,
     backplane: Option<Arc<dyn Backplane>>,
     distributed_locker: Option<Arc<dyn DistributedLocker>>,
     plugins: Vec<Arc<dyn Plugin>>,
@@ -3987,6 +4120,7 @@ impl<V> CacheBuilder<V> {
             instance_id: None,
             key_prefix: None,
             default_options: EntryOptions::default(),
+            tags_default_options: EntryOptions::tag_defaults(),
             clock: None,
             max_capacity: None,
             max_weighted_capacity: None,
@@ -4001,6 +4135,7 @@ impl<V> CacheBuilder<V> {
             events_capacity: 256,
             distributed: None,
             serializer: None,
+            serialization_mode: crate::distributed::SerializationMode::default(),
             backplane: None,
             distributed_locker: None,
             plugins: Vec::new(),
@@ -4034,7 +4169,20 @@ impl<V> CacheBuilder<V> {
     /// Sets the serializer used for the L2 wire format (e.g.
     /// [`JsonSerializer`](crate::JsonSerializer)).
     pub fn serializer(mut self, serializer: Arc<dyn DistributedSerializer<V>>) -> Self {
-        self.serializer = Some(serializer);
+        self.serializer = Some(crate::distributed::Serializer::Sync(serializer));
+        self
+    }
+    /// Sets an asynchronous full-snapshot codec, optionally offering a sync counterpart.
+    pub fn async_serializer(
+        mut self,
+        serializer: Arc<dyn crate::distributed::AsyncDistributedSerializer<V>>,
+    ) -> Self {
+        self.serializer = Some(crate::distributed::Serializer::Async(serializer));
+        self
+    }
+    /// Chooses the preferred available codec model. SyncPreferred preserves legacy behavior.
+    pub fn serialization_mode(mut self, mode: crate::distributed::SerializationMode) -> Self {
+        self.serialization_mode = mode;
         self
     }
 
@@ -4065,6 +4213,12 @@ impl<V> CacheBuilder<V> {
         self.default_options = options;
         self
     }
+    /// Sets independent defaults for tag invalidation and cache-wide clear.
+    /// Explicit operation options take precedence; per-key providers are skipped.
+    pub fn tags_default_options(mut self, options: EntryOptions) -> Self {
+        self.tags_default_options = options;
+        self
+    }
 
     /// Injects a custom [`Clock`] (e.g. [`ManualClock`](crate::ManualClock) in
     /// tests).
@@ -4087,6 +4241,17 @@ impl<V> CacheBuilder<V> {
     /// Supplies an explicit deep-copy algorithm for auto-clone options.
     pub fn value_cloner(mut self, cloner: Arc<dyn ValueCloner<V>>) -> Self {
         self.value_cloner = Some(cloner);
+        self
+    }
+
+    /// Uses the compiler-checked ordinary clone for auto-clone values.
+    /// This bypasses codec copying without admitting shared mutable state.
+    /// Later `value_cloner` calls may explicitly replace this strategy.
+    pub fn immutable_values(mut self) -> Self
+    where
+        V: crate::serializers::ImmutableValue,
+    {
+        self.value_cloner = Some(Arc::new(crate::serializers::ImmutableCloner));
         self
     }
     /// Supplies expiration jitter outside pure entry construction.
@@ -4269,15 +4434,19 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         });
         self.default_options
             .validate_with_cloner(cloner.as_deref())?;
-        for timeout in [
-            self.default_options.memory_lock_timeout(),
-            self.default_options.distributed_lock_timeout(),
-            self.default_options.factory_soft_timeout(),
-            self.default_options.factory_hard_timeout(),
-            self.default_options.distributed_soft_timeout(),
-            self.default_options.distributed_hard_timeout(),
-        ] {
-            validate_budget(timeout)?;
+        self.tags_default_options
+            .validate_with_cloner(cloner.as_deref())?;
+        for options in [&self.default_options, &self.tags_default_options] {
+            for timeout in [
+                options.memory_lock_timeout(),
+                options.distributed_lock_timeout(),
+                options.factory_soft_timeout(),
+                options.factory_hard_timeout(),
+                options.distributed_soft_timeout(),
+                options.distributed_hard_timeout(),
+            ] {
+                validate_budget(timeout)?;
+            }
         }
         let recovery_enabled = self.recovery_config.enabled
             && (self.distributed.is_some() || self.backplane.is_some());
@@ -4387,9 +4556,11 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             events,
             clock,
             default_options: self.default_options,
+            tags_default_options: self.tags_default_options,
             key_prefix: self.key_prefix,
             remove_by_tag_behavior: self.remove_by_tag_behavior,
             storage,
+            serialization_mode: self.serialization_mode,
             markers,
             scope,
             backplane: self.backplane,

@@ -81,6 +81,41 @@ async fn await_connected(
     .await
     .unwrap()
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backplane_shutdown_remains_terminal_while_the_owned_subscriber_disconnects() {
+    let Some(url) = fixture::redis_url() else {
+        return;
+    };
+    let mut connection = admin(&url).await;
+    for _ in 0..6 {
+        let name = unique("shutdown_race");
+        let backplane =
+            RedisBackplane::connect_named(&url, unique("shutdown_channel"), &name, 8, io())
+                .await
+                .unwrap();
+        let mut health = backplane.connection_state().unwrap();
+        await_connected(&mut health, 0).await;
+        let id = backplane.subscriber_client_id().unwrap();
+        let disconnect = async {
+            redis::cmd("CLIENT")
+                .arg("KILL")
+                .arg("ID")
+                .arg(id.value())
+                .query_async::<u64>(&mut connection)
+                .await
+                .unwrap();
+        };
+        let (_, stopped) = tokio::join!(disconnect, backplane.shutdown());
+        stopped.unwrap();
+        assert_eq!(*health.borrow(), BackplaneState::Stopped);
+        assert!(backplane.publish(message("closed")).await.is_err());
+        backplane.shutdown().await.unwrap();
+        assert_eq!(*health.borrow(), BackplaneState::Stopped);
+        await_no_clients(&mut connection, &backplane.subscriber_name()).await;
+        await_no_clients(&mut connection, &format!("{name}:publish")).await;
+    }
+}
 async fn acl(connection: &mut MultiplexedConnection, user: &str, password: &str, subscribe: bool) {
     let rule = if subscribe {
         "+subscribe"

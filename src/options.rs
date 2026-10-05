@@ -288,6 +288,20 @@ impl Default for EntryOptions {
 }
 
 impl EntryOptions {
+    /// Independent FusionCache-compatible defaults for tag/clear operations.
+    /// Durable markers retain the stronger backend invalidation lifetime.
+    #[must_use]
+    pub fn tag_defaults() -> Self {
+        Self::new(Duration::from_secs(60 * 60))
+            .with_distributed_duration(Duration::from_secs(60 * 60 * 24))
+            .with_fail_safe(true, Some(Duration::from_secs(60 * 60 * 24 * 10)), None)
+            .with_allow_background_backplane_operations(false)
+            .with_rethrow_serialization_exceptions(false)
+            .with_skip_distributed_locker(true)
+            .with_priority(Priority::NeverRemove)
+            .with_size(0)
+    }
+
     /// Creates options with the given logical duration and all other fields at
     /// their defaults.
     #[must_use]

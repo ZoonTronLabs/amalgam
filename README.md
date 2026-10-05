@@ -23,6 +23,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 The published package is `amalgam-cache`; the Rust library is imported as `amalgam`.
+Unreleased additions and the still-open full functionality inventory are tracked
+in [FULL_CONTRACT.md](docs/FULL_CONTRACT.md) and the [changelog](CHANGELOG.md).
 
 ## Basic use
 

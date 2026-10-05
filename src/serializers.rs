@@ -6,6 +6,73 @@
 use crate::error::{CloneError, ConfigError, Result};
 use crate::options::EntryOptions;
 
+mod immutable {
+    pub trait Sealed {}
+    macro_rules! scalars {
+        ($($ty:ty),+ $(,)?) => { $(impl Sealed for $ty {})+ };
+    }
+    scalars!(
+        (),
+        bool,
+        char,
+        u8,
+        u16,
+        u32,
+        u64,
+        u128,
+        usize,
+        i8,
+        i16,
+        i32,
+        i64,
+        i128,
+        isize,
+        f32,
+        f64,
+        String,
+        std::time::Duration,
+        std::time::SystemTime
+    );
+    impl<T: super::ImmutableValue> Sealed for Option<T> {}
+    impl<T: super::ImmutableValue, E: super::ImmutableValue> Sealed for std::result::Result<T, E> {}
+    impl<T: super::ImmutableValue> Sealed for Vec<T> {}
+    impl<T: super::ImmutableValue, const N: usize> Sealed for [T; N] {}
+    impl<T: super::ImmutableValue> Sealed for Box<T> {}
+    impl<T: super::ImmutableValue> Sealed for Box<[T]> {}
+    impl Sealed for Box<str> {}
+    impl<T: super::ImmutableValue> Sealed for std::sync::Arc<T> {}
+    impl<T: super::ImmutableValue> Sealed for std::sync::Arc<[T]> {}
+    impl Sealed for std::sync::Arc<str> {}
+    impl<A: super::ImmutableValue, B: super::ImmutableValue> Sealed for (A, B) {}
+    impl<A: super::ImmutableValue, B: super::ImmutableValue, C: super::ImmutableValue> Sealed
+        for (A, B, C)
+    {
+    }
+}
+
+/// Values whose ordinary clone safely satisfies cache isolation.
+///
+/// This sealed capability includes built-in scalars, strings and recursively
+/// supported containers. Owned mutable containers clone their contents;
+/// shared containers cannot contain interior-mutability types. Custom values
+/// use an explicit [`ValueCloner`] instead of making an unverifiable assertion.
+///
+/// ```compile_fail
+/// use amalgam::Cache;
+/// use std::sync::{Arc, Mutex};
+/// // A shared mutable allocation cannot acquire the immutable capability.
+/// Cache::<Arc<Mutex<u64>>>::builder().immutable_values();
+/// ```
+pub trait ImmutableValue: immutable::Sealed + Clone + Send + Sync + 'static {}
+impl<T> ImmutableValue for T where T: immutable::Sealed + Clone + Send + Sync + 'static {}
+
+pub(crate) struct ImmutableCloner;
+impl<V: ImmutableValue> ValueCloner<V> for ImmutableCloner {
+    fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
+        Ok(value.clone())
+    }
+}
+
 /// An extensible deep-copy strategy, independent of Serde and distributed I/O.
 ///
 /// A successful copy must preserve the logical value while isolating mutable
@@ -84,11 +151,11 @@ mod messagepack {
         }
 
         fn serialize(&self, entry: &DistributedEntry<V>) -> Result<Vec<u8>> {
-            rmp_serde::to_vec(entry).map_err(|e| Error::Serialization(e.to_string()))
+            rmp_serde::to_vec(entry).map_err(Error::serialization)
         }
 
         fn deserialize(&self, bytes: &[u8]) -> Result<DistributedEntry<V>> {
-            rmp_serde::from_slice(bytes).map_err(|e| Error::Deserialization(e.to_string()))
+            rmp_serde::from_slice(bytes).map_err(Error::deserialization)
         }
     }
 }
@@ -135,11 +202,11 @@ mod postcard_serializer {
         }
 
         fn serialize(&self, entry: &DistributedEntry<V>) -> Result<Vec<u8>> {
-            postcard::to_allocvec(entry).map_err(|e| Error::Serialization(e.to_string()))
+            postcard::to_allocvec(entry).map_err(Error::serialization)
         }
 
         fn deserialize(&self, bytes: &[u8]) -> Result<DistributedEntry<V>> {
-            postcard::from_bytes(bytes).map_err(|e| Error::Deserialization(e.to_string()))
+            postcard::from_bytes(bytes).map_err(Error::deserialization)
         }
     }
 

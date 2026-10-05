@@ -8,6 +8,45 @@ The comparison pins are distinct:
 - Executed reference: published NuGet FusionCache **2.9.0**, binary informational version `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
 - Amalgam: **0.3.1**.
 
+Unreleased additions are tracked in [the full functionality inventory](FULL_CONTRACT.md).
+They include original/current/stale factory metadata, independent marker policy,
+async snapshot codecs and explicit conditional/expiry choices. They are not part
+of the published 0.3.1 package. The remaining public-surface gaps stay open.
+
+Released 2.9 experiments additionally establish that eager current tags come from
+the triggering request, while stale tags describe the cached source. Its
+`NotModified` resets tags to stale tags but preserves caller changes or clearing
+of validators. The new `not_modified_builder` expresses that contract;
+`ValidatorUpdate` distinguishes retain, replace and clear. Existing `not_modified`
+continues to honor adaptive tags. The new conditional builder rejects a missing
+source with `ConditionalRefreshError` and rejects invalid legacy tag products.
+
+Released FusionCache Expire retains stale L1 but physically removes L2. Existing
+Rust `try_expire` deliberately retains a physically live L2 snapshot;
+`try_expire_with_policy(..., DistributedExpirePolicy::Remove)` now selects the
+released reference effect. Both paths preserve explicit layer skips and receipts.
+
+Unreleased tag/clear operations use separate `tags_default_options`. Their
+foreground backplane default is independent of ordinary values; durable marker
+lifetime is the existing stronger protocol. `AsyncDistributedSerializer` owns
+the complete validated snapshot; `SerializationMode` selects an available model.
+`SyncPreferred` preserves existing synchronous codec behavior and falls back to an
+async-only provider. `AsyncPreferred` uses a configured asynchronous provider;
+sync-only providers retain their established snapshot overrides.
+
+Marker options currently control mutations, while durable control reads still use
+required validation within the value read budget. Independent control skips and
+budgets remain an open functionality gap. Async codecs currently support owned
+future cancellation; a cooperative operation signal has not yet been forwarded.
+
+New codec/provider error envelopes preserve the concrete source for downcasting.
+Rust's typed envelope is an idiomatic diagnostic adaptation; it does not expose
+FusionCache's optional same-exception-object rethrow API. Legacy message-only
+variants cannot reconstruct a cause already converted into text. The sealed
+`ImmutableValue` capability permits codec-free copy for supported built-in types;
+custom values continue through their chosen `ValueCloner`. Providers may now use
+`options_for_with_defaults` to inspect the owning cache's current defaults.
+
 ## Observable behavior
 
 | Concern | Amalgam contract |

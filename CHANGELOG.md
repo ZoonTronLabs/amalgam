@@ -3,6 +3,36 @@
 All notable changes to `amalgam` are documented here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- Factory original key, current tags and stale tags; instance/provider inspection.
+- Independent tag/clear defaults (`tags_default_options`) and default policy factory.
+- Async complete-snapshot serializer contract and explicit sync/async preference, used by all L2/expire/replay paths. Existing synchronous codec implementations and snapshot overrides remain supported.
+- Explicit conditional-result builder with retain/replace/clear validator updates and typed absent-source rejection. It defaults to stale tags; existing adaptive `not_modified` remains a compatibility adapter.
+- Explicit distributed expire policy: retain stale L2 or remove L2 while retaining stale L1, matching the released FusionCache reference for the latter.
+- Public contracts for null versus miss, L2/clone/conditional/fail-safe null, codec cancellation, eager request tags and independent marker options.
+- Source-preserving `CodecError`/`TransportError` with unchanged concrete causes and independent failure-policy classification; legacy message-only errors remain adapters.
+- A sealed immutable copy capability for scalar/string/container values, selected with `immutable_values`, without admitting shared mutable allocations.
+- Per-key providers can derive options from the owning cache's current default snapshot using `options_for_with_defaults`; legacy hooks remain supported.
+
+### Changed
+
+- Tag/clear operations now use separate marker defaults with foreground backplane completion rather than ordinary value defaults or key providers. Explicit operation options still take precedence. Durable marker lifetime is unchanged.
+- Ready hits avoid key/event materialization without listeners; late plugin attachment during user callbacks remains observable.
+- Empty plugin delivery avoids a registration read lock through a count published under the registration write lock; callback admission and shutdown drainage remain authoritative.
+- Cancellation uses a single closed terminal state and Notify registration-before-check, preserving reasons and owned cancellation/drainage with fewer allocations.
+
+### Fixed
+
+- Eager factories receive triggering request tags separately from saved stale tags.
+- Redis backplane connection failures are classified as backplane failures, retaining the original Redis/timeout cause.
+- Typed control-frame errors retain parsing/validation causes; malformed incoming Redis frames retain and log typed JSON/UTF-8/numeric failures before continuity reconciliation.
+- Redis backplane stop is terminal across late connection acknowledgements and disconnect callbacks; shutdown serializes admission with its liveness barrier.
+
+Full FusionCache functionality remains in progress; see [the complete inventory](docs/FULL_CONTRACT.md). These entries do not constitute a published package or consumer rollout.
+
 ## [0.3.1] — 2026-10-05
 
 ### Fixed

@@ -60,8 +60,8 @@ pub use backplane::{
     ContinuityEpoch, InProcessBackplane, MarkerCommand,
 };
 pub use cache::{
-    BackplaneReadiness, Cache, CacheBuilder, ClearMode, CloseOutcome, LeasePolicy,
-    ReconciliationPolicy, ShutdownReport,
+    BackplaneReadiness, Cache, CacheBuilder, ClearMode, CloseOutcome, DistributedExpirePolicy,
+    LeasePolicy, ReconciliationPolicy, ShutdownReport,
 };
 pub use circuit::{CircuitBreaker, CircuitCheck};
 pub use commit::{
@@ -69,9 +69,9 @@ pub use commit::{
     LocalEffect, MutationReceipt, SkipReason,
 };
 pub use distributed::{
-    DistributedCache, DistributedEntry, DistributedSerializer, DistributedSnapshot,
-    InMemoryDistributedCache, InMemoryInvalidationStore, InvalidationStore, JsonSerializer,
-    LeasedMutation, LeasedWriteOutcome, SnapshotRetention,
+    AsyncDistributedSerializer, DistributedCache, DistributedEntry, DistributedSerializer,
+    DistributedSnapshot, InMemoryDistributedCache, InMemoryInvalidationStore, InvalidationStore,
+    JsonSerializer, LeasedMutation, LeasedWriteOutcome, SerializationMode, SnapshotRetention,
 };
 pub use distributed_lock::{
     AcquisitionPolicy, DistributedLease, DistributedLocker, InMemoryDistributedLocker, LeaseError,
@@ -80,15 +80,19 @@ pub use distributed_lock::{
     acquire_owned_supervised,
 };
 pub use error::{
-    CloneError, ConfigError, Error, FactoryCancellationReason, FactoryError, IdentityField, Result,
-    RuntimeComponent, ShutdownError, ShutdownFailure, ShutdownTask,
+    CloneError, CodecError, ConfigError, Error, FactoryCancellationReason, FactoryError,
+    IdentityField, Result, RuntimeComponent, ShutdownError, ShutdownFailure, ShutdownTask,
+    TransportError,
 };
 pub use events::{
     CacheEvent, CacheLevel, CacheOperation, CircuitComponent, EventEmission, EventStreamClosed,
     EventSubscription, Events, OperationOutcome,
 };
 pub use execution::{CancellationRequest, CancellationSource, FactoryCancellation};
-pub use factory::{FactoryContext, FactoryProduct, ModifiedBuilder};
+pub use factory::{
+    ConditionalRefreshError, FactoryContext, FactoryProduct, ModifiedBuilder, NotModifiedBuilder,
+    ValidatorUpdate,
+};
 pub use maybe::MaybeValue;
 pub use memory::{
     CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore, MemoryUsage,
@@ -108,7 +112,7 @@ pub use recovery::{
     ReplayOutcome, ReplayTicket, SupersedeOutcome,
 };
 pub use registry::{CacheRegistry, DefaultEntryOptionsProvider, RegistryError};
-pub use serializers::ValueCloner;
+pub use serializers::{ImmutableValue, ValueCloner};
 pub use tags::{
     CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerStoreLimits, MarkerVersion,
     StoredMarker, Tag, TagError,

@@ -12,7 +12,21 @@ use crate::options::EntryOptions;
 /// Supplies dynamic per-key defaults. None selects the static default options.
 pub trait DefaultEntryOptionsProvider: Send + Sync {
     /// The options for this key, or no dynamic override.
-    fn options_for(&self, key: &str) -> Option<EntryOptions>;
+    /// Legacy implementations may override this hook alone.
+    fn options_for(&self, _key: &str) -> Option<EntryOptions> {
+        None
+    }
+
+    /// Resolves an override against this cache's current default snapshot.
+    /// Explicit operation options bypass this provider. The key is the raw
+    /// application key, before the physical namespace is applied.
+    fn options_for_with_defaults(
+        &self,
+        key: &str,
+        _defaults: &EntryOptions,
+    ) -> Option<EntryOptions> {
+        self.options_for(key)
+    }
 }
 
 /// A named-cache resolution failure.

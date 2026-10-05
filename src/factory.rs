@@ -6,6 +6,12 @@ use crate::tags::{Tag, TagError, try_collect_tags};
 use crate::time::Timestamp;
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
+pub(crate) struct FactoryKeys {
+    pub(crate) raw: Arc<str>,
+    pub(crate) full: Arc<str>,
+}
+
 #[derive(Debug)]
 enum TagRequest {
     Inherited,
@@ -89,7 +95,7 @@ pub(crate) struct FactoryPayload<V> {
 /// Origin context. Optional stale data forms one complete snapshot.
 #[derive(Debug)]
 pub struct FactoryContext<V> {
-    key: Arc<str>,
+    keys: FactoryKeys,
     options: EntryOptions,
     call_tags: Box<[Tag]>,
     adaptive_tags: TagRequest,
@@ -98,14 +104,14 @@ pub struct FactoryContext<V> {
 }
 impl<V> FactoryContext<V> {
     pub(crate) fn with_cancellation(
-        key: Arc<str>,
+        keys: FactoryKeys,
         options: EntryOptions,
         call_tags: Box<[Tag]>,
         stale: Option<StaleInfo<V>>,
         cancellation: FactoryCancellation,
     ) -> Self {
         Self {
-            key,
+            keys,
             options,
             call_tags,
             adaptive_tags: TagRequest::Inherited,
@@ -115,7 +121,23 @@ impl<V> FactoryContext<V> {
     }
     /// The prefixed data key.
     pub fn key(&self) -> &str {
-        &self.key
+        &self.keys.full
+    }
+    /// The caller's key before the cache prefix was applied.
+    pub fn original_key(&self) -> &str {
+        &self.keys.raw
+    }
+    /// Current call or adaptive tags. A rejected legacy tag request is explicit.
+    pub fn tags(&self) -> Result<&[Tag], TagError> {
+        match &self.adaptive_tags {
+            TagRequest::Inherited => Ok(&self.call_tags),
+            TagRequest::Valid(tags) => Ok(tags),
+            TagRequest::Rejected(error) => Err(*error),
+        }
+    }
+    /// Tags in the complete stale snapshot, when one exists.
+    pub fn stale_tags(&self) -> Option<&[Tag]> {
+        self.stale.as_ref().map(|stale| stale.tags.as_ref())
     }
     /// Adapts produced-entry options; the cache validates them before effects.
     pub fn options_mut(&mut self) -> &mut EntryOptions {
@@ -216,6 +238,98 @@ impl<V> FactoryContext<V> {
             None => Err(FactoryError::new(
                 "not_modified() requires a stale snapshot",
             )),
+        }
+    }
+    /// Starts an explicit conditional refresh. Tags default to the stale snapshot,
+    /// matching FusionCache; validators can be retained, replaced or cleared.
+    /// The existing `not_modified` adapter keeps its adaptive-tag contract.
+    pub fn not_modified_builder(self) -> Result<NotModifiedBuilder<V>, ConditionalRefreshError> {
+        let stale = self.stale.ok_or(ConditionalRefreshError::NoStaleSnapshot)?;
+        let tags = match self.adaptive_tags {
+            TagRequest::Inherited | TagRequest::Valid(_) => TagRequest::Inherited,
+            TagRequest::Rejected(error) => TagRequest::Rejected(error),
+        };
+        Ok(NotModifiedBuilder {
+            stale,
+            options: self.options,
+            tags,
+            etag: ValidatorUpdate::Retain,
+            last_modified: ValidatorUpdate::Retain,
+        })
+    }
+}
+
+/// Expected rejection when constructing a conditional unchanged product.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ConditionalRefreshError {
+    /// An unchanged result requires a complete existing stale snapshot.
+    #[error("NotModified requires a stale snapshot")]
+    NoStaleSnapshot,
+}
+impl From<ConditionalRefreshError> for FactoryError {
+    fn from(error: ConditionalRefreshError) -> Self {
+        Self::from_source(error)
+    }
+}
+
+/// An explicit update to optional conditional-refresh metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ValidatorUpdate<T> {
+    /// Preserve the stale snapshot's validator.
+    #[default]
+    Retain,
+    /// Replace the validator with this value.
+    Replace(T),
+    /// Remove the validator from the refreshed snapshot.
+    Clear,
+}
+impl<T> ValidatorUpdate<T> {
+    fn apply(self, previous: Option<T>) -> Option<T> {
+        match self {
+            Self::Retain => previous,
+            Self::Replace(value) => Some(value),
+            Self::Clear => None,
+        }
+    }
+}
+
+/// A conditional product that always owns a complete existing stale snapshot.
+#[derive(Debug)]
+#[must_use = "call done() to return the conditional factory product"]
+pub struct NotModifiedBuilder<V> {
+    stale: StaleInfo<V>,
+    options: EntryOptions,
+    tags: TagRequest,
+    etag: ValidatorUpdate<String>,
+    last_modified: ValidatorUpdate<Timestamp>,
+}
+impl<V> NotModifiedBuilder<V> {
+    /// Selects whether to retain, replace or clear the ETag.
+    pub fn etag(mut self, update: ValidatorUpdate<String>) -> Self {
+        self.etag = update;
+        self
+    }
+    /// Selects whether to retain, replace or clear the modification timestamp.
+    pub fn last_modified(mut self, update: ValidatorUpdate<Timestamp>) -> Self {
+        self.last_modified = update;
+        self
+    }
+    /// Explicitly replaces stale tags with validated values.
+    pub fn validated_tags(mut self, tags: Box<[Tag]>) -> Self {
+        self.tags = TagRequest::Valid(tags);
+        self
+    }
+    /// Returns the unchanged value with selected metadata and adapted options.
+    pub fn done(mut self) -> FactoryProduct<V> {
+        self.stale.etag = self.etag.apply(self.stale.etag);
+        self.stale.last_modified = self.last_modified.apply(self.stale.last_modified);
+        let tags = self.tags.resolve(std::mem::take(&mut self.stale.tags));
+        FactoryProduct {
+            output: FactoryOutput::NotModified {
+                stale: self.stale,
+                tags,
+            },
+            options: self.options,
         }
     }
 }

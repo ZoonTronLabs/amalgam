@@ -176,7 +176,7 @@ impl BackplaneCommand {
             return Ok(Self::Data(message));
         };
         let bytes = decode_hex(encoded)?;
-        let frame: SourceFrame = serde_json::from_slice(&bytes).map_err(protocol_error)?;
+        let frame: SourceFrame = serde_json::from_slice(&bytes).map_err(MarkerError::protocol)?;
         match frame {
             SourceFrame::Data { source } => Ok(Self::Data(BackplaneMessage {
                 source_id: source.into(),
@@ -193,7 +193,9 @@ impl BackplaneCommand {
                 let modifier = modifier_from_byte(modifier)?;
                 let scope = CacheScope::new(prefix, version, modifier)?;
                 let kind = match marker {
-                    WireMarker::Tag(tag) => MarkerKind::Tag(Tag::new(tag).map_err(protocol_error)?),
+                    WireMarker::Tag(tag) => {
+                        MarkerKind::Tag(Tag::new(tag).map_err(MarkerError::protocol)?)
+                    }
                     WireMarker::ClearExpire => MarkerKind::ClearExpire,
                     WireMarker::ClearRemove => MarkerKind::ClearRemove,
                 };
@@ -214,7 +216,7 @@ impl BackplaneCommand {
 }
 
 fn encode_source(frame: &SourceFrame) -> std::result::Result<String, MarkerError> {
-    let bytes = serde_json::to_vec(frame).map_err(protocol_error)?;
+    let bytes = serde_json::to_vec(frame).map_err(MarkerError::protocol)?;
     Ok(format!("{CONTROL_PREFIX}{}", encode_hex(&bytes)))
 }
 
@@ -385,6 +387,26 @@ impl Backplane for InProcessBackplane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn malformed_typed_control_keeps_the_original_json_error() {
+        let message = BackplaneMessage {
+            source_id: format!("{CONTROL_PREFIX}{}", encode_hex(b"{")).into(),
+            timestamp: Timestamp::MIN,
+            action: BackplaneAction::Set,
+            key: "control".into(),
+        };
+        let error = BackplaneCommand::from_message(message).unwrap_err();
+        assert!(matches!(error, MarkerError::ProtocolWithSource { .. }));
+        assert!(
+            error
+                .source()
+                .unwrap()
+                .downcast_ref::<serde_json::Error>()
+                .is_some()
+        );
+    }
 
     #[test]
     fn reserved_source_and_magic_data_key_stay_data() {

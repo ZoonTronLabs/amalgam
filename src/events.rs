@@ -169,7 +169,8 @@ impl OperationOutcome {
             crate::Error::Tag(crate::tags::TagError::Blank) => Self::ConfigurationError,
             crate::Error::Marker(error) => match error {
                 crate::tags::MarkerError::Backend { .. } => Self::DistributedError,
-                crate::tags::MarkerError::Protocol { .. } => Self::CodecError,
+                crate::tags::MarkerError::Protocol { .. }
+                | crate::tags::MarkerError::ProtocolWithSource { .. } => Self::CodecError,
                 crate::tags::MarkerError::ScopeCapacity { .. } => Self::Rejected,
                 crate::tags::MarkerError::Unsupported
                 | crate::tags::MarkerError::BlankWireVersion
@@ -234,9 +235,15 @@ impl OperationOutcome {
             crate::Error::FactoryTimeout { .. } | crate::Error::LockTimeout { .. } => {
                 Self::TimedOut
             }
-            crate::Error::Serialization(_) | crate::Error::Deserialization(_) => Self::CodecError,
+            crate::Error::Serialization(_)
+            | crate::Error::Deserialization(_)
+            | crate::Error::Codec(_) => Self::CodecError,
             crate::Error::Distributed(_) => Self::DistributedError,
             crate::Error::Backplane(_) => Self::BackplaneError,
+            crate::Error::Transport(error) => match error {
+                crate::TransportError::Distributed { .. } => Self::DistributedError,
+                crate::TransportError::Backplane { .. } => Self::BackplaneError,
+            },
         }
     }
 }
@@ -497,12 +504,29 @@ impl Events {
 
     /// The sole event route, including memory eviction and background sources.
     pub fn emit_checked(&self, event: CacheEvent) -> EventEmission {
-        let plugin_errors = self
-            .inner
-            .plugins
-            .get()
-            .and_then(Weak::upgrade)
-            .map_or_else(Vec::new, |host| host.notify(&event));
+        self.emit_using(event, self.plugin_host())
+    }
+
+    /// Constructs allocation-bearing events only when an observer can receive
+    /// them. Admission is checked at emission, after any user clone callback.
+    pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> CacheEvent) {
+        let host = self.plugin_host();
+        if self.inner.sender.receiver_count() == 0
+            && host.as_ref().is_none_or(|host| !host.has_listeners())
+        {
+            return;
+        }
+        for error in self.emit_using(make(), host).plugin_errors {
+            tracing::warn!(error = %error, "amalgam: plugin event failed");
+        }
+    }
+
+    fn plugin_host(&self) -> Option<Arc<PluginHostInner>> {
+        self.inner.plugins.get().and_then(Weak::upgrade)
+    }
+
+    fn emit_using(&self, event: CacheEvent, host: Option<Arc<PluginHostInner>>) -> EventEmission {
+        let plugin_errors = host.map_or_else(Vec::new, |host| host.notify(&event));
         // A send failure means there are no observers, a normal lifecycle state.
         let subscribers = self.inner.sender.send(event).unwrap_or(0);
         EventEmission {

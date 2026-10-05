@@ -76,11 +76,11 @@ end
 return {revision, through}
 "#;
 
-fn distributed_err(error: impl std::fmt::Display) -> Error {
-    Error::Distributed(error.to_string())
+fn distributed_err(error: impl std::error::Error + Send + Sync + 'static) -> Error {
+    Error::distributed(error)
 }
-fn backplane_err(error: impl std::fmt::Display) -> Error {
-    Error::Backplane(error.to_string())
+fn backplane_err(error: impl std::error::Error + Send + Sync + 'static) -> Error {
+    Error::backplane(error)
 }
 fn open_client(connection: impl Into<String>) -> Result<Client> {
     Client::open(connection.into()).map_err(distributed_err)
@@ -132,7 +132,24 @@ impl Default for RedisIoOptions {
     }
 }
 
-async fn connect_manager(client: &Client, options: RedisIoOptions) -> Result<ConnectionManager> {
+enum ConnectionRole {
+    Distributed,
+    Backplane,
+}
+impl ConnectionRole {
+    fn failure(&self, source: impl std::error::Error + Send + Sync + 'static) -> Error {
+        match self {
+            Self::Distributed => distributed_err(source),
+            Self::Backplane => backplane_err(source),
+        }
+    }
+}
+
+async fn connect_manager(
+    client: &Client,
+    options: RedisIoOptions,
+    role: ConnectionRole,
+) -> Result<ConnectionManager> {
     let config = ConnectionManagerConfig::new()
         .set_connection_timeout(Some(options.connection_timeout))
         .set_response_timeout(Some(options.response_timeout))
@@ -143,8 +160,8 @@ async fn connect_manager(client: &Client, options: RedisIoOptions) -> Result<Con
         client.get_connection_manager_with_config(config),
     )
     .await
-    .map_err(distributed_err)?
-    .map_err(distributed_err)
+    .map_err(|source| role.failure(source))?
+    .map_err(|source| role.failure(source))
 }
 
 fn value_key(key: &str) -> String {
@@ -185,7 +202,7 @@ impl RedisInvalidationStore {
         let io = RedisIoOptions::default();
         let client = open_client(connection)?;
         Ok(Self {
-            manager: connect_manager(&client, io).await?,
+            manager: connect_manager(&client, io, ConnectionRole::Distributed).await?,
             limits,
             io,
         })
@@ -324,7 +341,7 @@ impl RedisDistributedCache {
         limits: MarkerStoreLimits,
     ) -> Result<Self> {
         let client = open_client(connection)?;
-        let manager = connect_manager(&client, io).await?;
+        let manager = connect_manager(&client, io, ConnectionRole::Distributed).await?;
         let invalidation = Arc::new(RedisInvalidationStore {
             manager: manager.clone(),
             limits,
@@ -440,7 +457,7 @@ impl RedisDistributedLocker {
     ) -> Result<Self> {
         let client = open_client(connection)?;
         Ok(Self {
-            manager: connect_manager(&client, io).await?,
+            manager: connect_manager(&client, io, ConnectionRole::Distributed).await?,
             io,
         })
     }
@@ -763,8 +780,8 @@ impl RedisBackplane {
             ));
         }
         let connection = connection.into();
-        let publish_client = open_client(connection.clone())?;
-        let manager = connect_manager(&publish_client, io).await?;
+        let publish_client = Client::open(connection.clone()).map_err(backplane_err)?;
+        let manager = connect_manager(&publish_client, io, ConnectionRole::Backplane).await?;
         let mut publisher = manager.clone();
         redis::cmd("CLIENT")
             .arg("SETNAME")
@@ -858,11 +875,25 @@ impl RedisBackplane {
 }
 
 fn disconnect(state: &watch::Sender<BackplaneState>) {
-    let epoch = match *state.borrow() {
-        BackplaneState::Connected { epoch } | BackplaneState::Disconnected { epoch } => epoch,
-        BackplaneState::Stopped => return,
-    };
-    state.send_replace(BackplaneState::Disconnected { epoch });
+    state.send_if_modified(|state| match *state {
+        BackplaneState::Connected { epoch } | BackplaneState::Disconnected { epoch } => {
+            *state = BackplaneState::Disconnected { epoch };
+            true
+        }
+        BackplaneState::Stopped => false,
+    });
+}
+
+fn stop_backplane(inner: &BackplaneInner) {
+    // Serialize terminal stop with subscriber admission. Socket callbacks use
+    // the same liveness gate; no connection can publish health after stop.
+    let mut liveness = inner
+        .liveness
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *liveness = None;
+    inner.stop.send_replace(true);
+    inner.state.send_replace(BackplaneState::Stopped);
 }
 
 fn admit_connected(inner: &BackplaneInner, epoch: ContinuityEpoch) -> bool {
@@ -873,10 +904,13 @@ fn admit_connected(inner: &BackplaneInner, epoch: ContinuityEpoch) -> bool {
     if *liveness != Some(inner.incarnation.load(Ordering::Acquire)) || *inner.stop.borrow() {
         return false;
     }
-    inner
-        .state
-        .send_replace(BackplaneState::Connected { epoch });
-    true
+    inner.state.send_if_modified(|state| match *state {
+        BackplaneState::Stopped => false,
+        BackplaneState::Connected { .. } | BackplaneState::Disconnected { .. } => {
+            *state = BackplaneState::Connected { epoch };
+            true
+        }
+    })
 }
 
 async fn open_subscriber(
@@ -1001,29 +1035,26 @@ async fn supervise_subscriber(
             Ok(push) if push.incarnation != inner.incarnation.load(Ordering::Acquire) => false,
             Ok(push) => match push.info.kind {
                 PushKind::Disconnection => true,
-                PushKind::Message => {
-                    match Msg::from_push_info(push.info)
-                        .and_then(|message| decode_message(message.get_payload_bytes()))
-                    {
-                        Some(message) => {
-                            let _ = inner.sender.send(message);
-                            false
-                        }
-                        None => {
-                            #[allow(
-                                deprecated,
-                                reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
-                            )]
-                            inner
-                                .malformed
-                                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                                    Some(value.saturating_add(1))
-                                })
-                                .ok();
-                            true
-                        }
+                PushKind::Message => match decode_push(push.info) {
+                    Ok(message) => {
+                        let _ = inner.sender.send(message);
+                        false
                     }
-                }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "amalgam: malformed Redis backplane message");
+                        #[allow(
+                            deprecated,
+                            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
+                        )]
+                        inner
+                            .malformed
+                            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                                Some(value.saturating_add(1))
+                            })
+                            .ok();
+                        true
+                    }
+                },
                 PushKind::Subscribe
                 | PushKind::PSubscribe
                 | PushKind::SSubscribe
@@ -1079,10 +1110,13 @@ async fn supervise_subscriber(
                                     == inner.incarnation.load(Ordering::Acquire)
                                     && push.info.kind == PushKind::Message =>
                             {
-                                if let Some(message) = Msg::from_push_info(push.info)
-                                    .and_then(|message| decode_message(message.get_payload_bytes()))
-                                {
-                                    let _ = inner.sender.send(message);
+                                match decode_push(push.info) {
+                                    Ok(message) => {
+                                        let _ = inner.sender.send(message);
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(error = %error, "amalgam: malformed Redis backplane message during reconnect")
+                                    }
                                 }
                             }
                             Ok(_) => {}
@@ -1152,8 +1186,7 @@ impl Backplane for RedisBackplane {
         Some(self.inner.state.subscribe())
     }
     async fn shutdown(&self) -> Result<()> {
-        self.inner.stop.send_replace(true);
-        self.inner.state.send_replace(BackplaneState::Stopped);
+        stop_backplane(&self.inner);
         let _shutdown = self.inner.shutdown_gate.lock().await;
         self.inner
             .subscriber
@@ -1181,8 +1214,7 @@ impl Backplane for RedisBackplane {
 
 impl Drop for RedisBackplane {
     fn drop(&mut self) {
-        self.inner.stop.send_replace(true);
-        self.inner.state.send_replace(BackplaneState::Stopped);
+        stop_backplane(&self.inner);
         self.inner
             .subscriber
             .lock()
@@ -1231,26 +1263,74 @@ fn encode_message(message: &BackplaneMessage) -> String {
     serde_json::json!({"version":2,"source":&*message.source_id,"ticks":message.timestamp.ticks(),"action":action_byte(message.action),"key":&*message.key}).to_string()
 }
 
-fn decode_message(bytes: &[u8]) -> Option<BackplaneMessage> {
+#[derive(Debug, thiserror::Error)]
+enum IncomingFrameError {
+    #[error("invalid Redis push message shape")]
+    PushShape,
+    #[error("invalid JSON backplane frame: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("unsupported backplane version {0}")]
+    Version(u8),
+    #[error("unsupported backplane action {0}")]
+    Action(u8),
+    #[error("invalid UTF-8 backplane frame: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error("missing {0:?} in legacy backplane frame")]
+    Missing(LegacyField),
+    #[error("invalid numeric field in legacy backplane frame: {0}")]
+    Number(#[from] std::num::ParseIntError),
+}
+#[derive(Debug)]
+enum LegacyField {
+    Source,
+    Timestamp,
+    Action,
+    Key,
+}
+
+fn decode_push(info: PushInfo) -> std::result::Result<BackplaneMessage, IncomingFrameError> {
+    let message = Msg::from_push_info(info).ok_or(IncomingFrameError::PushShape)?;
+    decode_message(message.get_payload_bytes())
+}
+
+fn decode_message(bytes: &[u8]) -> std::result::Result<BackplaneMessage, IncomingFrameError> {
     if bytes.first() == Some(&b'{') {
-        let frame: WireMessage = serde_json::from_slice(bytes).ok()?;
+        let frame: WireMessage = serde_json::from_slice(bytes)?;
         if frame.version != 2 {
-            return None;
+            return Err(IncomingFrameError::Version(frame.version));
         }
-        return Some(BackplaneMessage {
+        return Ok(BackplaneMessage {
             source_id: frame.source.into(),
             timestamp: Timestamp::from_ticks(frame.ticks),
-            action: action_from_byte(frame.action)?,
+            action: action_from_byte(frame.action)
+                .ok_or(IncomingFrameError::Action(frame.action))?,
             key: frame.key.into(),
         });
     }
-    let text = std::str::from_utf8(bytes).ok()?;
+    decode_legacy(std::str::from_utf8(bytes)?)
+}
+
+fn decode_legacy(text: &str) -> std::result::Result<BackplaneMessage, IncomingFrameError> {
     let mut fields = text.splitn(4, '|');
-    Some(BackplaneMessage {
-        source_id: fields.next()?.into(),
-        timestamp: Timestamp::from_ticks(fields.next()?.parse().ok()?),
-        action: action_from_byte(fields.next()?.parse().ok()?)?,
-        key: fields.next()?.into(),
+    let source = fields
+        .next()
+        .ok_or(IncomingFrameError::Missing(LegacyField::Source))?;
+    let ticks = fields
+        .next()
+        .ok_or(IncomingFrameError::Missing(LegacyField::Timestamp))?
+        .parse()?;
+    let action = fields
+        .next()
+        .ok_or(IncomingFrameError::Missing(LegacyField::Action))?
+        .parse()?;
+    let key = fields
+        .next()
+        .ok_or(IncomingFrameError::Missing(LegacyField::Key))?;
+    Ok(BackplaneMessage {
+        source_id: source.into(),
+        timestamp: Timestamp::from_ticks(ticks),
+        action: action_from_byte(action).ok_or(IncomingFrameError::Action(action))?,
+        key: key.into(),
     })
 }
 
@@ -1265,6 +1345,7 @@ fn duration_to_millis(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error as _;
 
     mod fixture {
         include!(concat!(
@@ -1273,6 +1354,67 @@ mod tests {
         ));
     }
     use fixture::redis_url;
+
+    fn disconnected_inner() -> BackplaneInner {
+        let (sender, _) = broadcast::channel(1);
+        let (state, _) = watch::channel(BackplaneState::Disconnected {
+            epoch: ContinuityEpoch::INITIAL,
+        });
+        let (stop, _) = watch::channel(false);
+        BackplaneInner {
+            manager: tokio::sync::RwLock::new(None),
+            client: Client::open("redis://127.0.0.1/").unwrap(),
+            channel: "state-test".into(),
+            name: "state-test".into(),
+            io: RedisIoOptions::default(),
+            sender,
+            state,
+            stop,
+            subscriber: Mutex::new(None),
+            subscriber_id: AtomicU64::new(0),
+            worker: Mutex::new(None),
+            incarnation: Arc::new(AtomicU64::new(1)),
+            liveness: Arc::new(Mutex::new(Some(1))),
+            dropped: AtomicU64::new(0),
+            malformed: AtomicU64::new(0),
+            acknowledged: AtomicU64::new(0),
+            shutdown_gate: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    #[test]
+    fn terminal_health_cannot_be_reopened_by_a_late_ack_or_disconnect() {
+        let inner = disconnected_inner();
+        inner.state.send_replace(BackplaneState::Stopped);
+        assert!(!admit_connected(&inner, ContinuityEpoch::INITIAL));
+        disconnect(&inner.state);
+        assert_eq!(*inner.state.borrow(), BackplaneState::Stopped);
+    }
+
+    #[test]
+    fn stop_wins_against_concurrent_connection_admission_and_disconnect() {
+        for _ in 0..64 {
+            let inner = Arc::new(disconnected_inner());
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            std::thread::scope(|threads| {
+                for _ in 0..2 {
+                    let inner = inner.clone();
+                    let barrier = barrier.clone();
+                    threads.spawn(move || {
+                        barrier.wait();
+                        for _ in 0..64 {
+                            admit_connected(&inner, ContinuityEpoch::INITIAL);
+                            disconnect(&inner.state);
+                        }
+                    });
+                }
+                barrier.wait();
+                stop_backplane(&inner);
+            });
+            assert_eq!(*inner.state.borrow(), BackplaneState::Stopped);
+            assert!(*inner.stop.borrow());
+        }
+    }
 
     /// A unique key prefix so concurrent test runs never collide.
     fn unique_key(name: &str) -> String {
@@ -1293,6 +1435,36 @@ mod tests {
     }
 
     #[test]
+    fn malformed_wire_keeps_the_original_parser_failure_for_diagnostics() {
+        let json = decode_message(b"{").unwrap_err();
+        assert!(
+            json.source()
+                .unwrap()
+                .downcast_ref::<serde_json::Error>()
+                .is_some()
+        );
+        let utf8 = decode_message(&[0xff]).unwrap_err();
+        assert!(
+            utf8.source()
+                .unwrap()
+                .downcast_ref::<std::str::Utf8Error>()
+                .is_some()
+        );
+        let number = decode_message(b"source|bad-ticks|1|key").unwrap_err();
+        assert!(
+            number
+                .source()
+                .unwrap()
+                .downcast_ref::<std::num::ParseIntError>()
+                .is_some()
+        );
+        assert!(matches!(
+            decode_message(b"source|10|255|key"),
+            Err(IncomingFrameError::Action(255))
+        ));
+    }
+
+    #[test]
     fn message_round_trips_through_wire_including_separator_in_key() {
         let original = BackplaneMessage {
             source_id: "node-a".into(),
@@ -1310,10 +1482,10 @@ mod tests {
 
     #[test]
     fn decode_rejects_malformed_input() {
-        assert!(decode_message(b"not-enough-fields").is_none());
-        assert!(decode_message(b"src|not-a-number|1|key").is_none());
-        assert!(decode_message(b"src|10|255|key").is_none()); // unknown action
-        assert!(decode_message(&[0xff, 0xfe]).is_none()); // invalid UTF-8
+        assert!(decode_message(b"not-enough-fields").is_err());
+        assert!(decode_message(b"src|not-a-number|1|key").is_err());
+        assert!(decode_message(b"src|10|255|key").is_err()); // unknown action
+        assert!(decode_message(&[0xff, 0xfe]).is_err()); // invalid UTF-8
     }
 
     #[test]

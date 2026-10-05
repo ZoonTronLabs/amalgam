@@ -119,9 +119,23 @@ pub enum MarkerError {
         /// A diagnostic explanation.
         detail: String,
     },
+    /// Decoding a control frame failed with its original parse/validation cause.
+    #[error("invalid invalidation protocol: {source}")]
+    ProtocolWithSource {
+        /// Original parser or boundary failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 impl MarkerError {
+    /// Preserves a control-protocol parser or validation failure.
+    pub fn protocol(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::ProtocolWithSource {
+            source: Box::new(source),
+        }
+    }
+
     /// Preserves an external storage cause.
     pub fn backend(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Backend {

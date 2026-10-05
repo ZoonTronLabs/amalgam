@@ -4,10 +4,10 @@ use crate::error::{Error, FactoryCancellationReason as Reason, Result};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
-use tokio::sync::{Notify, watch};
+use tokio::sync::Notify;
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 
@@ -22,30 +22,57 @@ enum CancellationState {
     Cancelled(Reason),
 }
 
+impl CancellationState {
+    fn load(state: &AtomicU8) -> Self {
+        match state.load(Ordering::Acquire) {
+            0 => Self::Active,
+            1 => Self::Cancelled(Reason::CallerCancelled),
+            2 => Self::Cancelled(Reason::CallerDropped),
+            3 => Self::Cancelled(Reason::SoftTimeout),
+            4 => Self::Cancelled(Reason::HardTimeout),
+            5 => Self::Cancelled(Reason::CacheShutdown),
+            6 => Self::Cancelled(Reason::LeaseLost),
+            7 => Self::Cancelled(Reason::ScopeFinished),
+            _ => unreachable!("only closed cancellation states are stored"),
+        }
+    }
+
+    fn cancelled_code(reason: Reason) -> u8 {
+        match reason {
+            Reason::CallerCancelled => 1,
+            Reason::CallerDropped => 2,
+            Reason::SoftTimeout => 3,
+            Reason::HardTimeout => 4,
+            Reason::CacheShutdown => 5,
+            Reason::LeaseLost => 6,
+            Reason::ScopeFinished => 7,
+        }
+    }
+}
+
 impl FactoryCancellation {
     pub(crate) fn reason(&self) -> Option<Reason> {
-        match *self.request.state.borrow() {
+        match CancellationState::load(&self.request.state) {
             CancellationState::Active => None,
             CancellationState::Cancelled(reason) => Some(reason),
         }
     }
     /// Whether this execution scope has ended or was cancelled.
     pub fn is_cancelled(&self) -> bool {
-        matches!(
-            *self.request.state.borrow(),
-            CancellationState::Cancelled(_)
-        )
+        self.reason().is_some()
     }
     /// Waits for a precise execution-scope reason.
     pub async fn cancelled(&self) -> Reason {
-        let mut state = self.request.state.subscribe();
         loop {
-            if let CancellationState::Cancelled(reason) = *state.borrow_and_update() {
+            // Subscribe before checking terminal state so cancellation cannot
+            // fall between the state read and notification registration.
+            let changed = self.request.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(reason) = self.reason() {
                 return reason;
             }
-            if state.changed().await.is_err() {
-                return Reason::ScopeFinished;
-            }
+            changed.await;
         }
     }
 }
@@ -66,7 +93,8 @@ pub struct CancellationSource {
 }
 #[derive(Debug)]
 struct Request {
-    state: watch::Sender<CancellationState>,
+    state: AtomicU8,
+    changed: Notify,
     listeners: Mutex<VecDeque<Listener>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +116,8 @@ impl CancellationSource {
     pub fn new() -> Self {
         Self {
             request: Arc::new(Request {
-                state: watch::channel(CancellationState::Active).0,
+                state: AtomicU8::new(0),
+                changed: Notify::new(),
                 listeners: Mutex::new(VecDeque::new()),
             }),
         }
@@ -104,17 +133,18 @@ impl CancellationSource {
         self.cancel_with(Reason::CallerCancelled)
     }
     pub(crate) fn cancel_with(&self, reason: Reason) -> CancellationRequest {
-        let mut changed = false;
-        self.request.state.send_if_modified(|state| {
-            if *state == CancellationState::Active {
-                *state = CancellationState::Cancelled(reason);
-                changed = true;
-                true
-            } else {
-                false
-            }
-        });
+        let changed = self
+            .request
+            .state
+            .compare_exchange(
+                0,
+                CancellationState::cancelled_code(reason),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok();
         if changed {
+            self.request.changed.notify_waiters();
             let listeners: Vec<_> = lock(&self.request.listeners)
                 .iter()
                 .filter_map(|listener| {
@@ -364,7 +394,7 @@ impl<T: Send + 'static> Execution<T> {
                 mode,
             });
         }
-        let reason = match *token.request.state.borrow() {
+        let reason = match CancellationState::load(&token.request.state) {
             CancellationState::Active => None,
             CancellationState::Cancelled(reason) => Some(reason),
         };
