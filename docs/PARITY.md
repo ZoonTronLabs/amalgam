@@ -110,6 +110,30 @@ Durable tag/clear operations require an atomic invalidation store. Existing cust
 
 Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers. OptionsControlled may revalidate markers on L1 hits according to independent tag defaults. Backplane continuity gaps, broadcast overflow and changed Redis connection epochs trigger reconciliation; Redis reports connected only after a matching subscription acknowledgement. `ready()` or `try_build_ready()` can await admission; healthless adapters report an explicit `BestEffort` outcome. A healthless custom backplane uses its selected conservative reconciliation policy. Timestamp-based marker ordering assumes a sufficiently consistent clock across participating nodes; injected clocks make local logic testable and do not solve distributed clock skew.
 
+
+### Redis outage boundary (0.3.1 and current source)
+
+`LeasePolicy::Fenced` is the default. Failed locker acquisition rejects ordinary
+origin work even with `with_rethrow_distributed_locker_exceptions(false)`.
+Explicit `CooperativeLegacy` and `false` permit the ordinary foreground origin
+to continue without that lease, with weaker cross-node ownership guarantees.
+The pinned FusionCache accessor instead suppresses an ordinary acquisition
+exception when its rethrow option is false and permits origin work; these
+contracts are not equivalent by default.
+
+A Redis backplane continuity gap discards all L1 entries, including retained
+fail-safe values. The next read is a miss; it either computes through the
+origin or fails on the configured fenced locker. Losing only L2 or the locker
+without a backplane gap does not invalidate an otherwise fresh L1 hit. This is
+a deliberate correctness/availability tradeoff, not universal resiliency parity.
+An owned cleanup failure during the outage can remain in `shutdown()` after
+reconnection regardless of the acquisition rethrow option.
+
+`locker_outage_contract` exercises default strict rejection, cooperative
+suppression/rethrow, untouched hot L1 and notification gaps without external
+process timing. The independent registry-pinned 0.3.1 outage reproduction also
+covers real Redis-compatible transport interruption, restart and recovery.
+
 ## Selected defaults
 
 | Setting | Default |
@@ -123,7 +147,9 @@ Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers. 
 | Background L2 operations | Disabled |
 | Background backplane operations | Enabled |
 | Rethrow serialization errors | Enabled |
-| Rethrow transport/locker/backplane errors | Disabled |
+| Rethrow value transport/backplane errors | Disabled |
+| Lease policy | `Fenced`; failed acquisition rejects origin work |
+| Rethrow locker acquisition errors | `false`; suppression applies to ordinary cooperative foreground acquisition |
 | Circuit breaker duration | Zero, disabled |
 | Recovery with configured distributed effects | Enabled; delay 2 seconds, queue bound 1024 |
 | Distributed snapshot namespace | `v2`, Prefix modifier |

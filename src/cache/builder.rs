@@ -240,7 +240,11 @@ impl<V> CacheBuilder<V> {
         self.invalidation_store = Some(store);
         self
     }
-    /// Chooses strict native fencing or explicitly cooperative legacy ownership.
+    /// Chooses strict native fencing (the default) or cooperative ownership.
+    ///
+    /// `Fenced` rejects failed acquisition even when the entry's rethrow option
+    /// is false. `CooperativeLegacy` permits ordinary origin work without a
+    /// lease when that option is false; cross-node fencing is then unavailable.
     pub fn lease_policy(mut self, policy: LeasePolicy) -> Self {
         self.lease_policy = policy;
         self

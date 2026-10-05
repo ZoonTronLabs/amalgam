@@ -490,7 +490,15 @@ impl EntryOptions {
         self
     }
 
-    /// Propagates distributed-locker errors instead of running without its lease.
+    /// Controls ordinary foreground acquisition errors in cooperative lease mode.
+    ///
+    /// With [`crate::LeasePolicy::CooperativeLegacy`], `false` permits origin
+    /// work without a lease after an acquisition failure. The default
+    /// [`crate::LeasePolicy::Fenced`] always propagates acquisition failures;
+    /// this option cannot authorize an unfenced commit. Ordinary fresh L1
+    /// service does not require lease acquisition; a notification continuity
+    /// gap first makes old L1 entries ineligible.
+    /// Owned cleanup failures remain observable through cache shutdown.
     #[must_use]
     pub fn with_rethrow_distributed_locker_exceptions(mut self, rethrow: bool) -> Self {
         self.rethrow_distributed_locker_exceptions = rethrow;

@@ -97,6 +97,40 @@ A backplane continuity gap, queue overflow or changed connection epoch requires 
 
 Distributed lease capabilities are explicit. Native owned acquisition, renewal and token-checked release prevent abandoned ownership. Strict stale-owner commit rejection additionally requires an atomic backend ownership check; renewal alone cannot provide it during a partition. An explicitly selected legacy provider mode carries weaker guarantees; an opaque acquisition that never completes cannot promise bounded cancellation drainage. A finite lock timeout, deliberate lock skipping or another writer outside the protocol can also permit duplicate origin work.
 
+
+### Redis outages and lease policy
+
+The default `LeasePolicy::Fenced` rejects a cache miss when the distributed
+locker cannot acquire ownership, including when
+`with_rethrow_distributed_locker_exceptions(false)` is set. Ordinary fresh L1
+hits remain local if the value store or locker alone is unavailable.
+
+A native backplane disconnect discards L1, including retained fail-safe values,
+because invalidations may have been missed. A previously warm key then needs
+L2 or the origin. With a failing fenced locker this returns `Error::Lease`;
+without a locker the origin may run again. Reconnection also reconciles L1.
+This default prioritizes invalidation correctness and does not provide the same
+outage availability as FusionCache's ordinary suppressed-locker-error path.
+
+To permit ordinary origin work after a locker acquisition failure, explicitly
+select cooperative ownership:
+
+```rust
+use amalgam::{Cache, EntryOptions, LeasePolicy};
+
+let builder = Cache::<String>::builder()
+    .lease_policy(LeasePolicy::CooperativeLegacy)
+    .default_options(EntryOptions::default()
+        .with_rethrow_distributed_locker_exceptions(false));
+```
+
+Keep the Redis providers on that builder. This permits duplicate origin work
+across nodes during an outage and gives up strict stale-owner commit fencing.
+It does not preserve pre-disconnect L1 values. Explicit cancellation remains
+an error. Supervised acquisition cleanup can also make `shutdown()` report
+outage failures after Redis has recovered; the rethrow option does not erase
+those owned-work diagnostics.
+
 Failed or skipped distributed effects can enter recovery with their original bytes, remaining lifetime and pending stage. Local same-key commit lanes order replay, foreground effects and publication. This protects an awaited newer local mutation from an older replay. Independent nodes and custom writes are not globally linearizable without a participating conditional backend protocol.
 
 ## Copying and capacity
