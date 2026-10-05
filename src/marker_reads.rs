@@ -6,6 +6,7 @@ use crate::error::Result;
 use crate::events::Events;
 use crate::execution::lock;
 use crate::locking::KeyedLock;
+use crate::marker_snapshots::{MarkerLifecyclePolicy, MarkerSnapshotCache};
 use crate::memory::{CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
 use crate::options::{EntryOptions, JitterSample};
 use crate::tags::{MarkerKind, MarkerVersion};
@@ -34,6 +35,10 @@ pub enum MarkerReadFailure {
     SoftTimeout,
     /// The unconditional marker deadline elapsed.
     HardTimeout,
+    /// The immediate shared marker factory was excluded by its soft budget.
+    FactorySoftTimeout,
+    /// The immediate shared marker factory was excluded by its hard budget.
+    FactoryHardTimeout,
     /// Durable control storage failed.
     Backend,
     /// A control response violated its protocol.
@@ -125,7 +130,13 @@ struct ClearObservations {
 pub(crate) struct MarkerObservations {
     pub(crate) memory: MemoryStore<MarkerObservation>,
     pub(crate) locks: KeyedLock,
+    pub(crate) lifecycle: MarkerLifecycleAccess,
     clears: Mutex<ClearObservations>,
+}
+
+pub(crate) enum MarkerLifecycleAccess {
+    DurableOnly,
+    CachedSnapshots(Arc<dyn MarkerSnapshotCache>),
 }
 
 pub(crate) enum MarkerReads {
@@ -134,6 +145,15 @@ pub(crate) enum MarkerReads {
 }
 
 impl MarkerReads {
+    pub(crate) fn lifecycle_policy(&self) -> MarkerLifecyclePolicy {
+        match self {
+            Self::DurableRequired => MarkerLifecyclePolicy::DurableOnly,
+            Self::OptionsControlled(observations) => match &observations.lifecycle {
+                MarkerLifecycleAccess::DurableOnly => MarkerLifecyclePolicy::DurableOnly,
+                MarkerLifecycleAccess::CachedSnapshots(_) => MarkerLifecyclePolicy::CachedSnapshots,
+            },
+        }
+    }
     pub(crate) fn policy(&self) -> MarkerReadPolicy {
         match self {
             Self::DurableRequired => MarkerReadPolicy::DurableRequired,
@@ -150,8 +170,14 @@ impl MarkerReads {
 }
 
 impl MarkerObservations {
-    pub(crate) fn new(limits: MemoryLimits, clock: Arc<dyn Clock>, expiry: MemoryExpiry) -> Self {
+    pub(crate) fn new(
+        limits: MemoryLimits,
+        clock: Arc<dyn Clock>,
+        expiry: MemoryExpiry,
+        lifecycle: MarkerLifecycleAccess,
+    ) -> Self {
         Self {
+            lifecycle,
             memory: MemoryStore::with_clock_and_expiry(
                 limits,
                 Events::with_capacity(16),
@@ -279,6 +305,38 @@ impl MarkerObservations {
             .await)
     }
 
+    pub(crate) async fn store_snapshot(
+        &self,
+        kind: &MarkerKind,
+        observation: MarkerObservation,
+        snapshot: crate::MarkerSnapshot,
+        options: &EntryOptions,
+        now: Timestamp,
+        stamp: ContinuityStamp,
+    ) -> Result<MarkerObservation> {
+        if options.skip_memory_write() || !stamp.is_current() {
+            return Ok(observation);
+        }
+        let source = Entry::try_rehydrate(
+            observation,
+            snapshot.created(),
+            snapshot.logical_expiration(),
+            snapshot.physical_expiration(),
+            false,
+            None,
+            None,
+            Box::from([]),
+            now,
+        )?;
+        let Some(local) = source.for_memory_hydration(options, now)? else {
+            return Ok(observation);
+        };
+        let local = local.with_hydrated_value(observation, stamp.clone());
+        Ok(self
+            .admit_observation(Self::key(kind), local, now, stamp)
+            .await)
+    }
+
     async fn admit_observation(
         &self,
         key: Arc<str>,
@@ -329,6 +387,69 @@ impl MarkerObservations {
                 .insert_if_unchanged(Self::key(kind), Some(source), entry, now)
                 .await;
             tracing::trace!(?admission, "marker fallback observation admission");
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn merge_maximum(
+        &self,
+        kind: &MarkerKind,
+        maximum: MarkerVersion,
+        now: Timestamp,
+        stamp: ContinuityStamp,
+    ) {
+        let key = Self::key(kind);
+        while stamp.is_current() {
+            let Some(current) = self.memory.get_at(&key, now).await else {
+                return;
+            };
+            let observation = current.value().reconcile_maximum(Some(maximum));
+            if observation == *current.value() {
+                return;
+            }
+            let merged = current.with_value(observation);
+            let admission = self
+                .memory
+                .insert_if_unchanged(Arc::clone(&key), Some(&current), merged, now)
+                .await;
+            if admission != MemoryAdmission::Rejected(CapacityRejection::VersionChanged) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn retain_snapshot_fallback(
+        &self,
+        kind: &MarkerKind,
+        snapshot: crate::MarkerSnapshot,
+        presence: MarkerPresence,
+        options: &EntryOptions,
+        now: Timestamp,
+        failure: MarkerReadFailure,
+        stamp: ContinuityStamp,
+    ) -> Result<()> {
+        if options.skip_memory_write() || !stamp.is_current() {
+            return Ok(());
+        }
+        let observation = MarkerObservation::Retained { presence, failure };
+        let source = Entry::try_rehydrate(
+            observation,
+            snapshot.created(),
+            snapshot.logical_expiration(),
+            snapshot.physical_expiration(),
+            false,
+            None,
+            None,
+            Box::from([]),
+            now,
+        )?
+        .with_retention(options.size()?, options.priority());
+        if let Some(throttled) = Entry::try_throttled(&source, options, now)? {
+            let entry = throttled.with_hydrated_value(observation, stamp.clone());
+            self.admit_observation(Self::key(kind), entry, now, stamp)
+                .await;
         }
         Ok(())
     }

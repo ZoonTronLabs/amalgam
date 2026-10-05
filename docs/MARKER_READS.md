@@ -97,18 +97,21 @@ use the same expiring cache as tags.
 | EnableAutoClone | Marker payloads are closed immutable Copy values; no ordinary `ValueCloner<V>` is required or called |
 | AllowStaleOnReadOnly | Does not select secondary fallback; the marker helper is not an ordinary read-only value operation |
 
-The remaining fields are not implemented as secondary marker factory controls.
-FactoryHardTimeout, background factory completion, marker eager refresh and
-distributed marker locking remain open work. EagerRefreshThreshold metadata
+The default `MarkerLifecyclePolicy::DurableOnly` does not run a secondary marker
+factory. Opt-in [CachedSnapshots](MARKER_SNAPSHOTS.md) adds nonzero renewal/repair,
+independent remote deadlines, zero factory-budget handling and owned foreground/
+background writes. Marker eager refresh, distributed locking, late factory
+completion and snapshot recovery remain open. EagerRefreshThreshold metadata
 alone does not start a marker eager refresh. SkipAutoCloneForImmutableObjects
 does not force an ordinary value serializer over typed markers.
 
 DistributedDuration and DistributedFailSafeMaxDuration do not expire durable
 markers, including explicit mutations: the atomic control protocol retains
-monotonic tombstones independently of ordinary value TTL. Secondary reads do
-not currently perform FusionCache's stale/nonzero marker renewal/repair writes.
-Accordingly SkipDistributedWrite, background distributed writes and backplane
-notification options control explicit marker mutations, not read renewal.
+monotonic tombstones independently of ordinary value TTL. In CachedSnapshots,
+those distributed durations instead govern the expendable observation record.
+SkipDistributedWrite and background distributed writes also select its renewal
+behavior. Backplane notification options control explicit marker mutations;
+read renewal never publishes an invalidation.
 Mutation operation overrides affect their write/seeding; future read policy
 still comes from cache-wide tag defaults.
 

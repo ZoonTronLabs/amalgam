@@ -23,6 +23,10 @@ use crate::distributed_lock::{LeaseError, LeaseProof};
 use crate::entry::Entry;
 use crate::error::{Error, FactoryCancellationReason, Result};
 use crate::execution::FactoryCancellation;
+use crate::marker_snapshots::{
+    MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotCacheError, MarkerSnapshotLimits,
+    MarkerSnapshotRead, MarkerSnapshotRenewal,
+};
 use crate::options::{EntryOptions, EntryWeight, Priority};
 use crate::tags::{
     CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerState, MarkerStoreLimits,
@@ -659,6 +663,11 @@ impl From<MarkerReadError> for Error {
 )]
 #[async_trait]
 pub trait InvalidationStore: Send + Sync {
+    /// Optional expiring snapshot area; default providers retain durable-only I/O.
+    fn snapshot_cache(&self) -> Option<Arc<dyn MarkerSnapshotCache>> {
+        None
+    }
+
     /// Reads one durable maximum from a genuinely separate control area.
     async fn read(
         &self,
@@ -706,18 +715,32 @@ pub trait InvalidationStore: Send + Sync {
 }
 
 /// Reference durable maxima, independent from the ordinary value-key map.
+#[derive(Clone)]
 pub struct InMemoryInvalidationStore {
-    scopes: Mutex<HashMap<CacheScope, MarkerState>>,
+    scopes: Arc<Mutex<HashMap<CacheScope, MarkerState>>>,
+    snapshots: Arc<Mutex<HashMap<(CacheScope, MarkerKind), MarkerSnapshot>>>,
     limits: MarkerStoreLimits,
+    snapshot_limits: MarkerSnapshotLimits,
 }
 
 impl InMemoryInvalidationStore {
     /// Creates a bounded provider without expiring live tombstones.
     #[must_use]
     pub fn new(limits: MarkerStoreLimits) -> Self {
+        Self::with_snapshot_limits(limits, MarkerSnapshotLimits::default())
+    }
+
+    /// Creates independently bounded permanent facts and expendable snapshots.
+    #[must_use]
+    pub fn with_snapshot_limits(
+        limits: MarkerStoreLimits,
+        snapshot_limits: MarkerSnapshotLimits,
+    ) -> Self {
         Self {
-            scopes: Mutex::new(HashMap::new()),
+            scopes: Arc::new(Mutex::new(HashMap::new())),
+            snapshots: Arc::new(Mutex::new(HashMap::new())),
             limits,
+            snapshot_limits,
         }
     }
 
@@ -729,6 +752,12 @@ impl InMemoryInvalidationStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
+
+    /// Snapshot records retained; expired records are removed by reads/renewals.
+    #[must_use]
+    pub fn snapshot_count(&self) -> usize {
+        crate::execution::lock(&self.snapshots).len()
+    }
 }
 
 impl Default for InMemoryInvalidationStore {
@@ -739,6 +768,9 @@ impl Default for InMemoryInvalidationStore {
 
 #[async_trait]
 impl InvalidationStore for InMemoryInvalidationStore {
+    fn snapshot_cache(&self) -> Option<Arc<dyn MarkerSnapshotCache>> {
+        Some(Arc::new(self.clone()))
+    }
     async fn read(
         &self,
         scope: &CacheScope,
@@ -794,6 +826,105 @@ impl InvalidationStore for InMemoryInvalidationStore {
                     .map(|at| StoredMarker::new(kind.clone(), at))
             })
             .collect())
+    }
+}
+
+#[async_trait]
+impl MarkerSnapshotCache for InMemoryInvalidationStore {
+    async fn read_snapshot(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        now: Timestamp,
+        cancellation: FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        let scopes = crate::execution::lock(&self.scopes);
+        let maximum = scopes.get(scope).and_then(|state| state.read(kind));
+        let mut snapshots = crate::execution::lock(&self.snapshots);
+        let key = (scope.clone(), kind.clone());
+        let result = match snapshots.get(&key).copied() {
+            Some(snapshot) if snapshot.is_physically_expired(now) => {
+                snapshots.remove(&key);
+                MarkerSnapshotRead::Missing { maximum }
+            }
+            Some(snapshot) => MarkerSnapshotRead::Snapshot(snapshot.with_maximum(maximum)),
+            None => MarkerSnapshotRead::Missing { maximum },
+        };
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        Ok(result)
+    }
+
+    async fn renew_snapshot(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        now: Timestamp,
+        cancellation: FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        if snapshot.is_physically_expired(now) {
+            return Ok(MarkerSnapshotRenewal::Expired);
+        }
+        let result = self.renew_snapshot_atomic(scope, kind, snapshot, now);
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        Ok(result)
+    }
+
+    async fn renew_snapshot_with_lease(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        now: Timestamp,
+        proof: &LeaseProof,
+        cancellation: FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        let result = proof
+            .with_memory_ownership(|| self.renew_snapshot_atomic(scope, kind, snapshot, now))?
+            .ok_or(LeaseError::Lost)?;
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        Ok(result)
+    }
+}
+
+impl InMemoryInvalidationStore {
+    fn renew_snapshot_atomic(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        now: Timestamp,
+    ) -> MarkerSnapshotRenewal {
+        if snapshot.is_physically_expired(now) {
+            return MarkerSnapshotRenewal::Expired;
+        }
+        // All operations take journal before snapshot: renewal and durable
+        // advance cannot race across the atomic maximum decision.
+        let scopes = crate::execution::lock(&self.scopes);
+        let maximum = scopes.get(scope).and_then(|state| state.read(kind));
+        let mut snapshots = crate::execution::lock(&self.snapshots);
+        snapshots.retain(|_, entry| !entry.is_physically_expired(now));
+        let key = (scope.clone(), kind.clone());
+        if let Some(current) = snapshots.get(&key).copied()
+            && current.supersedes(snapshot)
+        {
+            return MarkerSnapshotRenewal::KeptNewer(current.with_maximum(maximum));
+        }
+        if !snapshots.contains_key(&key)
+            && snapshots.len() >= self.snapshot_limits.max_entries()
+            && let Some(oldest) = snapshots
+                .iter()
+                .min_by_key(|(_, entry)| entry.created())
+                .map(|(key, _)| key.clone())
+        {
+            snapshots.remove(&oldest);
+        }
+        let snapshot = snapshot.with_maximum(maximum);
+        snapshots.insert(key, snapshot);
+        MarkerSnapshotRenewal::Stored(snapshot)
     }
 }
 

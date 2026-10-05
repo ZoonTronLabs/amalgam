@@ -39,6 +39,7 @@ pub mod factory;
 mod lifecycle;
 pub mod locking;
 pub mod marker_reads;
+pub mod marker_snapshots;
 pub mod maybe;
 pub mod memory;
 pub mod observability;
@@ -96,6 +97,11 @@ pub use factory::{
     ValidatorUpdate,
 };
 pub use marker_reads::{MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy};
+pub use marker_snapshots::{
+    MarkerLifecyclePolicy, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotCacheError,
+    MarkerSnapshotLimits, MarkerSnapshotRead, MarkerSnapshotRenewal, MarkerSnapshotValidationError,
+    MarkerSnapshotWriteOutcome,
+};
 pub use maybe::MaybeValue;
 pub use memory::{
     CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore, MemoryUsage,

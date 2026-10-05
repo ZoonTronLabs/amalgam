@@ -252,6 +252,13 @@ impl OperationOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CacheEvent {
+    /// An expiring control snapshot write finished, separate from invalidation.
+    MarkerSnapshotWrite {
+        /// The scoped marker category; ordinary value keys are not parsed.
+        kind: crate::MarkerKind,
+        /// The actual completion, including deliberately suppressed provider faults.
+        outcome: crate::MarkerSnapshotWriteOutcome,
+    },
     /// A typed peer invalidation was applied and its observation cache updated.
     MarkerReceived {
         /// The full scoped control command, including the source and revision.

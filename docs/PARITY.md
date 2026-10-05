@@ -38,7 +38,11 @@ Default durable control reads retain required validation within the value read
 budget. Opt-in `MarkerReadPolicy::OptionsControlled` applies independent marker
 read options, observation retention, per-marker budgets and typed authority,
 including fresh L1 hits. [The marker field matrix](MARKER_READS.md) describes
-remaining factory/renewal gaps and deliberate stronger boundaries. Async codecs
+remaining lifecycle gaps and deliberate stronger boundaries. Additional opt-in
+[CachedSnapshots](MARKER_SNAPSHOTS.md) supports expiring remote observations and
+nonzero repair with atomic maxima, independent deadlines and owned writes;
+the journal stays permanent. Provider fencing is available, while marker locker
+orchestration/eager/recovery still require implementation and evidence. Async codecs
 receive the actual owned cooperative operation signal through additive hooks.
 
 New codec/provider error envelopes preserve the concrete source for downcasting.

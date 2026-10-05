@@ -353,6 +353,17 @@ mod imp {
     impl PluginSession for MetricsSession {
         fn on_event(&self, event: &CacheEvent) -> Result<(), PluginError> {
             let counter = match event {
+                CacheEvent::MarkerSnapshotWrite { outcome, .. } => {
+                    let outcome = match outcome {
+                        crate::MarkerSnapshotWriteOutcome::Stored => "stored",
+                        crate::MarkerSnapshotWriteOutcome::KeptNewer => "kept_newer",
+                        crate::MarkerSnapshotWriteOutcome::Expired => "expired",
+                        crate::MarkerSnapshotWriteOutcome::BackendFailure => "backend_failure",
+                        crate::MarkerSnapshotWriteOutcome::ProtocolFailure => "protocol_failure",
+                    };
+                    metrics::counter!("amalgam_marker_snapshot_writes_total", "cache_name" => self.label.to_string(), "outcome" => outcome).increment(1);
+                    None
+                }
                 CacheEvent::MarkerRead { .. } => Some(&self.counters.marker_reads),
                 CacheEvent::MarkerReceived { .. } => Some(&self.counters.markers_received),
                 CacheEvent::Hit { stale: false, .. } => Some(&self.counters.hits),

@@ -30,8 +30,12 @@ use crate::factory::{FactoryContext, FactoryProduct, ProductOrigin, StaleInfo};
 use crate::lifecycle::Tasks;
 use crate::locking::{KeyGuard, KeyedLock};
 use crate::marker_reads::{
-    MarkerObservation, MarkerObservations, MarkerPresence, MarkerReadFailure, MarkerReadOutcome,
-    MarkerReadPolicy, MarkerReads,
+    MarkerLifecycleAccess, MarkerObservation, MarkerObservations, MarkerPresence,
+    MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy, MarkerReads,
+};
+use crate::marker_snapshots::{
+    MarkerLifecyclePolicy, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotRead,
+    MarkerSnapshotRenewal,
 };
 use crate::maybe::MaybeValue;
 use crate::memory::{MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
@@ -293,11 +297,36 @@ enum OptionsTarget {
 }
 enum MarkerFetch {
     Observed(MarkerPresence),
+    Snapshot(MarkerSnapshotRead),
     Deadline(MarkerReadFailure),
 }
 enum MarkerLookup {
     Ready(MarkerReadOutcome),
     Refresh(Option<Entry<MarkerObservation>>),
+}
+#[derive(Clone, Copy)]
+enum MarkerFactoryStale<'a> {
+    Memory(&'a Entry<MarkerObservation>),
+    Distributed(MarkerSnapshot),
+    Absent,
+}
+enum MarkerProviderFault {
+    Backend,
+    Protocol,
+}
+impl MarkerProviderFault {
+    fn read_failure(self) -> MarkerReadFailure {
+        match self {
+            Self::Backend => MarkerReadFailure::Backend,
+            Self::Protocol => MarkerReadFailure::Protocol,
+        }
+    }
+    fn write_outcome(self) -> crate::MarkerSnapshotWriteOutcome {
+        match self {
+            Self::Backend => crate::MarkerSnapshotWriteOutcome::BackendFailure,
+            Self::Protocol => crate::MarkerSnapshotWriteOutcome::ProtocolFailure,
+        }
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum L2ReadPolicy {
@@ -480,6 +509,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// The selected secondary control-read contract.
     pub fn marker_read_policy(&self) -> MarkerReadPolicy {
         self.inner.marker_reads.policy()
+    }
+    /// The independent marker snapshot lifetime/repair contract.
+    pub fn marker_lifecycle_policy(&self) -> MarkerLifecyclePolicy {
+        self.inner.marker_reads.lifecycle_policy()
     }
     /// Configured subscription readiness policy.
     pub fn wait_for_initial_backplane_subscribe(&self) -> bool {
@@ -1902,6 +1935,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         kind: MarkerKind,
         cancellation: &FactoryCancellation,
     ) -> Result<()> {
+        self.validate_execution_options(&self.inner.tags_default_options, OptionsTarget::Marker)?;
         let captured = self.inner.epoch.load(Ordering::Acquire);
         let outcome = match self.marker_lookup(observations, &kind, captured).await {
             MarkerLookup::Ready(outcome) => outcome,
@@ -2028,10 +2062,38 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         captured: u64,
         cancellation: &FactoryCancellation,
     ) -> Result<MarkerReadOutcome> {
-        match self
-            .fetch_control_marker(store, kind.clone(), cached.is_some(), cancellation)
-            .await
-        {
+        let fetched = match &observations.lifecycle {
+            MarkerLifecycleAccess::DurableOnly => {
+                self.fetch_control_marker(
+                    Arc::clone(&store),
+                    kind.clone(),
+                    cached.is_some(),
+                    cancellation,
+                )
+                .await
+            }
+            MarkerLifecycleAccess::CachedSnapshots(cache) => {
+                self.fetch_control_snapshot(
+                    Arc::clone(cache),
+                    kind.clone(),
+                    cached.is_some(),
+                    cancellation,
+                )
+                .await
+            }
+        };
+        match fetched {
+            Ok(MarkerFetch::Snapshot(snapshot)) => {
+                self.resolve_control_snapshot(
+                    observations,
+                    kind,
+                    cached,
+                    snapshot,
+                    captured,
+                    cancellation,
+                )
+                .await
+            }
             Ok(MarkerFetch::Observed(presence)) => {
                 self.record_control_observation(observations, kind, presence, captured)
                     .await
@@ -2041,12 +2103,374 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     .await
             }
             Err(Error::Marker(error)) => {
-                let failure = self.suppressed_marker_failure(kind, error)?;
+                let failure = self.suppressed_marker_fault(kind, error)?.read_failure();
                 self.marker_degraded(observations, kind, cached, failure)
                     .await
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn fetch_control_snapshot(
+        &self,
+        cache: Arc<dyn MarkerSnapshotCache>,
+        kind: MarkerKind,
+        has_fallback: bool,
+        cancellation: &FactoryCancellation,
+    ) -> Result<MarkerFetch> {
+        let options = &self.inner.tags_default_options;
+        let timeout = options.appropriate_distributed_timeout(has_fallback);
+        let soft = options.is_fail_safe_enabled()
+            && has_fallback
+            && timeout == options.distributed_soft_timeout()
+            && timeout != options.distributed_hard_timeout();
+        let source = CancellationSource::new();
+        let token = source.token();
+        let scope = self.inner.scope.clone();
+        let clock = Arc::clone(&self.inner.clock);
+        let mut execution = self.inner.scopes.execution(
+            async move {
+                cache
+                    .read_snapshot(&scope, &kind, clock.now(), token)
+                    .await
+                    .map(MarkerFetch::Snapshot)
+                    .map_err(Error::from)
+            },
+            source,
+        );
+        execution.link(cancellation, LinkMode::Explicit);
+        match bounded(timeout, &mut execution).await? {
+            Some(result) => result,
+            None => {
+                execution.cancel(if soft {
+                    Reason::SoftTimeout
+                } else {
+                    Reason::HardTimeout
+                });
+                Ok(MarkerFetch::Deadline(if soft {
+                    MarkerReadFailure::SoftTimeout
+                } else {
+                    MarkerReadFailure::HardTimeout
+                }))
+            }
+        }
+    }
+
+    async fn resolve_control_snapshot(
+        &self,
+        observations: &MarkerObservations,
+        kind: &MarkerKind,
+        cached: Option<&Entry<MarkerObservation>>,
+        read: MarkerSnapshotRead,
+        captured: u64,
+        cancellation: &FactoryCancellation,
+    ) -> Result<MarkerReadOutcome> {
+        let (observation, stale) = match read {
+            MarkerSnapshotRead::Snapshot(snapshot) => {
+                self.apply_marker(StoredMarker::new(kind.clone(), snapshot.version()));
+                if snapshot.is_fresh(self.inner.clock.now()) {
+                    return self
+                        .record_control_snapshot(observations, kind, snapshot, captured)
+                        .await;
+                }
+                (
+                    MarkerObservation::KnownMaximum(snapshot.version()),
+                    MarkerFactoryStale::Distributed(snapshot),
+                )
+            }
+            MarkerSnapshotRead::Missing { maximum } => {
+                if let Some(version) = maximum {
+                    self.apply_marker(StoredMarker::new(kind.clone(), version));
+                }
+                let presence = maximum.map_or(MarkerPresence::Absent, MarkerPresence::Present);
+                (
+                    MarkerObservation::Confirmed(presence),
+                    cached.map_or(MarkerFactoryStale::Absent, MarkerFactoryStale::Memory),
+                )
+            }
+        };
+        let observation = observation.reconcile_maximum(self.inner.tags.marker_version(kind));
+        self.complete_control_marker_factory(
+            observations,
+            kind,
+            observation,
+            stale,
+            captured,
+            cancellation,
+        )
+        .await
+    }
+
+    async fn record_control_snapshot(
+        &self,
+        observations: &MarkerObservations,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        captured: u64,
+    ) -> Result<MarkerReadOutcome> {
+        let observation = MarkerObservation::Confirmed(MarkerPresence::Present(snapshot.version()))
+            .reconcile_maximum(self.inner.tags.marker_version(kind));
+        let observation = observations
+            .store_snapshot(
+                kind,
+                observation,
+                snapshot,
+                &self.inner.tags_default_options,
+                self.inner.clock.now(),
+                ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
+            )
+            .await?;
+        Ok(observation.observed_outcome())
+    }
+
+    async fn complete_control_marker_factory(
+        &self,
+        observations: &MarkerObservations,
+        kind: &MarkerKind,
+        observation: MarkerObservation,
+        stale: MarkerFactoryStale<'_>,
+        captured: u64,
+        cancellation: &FactoryCancellation,
+    ) -> Result<MarkerReadOutcome> {
+        cancellation.check()?;
+        let options = &self.inner.tags_default_options;
+        if let Some(failure) = self.excluded_marker_factory(stale)? {
+            return self
+                .retain_excluded_marker_factory(
+                    observations,
+                    kind,
+                    observation.presence(),
+                    stale,
+                    captured,
+                    failure,
+                )
+                .await;
+        }
+        // The shared factory is an immediate selection, not remote I/O. Positive
+        // factory budgets cannot time out this total, allocation-free decision.
+        let observation = observation.reconcile_maximum(self.inner.tags.marker_version(kind));
+        let observation = observations
+            .store(
+                kind,
+                observation,
+                options,
+                self.inner.clock.now(),
+                self.jitter_sample(options)?,
+                ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
+            )
+            .await?;
+        if let MarkerPresence::Present(version) = observation.presence()
+            && !options.skip_distributed_write()
+        {
+            self.write_control_snapshot(
+                kind.clone(),
+                MarkerSnapshot::fresh(version, options, self.inner.clock.now()),
+                captured,
+                cancellation,
+            )
+            .await?;
+        }
+        cancellation.check()?;
+        Ok(observation
+            .reconcile_maximum(self.inner.tags.marker_version(kind))
+            .observed_outcome())
+    }
+
+    fn marker_factory_fallback_eligible(&self, stale: MarkerFactoryStale<'_>) -> bool {
+        self.inner.tags_default_options.is_fail_safe_enabled()
+            && match stale {
+                MarkerFactoryStale::Memory(cached) => self.marker_fallback_eligible(Some(cached)),
+                MarkerFactoryStale::Distributed(snapshot) => {
+                    !snapshot.is_physically_expired(self.inner.clock.now())
+                }
+                MarkerFactoryStale::Absent => false,
+            }
+    }
+
+    fn excluded_marker_factory(
+        &self,
+        stale: MarkerFactoryStale<'_>,
+    ) -> Result<Option<MarkerReadFailure>> {
+        let options = &self.inner.tags_default_options;
+        let has_fallback = self.marker_factory_fallback_eligible(stale);
+        let timeout = options.appropriate_factory_timeout(has_fallback);
+        if !timeout
+            .as_duration()
+            .is_some_and(|duration| duration.is_zero())
+        {
+            return Ok(None);
+        }
+        if !options.is_fail_safe_enabled() {
+            return Err(Error::FactoryTimeout {
+                elapsed: Duration::ZERO,
+            });
+        }
+        Ok(Some(
+            if has_fallback
+                && timeout == options.factory_soft_timeout()
+                && timeout != options.factory_hard_timeout()
+            {
+                MarkerReadFailure::FactorySoftTimeout
+            } else {
+                MarkerReadFailure::FactoryHardTimeout
+            },
+        ))
+    }
+
+    async fn retain_excluded_marker_factory(
+        &self,
+        observations: &MarkerObservations,
+        kind: &MarkerKind,
+        presence: MarkerPresence,
+        stale: MarkerFactoryStale<'_>,
+        captured: u64,
+        failure: MarkerReadFailure,
+    ) -> Result<MarkerReadOutcome> {
+        match stale {
+            MarkerFactoryStale::Distributed(snapshot)
+                if self.marker_factory_fallback_eligible(stale) =>
+            {
+                observations
+                    .retain_snapshot_fallback(
+                        kind,
+                        snapshot,
+                        presence,
+                        &self.inner.tags_default_options,
+                        self.inner.clock.now(),
+                        failure,
+                        ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
+                    )
+                    .await?;
+                Ok(MarkerReadOutcome::StaleFallback(failure))
+            }
+            MarkerFactoryStale::Memory(cached) => {
+                self.marker_degraded(observations, kind, Some(cached), failure)
+                    .await
+            }
+            MarkerFactoryStale::Distributed(_) | MarkerFactoryStale::Absent => {
+                Ok(MarkerReadOutcome::Unavailable(failure))
+            }
+        }
+    }
+
+    async fn write_control_snapshot(
+        &self,
+        kind: MarkerKind,
+        snapshot: MarkerSnapshot,
+        captured: u64,
+        cancellation: &FactoryCancellation,
+    ) -> Result<()> {
+        let MarkerReads::OptionsControlled(observations) = &self.inner.marker_reads else {
+            return Ok(());
+        };
+        let MarkerLifecycleAccess::CachedSnapshots(cache) = &observations.lifecycle else {
+            return Ok(());
+        };
+        let source = CancellationSource::new();
+        let token = source.token();
+        let worker = self.clone();
+        let cache = Arc::clone(cache);
+        let key = MarkerObservations::key(&kind);
+        let execution = self.inner.scopes.execution(
+            async move {
+                worker
+                    .commit_control_snapshot(cache, kind, snapshot, captured, token)
+                    .await
+            },
+            source,
+        );
+        let background = self
+            .inner
+            .tags_default_options
+            .allow_background_distributed_operations();
+        execution.link(
+            cancellation,
+            if background {
+                LinkMode::CallerScope
+            } else {
+                LinkMode::Explicit
+            },
+        );
+        if background {
+            let _completion = self.inner.tasks.spawn(
+                ShutdownTask::Distributed,
+                key,
+                self.inner.events.clone(),
+                execution,
+            );
+            Ok(())
+        } else {
+            execution.await
+        }
+    }
+
+    async fn commit_control_snapshot(
+        &self,
+        cache: Arc<dyn MarkerSnapshotCache>,
+        kind: MarkerKind,
+        snapshot: MarkerSnapshot,
+        captured: u64,
+        cancellation: FactoryCancellation,
+    ) -> Result<()> {
+        cancellation.check()?;
+        if self.inner.epoch.load(Ordering::Acquire) != captured {
+            return Ok(());
+        }
+        // Like the reference Set, this owned write has no distributed-read
+        // timeout. Provider I/O bounds and explicit cancellation still apply.
+        let result = cache
+            .renew_snapshot(
+                &self.inner.scope,
+                &kind,
+                snapshot,
+                self.inner.clock.now(),
+                cancellation.clone(),
+            )
+            .await
+            .map_err(Error::from);
+        cancellation.check()?;
+        let outcome = match result {
+            Ok(renewal) => {
+                let (snapshot, outcome) = match renewal {
+                    MarkerSnapshotRenewal::Stored(snapshot) => {
+                        (Some(snapshot), crate::MarkerSnapshotWriteOutcome::Stored)
+                    }
+                    MarkerSnapshotRenewal::KeptNewer(snapshot) => {
+                        (Some(snapshot), crate::MarkerSnapshotWriteOutcome::KeptNewer)
+                    }
+                    MarkerSnapshotRenewal::Expired => {
+                        (None, crate::MarkerSnapshotWriteOutcome::Expired)
+                    }
+                };
+                if let Some(snapshot) = snapshot {
+                    self.apply_marker(StoredMarker::new(kind.clone(), snapshot.version()));
+                    if !self.inner.tags_default_options.skip_memory_write()
+                        && let MarkerReads::OptionsControlled(observations) =
+                            &self.inner.marker_reads
+                    {
+                        // Set does not hydrate/shorten the just-created L1
+                        // lifetime. A higher returned fact only raises its value.
+                        observations
+                            .merge_maximum(
+                                &kind,
+                                snapshot.version(),
+                                self.inner.clock.now(),
+                                ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
+                            )
+                            .await;
+                    }
+                }
+                outcome
+            }
+            Err(Error::Marker(error)) => {
+                self.suppressed_marker_fault(&kind, error)?.write_outcome()
+            }
+            Err(error) => return Err(error),
+        };
+        self.inner
+            .events
+            .emit_lazy(|| CacheEvent::MarkerSnapshotWrite { kind, outcome });
+        Ok(())
     }
 
     async fn record_control_observation(
@@ -2074,20 +2498,20 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         Ok(observation.observed_outcome())
     }
 
-    fn suppressed_marker_failure(
+    fn suppressed_marker_fault(
         &self,
         kind: &MarkerKind,
         error: MarkerError,
-    ) -> Result<MarkerReadFailure> {
+    ) -> Result<MarkerProviderFault> {
         let options = &self.inner.tags_default_options;
         let failure = match &error {
             MarkerError::Backend { .. } if !options.rethrow_distributed_exceptions() => {
-                MarkerReadFailure::Backend
+                MarkerProviderFault::Backend
             }
             MarkerError::Protocol { .. } | MarkerError::ProtocolWithSource { .. }
                 if !options.rethrow_serialization_exceptions() =>
             {
-                MarkerReadFailure::Protocol
+                MarkerProviderFault::Protocol
             }
             MarkerError::Unsupported
             | MarkerError::BlankWireVersion
@@ -2097,7 +2521,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             | MarkerError::Protocol { .. }
             | MarkerError::ProtocolWithSource { .. } => return Err(error.into()),
         };
-        tracing::warn!(%error, ?kind, "marker read uses explicitly selected degradation policy");
+        tracing::warn!(%error, ?kind, "marker provider uses explicitly selected degradation policy");
         Ok(failure)
     }
 
@@ -4713,6 +5137,7 @@ pub struct CacheBuilder<V> {
     default_options: EntryOptions,
     tags_default_options: EntryOptions,
     marker_read_policy: MarkerReadPolicy,
+    marker_lifecycle_policy: MarkerLifecyclePolicy,
     marker_read_limits: MemoryLimits,
     clock: Option<Arc<dyn Clock>>,
     max_capacity: Option<u64>,
@@ -4754,6 +5179,7 @@ impl<V> CacheBuilder<V> {
             default_options: EntryOptions::default(),
             tags_default_options: EntryOptions::tag_defaults(),
             marker_read_policy: MarkerReadPolicy::default(),
+            marker_lifecycle_policy: MarkerLifecyclePolicy::default(),
             marker_read_limits: MemoryLimits::new(Some(4096), None),
             clock: None,
             max_capacity: None,
@@ -4859,6 +5285,13 @@ impl<V> CacheBuilder<V> {
     /// durable contract by default. Skips/suppressed failures are explicit choices.
     pub fn marker_read_policy(mut self, policy: MarkerReadPolicy) -> Self {
         self.marker_read_policy = policy;
+        self
+    }
+
+    /// Opts into independent expiring snapshots and nonzero read-miss repair.
+    /// Existing durable providers remain supported by the default DurableOnly.
+    pub fn marker_lifecycle_policy(mut self, policy: MarkerLifecyclePolicy) -> Self {
+        self.marker_lifecycle_policy = policy;
         self
     }
 
@@ -5162,6 +5595,20 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             None if self.distributed.is_some() => MarkerAccess::Unavailable,
             None => MarkerAccess::Local,
         };
+        let marker_lifecycle = match self.marker_lifecycle_policy {
+            MarkerLifecyclePolicy::DurableOnly => MarkerLifecycleAccess::DurableOnly,
+            MarkerLifecyclePolicy::CachedSnapshots => {
+                if self.marker_read_policy != MarkerReadPolicy::OptionsControlled {
+                    return Err(ConfigError::MarkerLifecycleRequiresControlledReads.into());
+                }
+                let cache = match &markers {
+                    MarkerAccess::Durable(store) => store.snapshot_cache(),
+                    MarkerAccess::Local | MarkerAccess::Unavailable => None,
+                }
+                .ok_or(ConfigError::MarkerSnapshotCapabilityUnavailable)?;
+                MarkerLifecycleAccess::CachedSnapshots(cache)
+            }
+        };
         let storage = match (self.distributed, self.serializer) {
             (Some(backend), Some(serializer)) => Storage::Hybrid {
                 backend,
@@ -5190,9 +5637,14 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         };
         let marker_reads = match self.marker_read_policy {
             MarkerReadPolicy::DurableRequired => MarkerReads::DurableRequired,
-            MarkerReadPolicy::OptionsControlled => MarkerReads::OptionsControlled(Box::new(
-                MarkerObservations::new(self.marker_read_limits, Arc::clone(&clock), expiry),
-            )),
+            MarkerReadPolicy::OptionsControlled => {
+                MarkerReads::OptionsControlled(Box::new(MarkerObservations::new(
+                    self.marker_read_limits,
+                    Arc::clone(&clock),
+                    expiry,
+                    marker_lifecycle,
+                )))
+            }
         };
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),

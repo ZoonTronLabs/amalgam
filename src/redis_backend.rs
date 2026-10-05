@@ -25,6 +25,10 @@ use crate::distributed_lock::{
     RenewalOutcome, TokenAcquisition, WaitBudget,
 };
 use crate::error::{Error, Result};
+use crate::marker_snapshots::{
+    MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotCacheError, MarkerSnapshotRead,
+    MarkerSnapshotRenewal,
+};
 use crate::tags::{
     CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerStoreLimits, MarkerVersion,
     StoredMarker,
@@ -74,6 +78,46 @@ for index = 1, #fields, 2 do
   end
 end
 return {revision, through}
+"#;
+
+const READ_MARKER_SNAPSHOT_SCRIPT: &str = r#"
+local maximum = redis.call('hget', KEYS[2], ARGV[1])
+if maximum and (string.len(maximum) ~= 16 or not string.match(maximum, '^[0-9a-f]+$')) then return {'!protocol'} end
+local snapshot = redis.call('get', KEYS[1])
+if not snapshot then return {'m', maximum or ''} end
+if string.len(snapshot) ~= 64 or not string.match(snapshot, '^[0-9a-f]+$') then return {'!protocol'} end
+if string.sub(snapshot, 49, 64) <= ARGV[2] then return {'m', maximum or ''} end
+if maximum and maximum > string.sub(snapshot, 1, 16) then
+  return {'s', maximum .. string.sub(snapshot, 17)}
+end
+return {'s', snapshot}
+"#;
+
+const RENEW_MARKER_SNAPSHOT_SCRIPT: &str = r#"
+if ARGV[5] ~= '' and redis.call('get', KEYS[3]) ~= ARGV[5] then return '!lease' end
+local candidate = ARGV[2]
+local current = redis.call('get', KEYS[1])
+if current then
+  if string.len(current) ~= 64 or not string.match(current, '^[0-9a-f]+$') then return '!protocol' end
+  if string.sub(current, 49, 64) > ARGV[4] and
+    (string.sub(current, 1, 16) > string.sub(candidate, 1, 16) or
+     (string.sub(current, 1, 16) == string.sub(candidate, 1, 16) and
+      string.sub(current, 17, 32) > string.sub(candidate, 17, 32))) then
+    local maximum = redis.call('hget', KEYS[2], ARGV[1])
+    if maximum and (string.len(maximum) ~= 16 or not string.match(maximum, '^[0-9a-f]+$')) then return '!protocol' end
+    if maximum and maximum > string.sub(current, 1, 16) then
+      current = maximum .. string.sub(current, 17)
+    end
+    return 'k:' .. current
+  end
+end
+local maximum = redis.call('hget', KEYS[2], ARGV[1])
+if maximum and (string.len(maximum) ~= 16 or not string.match(maximum, '^[0-9a-f]+$')) then return '!protocol' end
+if maximum and maximum > string.sub(candidate, 1, 16) then
+  candidate = maximum .. string.sub(candidate, 17)
+end
+redis.call('set', KEYS[1], candidate, 'PX', ARGV[3])
+return 's:' .. candidate
 "#;
 
 fn distributed_err(error: impl std::error::Error + Send + Sync + 'static) -> Error {
@@ -188,6 +232,63 @@ fn marker_field(kind: &MarkerKind) -> String {
     }
 }
 
+fn marker_snapshot_key(scope: &CacheScope, kind: &MarkerKind) -> String {
+    format!(
+        "{PRIVATE_AREA}marker-snapshots/{}/{}",
+        encode_hex(scope.storage_id().as_bytes()),
+        marker_field(kind)
+    )
+}
+
+fn encode_marker_snapshot(snapshot: MarkerSnapshot) -> String {
+    let mut frame = String::with_capacity(64);
+    for timestamp in [
+        snapshot.version().timestamp(),
+        snapshot.created(),
+        snapshot.logical_expiration(),
+        snapshot.physical_expiration(),
+    ] {
+        append_ordered_timestamp(&mut frame, timestamp);
+    }
+    frame
+}
+
+fn append_ordered_timestamp(frame: &mut String, timestamp: crate::Timestamp) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let biased = (timestamp.ticks() as u64) ^ (1_u64 << 63);
+    for digit in (0..16).rev() {
+        frame.push(char::from(HEX[((biased >> (digit * 4)) & 15) as usize]));
+    }
+}
+
+fn ordered_timestamp(timestamp: crate::Timestamp) -> String {
+    let mut frame = String::with_capacity(16);
+    append_ordered_timestamp(&mut frame, timestamp);
+    frame
+}
+
+fn decode_snapshot_timestamp(encoded: &str) -> std::result::Result<crate::Timestamp, MarkerError> {
+    let biased = u64::from_str_radix(encoded, 16).map_err(MarkerError::protocol)?;
+    Ok(crate::Timestamp::from_ticks(
+        (biased ^ (1_u64 << 63)) as i64,
+    ))
+}
+
+fn decode_marker_snapshot(encoded: &str) -> std::result::Result<MarkerSnapshot, MarkerError> {
+    if encoded.len() != 64 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(MarkerError::Protocol {
+            detail: "invalid marker snapshot frame".into(),
+        });
+    }
+    MarkerSnapshot::new(
+        MarkerVersion::from_ordered_hex(&encoded[..16])?,
+        decode_snapshot_timestamp(&encoded[16..32])?,
+        decode_snapshot_timestamp(&encoded[32..48])?,
+        decode_snapshot_timestamp(&encoded[48..64])?,
+    )
+    .map_err(MarkerError::protocol)
+}
+
 /// Redis durable atomic marker maxima in an isolated, bounded control area.
 #[derive(Clone)]
 pub struct RedisInvalidationStore {
@@ -211,6 +312,9 @@ impl RedisInvalidationStore {
 
 #[async_trait]
 impl InvalidationStore for RedisInvalidationStore {
+    fn snapshot_cache(&self) -> Option<Arc<dyn MarkerSnapshotCache>> {
+        Some(Arc::new(self.clone()))
+    }
     async fn read(
         &self,
         scope: &CacheScope,
@@ -313,6 +417,138 @@ impl InvalidationStore for RedisInvalidationStore {
                 })
             })
             .collect()
+    }
+}
+
+impl RedisInvalidationStore {
+    async fn renew_marker_snapshot(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        now: crate::Timestamp,
+        proof: Option<&crate::LeaseProof>,
+        cancellation: crate::FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        if snapshot.is_physically_expired(now) {
+            return Ok(MarkerSnapshotRenewal::Expired);
+        }
+        let ttl = snapshot
+            .remaining_ttl(now)
+            .as_millis()
+            .max(1)
+            .min(i64::MAX as u128) as i64;
+        let mut connection = self.manager.clone();
+        let response = tokio::time::timeout(
+            self.io.response_timeout,
+            redis::cmd("EVAL")
+                .arg(RENEW_MARKER_SNAPSHOT_SCRIPT)
+                .arg(3)
+                .arg(marker_snapshot_key(scope, kind))
+                .arg(marker_key(scope))
+                .arg(proof.map_or_else(
+                    || format!("{PRIVATE_AREA}unused-lease"),
+                    |proof| lease_key(proof.key()),
+                ))
+                .arg(marker_field(kind))
+                .arg(encode_marker_snapshot(snapshot))
+                .arg(ttl)
+                .arg(ordered_timestamp(now))
+                .arg(proof.map_or("", |proof| proof.token().as_str()))
+                .query_async::<String>(&mut connection),
+        )
+        .await
+        .map_err(MarkerError::backend)?
+        .map_err(MarkerError::backend)?;
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        match response.as_str() {
+            "!lease" => Err(LeaseError::Lost.into()),
+            "!protocol" => Err(MarkerError::Protocol {
+                detail: "invalid current marker snapshot".into(),
+            }
+            .into()),
+            response if response.starts_with("s:") => Ok(MarkerSnapshotRenewal::Stored(
+                decode_marker_snapshot(&response[2..])?,
+            )),
+            response if response.starts_with("k:") => Ok(MarkerSnapshotRenewal::KeptNewer(
+                decode_marker_snapshot(&response[2..])?,
+            )),
+            _ => Err(MarkerError::Protocol {
+                detail: "invalid marker renewal reply".into(),
+            }
+            .into()),
+        }
+    }
+}
+
+#[async_trait]
+impl MarkerSnapshotCache for RedisInvalidationStore {
+    async fn read_snapshot(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        now: crate::Timestamp,
+        cancellation: crate::FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        let mut connection = self.manager.clone();
+        let response = tokio::time::timeout(
+            self.io.response_timeout,
+            redis::cmd("EVAL")
+                .arg(READ_MARKER_SNAPSHOT_SCRIPT)
+                .arg(2)
+                .arg(marker_snapshot_key(scope, kind))
+                .arg(marker_key(scope))
+                .arg(marker_field(kind))
+                .arg(ordered_timestamp(now))
+                .query_async::<Vec<String>>(&mut connection),
+        )
+        .await
+        .map_err(MarkerError::backend)?
+        .map_err(MarkerError::backend)?;
+        MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
+        match response.as_slice() {
+            [action, payload] if action == "s" => Ok(MarkerSnapshotRead::Snapshot(
+                decode_marker_snapshot(payload)?,
+            )),
+            [action, payload] if action == "m" => Ok(MarkerSnapshotRead::Missing {
+                maximum: if payload.is_empty() {
+                    None
+                } else {
+                    Some(MarkerVersion::from_ordered_hex(payload)?)
+                },
+            }),
+            _ => Err(MarkerError::Protocol {
+                detail: "invalid atomic marker snapshot read".into(),
+            }
+            .into()),
+        }
+    }
+
+    async fn renew_snapshot(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        now: crate::Timestamp,
+        cancellation: crate::FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+        self.renew_marker_snapshot(scope, kind, snapshot, now, None, cancellation)
+            .await
+    }
+
+    async fn renew_snapshot_with_lease(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        snapshot: MarkerSnapshot,
+        now: crate::Timestamp,
+        proof: &crate::LeaseProof,
+        cancellation: crate::FactoryCancellation,
+    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+        self.renew_marker_snapshot(scope, kind, snapshot, now, Some(proof), cancellation)
+            .await
     }
 }
 

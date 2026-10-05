@@ -31,6 +31,12 @@ pub enum ConfigError {
     /// L2 was configured without a codec.
     #[error("a distributed cache requires a serializer")]
     DistributedWithoutSerializer,
+    /// Expiring marker snapshots require their explicit options-controlled read mode.
+    #[error("cached marker snapshots require OptionsControlled marker reads")]
+    MarkerLifecycleRequiresControlledReads,
+    /// The selected durable provider does not supply expiring marker snapshots.
+    #[error("the invalidation provider does not supply a marker snapshot cache")]
+    MarkerSnapshotCapabilityUnavailable,
     /// Deep cloning was requested without an implementation.
     #[error("auto-clone requires a value cloner or a serializer that supplies one")]
     AutoCloneWithoutCloner,
