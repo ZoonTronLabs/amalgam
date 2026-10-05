@@ -12,7 +12,8 @@ NuGet binary `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
 |---|---|
 | Factory original/processed key; current and stale tags | `original_key`, `tags`, `stale_tags`; `factory_context_contract` tests prefix ambiguity, cold L2 and eager |
 | Eager request tags | Passed from the triggering call, distinct from stale tags; matches released reference |
-| Separate marker mutation policy | `tags_default_options`, `tags_entry_options`, `EntryOptions::tag_defaults`; `marker_defaults_contract` tests explicit override and provider independence. Control-read fields are still unavailable, below |
+| Separate marker mutation policy | `tags_default_options`, `tags_entry_options`, `EntryOptions::tag_defaults`; `marker_defaults_contract` tests explicit override and provider independence |
+| Independent secondary marker reads | Opt-in `MarkerReadPolicy::OptionsControlled`, independent observation limits, per-marker budgets/skips/fault policy, typed authority and monotonic admission; `marker_read_contract` covers ready/L1/L2, peer races, continuity, short-circuit order and eager/passive cancellation. [Field boundaries](MARKER_READS.md) remain explicit |
 | Async complete-snapshot codecs | `AsyncDistributedSerializer`, `SerializationMode`; model/legacy tests plus additive cooperative hooks receive the actual owned scope signal. `cooperative_codec_contract` covers both directions, deadline reasons, expiry, eager/passive/replay, background completion, synchronous callbacks and direct legacy adapters |
 | Conditional validator replacement/clear | `not_modified_builder`, `ValidatorUpdate`, typed `ConditionalRefreshError`; `conditional_metadata_contract` verifies stored metadata on a cold L2 node |
 | Distributed expire choice | `DistributedExpirePolicy::Remove` matches FC L2 removal with stale L1; `RetainStale` keeps existing Rust behavior; `expire_policy_contract` tests both and skips/cancellation |
@@ -40,7 +41,7 @@ platform-only simply to close the inventory:
 | Logging/tracing/metrics configuration | Category levels, optional tags and full native OTel metric integration incomplete |
 | Optional distributed-expire-on-backplane-recovery | Exact replay policy only |
 | Portable tag/clear over a byte-only store | Requires separate genuine atomic InvalidationStore |
-| Marker control-read options | Durable validation currently ignores independent marker read skips/budgets; only mutation defaults are implemented |
+| Full marker factory/renewal options | Independent read controls are implemented by explicit policy; secondary renewal/repair, marker eager/background factory and distributed locking remain open. Durable marker TTL and recovery admission deliberately differ |
 | Full option-combination evidence | Stale-layer skips and locker degradation/bypass need a larger public matrix |
 
 .NET ABI, Microsoft service containers, HybridCache and ASP.NET OutputCaching

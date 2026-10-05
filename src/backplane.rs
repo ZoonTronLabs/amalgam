@@ -42,7 +42,7 @@ pub struct BackplaneMessage {
 }
 
 /// A validated control notification with an explicit namespace and marker kind.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerCommand {
     source_id: Arc<str>,
     scope: CacheScope,

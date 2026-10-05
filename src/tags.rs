@@ -490,6 +490,15 @@ impl TagRegistry {
             .map(MarkerVersion::timestamp)
     }
 
+    /// Reads a confirmed local maximum without changing observation freshness.
+    #[must_use]
+    pub fn marker_version(&self, kind: &MarkerKind) -> Option<MarkerVersion> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .read(kind)
+    }
+
     /// Merges a scope-wide logical invalidation.
     pub fn mark_clear_expire(&self, at: Timestamp) {
         self.advance(MarkerKind::ClearExpire, MarkerVersion::new(at));

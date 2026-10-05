@@ -197,7 +197,7 @@ impl ContinuityStamp {
         Self { epoch, captured }
     }
 
-    fn is_current(&self) -> bool {
+    pub(crate) fn is_current(&self) -> bool {
         self.epoch.load(Ordering::Acquire) == self.captured
     }
 }
@@ -278,6 +278,17 @@ impl<V> Entry<V> {
                 value,
                 meta: self.meta().clone(),
                 eligibility: Eligibility::Hydrated(stamp),
+            }),
+        }
+    }
+
+    /// Changes only a private orchestration payload, preserving its read fence.
+    pub(crate) fn with_value(&self, value: V) -> Self {
+        Self {
+            inner: Arc::new(EntryInner {
+                value,
+                meta: self.meta().clone(),
+                eligibility: self.inner.eligibility.clone(),
             }),
         }
     }

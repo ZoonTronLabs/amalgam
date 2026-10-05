@@ -252,6 +252,18 @@ impl OperationOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CacheEvent {
+    /// A typed peer invalidation was applied and its observation cache updated.
+    MarkerReceived {
+        /// The full scoped control command, including the source and revision.
+        command: crate::MarkerCommand,
+    },
+    /// A secondary invalidation read completed with explicit authority.
+    MarkerRead {
+        /// The control identity, independent of value keys.
+        kind: crate::MarkerKind,
+        /// Confirmed, reused, skipped or deliberately degraded control authority.
+        outcome: crate::MarkerReadOutcome,
+    },
     /// A supervised deferred storage/publication pipeline failed.
     BackgroundCommitError {
         /// The affected data key.

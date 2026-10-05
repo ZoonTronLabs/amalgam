@@ -38,6 +38,7 @@ mod execution;
 pub mod factory;
 mod lifecycle;
 pub mod locking;
+pub mod marker_reads;
 pub mod maybe;
 pub mod memory;
 pub mod observability;
@@ -71,7 +72,8 @@ pub use commit::{
 pub use distributed::{
     AsyncDistributedSerializer, DistributedCache, DistributedEntry, DistributedSerializer,
     DistributedSnapshot, InMemoryDistributedCache, InMemoryInvalidationStore, InvalidationStore,
-    JsonSerializer, LeasedMutation, LeasedWriteOutcome, SerializationMode, SnapshotRetention,
+    JsonSerializer, LeasedMutation, LeasedWriteOutcome, MarkerReadError, SerializationMode,
+    SnapshotRetention,
 };
 pub use distributed_lock::{
     AcquisitionPolicy, DistributedLease, DistributedLocker, InMemoryDistributedLocker, LeaseError,
@@ -93,6 +95,7 @@ pub use factory::{
     ConditionalRefreshError, FactoryContext, FactoryProduct, ModifiedBuilder, NotModifiedBuilder,
     ValidatorUpdate,
 };
+pub use marker_reads::{MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy};
 pub use maybe::MaybeValue;
 pub use memory::{
     CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore, MemoryUsage,

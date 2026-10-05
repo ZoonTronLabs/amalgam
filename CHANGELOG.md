@@ -9,6 +9,7 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 - Factory original key, current tags and stale tags; instance/provider inspection.
 - Independent tag/clear defaults (`tags_default_options`) and default policy factory.
+- Opt-in `MarkerReadPolicy::OptionsControlled`: independent secondary read options and observation bounds, per-marker deadlines/cancellation, typed control authority and peer-command events. CAS admission preserves newer facts, continuity fences reject old observations, and control checks stop at the first invalidation. Native marker factory renewal/repair remains open; see the field matrix in `docs/MARKER_READS.md`.
 - Async complete-snapshot serializer contract and explicit sync/async preference, used by all L2/expire/replay paths. Existing synchronous codec implementations and snapshot overrides remain supported.
 - Additive cooperative snapshot-codec hooks and `FactoryCancellation::check`. Every codec receives its owned operation signal; a linked L2 deadline scope publishes the exact timeout before dropping work without cancelling a later origin. Background factory/eager/passive/replay signals survive caller completion and end on owned shutdown.
 - Cancellation returned by a codec is always propagated, independently of serialization/transport suppression policies; synchronous callbacks cannot commit after cancelling their caller.

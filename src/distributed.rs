@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::distributed_lock::{LeaseError, LeaseProof};
 use crate::entry::Entry;
-use crate::error::{Error, Result};
+use crate::error::{Error, FactoryCancellationReason, Result};
 use crate::execution::FactoryCancellation;
 use crate::options::{EntryOptions, EntryWeight, Priority};
 use crate::tags::{
@@ -615,6 +615,43 @@ pub enum LeasedWriteOutcome {
     LeaseLost,
 }
 
+/// Complete expected failure family of a cooperative marker read.
+///
+/// Provider transport and control decoding failures belong in [`MarkerError`],
+/// preserving their original source. Cancellation cannot be suppressed as a
+/// provider fault or mistaken for a successful absent marker.
+#[derive(Debug, thiserror::Error)]
+pub enum MarkerReadError {
+    /// Storage or control protocol failure.
+    #[error(transparent)]
+    Provider(#[from] MarkerError),
+    /// The read's owning scope ended with its precise terminal reason.
+    #[error("marker read cancelled: {}", reason.as_str())]
+    Cancelled {
+        /// Cancellation of this owned phase.
+        reason: FactoryCancellationReason,
+    },
+}
+
+impl MarkerReadError {
+    /// Checks the owned token using this closed marker-read failure family.
+    pub fn check_cancellation(cancellation: &FactoryCancellation) -> std::result::Result<(), Self> {
+        match cancellation.reason() {
+            Some(reason) => Err(Self::Cancelled { reason }),
+            None => Ok(()),
+        }
+    }
+}
+
+impl From<MarkerReadError> for Error {
+    fn from(error: MarkerReadError) -> Self {
+        match error {
+            MarkerReadError::Provider(error) => Self::Marker(error),
+            MarkerReadError::Cancelled { reason } => Self::OperationCancelled { reason },
+        }
+    }
+}
+
 /// Durable invalidation storage. `advance` must implement a real atomic max.
 #[allow(
     clippy::double_must_use,
@@ -628,6 +665,21 @@ pub trait InvalidationStore: Send + Sync {
         scope: &CacheScope,
         kind: &MarkerKind,
     ) -> std::result::Result<Option<MarkerVersion>, MarkerError>;
+
+    /// Additive cooperative read hook. The default preserves old providers and
+    /// checks cancellation both before and after the legacy await. The signal
+    /// belongs to the actual owned marker phase, including its exact deadline.
+    async fn read_with_cancellation(
+        &self,
+        scope: &CacheScope,
+        kind: &MarkerKind,
+        cancellation: FactoryCancellation,
+    ) -> std::result::Result<Option<MarkerVersion>, MarkerReadError> {
+        MarkerReadError::check_cancellation(&cancellation)?;
+        let result = self.read(scope, kind).await;
+        MarkerReadError::check_cancellation(&cancellation)?;
+        Ok(result?)
+    }
 
     /// Advances an atomic maximum; any compaction first promotes ClearRemove.
     async fn advance(

@@ -34,10 +34,12 @@ the complete validated snapshot; `SerializationMode` selects an available model.
 async-only provider. `AsyncPreferred` uses a configured asynchronous provider;
 sync-only providers retain their established snapshot overrides.
 
-Marker options currently control mutations, while durable control reads still use
-required validation within the value read budget. Independent control skips and
-budgets remain an open functionality gap. Async codecs currently support owned
-future cancellation; a cooperative operation signal has not yet been forwarded.
+Default durable control reads retain required validation within the value read
+budget. Opt-in `MarkerReadPolicy::OptionsControlled` applies independent marker
+read options, observation retention, per-marker budgets and typed authority,
+including fresh L1 hits. [The marker field matrix](MARKER_READS.md) describes
+remaining factory/renewal gaps and deliberate stronger boundaries. Async codecs
+receive the actual owned cooperative operation signal through additive hooks.
 
 New codec/provider error envelopes preserve the concrete source for downcasting.
 Rust's typed envelope is an idiomatic diagnostic adaptation; it does not expose
@@ -58,7 +60,7 @@ custom values continue through their chosen `ValueCloner`. Providers may now use
 | Eager refresh | Request-driven, nonblocking refresh. Rechecks L2 and participates in a configured distributed locker; it does not apply the ordinary factory timeout. |
 | Snapshot ordering | Origin snapshot time is captured before origin work. Insertion time controls TTL separately. Delayed work does not acquire newer source ordering merely by finishing later. |
 | Conditional/adaptive origin | Products and updated options are validated before storage. `not_modified` needs a usable source value. |
-| Read-only lookup | Canonical reads preserve I/O, codec, deadline, circuit and copy failures. The selected L2 budget covers retrieval and required durable marker validation together. Canonical stale service rechecks physical retention and hard invalidation after waiting; legacy adapters preserve captured fallback compatibility. |
+| Read-only lookup | Canonical reads preserve value I/O, codec, deadline, circuit and copy failures. Default L2 budget covers retrieval and required durable validation; explicit OptionsControlled uses independent marker phases and documented marker fault policy. Canonical stale service rechecks physical retention and hard invalidation after waiting; legacy adapters preserve captured fallback compatibility. |
 | L1/L2 lifetime | Layer freshness and physical retention are independent. Hydration uses remaining source lifetime and cannot renew an expired source. |
 | Tags and clear | Durable markers use the effective physical namespace. Invalidation is **inclusive**, `entry_created <= marker`; a present minimum timestamp remains a marker. Explicit skipped distributed writes apply to single/batched tags and both clear modes, with honest per-stage receipts. |
 | Expire and notifications | Cold expire updates L2. Ordinary and passive hydration capture generation, continuity and expected L1 identity; delayed reads cannot overwrite newer hydration or completed local mutations. Preferred newer/equal-stamp stale memory is retained. Optional hydration skips a busy newer commit; private local epoch eligibility prevents post-gap insertion from becoming readable. |
@@ -92,7 +94,7 @@ Circuit refusal is an admission outcome, not a new transport failure; skipped op
 
 Durable tag/clear operations require an atomic invalidation store. Existing custom byte stores remain usable for ordinary L2 reads/writes without that optional capability. A custom implementation cannot silently claim atomic markers or fencing that it does not provide.
 
-Healthy L1 reads remain local. Cold L2 reads reconcile durable markers. Backplane continuity gaps, broadcast overflow and changed Redis connection epochs trigger reconciliation; Redis reports connected only after a matching subscription acknowledgement. `ready()` or `try_build_ready()` can await admission; healthless adapters report an explicit `BestEffort` outcome. A healthless custom backplane uses its selected conservative reconciliation policy. Timestamp-based marker ordering assumes a sufficiently consistent clock across participating nodes; injected clocks make local logic testable and do not solve distributed clock skew.
+Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers. OptionsControlled may revalidate markers on L1 hits according to independent tag defaults. Backplane continuity gaps, broadcast overflow and changed Redis connection epochs trigger reconciliation; Redis reports connected only after a matching subscription acknowledgement. `ready()` or `try_build_ready()` can await admission; healthless adapters report an explicit `BestEffort` outcome. A healthless custom backplane uses its selected conservative reconciliation policy. Timestamp-based marker ordering assumes a sufficiently consistent clock across participating nodes; injected clocks make local logic testable and do not solve distributed clock skew.
 
 ## Selected defaults
 

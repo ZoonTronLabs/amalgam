@@ -291,6 +291,8 @@ mod imp {
         codec_decode: metrics::Counter,
         published: metrics::Counter,
         received: metrics::Counter,
+        marker_reads: metrics::Counter,
+        markers_received: metrics::Counter,
     }
 
     struct MetricsSession {
@@ -337,7 +339,12 @@ mod imp {
                     labels.clone()
                 ),
                 published: metrics::counter!("amalgam_messages_published_total", labels.clone()),
-                received: metrics::counter!("amalgam_messages_received_total", labels),
+                received: metrics::counter!("amalgam_messages_received_total", labels.clone()),
+                marker_reads: metrics::counter!("amalgam_marker_reads_total", labels.clone()),
+                markers_received: metrics::counter!(
+                    "amalgam_marker_messages_received_total",
+                    labels
+                ),
             };
             Self { label, counters }
         }
@@ -346,6 +353,8 @@ mod imp {
     impl PluginSession for MetricsSession {
         fn on_event(&self, event: &CacheEvent) -> Result<(), PluginError> {
             let counter = match event {
+                CacheEvent::MarkerRead { .. } => Some(&self.counters.marker_reads),
+                CacheEvent::MarkerReceived { .. } => Some(&self.counters.markers_received),
                 CacheEvent::Hit { stale: false, .. } => Some(&self.counters.hits),
                 CacheEvent::Hit { stale: true, .. } => Some(&self.counters.stale),
                 CacheEvent::Miss { .. } => Some(&self.counters.misses),

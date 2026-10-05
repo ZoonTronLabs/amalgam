@@ -79,7 +79,7 @@ An explicit caller token and `FactoryContext` cancellation state identify cancel
 
 L2 backends, serializers, backplanes, lockers and copy strategies are open traits. JSON and reference in-memory providers are available by default; Redis, MessagePack and Postcard are optional. L1 and L2 freshness/retention are configured separately. Hydration caps local deadlines by the remaining source lifetime.
 
-Healthy L1 reads stay local. Cold L2 reads reconcile durable tag/clear markers; tags and clear against a custom L2 require an atomic invalidation provider. Ordinary legacy byte-store I/O remains usable without that capability. Control markers live outside ordinary value keys and are scoped by the effective physical namespace.
+Default healthy L1 reads stay local. Cold L2 reads reconcile durable tag/clear markers; tags and clear against a custom L2 require an atomic invalidation provider. Ordinary legacy byte-store I/O remains usable without that capability. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Unreleased opt-in [independent marker reads](docs/MARKER_READS.md) can revalidate L1 hits using separate tag defaults, budgets and observation limits.
 
 A backplane continuity gap, queue overflow or changed connection epoch requires reconciliation. Native Redis becomes connected only after a matching subscription acknowledgement. `ready()` and `try_build_ready()` expose that admission; the default initial-wait policy gates operations. A healthless adapter explicitly reports `BackplaneReadiness::BestEffort`. Custom backplanes without a health stream use the documented conservative reconciliation policy.
 
