@@ -1,6 +1,7 @@
 //! Cache-owned cancellable execution scopes. User code is never polled or dropped
 //! while a registry/state lock is held.
 use crate::error::{Error, FactoryCancellationReason as Reason, Result};
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -186,14 +187,37 @@ trait CancelWork: Send + Sync {
     fn finished(&self) -> bool;
 }
 
+const ACTIVE_STRIPES: usize = 64;
+#[repr(align(128))]
+struct ActiveStripe(AtomicUsize);
+#[derive(Clone, Copy)]
+struct StripeIndex(usize);
+static NEXT_STRIPE: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    // Const TLS has neither lazy runtime initialization nor a destructor.
+    // The shared allocator is touched once per thread, never once per lookup.
+    static ACTIVE_STRIPE: Cell<Option<StripeIndex>> = const { Cell::new(None) };
+}
+fn current_stripe() -> StripeIndex {
+    ACTIVE_STRIPE.with(|cached| match cached.get() {
+        Some(index) => index,
+        None => {
+            let index = StripeIndex(NEXT_STRIPE.fetch_add(1, Ordering::Relaxed) % ACTIVE_STRIPES);
+            cached.set(Some(index));
+            index
+        }
+    })
+}
+
 pub(crate) struct Scopes {
-    // Admission increments active before reading closing; shutdown sets closing
-    // before reading active. A single sequentially consistent order prevents
-    // both sides observing the other transition as absent on weak-memory CPUs.
+    // Admission increments its stripe before reading closing; shutdown sets
+    // closing before scanning every stripe. SeqCst preserves the same Dekker
+    // argument for each stripe on weak-memory CPUs. No shared RMW is needed
+    // between readers assigned to different stripes.
     closing: AtomicBool,
     scopes: Mutex<VecDeque<Weak<dyn CancelWork>>>,
     changed: Notify,
-    active: AtomicUsize,
+    active: [ActiveStripe; ACTIVE_STRIPES],
 }
 impl Scopes {
     pub(crate) fn new() -> Arc<Self> {
@@ -201,15 +225,23 @@ impl Scopes {
             closing: AtomicBool::new(false),
             scopes: Mutex::new(VecDeque::new()),
             changed: Notify::new(),
-            active: AtomicUsize::new(0),
+            active: std::array::from_fn(|_| ActiveStripe(AtomicUsize::new(0))),
         })
     }
     pub(crate) fn is_closed(&self) -> bool {
         self.closing.load(Ordering::SeqCst)
     }
     fn activity(&self) -> Activity<'_> {
-        self.active.fetch_add(1, Ordering::SeqCst);
-        Activity::Borrowed(self)
+        let stripe = current_stripe();
+        self.active[stripe.0].0.fetch_add(1, Ordering::SeqCst);
+        Activity::Borrowed(self, stripe)
+    }
+    fn idle(&self) -> bool {
+        // Check zero directly: a summed count could overflow, and drainage
+        // needs only the absence of work, not a globally coherent total.
+        self.active
+            .iter()
+            .all(|stripe| stripe.0.load(Ordering::SeqCst) == 0)
     }
     /// A synchronous operation has no parked future to own. Count it through
     /// every user callback so close rejects its result and shutdown drains it.
@@ -220,9 +252,10 @@ impl Scopes {
     /// Transfers synchronous completion ownership through an internal result.
     /// It retains only the scope counter, never the public cache lifetime.
     pub(crate) fn inline_owned(self: &Arc<Self>) -> InlinePermit<'static> {
-        self.active.fetch_add(1, Ordering::SeqCst);
+        let stripe = current_stripe();
+        self.active[stripe.0].0.fetch_add(1, Ordering::SeqCst);
         InlinePermit {
-            activity: Activity::Owned(Arc::clone(self)),
+            activity: Activity::Owned(Arc::clone(self), stripe),
         }
     }
     pub(crate) fn execution<T: Send + 'static>(
@@ -297,7 +330,7 @@ impl Scopes {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.active.load(Ordering::SeqCst) == 0
+            if self.idle()
                 && lock(&self.scopes)
                     .iter()
                     .filter_map(Weak::upgrade)
@@ -305,7 +338,7 @@ impl Scopes {
                 // A concurrent cancel/poll can mark a scope terminal while its
                 // user future destructor is still running. Recheck activity
                 // after the terminal-state snapshot, before claiming drainage.
-                && self.active.load(Ordering::SeqCst) == 0
+                && self.idle()
             {
                 return;
             }
@@ -315,21 +348,33 @@ impl Scopes {
 }
 
 enum Activity<'a> {
-    Borrowed(&'a Scopes),
-    Owned(Arc<Scopes>),
+    Borrowed(&'a Scopes, StripeIndex),
+    Owned(Arc<Scopes>, StripeIndex),
 }
 impl Activity<'_> {
     fn registry(&self) -> &Scopes {
         match self {
-            Self::Borrowed(registry) => registry,
-            Self::Owned(registry) => registry,
+            Self::Borrowed(registry, _) => registry,
+            Self::Owned(registry, _) => registry,
+        }
+    }
+    fn stripe(&self) -> StripeIndex {
+        match self {
+            Self::Borrowed(_, stripe) | Self::Owned(_, stripe) => *stripe,
         }
     }
 }
 impl Drop for Activity<'_> {
     fn drop(&mut self) {
         let registry = self.registry();
-        if registry.active.fetch_sub(1, Ordering::SeqCst) == 1 && registry.is_closed() {
+        // An owned permit can move to another thread. Release the original
+        // admission stripe, not the destination thread's cached index.
+        if registry.active[self.stripe().0]
+            .0
+            .fetch_sub(1, Ordering::SeqCst)
+            == 1
+            && registry.is_closed()
+        {
             registry.changed.notify_waiters();
         }
     }
@@ -528,4 +573,37 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Scopes;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn transferred_inline_work_drains_only_after_its_destination_releases_it() {
+        let scopes = Scopes::new();
+        let permit = scopes.inline_owned();
+        let (arrived, arrival) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            arrived.send(()).unwrap();
+            released.recv().unwrap();
+            drop(permit);
+        });
+        arrival.recv().unwrap();
+        scopes.close();
+        let mut drain = std::pin::pin!(scopes.drained());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut drain)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        thread.join().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), drain)
+            .await
+            .unwrap();
+    }
 }

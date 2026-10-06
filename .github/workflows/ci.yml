@@ -153,10 +153,41 @@ jobs:
       - run: cargo install cargo-audit --version 0.22.2 --locked
       - run: cargo audit --deny warnings
 
+  scaling:
+    name: Scaling against FusionCache 2.9
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: /tmp/amalgam-build-shared
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: '1.88.0'
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: python3 benches/run-scaling.py --gate hot --output /tmp/amalgam-scaling
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: scaling-report
+          path: |
+            /tmp/amalgam-scaling/report.json
+            /tmp/amalgam-scaling/pair-*.csv
+            /tmp/amalgam-scaling/pair-*.stderr
+          retention-days: 7
+
   ci:
     name: ci
     if: always()
-    needs: [quality, tests, features, redis, package, security]
+    needs: [quality, tests, features, redis, package, security, scaling]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

@@ -112,6 +112,12 @@ impl MarkerMemory {
             .await
             .map_err(Error::MarkerMemoryStorage)
     }
+    pub(crate) async fn maintain_step(&self) -> Result<()> {
+        self.store
+            .maintain_step()
+            .await
+            .map_err(Error::MarkerMemoryStorage)
+    }
     pub(crate) fn usage(&self) -> Result<MemoryUsage> {
         self.store.usage().map_err(Error::MarkerMemoryStorage)
     }

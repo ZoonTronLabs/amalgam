@@ -142,11 +142,19 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
         }
     }
     #[inline]
-    pub(crate) fn ready_at(&self, key: &str, now: Timestamp) -> StorageResult<Option<Entry<V>>> {
+    pub(crate) fn with_ready<R>(
+        &self,
+        key: &str,
+        now: Timestamp,
+        read: impl FnOnce(&Entry<V>) -> R,
+    ) -> StorageResult<Option<R>> {
         match self {
-            Self::Builtin(store) => Ok(store.ready_at(key, now)),
-            Self::Supplied(store) => store.ready_at(key, now),
+            Self::Builtin(store) => Ok(store.with_ready(key, now, read)),
+            Self::Supplied(store) => Ok(store.ready_at(key, now)?.as_ref().map(read)),
         }
+    }
+    pub(crate) fn ready_at(&self, key: &str, now: Timestamp) -> StorageResult<Option<Entry<V>>> {
+        self.with_ready(key, now, Entry::clone)
     }
     pub(crate) async fn insert_at(
         &self,
@@ -245,6 +253,15 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
                 }
                 Ok(())
             }
+        }
+    }
+    pub(crate) async fn maintain_step(&self) -> StorageResult<()> {
+        match self {
+            Self::Builtin(store) => {
+                store.maintain_step();
+                Ok(())
+            }
+            Self::Supplied(_) => self.run_pending_tasks().await,
         }
     }
     pub(crate) fn usage(&self) -> StorageResult<MemoryUsage> {

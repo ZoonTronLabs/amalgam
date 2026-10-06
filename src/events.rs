@@ -330,7 +330,8 @@ pub enum CacheEvent {
         operation: CacheOperation,
         /// Its explicit final outcome.
         outcome: OperationOutcome,
-        /// Monotonic elapsed duration.
+        /// Total wall-clock time when observers existed at operation start.
+        /// Zero if an observer subscribed only while the operation was running.
         elapsed: Duration,
         /// A single servicing component, when applicable.
         level: Option<CacheLevel>,
@@ -634,6 +635,15 @@ impl Events {
             subscribers,
             plugin_errors,
         }
+    }
+    /// Reads recipient interest without acquiring the idle plugin host.
+    pub(crate) fn observes_operations(&self) -> bool {
+        self.has_broadcast_receivers()
+            || self
+                .inner
+                .plugins
+                .get()
+                .is_some_and(PluginEventRoute::has_listeners)
     }
     pub(crate) fn operation_started(&self, operation: CacheOperation) {
         if self

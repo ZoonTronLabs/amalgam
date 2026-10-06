@@ -2,13 +2,14 @@
 use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
-    DistributedCache, DistributedExpirePolicy, DistributedLocker, EntryOptions, Error, Events,
-    Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, FactoryProduct,
-    Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LayerEvent, LookupKey, LookupMode,
-    LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MemoryEvent,
-    MutationReceipt, ObservationAdmission, Observed, OperationObservation, OperationOutcome,
-    Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyLookup, ReadyValue, ReplayTicket,
-    Result, ShutdownReport, Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
+    DistributedCache, DistributedExpirePolicy, DistributedLocker, Entry, EntryOptions, Error,
+    Events, Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin,
+    FactoryProduct, Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LayerEvent,
+    LookupKey, LookupMode, LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy,
+    MaybeValue, MemoryEvent, MutationReceipt, ObservationAdmission, Observed, OperationObservation,
+    OperationOutcome, Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyEager, ReadyHit,
+    ReadyLookup, ReadyObservation, ReadyRefresh, ReadyValue, ReplayTicket, Result, ShutdownReport,
+    Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
 };
 use crate::marker_reads::MarkerReads;
 
@@ -287,8 +288,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             Some(prefix) => Cow::Owned(format!("{prefix}{raw}")),
             None => Cow::Borrowed(raw),
         };
-        let observation = OperationObservation::new(
-            self.inner.events.clone(),
+        let observation = ReadyObservation::new(
+            &self.inner.events,
             &self.inner.name,
             &self.inner.instance_id,
             operation,
@@ -296,17 +297,34 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         );
         let span = observation.span();
         let _entered = span.enter();
-        let result = permit
-            .admit()
-            .and_then(|()| self.ready_value(&key, options, token, mode, &permit));
+        let resolved = if options.is_none() && permit.status(token).is_ok() {
+            self.inner
+                .default_options_provider
+                .as_ref()
+                .map(|provider| {
+                    provider
+                        .options_for_with_defaults(raw, &self.inner.default_options)
+                        .unwrap_or_else(|| self.inner.default_options.clone())
+                })
+        } else {
+            None
+        };
+        let result = permit.admit().and_then(|()| {
+            self.ready_value(&key, resolved.as_ref().or(options), token, mode, &permit)
+        });
         match result {
             Ok(None) => LookupStart::Owned {
                 observation,
                 key,
                 permit,
+                resolved: resolved.map(Box::new),
             },
-            Ok(Some(value)) => LookupStart::Ready(ReadyLookup {
-                result: Ok(ReadyValue { value, key }),
+            Ok(Some(hit)) => LookupStart::Ready(ReadyLookup {
+                result: Ok(ReadyValue {
+                    value: hit.value,
+                    key,
+                    refresh: hit.refresh,
+                }),
                 observation,
                 permit,
             }),
@@ -324,18 +342,26 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<&FactoryCancellation>,
         mode: LookupMode,
         permit: &InlinePermit<'_>,
-    ) -> Result<Option<V>> {
+    ) -> Result<Option<ReadyHit<V>>> {
         permit.status(token)?;
         let context = self.ready_context();
         let ready = context.inner();
-        if self.inner.wait_for_initial_backplane_subscribe
+        if self.inner.backplane.is_some()
+            && self.inner.wait_for_initial_backplane_subscribe
             && !self.inner.subscription_admitted.load(Ordering::Acquire)
-            || options.is_none() && self.inner.default_options_provider.is_some()
         {
             return Ok(None);
         }
-        let opts = options.unwrap_or(&self.inner.default_options);
-        ready.validate_options(opts)?;
+        let opts = match options {
+            Some(options) => {
+                ready.validate_options(options)?;
+                options
+            }
+            None => {
+                ready.default_runtime.validate()?;
+                &ready.default_options
+            }
+        };
         if opts.skip_memory_read() {
             return Ok(None);
         }
@@ -343,28 +369,49 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         permit.status(token)?;
         let now = self.inner.clock.now();
         permit.status(token)?;
-        let entry = self.inner.memory.ready_at(key, now)?;
+        enum Copy<V> {
+            Value(V),
+            Owned(Entry<V>),
+            Miss,
+        }
+        let can_copy = ready.ready_slot_copy(opts);
+        let selected = self.inner.memory.with_ready(key, now, |entry| {
+            if ready.tags(entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
+                return Copy::Miss;
+            }
+            if can_copy
+                && !(matches!(mode, LookupMode::GetOrSet) && entry.should_eager_refresh(now))
+            {
+                Copy::Value(entry.value().clone())
+            } else {
+                // The slot protects this Arc clone, not the optional callback.
+                Copy::Owned(entry.clone())
+            }
+        })?;
         permit.status(token)?;
-        let Some(entry) = entry else {
-            return Ok(None);
-        };
-        if ready.tags(&entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
-            return Ok(None);
-        }
-        if !ready.marker_reads_ready(&entry, now)? {
-            return Ok(None);
-        }
-        match mode {
-            LookupMode::GetOrSet => {
-                let eager = entry.should_eager_refresh(self.inner.clock.now());
-                permit.status(token)?;
-                if eager {
+        let (value, refresh) = match selected {
+            Some(Copy::Value(value)) => (value, ReadyRefresh::Complete),
+            Some(Copy::Owned(entry)) => {
+                if !ready.marker_reads_ready(&entry, now)? {
                     return Ok(None);
                 }
+                let eager = matches!(mode, LookupMode::GetOrSet) && entry.should_eager_refresh(now);
+                let value = ready.copy(entry.value(), opts)?;
+                permit.status(token)?;
+                ready.local_marker_ready_events(entry.meta().tags(), now)?;
+                permit.status(token)?;
+                let refresh = if eager {
+                    ReadyRefresh::Eager(Box::new(ReadyEager {
+                        current: entry,
+                        options: opts.clone(),
+                    }))
+                } else {
+                    ReadyRefresh::Complete
+                };
+                (value, refresh)
             }
-            LookupMode::Read | LookupMode::ConstantValue => {}
-        }
-        let value = ready.copy(entry.value(), opts);
+            Some(Copy::Miss) | None => return Ok(None),
+        };
         self.inner.events.emit_layer_lazy(|| {
             LayerEvent::Memory(MemoryEvent::Hit {
                 key: Arc::from(key),
@@ -372,11 +419,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             })
         });
         permit.status(token)?;
-        let value = value?;
-        ready.local_marker_ready_events(entry.meta().tags(), now)?;
-        permit.status(token)?;
-        Ok(Some(value))
+        Ok(Some(ReadyHit { value, refresh }))
     }
+
     /// Returns a value or produces it. Background write policy is observable;
     /// use get_or_set_full_with_commit when its actual completion is required.
     pub async fn get_or_set<F, Fut>(&self, key: impl AsRef<str>, factory: F) -> Result<V>
@@ -648,7 +693,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         fallback: MaybeValue<V>,
         cancellation: Option<FactoryCancellation>,
     ) -> Result<CacheValue<V>> {
-        let (observation, full, permit) = match self.start_lookup(
+        let (observation, full, permit, resolved) = match self.start_lookup(
             key,
             options.as_ref(),
             cancellation.as_ref(),
@@ -663,7 +708,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 // the same counted operation before its final cancellation check.
                 let span = ready.observation.span();
                 let _entered = span.enter();
-                drop((origin, tags, fallback, options));
+                let ready = self.ready_origin(ready, key, origin, tags);
+                drop((fallback, options));
                 return ready
                     .finish(
                         cancellation.as_ref(),
@@ -679,7 +725,13 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 observation,
                 key,
                 permit,
-            } => (observation, Arc::<str>::from(key.as_ref()), permit),
+                resolved,
+            } => (
+                observation.into_owned(),
+                Arc::<str>::from(key.as_ref()),
+                permit,
+                resolved,
+            ),
         };
         let worker = self.worker();
         let key = self.lookup_key(key, full);
@@ -692,12 +744,63 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             ObservationAdmission::Inline(permit),
             async move {
                 worker
-                    .get_or_set(key, origin, options, tags, fallback, caller)
+                    .get_or_set(
+                        key,
+                        origin,
+                        resolved.map(|options| *options).or(options),
+                        tags,
+                        fallback,
+                        caller,
+                    )
                     .await
             },
         )
         .await
     }
+    fn ready_origin<'a, O: CacheOrigin<V>>(
+        &self,
+        ready: ReadyLookup<'a, V>,
+        raw: &str,
+        origin: O,
+        tags: Box<[Tag]>,
+    ) -> ReadyLookup<'a, V> {
+        let ReadyLookup {
+            result,
+            observation,
+            permit,
+        } = ready;
+        let result = match result {
+            Ok(mut hit) => {
+                match std::mem::replace(&mut hit.refresh, ReadyRefresh::Complete) {
+                    ReadyRefresh::Complete => drop((origin, tags)),
+                    ReadyRefresh::Eager(work) => {
+                        let ReadyEager { current, options } = *work;
+                        self.worker().eager(
+                            LookupKey {
+                                raw: Arc::from(raw),
+                                full: Arc::from(hit.key.as_ref()),
+                            },
+                            options,
+                            current,
+                            tags,
+                            origin,
+                        );
+                    }
+                }
+                Ok(hit)
+            }
+            Err(error) => {
+                drop((origin, tags));
+                Err(error)
+            }
+        };
+        ReadyLookup {
+            result,
+            observation,
+            permit,
+        }
+    }
+
     /// Canonical read-only L1/L2 lookup. Expected failures retain their typed channel.
     pub async fn read(
         &self,
@@ -706,6 +809,40 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<MaybeValue<V>> {
         self.read_impl(key.as_ref(), options, None, CacheOperation::TryGet)
             .await
+    }
+    // A ready memory lookup borrows exactly the async admission/observation
+    // path, but needs neither runtime entry nor block_in_place. True misses
+    // transfer that same operation once to the driven native executor.
+    pub(in crate::cache) fn native_read(
+        &self,
+        key: &str,
+        options: Option<EntryOptions>,
+        runtime: &super::BlockingRuntime,
+    ) -> Result<MaybeValue<V>> {
+        if options.is_some() || !self.inner.native_inline_read() {
+            return runtime.run(self.read(key, options));
+        }
+        match self.start_lookup(key, None, None, CacheOperation::TryGet, LookupMode::Read) {
+            LookupStart::Ready(ready) => {
+                ready.finish(None, &self.inner.events, MaybeValue::from_value)
+            }
+            LookupStart::Owned {
+                observation,
+                key: full,
+                permit,
+                resolved,
+            } => runtime.run(self.prepare_read(
+                ReadOperation {
+                    key: self.lookup_key(key, Arc::from(full.as_ref())),
+                    options: resolved.map(|options| *options),
+                    cancellation: None,
+                    observation: observation.into_owned(),
+                    permit,
+                },
+                L2ReadPolicy::PreserveFailure,
+                std::convert::identity,
+            )),
+        }
     }
     /// Canonical read with explicit cancellation.
     pub async fn read_cancellable(
@@ -748,7 +885,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         policy: L2ReadPolicy,
         complete: impl FnOnce(MaybeValue<V>) -> T + Send + 'static,
     ) -> Result<T> {
-        let (observation, full, permit) = match self.start_lookup(
+        let (observation, full, permit, resolved) = match self.start_lookup(
             key,
             options.as_ref(),
             token.as_ref(),
@@ -764,12 +901,18 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 observation,
                 key,
                 permit,
-            } => (observation, Arc::<str>::from(key.as_ref()), permit),
+                resolved,
+            } => (
+                observation.into_owned(),
+                Arc::<str>::from(key.as_ref()),
+                permit,
+                resolved,
+            ),
         };
         self.prepare_read(
             ReadOperation {
                 key: self.lookup_key(key, full),
-                options,
+                options: resolved.map(|options| *options).or(options),
                 cancellation: token,
                 observation,
                 permit,

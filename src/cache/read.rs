@@ -784,7 +784,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             },
         );
     }
-    fn eager<O: CacheOrigin<V>>(
+    pub(super) fn eager<O: CacheOrigin<V>>(
         &self,
         keys: LookupKey,
         opts: EntryOptions,

@@ -4,11 +4,13 @@ use super::{
     Arc, CapacityRejection, CaptureAdmission, Entry, Expected, MemoryAdmission, MemoryExpiry,
     MemoryRead, MemoryUsage, MemoryWriteEvent, Retirement, Timestamp, entry_weight,
 };
+use crate::reader_slots::{
+    ReadGuard as RwLockReadGuard, ReaderSlots as RwLock, WriteGuard as RwLockWriteGuard,
+};
 use hashbrown::{HashMap, hash_map::RawEntryMut};
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 const SHARDS: usize = 64;
@@ -16,6 +18,7 @@ pub(super) struct Sharded<V> {
     shards: Box<[RwLock<Shard<V>>]>,
     hash: RandomState,
     generation: AtomicU64,
+    maintenance: AtomicUsize,
     expiry: MemoryExpiry,
 }
 struct Shard<V> {
@@ -66,6 +69,7 @@ impl<V> Sharded<V> {
             shards,
             hash,
             generation: AtomicU64::new(1),
+            maintenance: AtomicUsize::new(0),
             expiry,
         }
     }
@@ -75,17 +79,24 @@ impl<V> Sharded<V> {
         let hash = self.hash.hash_one(key);
         (hash, &self.shards[(hash as usize) & (SHARDS - 1)])
     }
-    pub(super) fn ready_at(&self, key: &str, now: Timestamp) -> Option<Entry<V>> {
+    /// Holds one reader slot through internal checks and ordinary value Clone.
+    /// Optional callbacks must use an owned Entry after releasing this guard.
+    pub(super) fn with_ready<R>(
+        &self,
+        key: &str,
+        now: Timestamp,
+        read_entry: impl FnOnce(&Entry<V>) -> R,
+    ) -> Option<R> {
         let (hash, shard) = self.route(key);
-        let state = shard.try_read()?;
+        let state = read(shard);
         let (_, stored) = state
             .entries
             .raw_entry()
-            .from_hash(hash, |k| k.as_ref() == key)?;
+            .from_hash(hash, |key_in_map| key_in_map.as_ref() == key)?;
         stored
             .retirement_reason(Some(now), self.generation.load(Ordering::Acquire))
             .is_none()
-            .then(|| stored.entry.clone())
+            .then(|| read_entry(&stored.entry))
     }
     pub(super) fn get(&self, key: &str, now: Option<Timestamp>) -> MemoryRead<V> {
         let (hash, shard) = self.route(key);
@@ -248,6 +259,9 @@ impl<V> Sharded<V> {
     }
     pub(super) fn expire(&self, shard: usize, now: Option<Timestamp>) -> Vec<Retirement<V>> {
         let mut state = write(&self.shards[shard]);
+        self.expire_locked(&mut state, now)
+    }
+    fn expire_locked(&self, state: &mut Shard<V>, now: Option<Timestamp>) -> Vec<Retirement<V>> {
         let generation = self.generation.load(Ordering::Acquire);
         let dead: Vec<_> = state
             .entries
@@ -263,6 +277,17 @@ impl<V> Sharded<V> {
             if let Some((key, stored)) = state.entries.remove_entry(&key) {
                 state.weight -= entry_weight(&stored.entry);
                 retired.push(stored.retire(key, reason));
+            }
+        }
+        retired
+    }
+    pub(super) fn maintain_step(&self, now: Option<Timestamp>) -> Vec<Retirement<V>> {
+        let first = self.maintenance.fetch_add(8, Ordering::Relaxed);
+        let mut retired = Vec::new();
+        for offset in 0..8 {
+            let shard = &self.shards[first.wrapping_add(offset) & (SHARDS - 1)];
+            if let Some(mut state) = shard.try_write() {
+                retired.extend(self.expire_locked(&mut state, now));
             }
         }
         retired

@@ -264,26 +264,32 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             }
         }
     }
-    /// Immediately available reads never mutate or retire values. Selected
-    /// component observers are notified before lookup, outside storage guards.
-    pub(crate) fn ready_at(&self, key: &str, now: Timestamp) -> Option<Entry<V>> {
+    /// The builtin map holds a reader slot through internal checks and ordinary
+    /// value Clone. Observers run before locking; optional callbacks run after it.
+    pub(crate) fn with_ready<R>(
+        &self,
+        key: &str,
+        now: Timestamp,
+        read: impl FnOnce(&Entry<V>) -> R,
+    ) -> Option<R> {
         self.component_read(crate::events::ComponentRead::Memory);
         match &self.backend {
-            Backend::Unbounded(store) => store.ready_at(key, now),
+            Backend::Unbounded(store) => store.with_ready(key, now, read),
             Backend::Retained(store) => {
-                let mut state = match store.try_lock() {
-                    Ok(state) => state,
-                    Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
-                    Err(std::sync::TryLockError::WouldBlock) => return None,
+                // Capacity policy is still being migrated; contention must
+                // already preserve a real hit rather than invoke a factory.
+                let entry = {
+                    let mut state = lock(store);
+                    let stored = state.entries.get(key)?;
+                    if stored.retirement_reason(Some(now)).is_some() {
+                        return None;
+                    }
+                    let access = state.ticket();
+                    let stored = state.entries.get_mut(key)?;
+                    stored.access = access;
+                    stored.entry.clone()
                 };
-                let stored = state.entries.get(key)?;
-                if stored.retirement_reason(Some(now)).is_some() {
-                    return None;
-                }
-                let access = state.ticket();
-                let stored = state.entries.get_mut(key)?;
-                stored.access = access;
-                Some(stored.entry.clone())
+                Some(read(&entry))
             }
         }
     }
@@ -463,6 +469,21 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                     self.retire(retired);
                 }
             }
+        }
+    }
+    pub(crate) fn maintain_step(&self) {
+        let now = self.clock.as_ref().map(|clock| clock.now());
+        let retired = match &self.backend {
+            Backend::Unbounded(store) => store.maintain_step(now),
+            Backend::Retained(store) => {
+                let Ok(mut state) = store.try_lock() else {
+                    return;
+                };
+                state.remove_expired(now)
+            }
+        };
+        for retired in retired {
+            self.retire(retired);
         }
     }
     /// A per-section diagnostic snapshot under concurrent mutation.

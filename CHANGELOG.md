@@ -46,6 +46,22 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Built-in L1 hits use padded reader slots sized for available parallelism,
+  copy values under the slot without entry reference counting, borrow observers,
+  and use striped shutdown admission. Custom callbacks and retired values remain
+  outside storage locks; ordinary value `Clone` must not reenter the same cache.
+- Tag invalidation reads immutable marker snapshots without taking the writer
+  mutex. Background L1 maintenance rotates through shards with non-blocking
+  write admission, while explicit maintenance still drains the whole store.
+- Per-key option providers are resolved once and fresh eager hits return the
+  current value immediately before scheduling refresh. Memory-only hits no
+  longer wait for a backplane subscription.
+- Native ready memory reads share the async admission path without entering
+  the executor. Operations without observers skip timing; subscriptions added
+  during an operation still receive completion with an unmeasured zero duration.
+- Add paired public-API scaling fixtures and a CI gate against the locked
+  FusionCache reference, with native reads, allocation checks and full reports.
+
 - Observed operations transfer owned work before awaiting, keeping lookup futures small. Background pipelines start their owned receipt scope directly instead of embedding an unused foreground receipt future. Cancellation, completion events and shutdown drainage retain the same ownership.
 
 - Cache orchestration is split into private API, builder, read, write, marker, recovery and runtime modules. Public `cache::Cache`/`cache::CacheBuilder` paths and cache field layout are preserved; see `docs/CACHE_INTERNALS.md`.

@@ -153,10 +153,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let weak = Arc::downgrade(&self.inner);
         let source = CancellationSource::new();
         let interval = match self.inner.reconciliation {
-            ReconciliationPolicy::Periodic(interval) => interval.min(Duration::from_secs(1)),
+            ReconciliationPolicy::Periodic(interval) => interval.min(Duration::from_millis(125)),
             ReconciliationPolicy::LocalOnly
             | ReconciliationPolicy::BackplaneContinuity
-            | ReconciliationPolicy::BackplaneBestEffort => Duration::from_secs(1),
+            | ReconciliationPolicy::BackplaneBestEffort => Duration::from_millis(125),
         };
         let execution = self.scopes().execution(
             async move {
@@ -165,9 +165,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     let Some(inner) = weak.upgrade() else {
                         return Ok(());
                     };
-                    inner.memory.run_pending_tasks().await?;
+                    inner.memory.maintain_step().await?;
                     if let MarkerReads::OptionsControlled(observations) = &inner.marker_reads {
-                        observations.memory.run_pending_tasks().await?;
+                        observations.memory.maintain_step().await?;
                         observations.locks.clean_idle(64);
                     }
                     inner.locks.clean_idle(256);

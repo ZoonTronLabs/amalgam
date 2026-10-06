@@ -22,7 +22,7 @@
 //! See the packaged README, `docs/PARITY.md`, `docs/AUDIT.md` and `PORTING.md`
 //! for supported contracts, migration and verification limits.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod backplane;
@@ -48,6 +48,9 @@ pub mod memory_storage;
 pub mod observability;
 pub mod options;
 pub mod plugins;
+// Owner-approved private performance boundary. Cache logic keeps the unsafe ban.
+#[allow(unsafe_code)]
+mod reader_slots;
 pub mod recovery;
 pub mod registry;
 pub mod serializers;

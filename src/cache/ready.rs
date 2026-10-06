@@ -2,12 +2,54 @@
 use super::{
     Cache, CacheEvent, CacheInner, ConfigError, Entry, EntryOptions, MarkerAccess, MarkerKind,
     MarkerReadOutcome, MarkerReadPolicy, MarkerReads, OptionsTarget, Ordering, Result,
-    RuntimeComponent, Storage, TagVerdict, Timeout, Timestamp, Worker, validate_budget,
+    RuntimeComponent, Storage, TagVerdict, Timestamp, Worker,
 };
+
+#[derive(Clone, Copy)]
+pub(super) enum RuntimeRequirement {
+    Inline,
+    Runtime,
+}
+impl RuntimeRequirement {
+    pub(super) fn for_options(
+        options: &EntryOptions,
+        distributed: bool,
+        backplane: bool,
+        locker: bool,
+    ) -> Self {
+        let background = options.eager_refresh_threshold().is_some()
+            || options.allow_background_distributed_operations() && distributed
+            || options.allow_background_backplane_operations() && backplane;
+        if options.requires_timer_runtime()
+            || background
+            || !options.skip_distributed_locker() && locker
+        {
+            Self::Runtime
+        } else {
+            Self::Inline
+        }
+    }
+    pub(super) fn validate(self) -> Result<()> {
+        match self {
+            Self::Inline => Ok(()),
+            Self::Runtime if tokio::runtime::Handle::try_current().is_ok() => Ok(()),
+            Self::Runtime => Err(ConfigError::MissingRuntime {
+                component: RuntimeComponent::Execution,
+            }
+            .into()),
+        }
+    }
+    fn requires_runtime(self) -> bool {
+        match self {
+            Self::Inline => false,
+            Self::Runtime => true,
+        }
+    }
+}
 
 pub(super) enum ReadyContext<'a, V: Clone + Send + Sync + 'static> {
     // Constructed only with no backplane and no runtime maintenance startup.
-    // ready_at never retires values; callbacks execute without a storage guard.
+    // Internal checks and ordinary value Clone borrow a thread-local reader slot.
     Borrowed(&'a CacheInner<V>),
     // The operation collector survives every health retirement and callback.
     Retiring(Worker<V>),
@@ -57,16 +99,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         opts: &EntryOptions,
         target: OptionsTarget,
     ) -> Result<()> {
-        for timeout in [
-            opts.memory_lock_timeout(),
-            opts.distributed_lock_timeout(),
-            opts.factory_soft_timeout(),
-            opts.factory_hard_timeout(),
-            opts.distributed_soft_timeout(),
-            opts.distributed_hard_timeout(),
-        ] {
-            validate_budget(timeout)?;
-        }
+        opts.validate()?;
         if self.options_require_runtime(opts, target)
             && tokio::runtime::Handle::try_current().is_err()
         {
@@ -82,23 +115,17 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         opts: &EntryOptions,
         target: OptionsTarget,
     ) -> bool {
-        let timers = [
-            opts.memory_lock_timeout(),
-            opts.factory_soft_timeout(),
-            opts.factory_hard_timeout(),
-            opts.distributed_soft_timeout(),
-            opts.distributed_hard_timeout(),
-        ]
-        .into_iter()
-        .any(|timeout| matches!(timeout,Timeout::After(duration) if !duration.is_zero()));
         let distributed = match target {
             OptionsTarget::Value => matches!(self.storage, Storage::Hybrid { .. }),
             OptionsTarget::Marker => matches!(self.markers, MarkerAccess::Durable(_)),
         };
-        let background = opts.eager_refresh_threshold().is_some()
-            || opts.allow_background_distributed_operations() && distributed
-            || opts.allow_background_backplane_operations() && self.backplane.is_some();
-        timers || background || !opts.skip_distributed_locker() && self.distributed_locker.is_some()
+        RuntimeRequirement::for_options(
+            opts,
+            distributed,
+            self.backplane.is_some(),
+            self.distributed_locker.is_some(),
+        )
+        .requires_runtime()
     }
     pub(super) fn copy(&self, value: &V, opts: &EntryOptions) -> Result<V> {
         crate::serializers::copy_value(value, opts, self.cloner.as_deref())
@@ -116,6 +143,22 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
     }
     pub(super) fn marker_clear_shortcut(&self) -> bool {
         matches!(self.storage, Storage::Hybrid { .. }) && self.backplane.is_some()
+    }
+
+    pub(super) fn native_inline_read(&self) -> bool {
+        matches!(self.storage, Storage::MemoryOnly)
+            && matches!(self.memory, crate::memory::CacheMemory::Builtin(_))
+            && matches!(self.default_runtime, RuntimeRequirement::Inline)
+            && self.default_options_provider.is_none()
+            && !self.default_options.enable_auto_clone()
+    }
+
+    /// Only internal checks and ordinary value Clone may run under an L1 slot.
+    pub(super) fn ready_slot_copy(&self, opts: &EntryOptions) -> bool {
+        !opts.enable_auto_clone()
+            && matches!(self.memory, crate::memory::CacheMemory::Builtin(_))
+            && (self.disable_tagging
+                || !matches!(self.marker_reads, MarkerReads::OptionsControlled(_)))
     }
 
     pub(super) fn marker_reads_ready(&self, entry: &Entry<V>, now: Timestamp) -> Result<bool> {

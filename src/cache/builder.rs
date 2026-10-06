@@ -485,18 +485,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         self.default_options
             .validate_with_cloner(cloner.as_deref())?;
         self.tags_default_options.validate()?;
-        for options in [&self.default_options, &self.tags_default_options] {
-            for timeout in [
-                options.memory_lock_timeout(),
-                options.distributed_lock_timeout(),
-                options.factory_soft_timeout(),
-                options.factory_hard_timeout(),
-                options.distributed_soft_timeout(),
-                options.distributed_hard_timeout(),
-            ] {
-                validate_budget(timeout)?;
-            }
-        }
         let recovery_enabled = self.recovery_config.enabled
             && (self.distributed.is_some() || self.backplane.is_some());
         if self.backplane.is_some() && tokio::runtime::Handle::try_current().is_err() {
@@ -657,6 +645,12 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.eviction_capture,
             self.key_prefix.as_deref(),
         )?;
+        let default_runtime = super::ready::RuntimeRequirement::for_options(
+            &self.default_options,
+            matches!(storage, Storage::Hybrid { .. }),
+            self.backplane.is_some(),
+            self.distributed_locker.is_some(),
+        );
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),
             name,
@@ -668,6 +662,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             events,
             clock,
             default_options: self.default_options,
+            default_runtime,
             tags_default_options: self.tags_default_options,
             marker_reads,
             key_prefix: self.key_prefix,

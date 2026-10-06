@@ -1244,3 +1244,43 @@ async fn delayed_clear_marker_does_not_evict_a_newer_snapshot() {
     assert_eq!(cache.read("k", None).await.unwrap().value(), Some(&7));
     cache.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn changing_timeout_requests_revalidates_the_configuration_before_effects() {
+    let cache = Cache::<i32>::new();
+    let invalid = EntryOptions::default().with_lock_timeout(Timeout::After(Duration::MAX));
+    let memory_repaired = invalid.clone().with_memory_lock_timeout(Timeout::Infinite);
+    assert!(matches!(
+        cache
+            .try_set_full("invalid", 1, Some(memory_repaired.clone()), Box::from([]))
+            .await,
+        Err(Error::Config(ConfigError::DeadlineOutOfRange))
+    ));
+    let repaired = memory_repaired.with_distributed_lock_timeout(Timeout::Infinite);
+    cache
+        .try_set_full("repaired", 7, Some(repaired), Box::from([]))
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(
+        cache.read("repaired", None).await.unwrap().into_value(),
+        Some(7)
+    );
+    assert!(!cache.read("invalid", None).await.unwrap().has_value());
+    let invalid = EntryOptions::default().with_factory_timeouts(
+        Timeout::Infinite,
+        Timeout::After(Duration::MAX),
+        false,
+    );
+    let repaired = invalid.with_factory_timeouts(Timeout::Infinite, Timeout::Infinite, false);
+    assert_eq!(
+        cache
+            .get_or_set_with("factory", |ctx| async move { Ok(ctx.value(9)) }, repaired)
+            .await
+            .unwrap(),
+        9
+    );
+    cache.shutdown().await.unwrap();
+}

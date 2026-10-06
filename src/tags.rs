@@ -380,7 +380,7 @@ pub enum TagVerdict {
     Remove,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct MarkerState {
     tags: HashMap<Tag, MarkerVersion>,
     clear_expire: Option<MarkerVersion>,
@@ -444,6 +444,7 @@ impl MarkerState {
 #[derive(Debug)]
 pub struct TagRegistry {
     state: Mutex<MarkerState>,
+    snapshot: arc_swap::ArcSwap<MarkerState>,
     marker_observed: AtomicBool,
     capacity: usize,
 }
@@ -452,6 +453,7 @@ impl Default for TagRegistry {
     fn default() -> Self {
         Self {
             state: Mutex::new(MarkerState::default()),
+            snapshot: arc_swap::ArcSwap::from_pointee(MarkerState::default()),
             marker_observed: AtomicBool::new(false),
             capacity: 4096,
         }
@@ -472,6 +474,7 @@ impl TagRegistry {
         }
         Ok(Self {
             state: Mutex::new(MarkerState::default()),
+            snapshot: arc_swap::ArcSwap::from_pointee(MarkerState::default()),
             marker_observed: AtomicBool::new(false),
             capacity,
         })
@@ -483,11 +486,12 @@ impl TagRegistry {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Publish under the guard before changing state. Readers either precede
-        // this first advance or wait for its complete marker/compaction result.
-        // The witness never resets, even when per-tag tombstones are compacted.
+        let outcome = state.advance(kind, at, self.capacity);
+        // Publication is the linearization point. Readers preceding it may use
+        // the previous snapshot; readers following it see compaction atomically.
+        self.snapshot.store(Arc::new(state.clone()));
         self.marker_observed.store(true, Ordering::Release);
-        state.advance(kind, at, self.capacity)
+        outcome
     }
 
     /// Legacy local invalidation adapter.
@@ -498,9 +502,8 @@ impl TagRegistry {
     /// Reads one locally known tag maximum.
     #[must_use]
     pub fn tag_marker(&self, tag: &Tag) -> Option<Timestamp> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.snapshot
+            .load()
             .read(&MarkerKind::Tag(tag.clone()))
             .map(MarkerVersion::timestamp)
     }
@@ -508,10 +511,7 @@ impl TagRegistry {
     /// Reads a confirmed local maximum without changing observation freshness.
     #[must_use]
     pub fn marker_version(&self, kind: &MarkerKind) -> Option<MarkerVersion> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .read(kind)
+        self.snapshot.load().read(kind)
     }
 
     /// Merges a scope-wide logical invalidation.
@@ -535,10 +535,7 @@ impl TagRegistry {
         if !self.marker_observed.load(Ordering::Acquire) {
             return TagVerdict::Valid;
         }
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self.snapshot.load();
         if state
             .clear_remove
             .is_some_and(|at| created <= at.timestamp())
@@ -568,10 +565,7 @@ impl TagRegistry {
     /// Number of retained per-tag maxima.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .tag_count()
+        self.snapshot.load().tag_count()
     }
 
     /// Whether no per-tag maximum is retained; global fences may still exist.

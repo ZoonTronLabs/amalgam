@@ -8,7 +8,7 @@
 //! * the eager-refresh threshold is an [`EagerThreshold`] newtype that can only
 //!   hold a value in the open interval `(0, 1)`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::ConfigError;
 use crate::time::{Timeout, Timestamp};
@@ -182,6 +182,17 @@ impl EagerThreshold {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum TimerRequirement {
+    Inline,
+    Runtime,
+}
+#[derive(Debug, Clone, Copy)]
+enum BudgetState {
+    Valid(TimerRequirement),
+    OutOfRange,
+}
+
 /// Options controlling how a single entry is cached.
 ///
 /// Build a baseline once (often via [`Cache::entry_options`](crate::Cache::entry_options),
@@ -189,6 +200,7 @@ impl EagerThreshold {
 /// `with_*` methods.
 #[derive(Debug, Clone)]
 pub struct EntryOptions {
+    budgets: BudgetState,
     // ---- expiration ----
     duration: Duration,
     memory_duration: Option<Duration>,
@@ -243,6 +255,7 @@ pub struct EntryOptions {
 impl Default for EntryOptions {
     fn default() -> Self {
         Self {
+            budgets: BudgetState::Valid(TimerRequirement::Inline),
             duration: Duration::from_secs(30),
             memory_duration: None,
             distributed_duration: None,
@@ -356,6 +369,7 @@ impl EntryOptions {
     #[must_use]
     pub fn with_lock_timeout(mut self, timeout: Timeout) -> Self {
         self.lock_timeout = timeout;
+        self.refresh_budgets();
         self
     }
 
@@ -364,6 +378,7 @@ impl EntryOptions {
     #[must_use]
     pub fn with_memory_lock_timeout(mut self, timeout: Timeout) -> Self {
         self.memory_lock_timeout = Some(timeout);
+        self.refresh_budgets();
         self
     }
 
@@ -372,6 +387,7 @@ impl EntryOptions {
     #[must_use]
     pub fn with_distributed_lock_timeout(mut self, timeout: Timeout) -> Self {
         self.distributed_lock_timeout = Some(timeout);
+        self.refresh_budgets();
         self
     }
 
@@ -407,6 +423,7 @@ impl EntryOptions {
         self.factory_soft_timeout = soft;
         self.factory_hard_timeout = hard;
         self.allow_timed_out_factory_background_completion = allow_background_completion;
+        self.refresh_budgets();
         self
     }
 
@@ -534,6 +551,7 @@ impl EntryOptions {
     pub fn with_distributed_timeouts(mut self, soft: Timeout, hard: Timeout) -> Self {
         self.distributed_soft_timeout = soft;
         self.distributed_hard_timeout = hard;
+        self.refresh_budgets();
         self
     }
 
@@ -659,7 +677,42 @@ impl EntryOptions {
 
     /// Checks this configuration request before any cache side effects.
     pub fn validate(&self) -> Result<(), ConfigError> {
-        self.size().map(|_| ())
+        self.size()?;
+        match self.budgets {
+            BudgetState::Valid(_) => Ok(()),
+            BudgetState::OutOfRange => Err(ConfigError::DeadlineOutOfRange),
+        }
+    }
+
+    fn refresh_budgets(&mut self) {
+        let timeouts = [
+            self.memory_lock_timeout(),
+            self.distributed_lock_timeout(),
+            self.factory_soft_timeout(),
+            self.factory_hard_timeout(),
+            self.distributed_soft_timeout(),
+            self.distributed_hard_timeout(),
+        ];
+        let now = Instant::now();
+        if timeouts.iter().any(|timeout| matches!(timeout, Timeout::After(duration) if now.checked_add(*duration).is_none())) {
+            self.budgets = BudgetState::OutOfRange;
+            return;
+        }
+        // A distributed lock budget alone needs no runtime without a locker.
+        let timers = timeouts.into_iter().enumerate().any(|(index, timeout)| {
+            index != 1 && matches!(timeout, Timeout::After(duration) if !duration.is_zero())
+        });
+        self.budgets = BudgetState::Valid(if timers {
+            TimerRequirement::Runtime
+        } else {
+            TimerRequirement::Inline
+        });
+    }
+    pub(crate) fn requires_timer_runtime(&self) -> bool {
+        match self.budgets {
+            BudgetState::Valid(TimerRequirement::Inline) => false,
+            BudgetState::Valid(TimerRequirement::Runtime) | BudgetState::OutOfRange => true,
+        }
     }
 
     /// Also validates the capability required by an auto-clone request.

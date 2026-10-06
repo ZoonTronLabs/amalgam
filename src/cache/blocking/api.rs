@@ -87,7 +87,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         key: impl AsRef<str>,
         options: Option<EntryOptions>,
     ) -> Result<MaybeValue<V>> {
-        self.runtime.run(self.cache.read(key, options))
+        self.cache.native_read(key.as_ref(), options, &self.runtime)
     }
     /// Read with explicit caller cancellation.
     pub fn read_cancellable(

@@ -1,6 +1,6 @@
 //! Operation spans and optional bounded cache-name metrics.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::events::{CacheEvent, CacheLevel, CacheOperation, Events, OperationOutcome};
 
@@ -45,18 +45,96 @@ enum ObservationState {
     Completed,
 }
 
+#[derive(Clone, Copy)]
+enum OperationTiming {
+    Unobserved,
+    Measured(Instant),
+}
+impl OperationTiming {
+    fn start(events: &Events) -> Self {
+        if events.observes_operations() {
+            Self::Measured(Instant::now())
+        } else {
+            Self::Unobserved
+        }
+    }
+    fn elapsed(self) -> Duration {
+        match self {
+            Self::Unobserved => Duration::ZERO,
+            Self::Measured(started) => started.elapsed(),
+        }
+    }
+}
+
+// Ownership of the event source differs, but completion and unwind semantics
+// are shared so an inline-to-owned handoff remains one logical observation.
+struct Observation {
+    operation: CacheOperation,
+    level: Option<CacheLevel>,
+    timing: OperationTiming,
+    span: tracing::Span,
+    state: ObservationState,
+}
+impl Observation {
+    fn new(
+        events: &Events,
+        cache_name: &str,
+        instance_id: &str,
+        operation: CacheOperation,
+        key: Option<&str>,
+    ) -> Self {
+        events.operation_started(operation);
+        Self {
+            operation,
+            level: None,
+            timing: OperationTiming::start(events),
+            span: operation_span(cache_name, instance_id, operation, key),
+            state: ObservationState::Pending,
+        }
+    }
+    fn complete(&mut self, events: &Events, outcome: OperationOutcome) {
+        self.state = ObservationState::Completed;
+        self.span.record("outcome", outcome.as_str());
+        events.emit_lazy(|| CacheEvent::OperationCompleted {
+            operation: self.operation,
+            outcome,
+            elapsed: self.timing.elapsed(),
+            level: self.level,
+        });
+    }
+    fn finish_on_drop(&mut self, events: &Events) {
+        match self.state {
+            ObservationState::Pending => self.complete(
+                events,
+                if std::thread::panicking() {
+                    OperationOutcome::Panicked
+                } else {
+                    OperationOutcome::Cancelled
+                },
+            ),
+            ObservationState::Completed => {}
+        }
+    }
+    fn transfer(&mut self) -> Self {
+        let observation = Self {
+            operation: self.operation,
+            level: self.level,
+            timing: self.timing,
+            span: self.span.clone(),
+            state: ObservationState::Pending,
+        };
+        self.state = ObservationState::Completed;
+        observation
+    }
+}
+
 /// Records exactly one completion, including cancellation when an operation
 /// future is dropped. Orchestration explicitly records normal/error outcomes.
 #[must_use = "dropping an unfinished observation records cancellation"]
 pub struct OperationObservation {
     events: Events,
-    operation: CacheOperation,
-    level: Option<CacheLevel>,
-    started: Instant,
-    span: tracing::Span,
-    state: ObservationState,
+    observation: Observation,
 }
-
 impl OperationObservation {
     /// Begins observing a single logical operation.
     pub fn new(
@@ -66,55 +144,71 @@ impl OperationObservation {
         operation: CacheOperation,
         key: Option<&str>,
     ) -> Self {
-        events.operation_started(operation);
+        let observation = Observation::new(&events, cache_name, instance_id, operation, key);
         Self {
             events,
-            operation,
-            level: None,
-            started: Instant::now(),
-            span: operation_span(cache_name, instance_id, operation, key),
-            state: ObservationState::Pending,
+            observation,
         }
     }
-
     /// The span to instrument this operation's future.
     #[must_use]
     pub fn span(&self) -> tracing::Span {
-        self.span.clone()
+        self.observation.span.clone()
     }
-
     /// Selects the servicing level where one level describes the final outcome.
     pub fn set_level(&mut self, level: CacheLevel) {
-        self.level = Some(level);
+        self.observation.level = Some(level);
     }
-
     /// Finishes once with an explicit typed outcome.
     pub fn finish(mut self, outcome: OperationOutcome) {
-        self.complete(outcome);
+        self.observation.complete(&self.events, outcome);
     }
-
-    fn complete(&mut self, outcome: OperationOutcome) {
-        self.state = ObservationState::Completed;
-        self.span.record("outcome", outcome.as_str());
-        self.events.emit_lazy(|| CacheEvent::OperationCompleted {
-            operation: self.operation,
-            outcome,
-            elapsed: self.started.elapsed(),
-            level: self.level,
-        });
+}
+impl Drop for OperationObservation {
+    fn drop(&mut self) {
+        self.observation.finish_on_drop(&self.events);
     }
 }
 
-impl Drop for OperationObservation {
-    fn drop(&mut self) {
-        match self.state {
-            ObservationState::Pending => self.complete(if std::thread::panicking() {
-                OperationOutcome::Panicked
-            } else {
-                OperationOutcome::Cancelled
-            }),
-            ObservationState::Completed => {}
+/// Inline observation borrows the event hub; ownership is acquired only when
+/// work actually leaves the ready lookup path.
+#[must_use = "dropping an unfinished observation records cancellation"]
+pub(crate) struct ReadyObservation<'a> {
+    events: &'a Events,
+    observation: Observation,
+}
+impl<'a> ReadyObservation<'a> {
+    pub(crate) fn new(
+        events: &'a Events,
+        cache_name: &str,
+        instance_id: &str,
+        operation: CacheOperation,
+        key: Option<&str>,
+    ) -> Self {
+        Self {
+            events,
+            observation: Observation::new(events, cache_name, instance_id, operation, key),
         }
+    }
+    pub(crate) fn span(&self) -> tracing::Span {
+        self.observation.span.clone()
+    }
+    pub(crate) fn set_level(&mut self, level: CacheLevel) {
+        self.observation.level = Some(level);
+    }
+    pub(crate) fn finish(mut self, outcome: OperationOutcome) {
+        self.observation.complete(self.events, outcome);
+    }
+    pub(crate) fn into_owned(mut self) -> OperationObservation {
+        OperationObservation {
+            events: self.events.clone(),
+            observation: self.observation.transfer(),
+        }
+    }
+}
+impl Drop for ReadyObservation<'_> {
+    fn drop(&mut self) {
+        self.observation.finish_on_drop(self.events);
     }
 }
 

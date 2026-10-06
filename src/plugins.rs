@@ -555,8 +555,11 @@ impl PluginEventRoute {
     pub(crate) fn has_observers(&self) -> bool {
         self.observers.load(Ordering::Acquire) != 0
     }
+    pub(crate) fn has_listeners(&self) -> bool {
+        self.listeners.load(Ordering::Acquire) != 0
+    }
     pub(crate) fn upgrade(&self) -> Option<Arc<PluginHostInner>> {
-        if self.listeners.load(Ordering::Acquire) == 0 {
+        if !self.has_listeners() {
             None
         } else {
             self.host.upgrade()

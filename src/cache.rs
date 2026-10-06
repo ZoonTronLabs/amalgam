@@ -66,7 +66,7 @@ use crate::marker_snapshots::{
 use crate::maybe::MaybeValue;
 use crate::memory::{CacheMemory, MemoryAdmission, MemoryExpiry, MemoryLimits};
 use crate::memory_locker::{LocalGuard, LocalLocks};
-use crate::observability::{OperationObservation, component_span};
+use crate::observability::{OperationObservation, ReadyObservation, component_span};
 use crate::options::{
     EntryOptions, JitterSample, JitterSource, KeyModifierMode, RandomJitterSource,
     RemoveByTagBehavior,
@@ -170,6 +170,11 @@ pub enum BackplaneReadiness {
 }
 
 /// A typed value cache. Public clones share lifecycle; workers never own public handles.
+///
+/// Ordinary `V::clone()` on a built-in L1 hit runs under its short reader slot.
+/// A value's `Clone` implementation must not reenter the same cache. Custom
+/// [`ValueCloner`] callbacks, factories, event handlers and value destructors
+/// execute outside storage locks; configure auto-clone for a custom cloner.
 pub struct Cache<V: Clone + Send + Sync + 'static> {
     inner: Arc<CacheInner<V>>,
     lifetime: Arc<PublicLifetime<V>>,
@@ -275,6 +280,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     events: Events,
     clock: Arc<dyn Clock>,
     default_options: EntryOptions,
+    default_runtime: ready::RuntimeRequirement,
     tags_default_options: EntryOptions,
     marker_reads: MarkerReads,
     key_prefix: Option<Arc<str>>,
@@ -439,21 +445,35 @@ enum LookupMode {
 struct ReadyValue<'key, V> {
     value: V,
     key: Cow<'key, str>,
+    refresh: ReadyRefresh<V>,
+}
+enum ReadyRefresh<V> {
+    Complete,
+    Eager(Box<ReadyEager<V>>),
+}
+struct ReadyEager<V> {
+    current: Entry<V>,
+    options: EntryOptions,
+}
+struct ReadyHit<V> {
+    value: V,
+    refresh: ReadyRefresh<V>,
 }
 type LookupKey = crate::factory::FactoryKeys;
 // Ready operations cannot park. Their counted permit covers all synchronous
 // user code, including unused factory/fallback destructors and event callbacks.
 struct ReadyLookup<'a, V> {
     result: Result<ReadyValue<'a, V>>,
-    observation: OperationObservation,
+    observation: ReadyObservation<'a>,
     permit: InlinePermit<'a>,
 }
 enum LookupStart<'a, V> {
     Ready(ReadyLookup<'a, V>),
     Owned {
-        observation: OperationObservation,
+        observation: ReadyObservation<'a>,
         key: Cow<'a, str>,
         permit: InlinePermit<'a>,
+        resolved: Option<Box<EntryOptions>>,
     },
 }
 enum ObservationAdmission<'a> {
@@ -474,10 +494,16 @@ impl<V> ReadyLookup<'_, V> {
         // Completion owns any default input, including its destructor on a hit
         // or an error. No caller input survives outside the counted boundary.
         let result = match self.result {
-            Ok(ready) => Ok(ReadyValue {
-                value: complete(ready.value),
-                key: ready.key,
-            }),
+            Ok(ready) => {
+                // Optional background handoff is consumed by factory lookups;
+                // any unused ownership is reclaimed while the permit is live.
+                drop(ready.refresh);
+                Ok(ReadyValue {
+                    value: complete(ready.value),
+                    key: ready.key,
+                    refresh: ReadyRefresh::Complete,
+                })
+            }
             Err(error) => {
                 drop(complete);
                 Err(error)
