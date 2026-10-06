@@ -48,7 +48,9 @@ value replacement eviction.
 ## Clear visibility and sharing
 
 `epoch(namespace)` must return one stable `MemoryStorageEpoch` for each exact
-configured key prefix, with distinct handles for distinct namespaces. Two same
+host-issued namespace, with distinct handles for distinct namespaces. Value
+namespaces retain the configured key-prefix identity; marker namespaces also
+identify their authority and canonical physical wire scope. Two same
 namespace calls are checked during construction. Caches sharing a provider and
 prefix share clear visibility; different prefixes retain separate visibility.
 Keys are the real processed keys: deliberately choosing overlapping prefixes
@@ -76,12 +78,12 @@ unchanged. Host visibility can already have advanced when physical clear fails,
 as described above. `try_run_pending_tasks()` preserves a maintenance failure;
 the existing unit-returning adapter reports errors through its legacy error path.
 
-The supplied interface covers value L1 storage. The cache's own tag/clear
-registry and marker snapshots retain their separate lifecycle. There is no
-heterogeneous-value registry, runtime component replacement, asynchronous L1
-provider interface, or independently supplied blocking locker callback added by
-this change. The broader matrices in [FULL_CONTRACT.md](FULL_CONTRACT.md) remain
-open; this addition does not establish complete FusionCache parity.
+The value interface also supports a separate typed [marker observation
+provider](MARKER_MEMORY_STORAGE.md). The permanent invalidation journal and durable
+snapshots retain their own lifecycles. Optional distinct synchronous local-lock
+acquisition is documented in [MEMORY_LOCKER.md](MEMORY_LOCKER.md). Heterogeneous
+values, runtime replacement and broader provider matrices remain in
+[FULL_CONTRACT.md](FULL_CONTRACT.md); these additions do not establish full parity.
 
 ## Reference and verification
 

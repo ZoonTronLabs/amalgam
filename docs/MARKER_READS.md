@@ -44,7 +44,8 @@ peer observation, and a degraded fallback cannot replace a concurrent refresh.
 By default, continuity generations fence observations and value hydration across gaps. Explicit `ReconciliationPolicy::BackplaneBestEffort` keeps their generation and existing lifetimes over notification gaps instead; received invalidations still apply, while missed peer changes can remain unseen. See [outage policies](BACKPLANE_OUTAGES.md).
 
 `CacheEvent::MarkerRead` reports the actual authority: `Observed`, `Cached`,
-`KnownMaximum`, `Skipped`, `StaleFallback(reason)` or `Unavailable(reason)`.
+`KnownMaximum`, `Local`, `Skipped`, `StaleFallback(reason)` or `Unavailable(reason)`.
+`Local` identifies a memory-only factory, without durable confirmation.
 `KnownMaximum` explicitly says that a remembered local maximum exceeds the
 current lower/absent response; it does not claim that storage contains that
 maximum. Failures are never cached as confirmed absence. `MarkerReceived`
@@ -131,3 +132,7 @@ fault causes, cancellation/drop/shutdown, notification races, continuity gaps,
 short-circuit order, eager/passive ownership and old provider compatibility.
 The complete TagsDefaultEntryOptions factory/renewal contract and whole-library
 functionality remain incomplete; see [FULL_CONTRACT.md](FULL_CONTRACT.md).
+
+A separately supplied `MemoryStorage<MarkerObservation>` participates in actual
+secondary storage, including memory-only shared tag/clear coordination. See
+[provider, namespace and failure boundaries](MARKER_MEMORY_STORAGE.md).

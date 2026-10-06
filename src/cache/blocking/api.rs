@@ -431,6 +431,16 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {
         self.cache.memory_storage()
     }
+    /// The actual supplied secondary observation L1, when configured.
+    pub fn marker_memory_storage(
+        &self,
+    ) -> Option<&Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>> {
+        self.cache.marker_memory_storage()
+    }
+    /// Actual observation count/weight; absent when independent reads are disabled.
+    pub fn marker_memory_usage(&self) -> Result<Option<crate::MemoryUsage>> {
+        self.cache.marker_memory_usage()
+    }
     /// Diagnostic usage of the actual L1 keyspace.
     pub fn memory_usage(&self) -> Result<crate::MemoryUsage> {
         self.cache.memory_usage()

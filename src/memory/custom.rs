@@ -38,6 +38,25 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
         capture: EvictionCapture,
         prefix: Option<&str>,
     ) -> Result<Self> {
+        Self::new_for_namespace(
+            provider,
+            limits,
+            events,
+            clock,
+            expiry,
+            capture,
+            crate::MemoryNamespace::new(prefix),
+        )
+    }
+    pub(crate) fn new_for_namespace(
+        provider: Option<Arc<dyn MemoryStorage<V>>>,
+        limits: MemoryLimits,
+        events: Events,
+        clock: Arc<dyn Clock>,
+        expiry: MemoryExpiry,
+        capture: EvictionCapture,
+        namespace: crate::MemoryNamespace,
+    ) -> Result<Self> {
         match provider {
             None => Ok(Self::Builtin(
                 MemoryStore::with_clock_and_expiry(limits, events, clock, expiry)
@@ -47,10 +66,16 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
                 if limits != MemoryLimits::default() {
                     return Err(crate::ConfigError::SuppliedMemoryWithBuiltinLimits.into());
                 }
-                let namespace = crate::MemoryNamespace::new(prefix);
                 let epoch = provider.epoch(&namespace);
                 if !epoch.same(&provider.epoch(&namespace)) {
                     return Err(crate::ConfigError::UnstableMemoryStorageEpoch.into());
+                }
+                if namespace.purpose() != crate::MemoryNamespacePurpose::Values
+                    && epoch.same(
+                        &provider.epoch(&crate::MemoryNamespace::new(Some(namespace.key_prefix()))),
+                    )
+                {
+                    return Err(crate::ConfigError::AliasedMarkerMemoryStorageEpoch.into());
                 }
                 epoch.current()?;
                 Ok(Self::Supplied(Box::new(Supplied {
@@ -196,14 +221,17 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
             Self::Supplied(store) => store.remove(key, Some(expected)),
         }
     }
-    pub(crate) fn invalidate_all(&self) -> StorageResult<()> {
+    pub(crate) fn begin_invalidation(&self) -> StorageResult<MemoryInvalidation<'_, V>> {
         match self {
-            Self::Builtin(store) => {
-                store.invalidate_all();
-                Ok(())
-            }
-            Self::Supplied(store) => store.clear(),
+            Self::Builtin(store) => Ok(MemoryInvalidation::Builtin(store)),
+            Self::Supplied(store) => Ok(MemoryInvalidation::Supplied {
+                store,
+                barrier: store.epoch.advance()?,
+            }),
         }
+    }
+    pub(crate) fn invalidate_all(&self) -> StorageResult<()> {
+        self.begin_invalidation()?.finish()
     }
     pub(crate) async fn run_pending_tasks(&self) -> StorageResult<()> {
         match self {
@@ -229,7 +257,38 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
         &self.observer().evictions
     }
 }
+pub(crate) enum MemoryInvalidation<'a, V: Clone + Send + Sync + 'static> {
+    Builtin(&'a MemoryStore<V>),
+    Supplied {
+        store: &'a Supplied<V>,
+        barrier: crate::MemoryGeneration,
+    },
+}
+impl<V: Clone + Send + Sync + 'static> MemoryInvalidation<'_, V> {
+    pub(crate) fn finish(self) -> StorageResult<()> {
+        match self {
+            Self::Builtin(store) => {
+                store.invalidate_all();
+                Ok(())
+            }
+            Self::Supplied { store, barrier } => store.clear_before(barrier),
+        }
+    }
+}
 impl<V: Clone + Send + Sync + 'static> Supplied<V> {
+    fn validate_record(&self, key: &str, record: &MemoryRecord<V>) -> StorageResult<()> {
+        let violation = if record.key() != key {
+            Some(crate::MemoryRecordViolation::Key)
+        } else if !record.inner.generation.epoch.same(&self.epoch) {
+            Some(crate::MemoryRecordViolation::Namespace)
+        } else {
+            None
+        };
+        match violation {
+            Some(violation) => Err(MemoryStorageError::InvalidRecord { violation }),
+            None => Ok(()),
+        }
+    }
     fn keep_owner(&self, record: &MemoryRecord<V>) {
         self.observer
             .reclamation
@@ -271,6 +330,7 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
         let Some(record) = self.provider.get(key)? else {
             return Ok(None);
         };
+        self.validate_record(key, &record)?;
         self.keep_owner(&record);
         if record.is_live_at(now) {
             return Ok(Some(record.entry().clone()));
@@ -288,6 +348,7 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
         let Some(record) = self.provider.try_get(key)? else {
             return Ok(None);
         };
+        self.validate_record(key, &record)?;
         self.keep_owner(&record);
         Ok(record.is_live_at(now).then(|| record.entry().clone()))
     }
@@ -299,8 +360,7 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
         self.retire_as(record, RetirementReason::Explicit);
         Ok(Some(entry))
     }
-    fn clear(&self) -> StorageResult<()> {
-        let barrier = self.epoch.advance()?;
+    fn clear_before(&self, barrier: crate::MemoryGeneration) -> StorageResult<()> {
         for record in self.provider.clear_before(&barrier)? {
             self.retire_as(record, RetirementReason::Explicit);
         }

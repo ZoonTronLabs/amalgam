@@ -201,10 +201,14 @@ impl OperationOutcome {
                 | crate::tags::MarkerError::BlankWireVersion
                 | crate::tags::MarkerError::ZeroCapacity => Self::ConfigurationError,
             },
-            crate::Error::MemoryStorage(error) => match error {
-                crate::MemoryStorageError::Provider { .. } => Self::MemoryError,
-                crate::MemoryStorageError::GenerationExhausted => Self::Rejected,
-            },
+            crate::Error::MemoryInvalidation(_) => Self::MemoryError,
+            crate::Error::MemoryStorage(error) | crate::Error::MarkerMemoryStorage(error) => {
+                match error {
+                    crate::MemoryStorageError::Provider { .. }
+                    | crate::MemoryStorageError::InvalidRecord { .. } => Self::MemoryError,
+                    crate::MemoryStorageError::GenerationExhausted => Self::Rejected,
+                }
+            }
             crate::Error::MemoryLocker(error) => match error {
                 crate::MemoryLockerError::Provider { .. } => Self::LockError,
                 crate::MemoryLockerError::Cancelled { .. } => Self::Cancelled,

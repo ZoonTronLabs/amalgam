@@ -3,15 +3,20 @@
 
 use crate::entry::{ContinuityStamp, Entry};
 use crate::error::Result;
-use crate::events::Events;
 use crate::execution::lock;
 use crate::marker_snapshots::{MarkerLifecyclePolicy, MarkerSnapshotCache};
-use crate::memory::{CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
+use crate::memory::{
+    CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryInvalidation, MemoryLimits,
+};
 use crate::memory_locker::LocalLocks;
 use crate::options::{EntryOptions, JitterSample};
 use crate::tags::{MarkerKind, MarkerVersion};
 use crate::time::{Clock, Timestamp};
 use std::sync::{Arc, Mutex};
+
+mod memory;
+use memory::MarkerMemory;
+pub(crate) use memory::MarkerMemoryNamespace;
 
 /// Selects the control-read contract independently of ordinary value options.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -52,6 +57,8 @@ pub enum MarkerReadOutcome {
     Cached,
     /// Durable storage confirmed presence or absence.
     Observed,
+    /// A memory-only marker factory selected a local fact or absence.
+    Local,
     /// A confirmed local maximum was retained after a lower or absent response.
     /// This does not claim that storage still contains that maximum.
     KnownMaximum,
@@ -63,46 +70,61 @@ pub enum MarkerReadOutcome {
     Unavailable(MarkerReadFailure),
 }
 
+/// Presence in a local or durable marker observation; absence carries no version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkerPresence {
+pub enum MarkerPresence {
+    /// The observed or retained monotonic invalidation boundary.
     Present(MarkerVersion),
+    /// No marker was present in the selected authority.
     Absent,
 }
 
+/// Typed facts stored by an application's marker L1 provider.
+/// The host owns all record metadata and reconciles live maxima atomically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkerObservation {
+pub enum MarkerObservation {
+    /// Presence or absence confirmed by durable control storage.
     Confirmed(MarkerPresence),
+    /// A fact selected by a memory-only marker factory.
+    Local(MarkerPresence),
+    /// A confirmed maximum retained over a lower or absent response.
     KnownMaximum(MarkerVersion),
+    /// A fail-safe observation retained after this explicit fault.
     Retained {
+        /// The retained presence or absence.
         presence: MarkerPresence,
+        /// The fault which selected fail-safe.
         failure: MarkerReadFailure,
     },
 }
 
 impl MarkerObservation {
-    pub(crate) fn presence(self) -> MarkerPresence {
+    /// The fact's presence, independent of its authority or degradation reason.
+    pub fn presence(self) -> MarkerPresence {
         match self {
-            Self::Confirmed(presence) | Self::Retained { presence, .. } => presence,
+            Self::Confirmed(presence) | Self::Local(presence) | Self::Retained { presence, .. } => {
+                presence
+            }
             Self::KnownMaximum(version) => MarkerPresence::Present(version),
         }
     }
-
-    pub(crate) fn outcome(self) -> MarkerReadOutcome {
+    /// The outcome when the actual stored observation is reused.
+    pub fn outcome(self) -> MarkerReadOutcome {
         match self {
             Self::Confirmed(_) => MarkerReadOutcome::Cached,
+            Self::Local(_) => MarkerReadOutcome::Local,
             Self::KnownMaximum(_) => MarkerReadOutcome::KnownMaximum,
             Self::Retained { failure, .. } => MarkerReadOutcome::StaleFallback(failure),
         }
     }
-
     pub(crate) fn observed_outcome(self) -> MarkerReadOutcome {
         match self {
             Self::Confirmed(_) => MarkerReadOutcome::Observed,
+            Self::Local(_) => MarkerReadOutcome::Local,
             Self::KnownMaximum(_) => MarkerReadOutcome::KnownMaximum,
             Self::Retained { failure, .. } => MarkerReadOutcome::StaleFallback(failure),
         }
     }
-
     pub(crate) fn reconcile_maximum(self, maximum: Option<MarkerVersion>) -> Self {
         match (self.presence(), maximum) {
             (MarkerPresence::Absent, Some(maximum)) => Self::KnownMaximum(maximum),
@@ -110,6 +132,31 @@ impl MarkerObservation {
                 Self::KnownMaximum(maximum)
             }
             (MarkerPresence::Absent | MarkerPresence::Present(_), _) => self,
+        }
+    }
+}
+
+pub(crate) enum MarkerReady {
+    Cached(MarkerObservation),
+    Shortcut(MarkerReadOutcome),
+    Skipped(Option<MarkerVersion>),
+}
+impl MarkerReady {
+    pub(crate) fn outcome(&self) -> MarkerReadOutcome {
+        match self {
+            Self::Cached(observation) => observation.outcome(),
+            Self::Shortcut(outcome) => *outcome,
+            Self::Skipped(_) => MarkerReadOutcome::Skipped,
+        }
+    }
+    pub(crate) fn maximum(&self) -> Option<MarkerVersion> {
+        match self {
+            Self::Cached(observation) => match observation.presence() {
+                MarkerPresence::Present(version) => Some(version),
+                MarkerPresence::Absent => None,
+            },
+            Self::Shortcut(_) => None,
+            Self::Skipped(maximum) => *maximum,
         }
     }
 }
@@ -128,7 +175,7 @@ struct ClearObservations {
 }
 
 pub(crate) struct MarkerObservations {
-    pub(crate) memory: MemoryStore<MarkerObservation>,
+    pub(crate) memory: MarkerMemory,
     pub(crate) locks: LocalLocks,
     pub(crate) lifecycle: MarkerLifecycleAccess,
     clears: Mutex<ClearObservations>,
@@ -161,35 +208,48 @@ impl MarkerReads {
         }
     }
 
-    pub(crate) fn invalidate(&self) {
+    pub(crate) fn begin_invalidation(
+        &self,
+    ) -> std::result::Result<
+        Option<MemoryInvalidation<'_, MarkerObservation>>,
+        crate::MemoryStorageError,
+    > {
         match self {
-            Self::DurableRequired => {}
-            Self::OptionsControlled(observations) => observations.invalidate(),
+            Self::DurableRequired => Ok(None),
+            Self::OptionsControlled(observations) => {
+                observations.reset_clears();
+                observations.memory.begin_invalidation().map(Some)
+            }
         }
     }
 }
 
 impl MarkerObservations {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        provider: Option<Arc<dyn crate::MemoryStorage<MarkerObservation>>>,
         limits: MemoryLimits,
         clock: Arc<dyn Clock>,
         expiry: MemoryExpiry,
         lifecycle: MarkerLifecycleAccess,
         locks: LocalLocks,
-    ) -> Self {
-        Self {
+        namespace: MarkerMemoryNamespace,
+    ) -> Result<Self> {
+        Ok(Self {
             lifecycle,
-            memory: MemoryStore::with_clock_and_expiry(
-                limits,
-                Events::with_capacity(16),
-                clock,
-                expiry,
-            ),
+            memory: MarkerMemory::new(provider, limits, clock, expiry, namespace)?,
             locks,
             clears: Mutex::new(ClearObservations {
                 remove: ClearObservation::Unknown,
                 expire: ClearObservation::Unknown,
             }),
+        })
+    }
+    pub(crate) fn lock_key(&self, kind: &MarkerKind) -> Arc<str> {
+        if self.memory.is_supplied() {
+            self.memory.key(kind)
+        } else {
+            Self::key(kind)
         }
     }
 
@@ -236,55 +296,50 @@ impl MarkerObservations {
         *target = ClearObservation::Known { epoch, outcome };
     }
 
-    pub(crate) fn ready(
+    pub(crate) fn ready_value(
         &self,
         kind: &MarkerKind,
         options: &EntryOptions,
         now: Timestamp,
         epoch: u64,
         clear_shortcut: bool,
-    ) -> bool {
-        self.ready_outcome(kind, options, now, epoch, clear_shortcut)
-            .is_some()
-    }
-
-    pub(crate) fn ready_outcome(
-        &self,
-        kind: &MarkerKind,
-        options: &EntryOptions,
-        now: Timestamp,
-        epoch: u64,
-        clear_shortcut: bool,
-    ) -> Option<MarkerReadOutcome> {
+    ) -> Result<Option<MarkerReady>> {
         if clear_shortcut && let Some(outcome) = self.clear_status(kind, epoch) {
-            return Some(outcome);
+            return Ok(Some(MarkerReady::Shortcut(outcome)));
         }
         let cached = if options.skip_memory_read() {
             None
         } else {
-            self.memory.ready_at(&Self::key(kind), now)
+            self.memory.ready_at(&self.memory.key(kind), now)?
         };
         if let Some(entry) = &cached
             && entry.freshness(now).is_fresh()
         {
-            if matches!(self.lifecycle, MarkerLifecycleAccess::CachedSnapshots(_))
+            if (matches!(self.lifecycle, MarkerLifecycleAccess::CachedSnapshots(_))
+                || self.memory.is_local_supplied())
                 && entry.should_eager_refresh(now)
             {
-                return None;
+                return Ok(None);
             }
-            return Some(entry.value().outcome());
+            return Ok(Some(MarkerReady::Cached(*entry.value())));
         }
-        if options.skip_distributed_read()
-            || cached.is_some() && options.skip_distributed_read_when_stale()
+        if !self.memory.is_local_supplied()
+            && (options.skip_distributed_read()
+                || cached.is_some() && options.skip_distributed_read_when_stale())
         {
             match self.lifecycle {
-                MarkerLifecycleAccess::DurableOnly => Some(MarkerReadOutcome::Skipped),
-                // Skipping the read does not also skip the shared factory or
-                // an independently enabled snapshot write/locker.
-                MarkerLifecycleAccess::CachedSnapshots(_) => None,
+                MarkerLifecycleAccess::DurableOnly => {
+                    Ok(Some(MarkerReady::Skipped(cached.and_then(|entry| {
+                        match entry.value().presence() {
+                            MarkerPresence::Present(version) => Some(version),
+                            MarkerPresence::Absent => None,
+                        }
+                    }))))
+                }
+                MarkerLifecycleAccess::CachedSnapshots(_) => Ok(None),
             }
         } else {
-            None
+            Ok(None)
         }
     }
 
@@ -311,9 +366,8 @@ impl MarkerObservations {
             None,
         )?;
         let entry = entry.with_hydrated_value(observation, stamp.clone());
-        Ok(self
-            .admit_observation(Self::key(kind), entry, now, stamp)
-            .await)
+        self.admit_observation(self.memory.key(kind), entry, now, stamp)
+            .await
     }
 
     pub(crate) async fn store_snapshot(
@@ -343,9 +397,8 @@ impl MarkerObservations {
             return Ok(observation);
         };
         let local = local.with_hydrated_value(observation, stamp.clone());
-        Ok(self
-            .admit_observation(Self::key(kind), local, now, stamp)
-            .await)
+        self.admit_observation(self.memory.key(kind), local, now, stamp)
+            .await
     }
 
     async fn admit_observation(
@@ -354,9 +407,9 @@ impl MarkerObservations {
         entry: Entry<MarkerObservation>,
         now: Timestamp,
         stamp: ContinuityStamp,
-    ) -> MarkerObservation {
+    ) -> Result<MarkerObservation> {
         while stamp.is_current() {
-            let current = self.memory.get_at(&key, now).await;
+            let current = self.memory.get_at(&key, now).await?;
             let maximum = current
                 .as_ref()
                 .and_then(|entry| match entry.value().presence() {
@@ -368,14 +421,14 @@ impl MarkerObservations {
             let admission = self
                 .memory
                 .insert_if_unchanged(Arc::clone(&key), current.as_ref(), merged, now)
-                .await;
+                .await?;
             tracing::trace!(?admission, "marker observation admission");
             if admission != MemoryAdmission::Rejected(CapacityRejection::VersionChanged) {
-                return observation;
+                return Ok(observation);
             }
             tokio::task::yield_now().await;
         }
-        *entry.value()
+        Ok(*entry.value())
     }
 
     pub(crate) async fn retain_fallback(
@@ -385,21 +438,32 @@ impl MarkerObservations {
         options: &EntryOptions,
         now: Timestamp,
         failure: MarkerReadFailure,
-    ) -> Result<()> {
+    ) -> Result<MarkerObservation> {
+        let observation = MarkerObservation::Retained {
+            presence: source.value().presence(),
+            failure,
+        };
         if !options.skip_memory_write()
             && let Some(entry) = Entry::try_throttled(source, options, now)?
         {
-            let entry = entry.with_value(MarkerObservation::Retained {
-                presence: source.value().presence(),
-                failure,
-            });
+            let key = self.memory.key(kind);
             let admission = self
                 .memory
-                .insert_if_unchanged(Self::key(kind), Some(source), entry, now)
-                .await;
+                .insert_if_unchanged(
+                    Arc::clone(&key),
+                    Some(source),
+                    entry.with_value(observation),
+                    now,
+                )
+                .await?;
             tracing::trace!(?admission, "marker fallback observation admission");
+            if admission == MemoryAdmission::Rejected(CapacityRejection::VersionChanged)
+                && let Some(current) = self.memory.get_at(&key, now).await?
+            {
+                return Ok(*current.value());
+            }
         }
-        Ok(())
+        Ok(observation)
     }
 
     pub(crate) async fn merge_maximum(
@@ -408,26 +472,27 @@ impl MarkerObservations {
         maximum: MarkerVersion,
         now: Timestamp,
         stamp: ContinuityStamp,
-    ) {
-        let key = Self::key(kind);
+    ) -> Result<Option<MarkerObservation>> {
+        let key = self.memory.key(kind);
         while stamp.is_current() {
-            let Some(current) = self.memory.get_at(&key, now).await else {
-                return;
+            let Some(current) = self.memory.get_at(&key, now).await? else {
+                return Ok(None);
             };
             let observation = current.value().reconcile_maximum(Some(maximum));
             if observation == *current.value() {
-                return;
+                return Ok(Some(observation));
             }
             let merged = current.with_value(observation);
             let admission = self
                 .memory
                 .insert_if_unchanged(Arc::clone(&key), Some(&current), merged, now)
-                .await;
+                .await?;
             if admission != MemoryAdmission::Rejected(CapacityRejection::VersionChanged) {
-                return;
+                return Ok(Some(observation));
             }
             tokio::task::yield_now().await;
         }
+        Ok(None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -440,11 +505,11 @@ impl MarkerObservations {
         now: Timestamp,
         failure: MarkerReadFailure,
         stamp: ContinuityStamp,
-    ) -> Result<()> {
-        if options.skip_memory_write() || !stamp.is_current() {
-            return Ok(());
-        }
+    ) -> Result<MarkerObservation> {
         let observation = MarkerObservation::Retained { presence, failure };
+        if options.skip_memory_write() || !stamp.is_current() {
+            return Ok(observation);
+        }
         let source = Entry::try_rehydrate(
             observation,
             snapshot.created(),
@@ -459,14 +524,14 @@ impl MarkerObservations {
         .with_retention(options.size()?, options.priority());
         if let Some(throttled) = Entry::try_throttled(&source, options, now)? {
             let entry = throttled.with_hydrated_value(observation, stamp.clone());
-            self.admit_observation(Self::key(kind), entry, now, stamp)
+            return self
+                .admit_observation(self.memory.key(kind), entry, now, stamp)
                 .await;
         }
-        Ok(())
+        Ok(observation)
     }
 
-    pub(crate) fn invalidate(&self) {
-        self.memory.invalidate_all();
+    fn reset_clears(&self) {
         let mut clears = lock(&self.clears);
         clears.remove = ClearObservation::Unknown;
         clears.expire = ClearObservation::Unknown;

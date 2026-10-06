@@ -33,7 +33,8 @@ pub struct CacheBuilder<V> {
     tags_default_options: EntryOptions,
     marker_read_policy: MarkerReadPolicy,
     marker_lifecycle_policy: MarkerLifecyclePolicy,
-    marker_read_limits: MemoryLimits,
+    marker_read_limits: Option<MemoryLimits>,
+    marker_memory_storage: Option<Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>>,
     clock: Option<Arc<dyn Clock>>,
     max_capacity: Option<u64>,
     max_weighted_capacity: Option<u64>,
@@ -78,7 +79,8 @@ impl<V> CacheBuilder<V> {
             tags_default_options: EntryOptions::tag_defaults(),
             marker_read_policy: MarkerReadPolicy::default(),
             marker_lifecycle_policy: MarkerLifecyclePolicy::default(),
-            marker_read_limits: MemoryLimits::new(Some(4096), None),
+            marker_read_limits: None,
+            marker_memory_storage: None,
             clock: None,
             max_capacity: None,
             max_weighted_capacity: None,
@@ -117,6 +119,17 @@ impl<V> CacheBuilder<V> {
     /// is shared by Arc; cache shutdown does not dispose a shared provider.
     pub fn memory_storage(mut self, storage: Arc<dyn crate::MemoryStorage<V>>) -> Self {
         self.memory_storage = Some(storage);
+        self
+    }
+
+    /// Supplies the actual secondary tag/clear observation L1, separately from
+    /// ordinary values. Requires `MarkerReadPolicy::OptionsControlled`.
+    /// The provider owns capacity and distinct stable epochs for each namespace.
+    pub fn marker_memory_storage(
+        mut self,
+        storage: Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>,
+    ) -> Self {
+        self.marker_memory_storage = Some(storage);
         self
     }
 
@@ -233,7 +246,7 @@ impl<V> CacheBuilder<V> {
     /// Limits the separate observation cache; never expires durable tombstones
     /// or discards known local invalidations. Tag size and priority select admission.
     pub fn marker_read_limits(mut self, limits: MemoryLimits) -> Self {
-        self.marker_read_limits = limits;
+        self.marker_read_limits = Some(limits);
         self
     }
 
@@ -555,6 +568,11 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             None if self.distributed.is_some() => MarkerAccess::Unavailable,
             None => MarkerAccess::Local,
         };
+        if self.marker_memory_storage.is_some()
+            && self.marker_read_policy != MarkerReadPolicy::OptionsControlled
+        {
+            return Err(ConfigError::SuppliedMarkerMemoryRequiresControlledReads.into());
+        }
         let marker_lifecycle = match self.marker_lifecycle_policy {
             MarkerLifecyclePolicy::DurableOnly => MarkerLifecycleAccess::DurableOnly,
             MarkerLifecyclePolicy::CachedSnapshots => {
@@ -604,13 +622,30 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         let marker_reads = match self.marker_read_policy {
             MarkerReadPolicy::DurableRequired => MarkerReads::DurableRequired,
             MarkerReadPolicy::OptionsControlled => {
+                let limits = self.marker_read_limits.unwrap_or_else(|| {
+                    if self.marker_memory_storage.is_some() {
+                        MemoryLimits::default()
+                    } else {
+                        MemoryLimits::new(Some(4096), None)
+                    }
+                });
+                let namespace = match &markers {
+                    MarkerAccess::Local => crate::marker_reads::MarkerMemoryNamespace::Local(
+                        self.key_prefix.clone().unwrap_or_else(|| Arc::from("")),
+                    ),
+                    MarkerAccess::Durable(_) | MarkerAccess::Unavailable => {
+                        crate::marker_reads::MarkerMemoryNamespace::Durable(scope.clone())
+                    }
+                };
                 MarkerReads::OptionsControlled(Box::new(MarkerObservations::new(
-                    self.marker_read_limits,
+                    self.marker_memory_storage,
+                    limits,
                     Arc::clone(&clock),
                     expiry,
                     marker_lifecycle,
                     locks.for_markers(),
-                )))
+                    namespace,
+                )?))
             }
         };
         let memory = crate::memory::CacheMemory::new(

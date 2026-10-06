@@ -25,6 +25,12 @@ pub enum ConfigError {
     /// Supplied storage must expose one stable shared generation identity.
     #[error("memory storage returned different epoch identities")]
     UnstableMemoryStorageEpoch,
+    /// Control observations need their explicit independent read policy.
+    #[error("supplied marker memory requires OptionsControlled marker reads")]
+    SuppliedMarkerMemoryRequiresControlledReads,
+    /// Values and observations cannot share a visibility generation.
+    #[error("marker memory and ordinary values must have distinct epochs")]
+    AliasedMarkerMemoryStorageEpoch,
     /// Local-only reconciliation cannot cover an external data/notification provider.
     #[error("local-only reconciliation requires memory-only storage and no backplane")]
     LocalReconciliationWithExternalStorage,
@@ -357,6 +363,12 @@ pub enum Error {
     /// A supplied L1 failed, preserving its original cause.
     #[error(transparent)]
     MemoryStorage(#[from] crate::memory_storage::MemoryStorageError),
+    /// An independently supplied control-observation L1 failed.
+    #[error("marker {0}")]
+    MarkerMemoryStorage(#[source] crate::memory_storage::MemoryStorageError),
+    /// Both value and control barriers were advanced but physical cleanup failed.
+    #[error("{0}")]
+    MemoryInvalidation(#[source] Box<crate::MemoryInvalidationFailure>),
 
     /// Typed recovery construction/lifecycle failure.
     #[error(transparent)]

@@ -10,7 +10,7 @@ use crate::events::{
 };
 use crate::options::Priority;
 use crate::time::{Clock, Timestamp};
-pub(crate) use custom::CacheMemory;
+pub(crate) use custom::{CacheMemory, MemoryInvalidation};
 use reclamation::Reclamation;
 pub(crate) use reclamation::{ReclamationFence, ReclamationGuard};
 use sharded::Sharded;

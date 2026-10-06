@@ -14,6 +14,8 @@ use super::{
 
 #[path = "marker_eager.rs"]
 mod eager;
+#[path = "marker_local.rs"]
+mod local;
 #[path = "marker_recovery.rs"]
 mod recovery;
 
@@ -135,7 +137,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         };
         let store = match &self.inner.markers {
-            MarkerAccess::Local => return Ok(()),
+            MarkerAccess::Local => {
+                if observations.memory.is_supplied() {
+                    return Box::pin(self.check_local_markers(entry, cancellation, observations))
+                        .await;
+                }
+                return Ok(());
+            }
             MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
             MarkerAccess::Durable(store) => Arc::clone(store),
         };
@@ -182,14 +190,23 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         observations: &MarkerObservations,
         kind: &MarkerKind,
-    ) -> Option<Entry<MarkerObservation>> {
+    ) -> Result<Option<Entry<MarkerObservation>>> {
         if self.inner.tags_default_options.skip_memory_read() {
-            None
-        } else {
-            observations
-                .memory
-                .get_at(&MarkerObservations::key(kind), self.inner.clock.now())
-                .await
+            return Ok(None);
+        }
+        let cached = observations
+            .memory
+            .get_at(&observations.memory.key(kind), self.inner.clock.now())
+            .await?;
+        if let Some(entry) = &cached {
+            self.accept_marker_observation(kind, *entry.value());
+        }
+        Ok(cached)
+    }
+
+    fn accept_marker_observation(&self, kind: &MarkerKind, observation: MarkerObservation) {
+        if let MarkerPresence::Present(version) = observation.presence() {
+            self.apply_marker(StoredMarker::new(kind.clone(), version));
         }
     }
 
@@ -209,7 +226,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> Result<()> {
         self.validate_execution_options(&self.inner.tags_default_options, OptionsTarget::Marker)?;
         let captured = self.inner.epoch.load(Ordering::Acquire);
-        let outcome = match self.marker_lookup(observations, &kind, captured).await {
+        let outcome = match self.marker_lookup(observations, &kind, captured).await? {
             MarkerLookup::Ready(outcome) => outcome,
             MarkerLookup::Refresh(cached) => {
                 self.refresh_control_marker(
@@ -238,19 +255,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         observations: &MarkerObservations,
         kind: &MarkerKind,
         captured: u64,
-    ) -> MarkerLookup {
+    ) -> Result<MarkerLookup> {
         if self.marker_clear_shortcut()
             && let Some(outcome) = observations.clear_status(kind, captured)
         {
-            return MarkerLookup::Ready(outcome);
+            return Ok(MarkerLookup::Ready(outcome));
         }
-        let cached = self.marker_cached(observations, kind).await;
+        let cached = self.marker_cached(observations, kind).await?;
         if let Some(entry) = &cached
             && entry.freshness(self.inner.clock.now()).is_fresh()
         {
-            return MarkerLookup::Ready(entry.value().outcome());
+            return Ok(MarkerLookup::Ready(entry.value().outcome()));
         }
-        MarkerLookup::Refresh(cached)
+        Ok(MarkerLookup::Refresh(cached))
     }
 
     async fn refresh_control_marker(
@@ -262,7 +279,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         captured: u64,
         cancellation: &FactoryCancellation,
     ) -> Result<MarkerReadOutcome> {
-        let key = MarkerObservations::key(kind);
+        let key = observations.lock_key(kind);
         let guard = observations
             .locks
             .acquire(
@@ -294,7 +311,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         captured: u64,
         cancellation: &FactoryCancellation,
     ) -> Result<MarkerReadOutcome> {
-        let cached = self.marker_cached(observations, kind).await;
+        let cached = self.marker_cached(observations, kind).await?;
         let options = &self.inner.tags_default_options;
         if let Some(entry) = &cached
             && entry.freshness(self.inner.clock.now()).is_fresh()
@@ -824,6 +841,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
             )
             .await?;
+        self.accept_marker_observation(kind, observation);
         Ok(observation.observed_outcome())
     }
 
@@ -896,6 +914,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .await?;
             (observation, MarkerLocalCommit::Admitted)
         };
+        self.accept_marker_observation(kind, observation);
         if let MarkerPresence::Present(version) = observation.presence()
             && !options.skip_distributed_write()
         {
@@ -979,7 +998,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             MarkerFactoryStale::Distributed(snapshot)
                 if self.marker_factory_fallback_eligible(stale) =>
             {
-                observations
+                let observation = observations
                     .retain_snapshot_fallback(
                         kind,
                         snapshot,
@@ -990,6 +1009,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
                     )
                     .await?;
+                self.accept_marker_observation(kind, observation);
                 Ok(MarkerReadOutcome::StaleFallback(failure))
             }
             MarkerFactoryStale::Memory(cached) => {
@@ -1121,7 +1141,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         match commit.local {
                             MarkerLocalCommit::Admitted => {
                                 // Renewal must not shorten the independent L1 lifetime.
-                                observations
+                                let observation = observations
                                     .merge_maximum(
                                         kind,
                                         snapshot.version(),
@@ -1131,14 +1151,17 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                             captured,
                                         ),
                                     )
-                                    .await;
+                                    .await?;
+                                if let Some(observation) = observation {
+                                    self.accept_marker_observation(kind, observation);
+                                }
                             }
                             MarkerLocalCommit::AwaitingFence {
                                 observation,
                                 created,
                                 jitter,
                             } => {
-                                observations
+                                let observation = observations
                                     .store(
                                         kind,
                                         observation.reconcile_maximum(Some(snapshot.version())),
@@ -1151,6 +1174,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                         ),
                                     )
                                     .await?;
+                                self.accept_marker_observation(kind, observation);
                             }
                         }
                     }
@@ -1196,6 +1220,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
             )
             .await?;
+        self.accept_marker_observation(kind, observation);
         Ok(observation.observed_outcome())
     }
 
@@ -1238,7 +1263,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             && source.is_read_eligible()
             && !source.is_physically_expired(self.inner.clock.now())
         {
-            observations
+            let observation = observations
                 .retain_fallback(
                     kind,
                     source,
@@ -1247,6 +1272,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     failure,
                 )
                 .await?;
+            self.accept_marker_observation(kind, observation);
             Ok(MarkerReadOutcome::StaleFallback(failure))
         } else {
             Ok(MarkerReadOutcome::Unavailable(failure))
@@ -1332,17 +1358,27 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         };
         let captured = self.inner.epoch.load(Ordering::Acquire);
+        let observation = match &self.inner.markers {
+            MarkerAccess::Local => {
+                MarkerObservation::Local(MarkerPresence::Present(marker.version()))
+            }
+            MarkerAccess::Durable(_) => {
+                MarkerObservation::Confirmed(MarkerPresence::Present(marker.version()))
+            }
+            MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
+        }
+        .reconcile_maximum(self.inner.tags.marker_version(marker.kind()));
         let observation = observations
             .store(
                 marker.kind(),
-                MarkerObservation::Confirmed(MarkerPresence::Present(marker.version()))
-                    .reconcile_maximum(self.inner.tags.marker_version(marker.kind())),
+                observation,
                 options,
                 self.inner.clock.now(),
                 self.jitter_sample(options)?,
                 ContinuityStamp::new(Arc::clone(&self.inner.epoch), captured),
             )
             .await?;
+        self.accept_marker_observation(marker.kind(), observation);
         if self.marker_clear_shortcut() && self.inner.epoch.load(Ordering::Acquire) == captured {
             observations.initialize_clear(marker.kind(), captured, observation.outcome());
         }

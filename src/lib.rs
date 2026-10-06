@@ -103,7 +103,9 @@ pub use factory::{
     ConditionalRefreshError, FactoryContext, FactoryInvocation, FactoryProduct, ModifiedBuilder,
     NotModifiedBuilder, ValidatorUpdate,
 };
-pub use marker_reads::{MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy};
+pub use marker_reads::{
+    MarkerObservation, MarkerPresence, MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy,
+};
 pub use marker_snapshots::{
     MarkerLifecyclePolicy, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotCacheError,
     MarkerSnapshotLimits, MarkerSnapshotRead, MarkerSnapshotRenewal, MarkerSnapshotValidationError,
@@ -118,8 +120,9 @@ pub use memory_locker::{
     MemoryLockRequest, MemoryLocker, MemoryLockerContext, MemoryLockerError,
 };
 pub use memory_storage::{
-    MemoryCondition, MemoryGeneration, MemoryNamespace, MemoryRecord, MemoryRetirement,
-    MemoryStorage, MemoryStorageEpoch, MemoryStorageError, MemoryStorageWrite,
+    MemoryCondition, MemoryGeneration, MemoryInvalidationFailure, MemoryNamespace,
+    MemoryNamespacePurpose, MemoryRecord, MemoryRecordViolation, MemoryRetirement, MemoryStorage,
+    MemoryStorageEpoch, MemoryStorageError, MemoryStorageWrite,
 };
 pub use options::{
     EagerThreshold, EntryOptions, EntryWeight, JitterSample, JitterSource, KeyModifierMode,

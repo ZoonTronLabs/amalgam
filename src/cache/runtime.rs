@@ -52,8 +52,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 tracing::error!("cache continuity generation exhausted");
                 self.inner.close();
             }
-            self.memory.invalidate_all()?;
-            self.inner.marker_reads.invalidate();
+            self.invalidate_memory_layers()?;
         }
         if let Some(recovery) = &self.inner.recovery {
             recovery.suspend();
@@ -110,8 +109,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         drop(seen);
         if invalidate {
-            self.memory.invalidate_all()?;
-            self.inner.marker_reads.invalidate();
+            self.invalidate_memory_layers()?;
         }
         if exhausted {
             tracing::error!("cache continuity generation exhausted");
@@ -119,6 +117,25 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         Ok(())
     }
+    fn invalidate_memory_layers(&self) -> Result<()> {
+        // Both visibility barriers precede every external cleanup callback.
+        let values = self.memory.begin_invalidation();
+        let markers = self.inner.marker_reads.begin_invalidation();
+        let values = values.and_then(|barrier| barrier.finish());
+        let markers = markers.and_then(|barrier| match barrier {
+            Some(barrier) => barrier.finish(),
+            None => Ok(()),
+        });
+        match (values, markers) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(values), Ok(())) => Err(Error::MemoryStorage(values)),
+            (Ok(()), Err(markers)) => Err(Error::MarkerMemoryStorage(markers)),
+            (Err(values), Err(markers)) => Err(Error::MemoryInvalidation(Box::new(
+                crate::MemoryInvalidationFailure { values, markers },
+            ))),
+        }
+    }
+
     pub(super) fn start_maintenance(&self) {
         if self.inner.maintenance.load(Ordering::Acquire)
             || tokio::runtime::Handle::try_current().is_err()
@@ -150,7 +167,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     };
                     inner.memory.run_pending_tasks().await?;
                     if let MarkerReads::OptionsControlled(observations) = &inner.marker_reads {
-                        observations.memory.run_pending_tasks().await;
+                        observations.memory.run_pending_tasks().await?;
                         observations.locks.clean_idle(64);
                     }
                     inner.locks.clean_idle(256);

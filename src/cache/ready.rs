@@ -2,7 +2,7 @@
 use super::{
     Cache, CacheEvent, CacheInner, ConfigError, Entry, EntryOptions, MarkerAccess, MarkerKind,
     MarkerReadOutcome, MarkerReadPolicy, MarkerReads, OptionsTarget, Ordering, Result,
-    RuntimeComponent, Storage, Tag, TagVerdict, Timeout, Timestamp, Worker, validate_budget,
+    RuntimeComponent, Storage, TagVerdict, Timeout, Timestamp, Worker, validate_budget,
 };
 
 pub(super) enum ReadyContext<'a, V: Clone + Send + Sync + 'static> {
@@ -118,45 +118,66 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         matches!(self.storage, Storage::Hybrid { .. }) && self.backplane.is_some()
     }
 
-    pub(super) fn marker_reads_ready(&self, tags: &[Tag], now: Timestamp) -> bool {
-        if self.disable_tagging
-            || self.marker_reads.policy() == MarkerReadPolicy::DurableRequired
-            || matches!(self.markers, MarkerAccess::Local)
-        {
-            return true;
+    pub(super) fn marker_reads_ready(&self, entry: &Entry<V>, now: Timestamp) -> Result<bool> {
+        if self.disable_tagging || self.marker_reads.policy() == MarkerReadPolicy::DurableRequired {
+            return Ok(true);
         }
         if matches!(self.markers, MarkerAccess::Unavailable) {
-            return false;
+            return Ok(false);
         }
         let MarkerReads::OptionsControlled(observations) = &self.marker_reads else {
-            return true;
+            return Ok(true);
         };
+        if matches!(self.markers, MarkerAccess::Local) && !observations.memory.is_supplied() {
+            return Ok(true);
+        }
         let options = &self.tags_default_options;
         let epoch = self.epoch.load(Ordering::Acquire);
-        Worker::<V>::secondary_marker_kinds(tags).all(|kind| {
-            observations.ready(&kind, options, now, epoch, self.marker_clear_shortcut())
-        })
-    }
-
-    pub(super) fn marker_ready_events(&self, tags: &[Tag], now: Timestamp) {
-        if self.disable_tagging {
-            return;
-        }
-        let MarkerReads::OptionsControlled(observations) = &self.marker_reads else {
-            return;
-        };
-        let epoch = self.epoch.load(Ordering::Acquire);
-        for kind in Worker::<V>::secondary_marker_kinds(tags) {
-            if let Some(outcome) = observations.ready_outcome(
+        for kind in Worker::<V>::secondary_marker_kinds(entry.meta().tags()) {
+            let Some(probe) = observations.ready_value(
                 &kind,
-                &self.tags_default_options,
+                options,
                 now,
                 epoch,
                 self.marker_clear_shortcut(),
-            ) {
-                self.marker_event(&kind, outcome);
+            )?
+            else {
+                return Ok(false);
+            };
+            if let Some(maximum) = probe.maximum() {
+                self.tags.advance(kind.clone(), maximum);
+            }
+            self.marker_event(&kind, probe.outcome());
+            if probe.maximum().is_some() && self.tags(entry) != TagVerdict::Valid {
+                return Ok(false);
             }
         }
+        Ok(self.tags(entry) == TagVerdict::Valid)
+    }
+
+    pub(super) fn local_marker_ready_events(
+        &self,
+        tags: &[super::Tag],
+        now: Timestamp,
+    ) -> Result<()> {
+        if self.disable_tagging || !matches!(self.markers, MarkerAccess::Local) {
+            return Ok(());
+        }
+        let MarkerReads::OptionsControlled(observations) = &self.marker_reads else {
+            return Ok(());
+        };
+        if observations.memory.is_supplied() {
+            return Ok(());
+        }
+        let epoch = self.epoch.load(Ordering::Acquire);
+        for kind in Worker::<V>::secondary_marker_kinds(tags) {
+            if let Some(probe) =
+                observations.ready_value(&kind, &self.tags_default_options, now, epoch, false)?
+            {
+                self.marker_event(&kind, probe.outcome());
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn marker_event(&self, kind: &MarkerKind, outcome: MarkerReadOutcome) {

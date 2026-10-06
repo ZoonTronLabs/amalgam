@@ -76,8 +76,9 @@ implementations keep their adapter. Independent bounded callback pools prevent
 lock waiters from starving factories; started callbacks and late guards remain
 owned until real completion. `ShutdownTask::MemoryLockerAcquisition` is an
 additive closed variant requiring exhaustive downstream handling. See
-[local coordination](MEMORY_LOCKER.md). Separate marker storage and broader
-provider matrices remain open.
+[local coordination](MEMORY_LOCKER.md). Separate
+[typed marker storage](MARKER_MEMORY_STORAGE.md) now participates in actual local
+and durable observation reads/writes; broader provider matrices remain open.
 
 ## Observable behavior
 

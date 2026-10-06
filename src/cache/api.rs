@@ -10,6 +10,7 @@ use super::{
     Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyLookup, ReadyValue, ReplayTicket,
     Result, ShutdownReport, Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
 };
+use crate::marker_reads::MarkerReads;
 
 struct ReadOperation<'a> {
     key: LookupKey,
@@ -214,15 +215,21 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             if !self.inner.maintenance.load(Ordering::Acquire) {
                 self.worker().start_maintenance();
             }
-            let worker = self.worker();
+            let worker_seed = self.worker_seed();
             let completion_token = source.token();
             // The scope owns the observer too: a parked caller can be cancelled and
             // finish its logical observation without polling its future again.
             let execution = self.operation_scopes().execution(
                 async move {
-                    if worker.inner.wait_for_initial_backplane_subscribe
-                        && !worker.inner.subscription_admitted.load(Ordering::Acquire)
-                    {
+                    // A collector is needed only when startup can retire memory.
+                    // Keep an admitted collector through the complete operation.
+                    let readiness_worker = (worker_seed.inner.wait_for_initial_backplane_subscribe
+                        && !worker_seed
+                            .inner
+                            .subscription_admitted
+                            .load(Ordering::Acquire))
+                    .then(|| worker_seed.worker());
+                    if let Some(worker) = &readiness_worker {
                         if let Err(error) = worker.await_readiness().await {
                             observation.finish(OperationOutcome::from_error(&error));
                             return Err(error);
@@ -344,7 +351,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         if ready.tags(&entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
             return Ok(None);
         }
-        if !ready.marker_reads_ready(entry.meta().tags(), now) {
+        if !ready.marker_reads_ready(&entry, now)? {
             return Ok(None);
         }
         match mode {
@@ -366,7 +373,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         });
         permit.status(token)?;
         let value = value?;
-        ready.marker_ready_events(entry.meta().tags(), now);
+        ready.local_marker_ready_events(entry.meta().tags(), now)?;
         permit.status(token)?;
         Ok(Some(value))
     }
@@ -1277,6 +1284,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Runs maintenance, preserving an external L1 provider's typed failure.
     pub async fn try_run_pending_tasks(&self) -> Result<()> {
         self.inner.memory.run_pending_tasks().await?;
+        if let MarkerReads::OptionsControlled(observations) = &self.inner.marker_reads {
+            observations.memory.run_pending_tasks().await?;
+            observations.locks.clean_idle(64);
+        }
         self.inner.locks.clean_idle(256);
         self.inner.lanes.clean(256);
         Ok(())
@@ -1284,6 +1295,22 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// The supplied L1 provider, when one was explicitly configured.
     pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {
         self.inner.memory.provider()
+    }
+    /// The actual supplied secondary observation L1, when configured.
+    pub fn marker_memory_storage(
+        &self,
+    ) -> Option<&Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>> {
+        match &self.inner.marker_reads {
+            MarkerReads::DurableRequired => None,
+            MarkerReads::OptionsControlled(observations) => observations.memory.provider(),
+        }
+    }
+    /// Actual observation count/weight; absent when independent reads are disabled.
+    pub fn marker_memory_usage(&self) -> Result<Option<crate::MemoryUsage>> {
+        match &self.inner.marker_reads {
+            MarkerReads::DurableRequired => Ok(None),
+            MarkerReads::OptionsControlled(observations) => observations.memory.usage().map(Some),
+        }
     }
     /// Retained count/weight in the actual L1 keyspace, including shared users.
     pub fn memory_usage(&self) -> Result<crate::MemoryUsage> {

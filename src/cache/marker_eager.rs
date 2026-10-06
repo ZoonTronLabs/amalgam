@@ -29,14 +29,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         {
             return Ok(());
         }
-        let Some(current) = self.marker_cached(observations, kind).await else {
+        let Some(current) = self.marker_cached(observations, kind).await? else {
             return Ok(());
         };
         let now = self.inner.clock.now();
         if !current.should_eager_refresh(now) || !current.is_read_eligible() {
             return Ok(());
         }
-        let key = MarkerObservations::key(kind);
+        let key = observations.memory.key(kind);
         let claim = observations
             .memory
             .insert_if_unchanged(
@@ -45,7 +45,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 current.without_eager_refresh(),
                 now,
             )
-            .await;
+            .await?;
         cancellation.check()?;
         if !matches!(claim, MemoryAdmission::Admitted | MemoryAdmission::Replaced)
             || self.inner.epoch.load(Ordering::Acquire) != captured
@@ -53,7 +53,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         }
         let Some(local) = observations.locks.try_acquire(
-            &key,
+            &observations.lock_key(kind),
             crate::MemoryLockKind::Marker(kind.clone()),
             cancellation,
         )?

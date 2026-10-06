@@ -17,6 +17,39 @@ pub enum MemoryStorageError {
     /// Clear generations must never wrap and make old records visible again.
     #[error("memory storage generation exhausted")]
     GenerationExhausted,
+    /// A provider returned a host record from a different key or namespace.
+    #[error("memory storage returned an invalid record: {violation:?}")]
+    InvalidRecord {
+        /// The violated immutable-record identity boundary.
+        violation: MemoryRecordViolation,
+    },
+}
+/// A finite violation of the supplied record contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryRecordViolation {
+    /// The returned record carries a different processed key.
+    Key,
+    /// The returned record belongs to a different host-issued epoch identity.
+    Namespace,
+}
+/// Both ordinary-value and control-observation invalidations failed.
+/// Each original cause remains available independently.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("value invalidation failed: {values}; marker invalidation failed: {markers}")]
+pub struct MemoryInvalidationFailure {
+    #[source]
+    pub(crate) values: MemoryStorageError,
+    pub(crate) markers: MemoryStorageError,
+}
+impl MemoryInvalidationFailure {
+    /// Original ordinary-value storage failure.
+    pub fn values(&self) -> &MemoryStorageError {
+        &self.values
+    }
+    /// Original marker-observation storage failure.
+    pub fn markers(&self) -> &MemoryStorageError {
+        &self.markers
+    }
 }
 impl MemoryStorageError {
     /// Preserves a concrete provider failure through the canonical cache API.
@@ -27,17 +60,57 @@ impl MemoryStorageError {
     }
 }
 
-/// One processed-key prefix sharing clear visibility in a supplied keyspace.
+/// A host-issued value or control authority sharing a visibility generation.
 /// Providers retain distinct stable epochs for distinct namespaces.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MemoryNamespace(Arc<str>);
+pub struct MemoryNamespace(Namespace);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Namespace {
+    Values(Arc<str>),
+    LocalMarkers(Arc<str>),
+    DurableMarkers(crate::CacheScope),
+}
+/// Value and control authority occupy distinct generation domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryNamespacePurpose {
+    /// Ordinary values, preserving the existing provider keyspace.
+    Values,
+    /// In-process observations without a durable journal provider.
+    LocalMarkerObservations,
+    /// Observations of a particular validated distributed wire scope.
+    DurableMarkerObservations,
+}
 impl MemoryNamespace {
     pub(crate) fn new(prefix: Option<&str>) -> Self {
-        Self(Arc::from(prefix.unwrap_or("")))
+        Self(Namespace::Values(Arc::from(prefix.unwrap_or(""))))
+    }
+    pub(crate) fn local_markers(prefix: Arc<str>) -> Self {
+        Self(Namespace::LocalMarkers(prefix))
+    }
+    pub(crate) fn durable_markers(scope: crate::CacheScope) -> Self {
+        Self(Namespace::DurableMarkers(scope))
     }
     /// The exact configured prefix; no prefix is the empty namespace.
     pub fn key_prefix(&self) -> &str {
-        &self.0
+        match &self.0 {
+            Namespace::Values(prefix) | Namespace::LocalMarkers(prefix) => prefix,
+            Namespace::DurableMarkers(scope) => scope.prefix(),
+        }
+    }
+    /// The validated physical wire scope of durable observations, if applicable.
+    pub fn durable_scope(&self) -> Option<&crate::CacheScope> {
+        match &self.0 {
+            Namespace::DurableMarkers(scope) => Some(scope),
+            Namespace::Values(_) | Namespace::LocalMarkers(_) => None,
+        }
+    }
+    /// Authority of this generation domain; providers partition complete namespaces.
+    pub const fn purpose(&self) -> MemoryNamespacePurpose {
+        match &self.0 {
+            Namespace::Values(_) => MemoryNamespacePurpose::Values,
+            Namespace::LocalMarkers(_) => MemoryNamespacePurpose::LocalMarkerObservations,
+            Namespace::DurableMarkers(_) => MemoryNamespacePurpose::DurableMarkerObservations,
+        }
     }
 }
 
@@ -95,7 +168,7 @@ impl MemoryStorageEpoch {
 /// A host-issued visibility barrier. Earlier clears cannot remove newer writes.
 #[derive(Debug, Clone)]
 pub struct MemoryGeneration {
-    epoch: MemoryStorageEpoch,
+    pub(crate) epoch: MemoryStorageEpoch,
     value: u64,
 }
 impl MemoryGeneration {
