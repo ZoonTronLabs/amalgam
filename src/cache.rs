@@ -6,6 +6,7 @@ use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
 mod clock;
 mod markers;
+mod memory_inline;
 mod origin;
 mod plain_ready;
 mod plugin;
@@ -287,6 +288,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     default_options: EntryOptions,
     default_runtime: ready::RuntimeRequirement,
     ready_plan: plain_ready::ReadyPlan,
+    write_plan: memory_inline::WritePlan,
     tags_default_options: EntryOptions,
     marker_reads: MarkerReads,
     key_prefix: Option<Arc<str>>,
@@ -575,6 +577,25 @@ pub(crate) async fn bounded<T>(
     }
 }
 
+// An origin carries the version observed before user factory creation/poll.
+// Its active revision keeps identity stable across an intervening mutation.
+struct OriginCommit<V> {
+    guard: FlightGuard,
+    started_at: OriginVersion<V>,
+}
+enum OriginVersion<V> {
+    Memory(crate::memory::MemoryOrigin<V>),
+    Ordered(Fence),
+}
+impl<V> OriginVersion<V> {
+    fn is_current(&self) -> bool {
+        match self {
+            Self::Memory(version) => version.is_current(),
+            Self::Ordered(version) => version.passive_is_current(),
+        }
+    }
+}
+
 struct FlightGuard {
     local: LocalParticipation,
     lease: Option<DistributedLease>,
@@ -642,6 +663,17 @@ enum LockOutcome<V> {
     Served(V),
 }
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
+    fn capture_origin(&self, key: &Arc<str>, guard: FlightGuard) -> Result<OriginCommit<V>> {
+        let started_at = if self.inner.write_plan.is_inline() {
+            let CacheMemory::Builtin(memory) = &self.memory else {
+                unreachable!("inline memory plan requires builtin L1")
+            };
+            OriginVersion::Memory(memory.capture_origin(Arc::clone(key))?)
+        } else {
+            OriginVersion::Ordered(self.inner.lanes.capture(key, &self.inner.epoch))
+        };
+        Ok(OriginCommit { guard, started_at })
+    }
     fn lease_owner(&self, key: &Arc<str>) -> Arc<dyn LeaseTaskOwner> {
         Arc::new(CacheLeaseOwner {
             tasks: Arc::clone(&self.inner.tasks),

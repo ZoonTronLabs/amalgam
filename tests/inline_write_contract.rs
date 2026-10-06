@@ -1,0 +1,104 @@
+//! Inline L1 writes still own close attribution and deterministic reclamation.
+use amalgam::{Cache, EntryOptions, MutationReceipt};
+use std::future::Future;
+use std::pin::pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
+fn ready<T>(work: impl Future<Output = T>) -> T {
+    let mut work = pin!(work);
+    match work.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("memory-only mutation suspended without a runtime"),
+    }
+}
+type Owner = Arc<Mutex<Weak<Cache<Arc<Probe>>>>>;
+
+struct Probe {
+    drops: Arc<AtomicUsize>,
+    action: Option<Owner>,
+}
+impl Drop for Probe {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        if let Some(action) = &self.action {
+            let owner = action.lock().unwrap().upgrade().unwrap();
+            let nested = Arc::new(Self {
+                drops: self.drops.clone(),
+                action: None,
+            });
+            assert!(matches!(
+                ready(owner.try_set("same", nested)).unwrap(),
+                MutationReceipt::Completed(_)
+            ));
+        }
+    }
+}
+
+#[test]
+fn replacement_is_inline_and_reclaims_the_unpinned_value_before_return() {
+    let cache: Cache<Arc<Probe>> = Cache::builder()
+        .default_options(EntryOptions::new(Duration::from_secs(60)))
+        .try_build()
+        .unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let old = Arc::new(Probe {
+        drops: drops.clone(),
+        action: None,
+    });
+    let old_weak = Arc::downgrade(&old);
+    assert!(matches!(
+        ready(cache.try_set("same", old)).unwrap(),
+        MutationReceipt::Completed(_)
+    ));
+    let current = Arc::new(Probe {
+        drops: drops.clone(),
+        action: None,
+    });
+    assert!(matches!(
+        ready(cache.try_set("same", current)).unwrap(),
+        MutationReceipt::Completed(_)
+    ));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(
+        old_weak.upgrade().is_none(),
+        "retired values must not wait for a maintenance tick"
+    );
+}
+
+#[test]
+fn retired_value_drop_can_reenter_the_same_key_after_the_commit() {
+    for capacity in [None, Some(2)] {
+        let builder = Cache::builder().default_options(EntryOptions::new(Duration::from_secs(60)));
+        let cache: Arc<Cache<Arc<Probe>>> = Arc::new(match capacity {
+            Some(capacity) => builder.max_capacity(capacity).try_build().unwrap(),
+            None => builder.try_build().unwrap(),
+        });
+        let drops = Arc::new(AtomicUsize::new(0));
+        let old = Arc::new(Probe {
+            drops: drops.clone(),
+            action: Some(Arc::new(Mutex::new(Arc::downgrade(&cache)))),
+        });
+        ready(cache.try_set("same", old)).unwrap();
+        ready(cache.try_set(
+            "same",
+            Arc::new(Probe {
+                drops: drops.clone(),
+                action: None,
+            }),
+        ))
+        .unwrap();
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            2,
+            "the reentrant write replaces the outer candidate"
+        );
+        let value = ready(cache.read("same", None))
+            .unwrap()
+            .into_value()
+            .unwrap();
+        assert!(value.action.is_none());
+    }
+}

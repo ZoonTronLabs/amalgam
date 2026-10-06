@@ -554,7 +554,7 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn background_completion_observation_can_resurrect_an_awaited_remove() {
+async fn background_completion_cannot_resurrect_an_awaited_remove() {
     let clock = Arc::new(ManualClock::default());
     let options = EntryOptions::new(Duration::from_secs(10))
         .with_fail_safe(
@@ -600,10 +600,9 @@ async fn background_completion_observation_can_resurrect_an_awaited_remove() {
     })
     .await
     .expect("background completed");
-    // This is a concurrency semantic observation shared by FusionCache, not a parity defect.
     assert_eq!(
         cache.try_get("k", None).await.value().copied(),
-        Some(2),
-        "observation: an awaited remove can be followed by an earlier background factory write"
+        None,
+        "an awaited remove supersedes a previously started background factory"
     );
 }

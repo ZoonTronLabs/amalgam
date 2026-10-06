@@ -36,6 +36,15 @@ impl<T> WeakSlots<T> {
     }
 
     pub(crate) fn get(&self, key: &str, make: impl FnOnce() -> T) -> Arc<T> {
+        self.get_with(key, make, Arc::clone)
+    }
+
+    pub(crate) fn get_with<R>(
+        &self,
+        key: &str,
+        make: impl FnOnce() -> T,
+        inspect: impl FnOnce(&Arc<T>) -> R,
+    ) -> R {
         if self
             .lookups
             .fetch_add(1, Ordering::Relaxed)
@@ -46,17 +55,17 @@ impl<T> WeakSlots<T> {
         let key: Arc<str> = Arc::from(key);
         let (value, inserted) = match self.slots.entry(Arc::clone(&key)) {
             Entry::Occupied(mut slot) => match slot.get().upgrade() {
-                Some(value) => (value, false),
+                Some(value) => (inspect(&value), false),
                 None => {
                     let value = Arc::new(make());
                     slot.insert(Arc::downgrade(&value));
-                    (value, false)
+                    (inspect(&value), false)
                 }
             },
             Entry::Vacant(slot) => {
                 let value = Arc::new(make());
                 slot.insert(Arc::downgrade(&value));
-                (value, true)
+                (inspect(&value), true)
             }
         };
         if inserted {

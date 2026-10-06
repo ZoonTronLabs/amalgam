@@ -7,9 +7,9 @@ use super::{
     EntryOptions, Error, FactoryCancellation, FactoryProduct, Fence, FlightGuard, Future,
     Instrument, KeyMutation, LayerEvent, LeaseError, LeasePolicy, LeasedMutation,
     LeasedWriteOutcome, LocalCommit, LocalEffect, MutationReceipt, Observed, OperationOutcome,
-    OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryItem,
-    RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker, lock,
-    recovery_action,
+    OriginCommit, OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction,
+    RecoveryItem, RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker,
+    lock, recovery_action,
 };
 use super::{RecoveryFence, component_span};
 
@@ -19,12 +19,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: Arc<str>,
         product: FactoryProduct<V>,
         started: Timestamp,
-        guard: FlightGuard,
+        guard: OriginCommit<V>,
         cancellation: &FactoryCancellation,
     ) -> Result<OriginCompletion<V>> {
         let product = product.into_payload()?;
         self.validate_options(&product.options)?;
-        guard.proof()?;
+        guard.guard.proof()?;
         let value = self.copy(&product.value, &product.options)?;
         let stored = self.copy(&product.value, &product.options)?;
         let entry = self.fresh_entry(
@@ -44,7 +44,17 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 cancellation,
             )
             .await?;
-        self.emit(CacheEvent::Set { key });
+        if !matches!(
+            &receipt,
+            MutationReceipt::Completed(CommitReport {
+                local: LocalEffect::Stored(crate::MemoryAdmission::Rejected(
+                    crate::CapacityRejection::VersionChanged
+                )),
+                ..
+            })
+        ) {
+            self.emit(CacheEvent::Set { key });
+        }
         let value = CacheValue {
             value,
             commit: CommitReceipt::Mutation(receipt),
@@ -79,9 +89,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: Arc<str>,
         entry: Entry<V>,
         opts: EntryOptions,
-        flight: Option<FlightGuard>,
+        flight: Option<OriginCommit<V>>,
         cancellation: &FactoryCancellation,
     ) -> Result<MutationReceipt> {
+        if self.inner.write_plan.is_inline() {
+            return self.inline_entry(key, entry, &opts, flight, cancellation);
+        }
         let data = match &self.inner.storage {
             Storage::MemoryOnly => PreparedData::Absent,
             Storage::Hybrid { serializer, .. } if !opts.skip_distributed_write() => {
@@ -117,9 +130,27 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let lane = self.inner.lanes.get(&key);
         let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
-        if let Some(flight) = &flight {
-            flight.proof()?;
+        if let Some(origin) = &flight {
+            origin.guard.proof()?;
+            if !origin.started_at.is_current() {
+                return Ok(MutationReceipt::Completed(CommitReport {
+                    local: LocalEffect::Stored(crate::MemoryAdmission::Rejected(
+                        crate::CapacityRejection::VersionChanged,
+                    )),
+                    distributed: if matches!(self.inner.storage, Storage::MemoryOnly) {
+                        EffectOutcome::NotConfigured
+                    } else {
+                        EffectOutcome::Skipped(SkipReason::Superseded)
+                    },
+                    backplane: if self.inner.backplane.is_none() {
+                        EffectOutcome::NotConfigured
+                    } else {
+                        EffectOutcome::Skipped(SkipReason::Superseded)
+                    },
+                }));
+            }
         }
+        let flight = flight.map(|origin| origin.guard);
         let fence = lane.advance(entry.meta().created(), &self.inner.epoch)?;
         let local = if opts.skip_memory_write() {
             LocalCommit::Applied(LocalEffect::Skipped)
@@ -555,6 +586,20 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> Result<Observed<MutationReceipt>> {
         let opts = self.resolve_options(&raw, options)?;
         let key = self.full_key(&raw);
+        if self.inner.write_plan.is_inline() {
+            cancellation.check()?;
+            let local = self.inline_key_mutation(&key, &opts, mutation, self.inner.clock.now())?;
+            let (event, outcome) = match mutation {
+                KeyMutation::Remove => (CacheEvent::Remove { key }, OperationOutcome::Removed),
+                KeyMutation::Expire(_) => (CacheEvent::Expire { key }, OperationOutcome::Expired),
+            };
+            self.emit(event);
+            return Ok(Observed::new(
+                super::memory_inline::receipt(local),
+                outcome,
+                None,
+            ));
+        }
         let lane = self.inner.lanes.get(&key);
         let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
         let now = self.inner.clock.now();

@@ -672,6 +672,12 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         } else {
             super::plain_ready::ReadyPlan::General
         };
+        let write_plan = super::memory_inline::WritePlan::select(
+            &storage,
+            &memory,
+            self.backplane.is_some(),
+            self.distributed_locker.is_some(),
+        );
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),
             name,
@@ -685,6 +691,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             default_options: self.default_options,
             default_runtime,
             ready_plan,
+            write_plan,
             tags_default_options: self.tags_default_options,
             marker_reads,
             key_prefix: self.key_prefix,

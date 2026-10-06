@@ -189,15 +189,8 @@ impl KeyLane {
             captured_epoch: epoch.load(Ordering::Acquire),
         }
     }
-    pub(crate) fn advance(
-        self: &Arc<Self>,
-        at: Timestamp,
-        epoch: &Arc<AtomicU64>,
-    ) -> Result<Arc<Fence>> {
-        #[allow(
-            deprecated,
-            reason = "Atomic::try_update is unavailable on the supported Rust 1.88"
-        )]
+    fn advance_revision(&self) -> Result<OperationGeneration> {
+        #[allow(deprecated, reason = "Atomic::try_update is unavailable on Rust 1.88")]
         let generation = self
             .generation
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
@@ -205,6 +198,14 @@ impl KeyLane {
             })
             .map_err(|_| RecoveryError::GenerationExhausted)?
             + 1;
+        Ok(OperationGeneration::new(generation))
+    }
+    pub(crate) fn advance(
+        self: &Arc<Self>,
+        at: Timestamp,
+        epoch: &Arc<AtomicU64>,
+    ) -> Result<Arc<Fence>> {
+        let generation = self.advance_revision()?.value();
         let mut stamp = lock(&self.timestamp);
         *stamp = Some(stamp.map_or(at, |old| old.max(at)));
         drop(stamp);
@@ -250,6 +251,10 @@ impl Lanes {
     }
     pub(crate) fn get(&self, key: &str) -> Arc<KeyLane> {
         self.slots.get(key, KeyLane::new)
+    }
+    pub(crate) fn capture(&self, key: &str, epoch: &Arc<AtomicU64>) -> Fence {
+        self.slots
+            .get_with(key, KeyLane::new, |lane| lane.snapshot(epoch))
     }
     pub(crate) fn clean(&self, budget: usize) {
         self.slots.clean(budget);

@@ -631,11 +631,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             },
             origin_cancellation.clone(),
         );
+        let lease_state = guard.lease.as_ref().map(DistributedLease::state);
+        let guard = self.capture_origin(&key, guard)?;
         let started = self.inner.clock.now();
         let worker = self.clone();
         let flight_key = Arc::clone(&key);
         let cancelled = source.clone();
-        let lease_state = guard.lease.as_ref().map(DistributedLease::state);
         let mut execution=self.scopes().execution(async move {
             let origin=origin.invoke(ctx);
             let product=if let Some(mut state)=lease_state {tokio::select! {biased; ()=lease_lost(&mut state)=>{cancelled.cancel_with(Reason::LeaseLost);return Err(Error::FactoryCancelled {reason:Reason::LeaseLost});},product=origin=>product}}else{origin.await};
@@ -818,9 +819,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
             if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}
             let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone()).with_invocation(crate::factory::FactoryInvocation::EagerRefresh);
+            let lease_state=guard.lease.as_ref().map(DistributedLease::state);
+            let guard=worker.capture_origin(&key,guard)?;
             let started=worker.inner.clock.now();
             let origin=origin.invoke(ctx);
-            let product=if let Some(mut state)=guard.lease.as_ref().map(DistributedLease::state) {
+            let product=if let Some(mut state)=lease_state {
                 tokio::select! {biased; ()=lease_lost(&mut state)=>return Err(Error::FactoryCancelled {reason:Reason::LeaseLost}),product=origin=>product}
             }else{origin.await};
             let product=product.map_err(Error::from)?;let result=worker.store_product(key,product,started,guard,&token).await;

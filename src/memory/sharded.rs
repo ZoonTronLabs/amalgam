@@ -23,6 +23,7 @@ pub(super) struct Sharded<V> {
 struct Shard<V> {
     entries: HashMap<Arc<str>, Stored<V>, RandomState>,
     weight: u128,
+    origins: super::Origins,
 }
 struct Stored<V> {
     entry: Entry<V>,
@@ -71,6 +72,7 @@ impl<V> Sharded<V> {
                 RwLock::new(Shard {
                     entries: HashMap::with_hasher(hash.clone()),
                     weight: 0,
+                    origins: super::Origins::default(),
                 })
             })
             .collect::<Box<[_]>>();
@@ -189,6 +191,38 @@ impl<V> Sharded<V> {
         Self::remove_same(shard, hash, key, expected)
             .map(|(key, stored)| stored.retire(key, Reason::Explicit))
     }
+    pub(super) fn origin_generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+    pub(super) fn capture_origin(
+        &self,
+        key: &Arc<str>,
+    ) -> crate::Result<(Arc<super::origin::Revision>, u64, u64)> {
+        let (_, shard) = self.route(key);
+        let mut state = write(shard);
+        let generation = self.origin_generation();
+        if generation == u64::MAX {
+            return Err(crate::RecoveryError::GenerationExhausted.into());
+        }
+        let (revision, captured) = state.origins.capture(key)?;
+        Ok((revision, captured, generation))
+    }
+    pub(super) fn forget_origin(&self, key: &str, revision: &Arc<super::origin::Revision>) {
+        let (_, shard) = self.route(key);
+        write(shard).origins.forget(key, revision);
+    }
+    pub(super) fn invalidate_origin(&self, key: &str) {
+        let (_, shard) = self.route(key);
+        write(shard).origins.advance(key);
+    }
+    pub(super) fn remove_as_mutation(&self, key: &str) -> Option<Retirement<V>> {
+        let (_, shard) = self.route(key);
+        let mut state = write(shard);
+        state.origins.advance(key);
+        let (key, stored) = state.entries.remove_entry(key)?;
+        state.weight -= entry_weight(&stored.entry);
+        Some(stored.retire(key, Reason::Explicit))
+    }
     pub(super) fn insert(
         &self,
         key: Arc<str>,
@@ -217,7 +251,7 @@ impl<V> Sharded<V> {
             .from_hash(hash, |k| k.as_ref() == key.as_ref());
         let visible = current.filter(|(_, stored)| stored.generation == generation);
         let replacing_visible = visible.is_some();
-        if !expected.matches(visible.map(|(_, stored)| &stored.entry)) {
+        if !expected.matches_generation(visible.map(|(_, stored)| &stored.entry), generation) {
             return super::RetentionCommit::rejected(CapacityRejection::VersionChanged, Vec::new());
         }
         let capture = match (current, event) {
@@ -232,6 +266,9 @@ impl<V> Sharded<V> {
         };
         let old_weight = current.map_or(0, |(_, stored)| entry_weight(&stored.entry));
         let new_weight = entry_weight(&value.entry);
+        if expected.changes_origin() {
+            state.origins.advance(&key);
+        }
         let retired = match state
             .entries
             .raw_entry_mut()

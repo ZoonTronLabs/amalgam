@@ -7,6 +7,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Capture the origin version before invoking a factory. A late completion can
+  return its computed value to its caller but cannot overwrite an awaited newer
+  set, resurrect an awaited remove, or survive an intervening clear. Built-in
+  memory commits compare the active revision in the same critical section as
+  the actual storage change; idle revision keys are reclaimed.
+
 - Initialize reader-thread parking metadata during its first slot admission,
   before acquiring a slot. A warmed hit remains allocation-free when it first
   contends with a writer; waiting still returns the current entry.
@@ -55,6 +61,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 - Per-key providers can derive options from the owning cache's current default snapshot using `options_for_with_defaults`; legacy hooks remain supported.
 
 ### Changed
+
+- Built-in memory-only caches select synchronous value commits at construction.
+  Set and factory commits avoid the distributed owned pipeline, asynchronous
+  key lanes and completion channels. They return completed mutation receipts.
+  Preparation, observations and destruction remain outside storage coordination;
+  an unpinned replaced value is destroyed before the mutation returns.
 
 - Canonical read queries carry a lazy input instead of reserving the asynchronous preparation frame on every hit. They create owned asynchronous work only after a real miss, preserving cancellation and observation; explicit per-call option snapshots pay for their own storage.
 

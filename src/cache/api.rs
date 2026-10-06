@@ -1184,6 +1184,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         tags: Box<[Tag]>,
         token: Option<FactoryCancellation>,
     ) -> Result<MutationReceipt> {
+        if self.inner.write_plan.is_inline() {
+            return self.inline_set(key, value, options, tags, token.as_ref());
+        }
         let worker = self.worker();
         let raw: Arc<str> = Arc::from(key);
         let full = worker.full_key(key);

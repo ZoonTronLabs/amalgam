@@ -1,6 +1,9 @@
 //! Concurrent L1 storage with absolute expiry and optional capacity limits.
 //! Retired entries leave backend guards before observation or reclamation.
 mod custom;
+mod origin;
+pub(crate) use origin::MemoryOrigin;
+use origin::Origins;
 mod reclamation;
 mod sharded;
 use crate::entry::Entry;
@@ -356,6 +359,169 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             MemoryWriteEvent::Expire,
         )
     }
+    pub(crate) fn prepare_insert(
+        &self,
+        key: Arc<str>,
+        entry: Entry<V>,
+        now: Timestamp,
+    ) -> PreparedWrite<V> {
+        self.prepare_write(key, entry, now, MemoryWriteEvent::Set)
+    }
+    pub(crate) fn prepare_expire(
+        &self,
+        key: Arc<str>,
+        entry: Entry<V>,
+        now: Timestamp,
+    ) -> PreparedWrite<V> {
+        self.prepare_write(key, entry, now, MemoryWriteEvent::Expire)
+    }
+    fn prepare_write(
+        &self,
+        key: Arc<str>,
+        entry: Entry<V>,
+        now: Timestamp,
+        event: MemoryWriteEvent,
+    ) -> PreparedWrite<V> {
+        let (prepared, original) = if entry.meta().inserted_at() == now {
+            (entry, None)
+        } else {
+            (entry.at_insertion(now), Some(entry))
+        };
+        PreparedWrite {
+            key,
+            entry: prepared,
+            original,
+            now,
+            event,
+            capture: self.capture_admission(),
+        }
+    }
+    pub(crate) fn capture_origin(&self, key: Arc<str>) -> crate::Result<MemoryOrigin<V>> {
+        let (revision, captured, generation) = match &self.backend {
+            Backend::Unbounded(store) => store.capture_origin(&key)?,
+            Backend::Retained(store) => {
+                let mut state = lock(store);
+                if state.generation == u64::MAX {
+                    return Err(crate::RecoveryError::GenerationExhausted.into());
+                }
+                let (revision, captured) = state.origins.capture(&key)?;
+                (revision, captured, state.generation)
+            }
+        };
+        Ok(MemoryOrigin::new(
+            key,
+            self.backend.clone(),
+            revision,
+            captured,
+            generation,
+        ))
+    }
+    pub(crate) fn invalidate_origin(&self, key: &str) {
+        match &self.backend {
+            Backend::Unbounded(store) => store.invalidate_origin(key),
+            Backend::Retained(store) => lock(store).origins.advance(key),
+        }
+    }
+    pub(crate) fn apply_insert(&self, write: PreparedWrite<V>) -> MemoryCommit<V> {
+        self.apply_write(write, Expected::Mutation)
+    }
+    pub(crate) fn apply_origin(
+        &self,
+        write: PreparedWrite<V>,
+        origin: &MemoryOrigin<V>,
+    ) -> MemoryCommit<V> {
+        self.apply_write(write, Expected::Origin(origin))
+    }
+    pub(crate) fn apply_expire(
+        &self,
+        write: PreparedWrite<V>,
+        expected: &Entry<V>,
+    ) -> MemoryCommit<V> {
+        self.apply_write(write, Expected::MutationOf(expected))
+    }
+    fn apply_write(&self, write: PreparedWrite<V>, expected: Expected<'_, V>) -> MemoryCommit<V> {
+        let commit = if write.entry.is_physically_expired(write.now) {
+            // A rejected old factory must not invalidate a newer origin.
+            if matches!(expected, Expected::Mutation) {
+                self.invalidate_origin(&write.key);
+            }
+            RetentionCommit::rejected(CapacityRejection::PhysicallyExpired, Vec::new())
+        } else {
+            match &self.backend {
+                Backend::Unbounded(store) => store.insert(
+                    write.key.clone(),
+                    write.entry.clone(),
+                    write.now,
+                    expected,
+                    write.capture,
+                    write.event,
+                ),
+                Backend::Retained(store) => lock(store).insert(
+                    write.key.clone(),
+                    write.entry.clone(),
+                    write.now,
+                    expected,
+                    write.capture,
+                    write.event,
+                ),
+            }
+        };
+        MemoryCommit { write, commit }
+    }
+    pub(crate) fn finish_insert(&self, completed: MemoryCommit<V>) -> MemoryAdmission {
+        let MemoryCommit { write, commit } = completed;
+        let PreparedWrite {
+            key,
+            entry,
+            original,
+            event,
+            ..
+        } = write;
+        for retired in commit.retired {
+            self.retire(retired);
+        }
+        if let Some(original) = original {
+            self.observer.reclamation.retain(original);
+        }
+        self.observer.reclamation.retain(entry);
+        match commit.admission {
+            MemoryAdmission::Rejected(reason) => self.rejected(key, reason),
+            MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
+                self.emit_layer_lazy(|| {
+                    LayerEvent::Memory(match event {
+                        MemoryWriteEvent::Set => MemoryEvent::Set { key },
+                        MemoryWriteEvent::Expire => MemoryEvent::Expire { key },
+                    })
+                });
+                commit.admission
+            }
+        }
+    }
+    pub(crate) fn ready_at_for_mutation(&self, key: &str, now: Timestamp) -> Option<Entry<V>> {
+        self.read(key, Some(now))
+    }
+    pub(crate) fn detach_remove(&self, key: &Arc<str>) -> DetachedRemoval<V> {
+        let retired = match &self.backend {
+            Backend::Unbounded(store) => store.remove_as_mutation(key),
+            Backend::Retained(store) => {
+                let mut state = lock(store);
+                state.origins.advance(key);
+                state
+                    .remove(key)
+                    .map(|stored| stored.retire(Arc::clone(key), RetirementReason::Explicit))
+            }
+        };
+        DetachedRemoval {
+            key: Arc::clone(key),
+            retired,
+        }
+    }
+    pub(crate) fn finish_remove(&self, removed: DetachedRemoval<V>) {
+        if let Some(retired) = removed.retired {
+            self.retire(retired);
+        }
+        self.emit_layer_lazy(|| LayerEvent::Memory(MemoryEvent::Remove { key: removed.key }));
+    }
     fn insert_internal(
         &self,
         key: Arc<str>,
@@ -364,46 +530,11 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         expected: Expected<'_, V>,
         event: MemoryWriteEvent,
     ) -> MemoryAdmission {
-        if entry.is_physically_expired(now) {
-            self.observer.reclamation.retain(entry);
-            return self.rejected(key, CapacityRejection::PhysicallyExpired);
-        }
-        let prepared = entry.at_insertion(now);
-        let capture = self.capture_admission();
-        let commit = match &self.backend {
-            Backend::Unbounded(store) => {
-                store.insert(key.clone(), prepared.clone(), now, expected, capture, event)
-            }
-            Backend::Retained(store) => {
-                lock(store).insert(key.clone(), prepared.clone(), now, expected, capture, event)
-            }
-        };
-        for retired in commit.retired {
-            self.retire(retired);
-        }
-        match commit.admission {
-            MemoryAdmission::Rejected(reason) => {
-                self.observer.reclamation.retain(prepared);
-                self.observer.reclamation.retain(entry);
-                self.rejected(key, reason)
-            }
-            MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
-                self.emit_layer_lazy(|| {
-                    LayerEvent::Memory(match event {
-                        MemoryWriteEvent::Set => MemoryEvent::Set { key },
-                        MemoryWriteEvent::Expire => MemoryEvent::Expire { key },
-                    })
-                });
-                // A timestamp adjustment may create another V representation.
-                // Retain both through coordination, including concurrent clear.
-                if !entry.is_same_instance(&prepared) {
-                    self.observer.reclamation.retain(entry);
-                }
-                self.observer.reclamation.retain(prepared);
-                commit.admission
-            }
-        }
+        let prepared = self.prepare_write(key, entry, now, event);
+        let committed = self.apply_write(prepared, expected);
+        self.finish_insert(committed)
     }
+
     fn rejected(&self, key: Arc<str>, reason: CapacityRejection) -> MemoryAdmission {
         self.emit(CacheEvent::MemoryAdmissionRejected { key, reason });
         MemoryAdmission::Rejected(reason)
@@ -459,6 +590,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             Backend::Retained(store) => {
                 let retired = {
                     let mut state = lock(store);
+                    state.generation = state.generation.saturating_add(1);
                     let entries = std::mem::take(&mut state.entries);
                     state.weight = 0;
                     entries
@@ -522,6 +654,9 @@ enum Expected<'a, V> {
     Any,
     Absent,
     Same(&'a Entry<V>),
+    Mutation,
+    MutationOf(&'a Entry<V>),
+    Origin(&'a MemoryOrigin<V>),
 }
 
 impl<V> Expected<'_, V> {
@@ -529,7 +664,11 @@ impl<V> Expected<'_, V> {
         match self {
             Self::Any => true,
             Self::Absent => current.is_none(),
-            Self::Same(expected) => current.is_some_and(|entry| entry.is_same_instance(expected)),
+            Self::Same(expected) | Self::MutationOf(expected) => {
+                current.is_some_and(|entry| entry.is_same_instance(expected))
+            }
+            Self::Mutation => true,
+            Self::Origin(_) => unreachable!("origin matching also needs the storage generation"),
         }
     }
 }
@@ -557,6 +696,23 @@ enum MemoryRead<V> {
         reason: RetirementReason,
         capture: CaptureAdmission,
     },
+}
+
+pub(crate) struct PreparedWrite<V> {
+    key: Arc<str>,
+    entry: Entry<V>,
+    original: Option<Entry<V>>,
+    now: Timestamp,
+    capture: CaptureAdmission,
+    event: MemoryWriteEvent,
+}
+pub(crate) struct MemoryCommit<V> {
+    write: PreparedWrite<V>,
+    commit: RetentionCommit<V>,
+}
+pub(crate) struct DetachedRemoval<V> {
+    key: Arc<str>,
+    retired: Option<Retirement<V>>,
 }
 
 struct RetentionCommit<V> {
@@ -616,6 +772,8 @@ impl<V> Stored<V> {
 }
 
 struct Retention<V> {
+    origins: Origins,
+    generation: u64,
     entries: HashMap<Arc<str>, Stored<V>>,
     weight: u128,
     next_access: u128,
@@ -626,6 +784,8 @@ struct Retention<V> {
 impl<V: Clone> Retention<V> {
     fn new(limits: MemoryLimits, expiry: MemoryExpiry) -> Self {
         Self {
+            origins: Origins::default(),
+            generation: 1,
             entries: HashMap::new(),
             weight: 0,
             next_access: 0,
@@ -702,8 +862,14 @@ impl<V: Clone> Retention<V> {
         capture: CaptureAdmission,
         event: MemoryWriteEvent,
     ) -> RetentionCommit<V> {
-        if !expected.matches(self.entries.get(key.as_ref()).map(|stored| &stored.entry)) {
+        if !expected.matches_generation(
+            self.entries.get(key.as_ref()).map(|stored| &stored.entry),
+            self.generation,
+        ) {
             return RetentionCommit::rejected(CapacityRejection::VersionChanged, Vec::new());
+        }
+        if expected.changes_origin() {
+            self.origins.advance(&key);
         }
         let weight = entry_weight(&entry);
         if !self.limits.fits(1, weight) {
