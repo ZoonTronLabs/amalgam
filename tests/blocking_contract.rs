@@ -303,14 +303,28 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
 #[test]
 fn timed_callback_panic_retains_original_join_in_shutdown_report() {
     let cache = BlockingCache::<u64>::new().unwrap();
+    // Test panic identity, independently of callback-thread startup speed.
+    // The separate hard-deadline test still uses the short timed() budget.
+    let options = EntryOptions::new(Duration::from_secs(10)).with_factory_timeouts(
+        Timeout::Infinite,
+        Timeout::After(Duration::from_secs(5)),
+        false,
+    );
     let error = cache
-        .get_or_set_with("panic", |_| panic!("native-original-panic"), timed())
+        .get_or_set_with("panic", |_| panic!("native-original-panic"), options)
         .unwrap_err();
-    assert!(matches!(error, Error::FactoryWithSource { .. }));
+    let Error::FactoryWithSource { source, .. } = error else {
+        panic!("expected the original callback panic, got {error:?}");
+    };
+    let original = std::error::Error::source(&source)
+        .unwrap()
+        .downcast_ref::<Arc<tokio::task::JoinError>>()
+        .expect("foreground failure retains the original join cause");
+    assert!(original.is_panic());
     let Error::Shutdown(error) = cache.shutdown().unwrap_err() else {
         panic!("shutdown must preserve the original blocking task failure");
     };
-    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::BackgroundTask { task: ShutdownTask::Factory, source } if source.is_panic())));
+    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::BackgroundTask { task: ShutdownTask::Factory, source } if Arc::ptr_eq(original, source))));
 }
 
 #[tokio::test(flavor = "current_thread")]
