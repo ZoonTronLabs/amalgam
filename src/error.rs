@@ -230,6 +230,8 @@ pub enum ShutdownTask {
     Maintenance,
     /// Releasing an owned distributed lease.
     LeaseRelease,
+    /// Draining the configured local memory locker for this cache.
+    MemoryLocker,
 }
 
 impl ShutdownTask {
@@ -243,6 +245,7 @@ impl ShutdownTask {
             Self::Recovery => "recovery",
             Self::Maintenance => "maintenance",
             Self::LeaseRelease => "lease_release",
+            Self::MemoryLocker => "memory_locker",
         }
     }
 }
@@ -338,6 +341,10 @@ pub enum Error {
     /// Typed distributed ownership or fencing failure.
     #[error(transparent)]
     Lease(#[from] crate::distributed_lock::LeaseError),
+
+    /// A custom local memory locker failed.
+    #[error(transparent)]
+    MemoryLocker(#[from] crate::memory_locker::MemoryLockerError),
 
     /// Typed recovery construction/lifecycle failure.
     #[error(transparent)]

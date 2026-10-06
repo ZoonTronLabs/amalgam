@@ -445,6 +445,9 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         {
             failures.push(ShutdownFailure::Work(error.into()));
         }
+        self.locks.shutdown(&self.tasks, &self.events);
+        self.tasks.drain().await;
+        failures.extend(self.tasks.take_failures());
         failures.extend(plugin_failures.into_iter().map(ShutdownFailure::Plugin));
         let result = if failures.is_empty() {
             Ok(ShutdownReport)

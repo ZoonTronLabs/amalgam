@@ -52,7 +52,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         {
             return Ok(());
         }
-        let Some(local) = observations.locks.try_lock(&key) else {
+        let Some(local) = observations.locks.try_acquire(
+            &key,
+            crate::MemoryLockKind::Marker(kind.clone()),
+            cancellation,
+        )?
+        else {
             return Ok(());
         };
         let local = self.memory.guard(local);

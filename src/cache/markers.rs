@@ -263,12 +263,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         cancellation: &FactoryCancellation,
     ) -> Result<MarkerReadOutcome> {
         let key = MarkerObservations::key(kind);
-        let guard = bounded(
-            self.marker_lock_timeout(before_lock),
-            observations.locks.lock(&key),
-        )
-        .await?
-        .map(|guard| self.memory.guard(guard));
+        let guard = observations
+            .locks
+            .acquire(
+                &key,
+                crate::MemoryLockKind::Marker(kind.clone()),
+                self.marker_lock_timeout(before_lock),
+                cancellation,
+            )
+            .await?
+            .map(|guard| self.memory.guard(guard));
         cancellation.check()?;
         if guard.is_none() && self.marker_fallback_eligible(before_lock) {
             // The current owner will refresh this marker: a contending reader

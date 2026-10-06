@@ -52,7 +52,6 @@ use crate::execution::{
 };
 use crate::factory::{FactoryContext, FactoryProduct, ProductOrigin, StaleInfo};
 use crate::lifecycle::Tasks;
-use crate::locking::{KeyGuard, KeyedLock};
 use crate::marker_leases::{MarkerLease, MarkerLeaseKey};
 use crate::marker_reads::{
     MarkerLifecycleAccess, MarkerObservation, MarkerObservations, MarkerPresence,
@@ -64,6 +63,7 @@ use crate::marker_snapshots::{
 };
 use crate::maybe::MaybeValue;
 use crate::memory::{MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
+use crate::memory_locker::{LocalGuard, LocalLocks};
 use crate::observability::{OperationObservation, component_span};
 use crate::options::{
     EntryOptions, JitterSample, JitterSource, KeyModifierMode, RandomJitterSource,
@@ -251,7 +251,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     name: Arc<str>,
     instance_id: Arc<str>,
     memory: MemoryStore<V>,
-    locks: KeyedLock,
+    locks: LocalLocks,
     lanes: Lanes,
     tags: TagRegistry,
     events: Events,
@@ -505,7 +505,7 @@ async fn drive<T: Send + 'static>(
         execution.await
     }
 }
-fn validate_budget(timeout: Timeout) -> Result<()> {
+pub(crate) fn validate_budget(timeout: Timeout) -> Result<()> {
     if let Timeout::After(duration) = timeout
         && Instant::now().checked_add(duration).is_none()
     {
@@ -513,7 +513,10 @@ fn validate_budget(timeout: Timeout) -> Result<()> {
     }
     Ok(())
 }
-async fn bounded<T>(timeout: Timeout, work: impl Future<Output = T>) -> Result<Option<T>> {
+pub(crate) async fn bounded<T>(
+    timeout: Timeout,
+    work: impl Future<Output = T>,
+) -> Result<Option<T>> {
     validate_budget(timeout)?;
     match timeout {
         Timeout::Infinite => Ok(Some(work.await)),
@@ -532,7 +535,7 @@ struct FlightGuard {
     _reclamation: Option<Arc<dyn crate::memory::ReclamationFence>>,
 }
 enum LocalParticipation {
-    Held(crate::memory::ReclamationGuard<KeyGuard>),
+    Held(crate::memory::ReclamationGuard<LocalGuard>),
     UnlockedAfterTimeout,
     ReplayOnly,
 }

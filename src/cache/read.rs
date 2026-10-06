@@ -411,6 +411,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: &Arc<str>,
         opts: &EntryOptions,
         stale: Option<&Entry<V>>,
+        cancellation: &FactoryCancellation,
     ) -> Result<LockOutcome<V>> {
         let timeout = if opts.memory_lock_timeout().is_infinite()
             && opts.is_fail_safe_enabled()
@@ -420,7 +421,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         } else {
             opts.memory_lock_timeout()
         };
-        let local = match bounded(timeout, self.inner.locks.lock(key)).await? {
+        let local = match self
+            .inner
+            .locks
+            .acquire(key, crate::MemoryLockKind::Entry, timeout, cancellation)
+            .await?
+        {
             Some(local) => LocalParticipation::Held(self.memory.guard(local)),
             None => {
                 if opts.is_fail_safe_enabled()
@@ -532,7 +538,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         self.emit(CacheEvent::Miss {
             key: Arc::clone(&key),
         });
-        let guard = match self.acquire_lock(&key, &opts, stale.as_ref()).await? {
+        let guard = match self
+            .acquire_lock(&key, &opts, stale.as_ref(), &caller)
+            .await?
+        {
             LockOutcome::Acquired(guard) | LockOutcome::UnlockedAfterTimeout(guard) => guard,
             LockOutcome::Served(value) => {
                 return Ok(Observed::new(
@@ -778,16 +787,22 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         origin: O,
     ) {
         let key = Arc::clone(&keys.full);
-        let Some(local) = self.inner.locks.try_lock(&key) else {
-            return;
+        let claim = match self.inner.locks.try_eager(&key) {
+            Ok(Some(claim)) => claim,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, "local eager lock acquisition failed");
+                return;
+            }
         };
+        let local = claim.guard;
+        let source = claim.source;
+        let token = source.token();
         self.emit(CacheEvent::EagerRefresh {
             key: Arc::clone(&key),
         });
         let worker = self.clone();
         let background_key = Arc::clone(&key);
-        let source = CancellationSource::new();
-        let token = source.token();
         let cancelled = source.clone();
         let execution=self.scopes().execution(async move {
             let mut guard=FlightGuard {local:LocalParticipation::Held(worker.memory.guard(local)),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy,_reclamation:worker.memory.fence()};

@@ -43,6 +43,7 @@ pub mod marker_reads;
 pub mod marker_snapshots;
 pub mod maybe;
 pub mod memory;
+pub mod memory_locker;
 pub mod observability;
 pub mod options;
 pub mod plugins;
@@ -110,6 +111,10 @@ pub use marker_snapshots::{
 pub use maybe::MaybeValue;
 pub use memory::{
     CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore, MemoryUsage,
+};
+pub use memory_locker::{
+    MemoryLock, MemoryLockGuard, MemoryLockKind, MemoryLockOutcome, MemoryLockRequest,
+    MemoryLocker, MemoryLockerContext, MemoryLockerError,
 };
 pub use options::{
     EagerThreshold, EntryOptions, EntryWeight, JitterSample, JitterSource, KeyModifierMode,

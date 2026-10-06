@@ -199,23 +199,31 @@ impl Tasks {
         events: Events,
         work: impl Future<Output = Result<()>> + Send + 'static,
     ) {
+        self.cleanup_task(ShutdownTask::LeaseRelease, key, events, work);
+    }
+    pub(crate) fn cleanup_task(
+        self: &Arc<Self>,
+        task: ShutdownTask,
+        key: Arc<str>,
+        events: Events,
+        work: impl Future<Output = Result<()>> + Send + 'static,
+    ) {
+        if let Err(error) = self.executor() {
+            lock(&self.failures).push(ShutdownFailure::Work(error));
+            return;
+        }
         let tasks = Arc::clone(self);
-        let _receiver = self.spawn(
-            ShutdownTask::LeaseRelease,
-            Arc::clone(&key),
-            events.clone(),
-            async move {
-                if let Err(error) = work.await {
-                    tracing::warn!(%error,key=%key,"owned lease cleanup failed");
-                    events.emit(CacheEvent::BackgroundCommitError {
-                        key,
-                        message: error.to_string(),
-                    });
-                    lock(&tasks.failures).push(ShutdownFailure::Work(error));
-                }
-                Ok(())
-            },
-        );
+        let _receiver = self.spawn(task, Arc::clone(&key), events.clone(), async move {
+            if let Err(error) = work.await {
+                tracing::warn!(%error,key=%key,"owned cleanup failed");
+                events.emit(CacheEvent::BackgroundCommitError {
+                    key,
+                    message: error.to_string(),
+                });
+                lock(&tasks.failures).push(ShutdownFailure::Work(error));
+            }
+            Ok(())
+        });
     }
     pub(crate) async fn drain(&self) {
         let _join = self.join.lock().await;

@@ -5,9 +5,9 @@ use crate::entry::{ContinuityStamp, Entry};
 use crate::error::Result;
 use crate::events::Events;
 use crate::execution::lock;
-use crate::locking::KeyedLock;
 use crate::marker_snapshots::{MarkerLifecyclePolicy, MarkerSnapshotCache};
 use crate::memory::{CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
+use crate::memory_locker::LocalLocks;
 use crate::options::{EntryOptions, JitterSample};
 use crate::tags::{MarkerKind, MarkerVersion};
 use crate::time::{Clock, Timestamp};
@@ -129,7 +129,7 @@ struct ClearObservations {
 
 pub(crate) struct MarkerObservations {
     pub(crate) memory: MemoryStore<MarkerObservation>,
-    pub(crate) locks: KeyedLock,
+    pub(crate) locks: LocalLocks,
     pub(crate) lifecycle: MarkerLifecycleAccess,
     clears: Mutex<ClearObservations>,
 }
@@ -175,6 +175,7 @@ impl MarkerObservations {
         clock: Arc<dyn Clock>,
         expiry: MemoryExpiry,
         lifecycle: MarkerLifecycleAccess,
+        locks: LocalLocks,
     ) -> Self {
         Self {
             lifecycle,
@@ -184,7 +185,7 @@ impl MarkerObservations {
                 clock,
                 expiry,
             ),
-            locks: KeyedLock::new(64),
+            locks,
             clears: Mutex::new(ClearObservations {
                 remove: ClearObservation::Unknown,
                 expire: ClearObservation::Unknown,

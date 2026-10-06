@@ -198,6 +198,10 @@ impl OperationOutcome {
                 | crate::tags::MarkerError::BlankWireVersion
                 | crate::tags::MarkerError::ZeroCapacity => Self::ConfigurationError,
             },
+            crate::Error::MemoryLocker(error) => match error {
+                crate::MemoryLockerError::Provider { .. } => Self::LockError,
+                crate::MemoryLockerError::Cancelled { .. } => Self::Cancelled,
+            },
             crate::Error::Lease(error) => match error {
                 crate::distributed_lock::LeaseError::Lost
                 | crate::distributed_lock::LeaseError::Cancelled => Self::Cancelled,

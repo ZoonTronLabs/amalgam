@@ -3,8 +3,8 @@ use super::{
     Arc, AtomicBool, AtomicU64, AutoRecoveryService, Backplane, Cache, CacheInner, CacheScope,
     CircuitBreaker, Clock, ClockTiming, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
     DistributedLocker, DistributedSerializer, Duration, EntryOptions, Events, ExecutorOwnership,
-    IdentityField, InitialPlugin, Instant, InvalidationStore, JitterSource, KeyModifierMode,
-    KeyedLock, Lanes, LeasePolicy, LeaseTtl, Lifecycle, MarkerAccess, MarkerLifecycleAccess,
+    IdentityField, InitialPlugin, Instant, InvalidationStore, JitterSource, KeyModifierMode, Lanes,
+    LeasePolicy, LeaseTtl, Lifecycle, LocalLocks, MarkerAccess, MarkerLifecycleAccess,
     MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryExpiry,
     MemoryLimits, MemoryStore, Plugin, PluginContext, PluginHost, PublicLifetime,
     RandomJitterSource, ReconciliationPolicy, RecoveryConfig, RecoveryExecutor,
@@ -44,6 +44,7 @@ pub struct CacheBuilder<V> {
     lease_ttl: Duration,
     reconciliation: Option<ReconciliationPolicy>,
     lock_shards: usize,
+    memory_locker: Option<Arc<dyn crate::MemoryLocker>>,
     remove_by_tag_behavior: RemoveByTagBehavior,
     events_capacity: usize,
     eviction_capture: crate::EvictionCapture,
@@ -87,6 +88,7 @@ impl<V> CacheBuilder<V> {
             lease_ttl: Duration::from_secs(30),
             reconciliation: None,
             lock_shards: 1024,
+            memory_locker: None,
             remove_by_tag_behavior: RemoveByTagBehavior::default(),
             events_capacity: 256,
             eviction_capture: crate::EvictionCapture::default(),
@@ -119,6 +121,27 @@ impl<V> CacheBuilder<V> {
     /// random id is generated if not set.
     pub fn instance_id(mut self, id: impl AsRef<str>) -> Self {
         self.instance_id = Some(Arc::from(id.as_ref()));
+        self
+    }
+
+    /// Supplies local single-flight coordination for both entries and marker
+    /// factories, including nonblocking eager refresh. The default concrete
+    /// guard remains unboxed. Explicit shutdown drains the per-cache hook.
+    ///
+    /// ```
+    /// use amalgam::{Cache, locking::KeyedLock};
+    /// use std::sync::Arc;
+    /// # #[tokio::main]
+    /// # async fn main() -> amalgam::Result<()> {
+    /// let cache: Cache<u64> = Cache::builder()
+    ///     .memory_locker(Arc::new(KeyedLock::default()))
+    ///     .try_build()?;
+    /// assert_eq!(cache.get_or_set("key", |ctx| async move { Ok(ctx.value(42)) }).await?, 42);
+    /// cache.shutdown().await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn memory_locker(mut self, locker: Arc<dyn crate::MemoryLocker>) -> Self {
+        self.memory_locker = Some(locker);
         self
     }
 
@@ -563,6 +586,12 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             ClockTiming::RealTime => MemoryExpiry::RealTime,
             ClockTiming::Controlled => MemoryExpiry::ClockDriven,
         };
+        let locks = LocalLocks::new(
+            self.memory_locker,
+            Arc::clone(&name),
+            Arc::clone(&instance_id),
+            self.lock_shards,
+        );
         let marker_reads = match self.marker_read_policy {
             MarkerReadPolicy::DurableRequired => MarkerReads::DurableRequired,
             MarkerReadPolicy::OptionsControlled => {
@@ -571,6 +600,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                     Arc::clone(&clock),
                     expiry,
                     marker_lifecycle,
+                    locks.for_markers(),
                 )))
             }
         };
@@ -585,7 +615,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 expiry,
             )
             .with_eviction_capture(self.eviction_capture),
-            locks: KeyedLock::new(self.lock_shards),
+            locks,
             lanes: Lanes::new(),
             tags: TagRegistry::new(),
             events,
