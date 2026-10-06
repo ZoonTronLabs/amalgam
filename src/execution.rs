@@ -527,6 +527,15 @@ impl<T> ExecutionCheckpoint<T> {
         }
     }
 }
+impl<T> Scope<T> {
+    fn drop_reason(&self) -> Reason {
+        match CancellationState::load(&self.source.request.state) {
+            CancellationState::Cancelled(reason) => reason,
+            CancellationState::Active if self.registry.is_closed() => Reason::CacheShutdown,
+            CancellationState::Active => Reason::CallerDropped,
+        }
+    }
+}
 impl<T: Send + 'static> CancelWork for Scope<T> {
     fn cancel(&self, reason: Reason) {
         let _activity = self.registry.activity();
@@ -601,9 +610,19 @@ impl<T: Send + 'static> Execution<T> {
 struct PollLease<T: Send + 'static>(Arc<Scope<T>>);
 impl<T: Send + 'static> Drop for PollLease<T> {
     fn drop(&mut self) {
-        if matches!(*lock(&self.0.state), State::Polling { .. }) {
-            *lock(&self.0.state) = State::Cancelled(Reason::CallerDropped);
-            self.0.source.cancel_with(Reason::CallerDropped);
+        let reason = {
+            let mut state = lock(&self.0.state);
+            match &*state {
+                State::Polling { cancellation } => {
+                    let reason = cancellation.unwrap_or_else(|| self.0.drop_reason());
+                    *state = State::Cancelled(reason);
+                    Some(reason)
+                }
+                State::Pending(_) | State::Cancelled(_) | State::Completed => None,
+            }
+        };
+        if let Some(reason) = reason {
+            self.0.source.cancel_with(reason);
             self.0.registry.changed.notify_waiters();
         }
     }
@@ -663,7 +682,7 @@ impl<T: Send + 'static> Future for Execution<T> {
 }
 impl<T: Send + 'static> Drop for Execution<T> {
     fn drop(&mut self) {
-        self.scope.cancel(Reason::CallerDropped);
+        self.scope.cancel(self.scope.drop_reason());
     }
 }
 
@@ -739,5 +758,92 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), drain)
             .await
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod close_drop_cause_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    struct ParkedDrop {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl Drop for ParkedDrop {
+        fn drop(&mut self) {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+    }
+
+    #[test]
+    fn caller_drop_during_close_keeps_shutdown_cause_before_registry_reaches_it() {
+        let scopes = Scopes::new();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let parked = ParkedDrop {
+            entered: entered_tx,
+            release: release_rx,
+        };
+        let blocker = scopes.execution(
+            async move {
+                let _parked = parked;
+                std::future::pending::<Result<()>>().await
+            },
+            CancellationSource::new(),
+        );
+        let source = CancellationSource::new();
+        let token = source.token();
+        let target = scopes.execution(std::future::pending::<Result<()>>(), source);
+        let registry = scopes.clone();
+        let closer = std::thread::spawn(move || registry.close());
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(scopes.is_closed());
+        drop(target);
+        let observed = token.reason();
+        // Always unblock/join before asserting, including on the old failing code.
+        release_tx.send(()).unwrap();
+        assert!(closer.join().unwrap());
+        drop(blocker);
+        assert_eq!(observed, Some(Reason::CacheShutdown));
+    }
+
+    #[test]
+    fn panic_during_a_closed_poll_preserves_the_published_shutdown_cause() {
+        let scopes = Scopes::new();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let execution = scopes.execution(
+            async move {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                panic!("original factory panic");
+                #[allow(unreachable_code)]
+                Ok::<(), Error>(())
+            },
+            CancellationSource::new(),
+        );
+        let scope = execution.scope.clone();
+        let poller = std::thread::spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut execution = std::pin::pin!(execution);
+                let mut context = Context::from_waker(Waker::noop());
+                execution.as_mut().poll(&mut context)
+            }))
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(scopes.close());
+        release_tx.send(()).unwrap();
+        let panic = poller.join().unwrap().unwrap_err();
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"original factory panic")
+        );
+        assert!(matches!(
+            *lock(&scope.state),
+            State::Cancelled(Reason::CacheShutdown)
+        ));
     }
 }

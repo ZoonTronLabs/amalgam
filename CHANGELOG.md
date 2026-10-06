@@ -5,6 +5,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the published shutdown cancellation reason when a caller drops nested work before shutdown reaches its registry entry; retain an existing cancellation during panic cleanup. Native provider callbacks still drain before shutdown completes.
+
 - Typed original-value memory eviction subscriptions and physical reason facts;
   explicit insertion/retirement capture, bounded independent lag and deferred
   value reclamation through origin/lane guards. Independently locked unbounded
