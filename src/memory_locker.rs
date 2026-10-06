@@ -171,6 +171,10 @@ pub enum MemoryLockOutcome {
 }
 
 /// Independently supplied local coordination for entries and marker factories.
+#[allow(
+    clippy::double_must_use,
+    reason = "async-trait 0.1.89 emits must_use on boxed futures"
+)]
 #[async_trait]
 pub trait MemoryLocker: Send + Sync + 'static {
     /// Acquires a guard. The host enforces the supplied timeout and cancellation;
