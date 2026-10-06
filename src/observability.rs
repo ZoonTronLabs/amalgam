@@ -95,7 +95,7 @@ impl OperationObservation {
     fn complete(&mut self, outcome: OperationOutcome) {
         self.state = ObservationState::Completed;
         self.span.record("outcome", outcome.as_str());
-        self.events.emit(CacheEvent::OperationCompleted {
+        self.events.emit_lazy(|| CacheEvent::OperationCompleted {
             operation: self.operation,
             outcome,
             elapsed: self.started.elapsed(),

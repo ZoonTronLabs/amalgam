@@ -14,13 +14,14 @@ pub use eviction::{
 mod layers;
 pub use layers::{BackplaneEvent, DistributedEvent, LayerEvent, MemoryEvent};
 
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::broadcast;
 
 use crate::memory::CapacityRejection;
-use crate::plugins::{PluginError, PluginHost, PluginHostInner};
+use crate::plugins::{PluginError, PluginEventRoute, PluginHost, PluginHostInner};
 
 /// A bounded logical-operation label used by spans and metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,9 +446,12 @@ pub struct Events {
 
 struct EventHub {
     sender: broadcast::Sender<CacheEvent>,
+    // Monotonic: raw broadcast receivers can resubscribe without this hub.
+    // Before the first subscription, emission need not lock the channel.
+    broadcast_armed: AtomicBool,
     layers: OnceLock<broadcast::Sender<LayerEvent>>,
     capacity: usize,
-    plugins: OnceLock<Weak<PluginHostInner>>,
+    plugins: OnceLock<PluginEventRoute>,
 }
 
 /// The explicit result of routing an event to observers and plugins.
@@ -528,6 +532,7 @@ impl Events {
         Self {
             inner: Arc::new(EventHub {
                 sender,
+                broadcast_armed: AtomicBool::new(false),
                 layers: OnceLock::new(),
                 capacity: capacity.max(1),
                 plugins: OnceLock::new(),
@@ -542,6 +547,9 @@ impl Events {
     /// observability, never a correctness mechanism.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<CacheEvent> {
+        // Publish before channel admission. A racing emission may precede
+        // admission, but later emissions cannot skip an admitted receiver.
+        self.inner.broadcast_armed.store(true, Ordering::Release);
         self.inner.sender.subscribe()
     }
 
@@ -609,7 +617,7 @@ impl Events {
     pub fn attach_plugins(&self, host: &PluginHost) -> Result<(), PluginError> {
         self.inner
             .plugins
-            .set(host.downgrade())
+            .set(host.event_route())
             .map_err(|_| PluginError::EventsAlreadyAttached)
     }
 
@@ -629,8 +637,7 @@ impl Events {
     /// them. Admission is checked at emission, after any user clone callback.
     pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> CacheEvent) {
         let host = self.plugin_host();
-        if self.inner.sender.receiver_count() == 0
-            && host.as_ref().is_none_or(|host| !host.has_listeners())
+        if !self.has_broadcast_receivers() && host.as_ref().is_none_or(|host| !host.has_listeners())
         {
             return;
         }
@@ -640,13 +647,21 @@ impl Events {
     }
 
     fn plugin_host(&self) -> Option<Arc<PluginHostInner>> {
-        self.inner.plugins.get().and_then(Weak::upgrade)
+        self.inner.plugins.get().and_then(PluginEventRoute::upgrade)
+    }
+
+    fn has_broadcast_receivers(&self) -> bool {
+        self.inner.broadcast_armed.load(Ordering::Acquire) && self.inner.sender.receiver_count() > 0
     }
 
     fn emit_using(&self, event: CacheEvent, host: Option<Arc<PluginHostInner>>) -> EventEmission {
         let plugin_errors = host.map_or_else(Vec::new, |host| host.notify(&event));
         // A send failure means there are no observers, a normal lifecycle state.
-        let subscribers = self.inner.sender.send(event).unwrap_or(0);
+        let subscribers = if self.inner.broadcast_armed.load(Ordering::Acquire) {
+            self.inner.sender.send(event).unwrap_or(0)
+        } else {
+            0
+        };
         EventEmission {
             subscribers,
             plugin_errors,

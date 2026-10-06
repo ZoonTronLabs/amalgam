@@ -405,8 +405,25 @@ pub(crate) struct PluginHostInner {
     slots: RwLock<HostState>,
     // Published under the slots write lock. Counts potential recipients,
     // including draining slots; actual admission still belongs to each slot.
-    listeners: AtomicUsize,
+    listeners: Arc<AtomicUsize>,
     attachments: Arc<Scopes>,
+}
+
+/// The event hub can check recipient admission without pinning an idle host.
+/// The shared counter owns no sessions, cache, or teardown work.
+pub(crate) struct PluginEventRoute {
+    host: Weak<PluginHostInner>,
+    listeners: Arc<AtomicUsize>,
+}
+
+impl PluginEventRoute {
+    pub(crate) fn upgrade(&self) -> Option<Arc<PluginHostInner>> {
+        if self.listeners.load(Ordering::Acquire) == 0 {
+            None
+        } else {
+            self.host.upgrade()
+        }
+    }
 }
 
 impl PluginHostInner {
@@ -540,7 +557,7 @@ impl PluginHost {
             inner: Arc::new(PluginHostInner {
                 context,
                 slots: RwLock::new(HostState::Running(Vec::with_capacity(plugins.len()))),
-                listeners: AtomicUsize::new(0),
+                listeners: Arc::new(AtomicUsize::new(0)),
                 attachments: Scopes::new(),
             }),
         };
@@ -694,8 +711,11 @@ impl PluginHost {
         errors
     }
 
-    pub(crate) fn downgrade(&self) -> Weak<PluginHostInner> {
-        Arc::downgrade(&self.inner)
+    pub(crate) fn event_route(&self) -> PluginEventRoute {
+        PluginEventRoute {
+            host: Arc::downgrade(&self.inner),
+            listeners: Arc::clone(&self.inner.listeners),
+        }
     }
 }
 
