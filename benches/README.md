@@ -34,6 +34,7 @@ FusionCache with at most six allocations. `--gate all` also requires replacement
 currently enforces the hot milestone; later milestones promote the gate.
 
 The report also includes `ready-costs.csv`, a diagnostic breakdown of clock,
-hash, counter and framework costs. Constant controlled/real-time clocks isolate
-components in that file only; paired speed gates always use the real system
-clock and the same public APIs.
+hash, counter and framework costs. Constant clocks isolate framework and
+physical-expiry overhead. Default live-clock reads and explicitly injected system
+UTC reads are reported separately. The performance gate uses the actual cache's
+default live clock and the same public APIs; constant clocks are diagnostic only.

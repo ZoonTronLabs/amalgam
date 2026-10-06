@@ -266,6 +266,23 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     }
     /// The builtin map holds a reader slot through internal checks and ordinary
     /// value Clone. Observers run before locking; optional callbacks run after it.
+    pub(crate) fn with_local_ready<R>(
+        &self,
+        key: &str,
+        clock: &crate::time::local::LocalClock,
+        read: impl FnOnce(&Entry<V>, Timestamp) -> R,
+    ) -> Option<R> {
+        match &self.backend {
+            Backend::Unbounded(store) => {
+                self.component_read(crate::events::ComponentRead::Memory);
+                store.with_local_ready(key, clock, read)
+            }
+            Backend::Retained(_) => {
+                let now = clock.now();
+                self.with_ready(key, now, |entry| read(entry, now))
+            }
+        }
+    }
     pub(crate) fn with_ready<R>(
         &self,
         key: &str,

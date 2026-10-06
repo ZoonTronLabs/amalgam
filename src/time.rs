@@ -12,6 +12,16 @@
 //! * **Cross-node ordering** (backplane messages, tag markers, "newer wins") —
 //!   also a [`Timestamp`], deliberately a wall-clock value so independent nodes
 //!   can compare them.
+//!
+//! Standalone caches with built-in local storage use a UTC anchor plus elapsed
+//! monotonic time for duration lifetimes. One private sample under the reader
+//! slot supplies both freshness and physical expiry on the plain ready path.
+//! Hybrid caches, supplied storage/markers, distributed lockers/backplanes and
+//! explicitly supplied clocks preserve their
+//! interoperable clock domain and elapsed backend deadlines. [`SystemClock`]
+//! always returns live system UTC when explicitly selected.
+
+pub(crate) mod local;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -117,7 +127,9 @@ pub enum ClockTiming {
 /// Inject a custom implementation in tests to make every expiration, throttle
 /// and timeout window deterministic. Production code uses [`SystemClock`].
 pub trait Clock: Send + Sync {
-    /// Returns the current wall-clock instant as a [`Timestamp`].
+    /// Returns a timestamp in this clock's domain. Hybrid caches require
+    /// UTC-comparable timestamps; isolated duration lifetimes can use a
+    /// UTC-anchored elapsed scale.
     fn now(&self) -> Timestamp;
 
     /// Declares physical-expiry timing. Custom clocks are controlled by default

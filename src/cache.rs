@@ -4,6 +4,7 @@ mod blocking;
 pub(crate) use blocking::MemoryAcquireRoute;
 use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
+mod clock;
 mod markers;
 mod origin;
 mod plain_ready;
@@ -281,7 +282,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     lanes: Lanes,
     tags: TagRegistry,
     events: Events,
-    clock: Arc<dyn Clock>,
+    clock: crate::time::local::CacheClock,
     default_options: EntryOptions,
     default_runtime: ready::RuntimeRequirement,
     ready_plan: plain_ready::ReadyPlan,

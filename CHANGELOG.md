@@ -46,6 +46,14 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Built-in standalone caches use one UTC-anchored monotonic time sample for
+  ready-read freshness and expiry. Local duration lifetimes remain steady across
+  civil-clock corrections. Hybrid and external components, plus explicitly
+  supplied clocks, retain their existing time model.
+- In-memory shard routing uses a randomly keyed aHash builder. Full string
+  equality still decides key identity; hashes are neither persisted nor sent
+  between nodes.
+
 - Memory-only caches select a plain read plan at construction. Unobserved hits
   carry no span or timing envelope; late subscribers still receive one terminal
   event. Thread-bound admission publishes its own count and releases it with a

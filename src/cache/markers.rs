@@ -479,7 +479,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let source = CancellationSource::new();
         let token = source.token();
         let scope = self.inner.scope.clone();
-        let clock = Arc::clone(&self.inner.clock);
+        let clock = self.inner.clock.shared();
         let mut execution = self.scopes().execution(
             async move {
                 cache

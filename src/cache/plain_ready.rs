@@ -68,19 +68,25 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let value = (|| {
             permit.admit()?;
             permit.status(token)?;
-            // The injected clock is caller code: it runs outside the slot and
-            // inside the same counted admission as the eventual value Clone.
-            let now = self.inner.clock.now();
-            permit.status(token)?;
             let CacheMemory::Builtin(memory) = &self.inner.memory else {
                 unreachable!("Plain plan requires built-in L1");
             };
-            let copied = memory
-                .with_ready(key, now, |entry| {
-                    (self.inner.tags(entry) == TagVerdict::Valid && entry.freshness(now).is_fresh())
-                        .then(|| entry.value().clone())
-                })
-                .flatten();
+            let copy = |entry: &super::Entry<V>, now| {
+                (self.inner.tags(entry) == TagVerdict::Valid && entry.freshness(now).is_fresh())
+                    .then(|| entry.value().clone())
+            };
+            let copied = match &self.inner.clock {
+                crate::time::local::CacheClock::Local(clock) => {
+                    memory.with_local_ready(key, clock, copy)
+                }
+                crate::time::local::CacheClock::Shared(clock) => {
+                    // User clock code stays outside the slot and inside admission.
+                    let now = clock.now();
+                    permit.status(token)?;
+                    memory.with_ready(key, now, |entry| copy(entry, now))
+                }
+            }
+            .flatten();
             permit.status(token)?;
             Ok(copied)
         })();

@@ -292,6 +292,8 @@ fn ready_costs() {
         use std::hash::BuildHasher;
         hash.hash_one(black_box("key-0"))
     });
+    let keyed = ahash::RandomState::new();
+    cost("key_hash_ahash", || keyed.hash_one(black_box("key-0")));
     let active = std::sync::atomic::AtomicUsize::new(0);
     cost("counter_pair", || {
         active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -309,18 +311,25 @@ fn ready_costs() {
     for (label, clock) in [
         (
             "controlled",
-            Arc::new(CostClock(amalgam::ClockTiming::Controlled)) as Arc<dyn Clock>,
+            Some(Arc::new(CostClock(amalgam::ClockTiming::Controlled)) as Arc<dyn Clock>),
         ),
         (
             "physical",
-            Arc::new(CostClock(amalgam::ClockTiming::RealTime)) as Arc<dyn Clock>,
+            Some(Arc::new(CostClock(amalgam::ClockTiming::RealTime)) as Arc<dyn Clock>),
         ),
-        ("system", Arc::new(amalgam::SystemClock) as Arc<dyn Clock>),
+        (
+            "system",
+            Some(Arc::new(amalgam::SystemClock) as Arc<dyn Clock>),
+        ),
+        ("default", None),
     ] {
         let builder = || {
-            Cache::builder()
-                .clock(clock.clone())
-                .default_options(EntryOptions::new(Duration::from_secs(3600)))
+            let builder =
+                Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600)));
+            match &clock {
+                Some(clock) => builder.clock(Arc::clone(clock)),
+                None => builder,
+            }
         };
         let cache = builder().build();
         rt.block_on(async {

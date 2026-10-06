@@ -7,9 +7,8 @@ use super::{
 use crate::reader_slots::{
     ReadGuard as RwLockReadGuard, ReaderSlots as RwLock, WriteGuard as RwLockWriteGuard,
 };
+use ahash::RandomState;
 use hashbrown::{HashMap, hash_map::RawEntryMut};
-use std::collections::hash_map::RandomState;
-use std::hash::BuildHasher;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -33,12 +32,22 @@ struct Stored<V> {
 }
 impl<V> Stored<V> {
     fn retirement_reason(&self, now: Option<Timestamp>, generation: u64) -> Option<Reason> {
+        self.retirement_at(now, generation, None)
+    }
+    fn retirement_at(
+        &self,
+        now: Option<Timestamp>,
+        generation: u64,
+        elapsed: Option<Instant>,
+    ) -> Option<Reason> {
         if self.generation != generation {
             Some(Reason::Continuity)
         } else if !self.entry.is_read_eligible() {
             Some(Reason::Eligibility)
         } else if now.is_some_and(|at| self.entry.is_physically_expired(at))
-            || self.expiration.is_some_and(|at| Instant::now() >= at)
+            || self
+                .expiration
+                .is_some_and(|at| elapsed.unwrap_or_else(Instant::now) >= at)
         {
             Some(Reason::Expired)
         } else {
@@ -97,6 +106,30 @@ impl<V> Sharded<V> {
             .retirement_reason(Some(now), self.generation.load(Ordering::Acquire))
             .is_none()
             .then(|| read_entry(&stored.entry))
+    }
+    /// A private local clock is sampled after admission, under the value slot.
+    /// Logical freshness and physical expiry share that one elapsed sample.
+    pub(super) fn with_local_ready<R>(
+        &self,
+        key: &str,
+        clock: &crate::time::local::LocalClock,
+        read_entry: impl FnOnce(&Entry<V>, Timestamp) -> R,
+    ) -> Option<R> {
+        let (hash, shard) = self.route(key);
+        let state = read(shard);
+        let (_, stored) = state
+            .entries
+            .raw_entry()
+            .from_hash(hash, |k| k.as_ref() == key)?;
+        let (now, elapsed) = clock.sample();
+        stored
+            .retirement_at(
+                Some(now),
+                self.generation.load(Ordering::Acquire),
+                Some(elapsed),
+            )
+            .is_none()
+            .then(|| read_entry(&stored.entry, now))
     }
     pub(super) fn get(&self, key: &str, now: Option<Timestamp>) -> MemoryRead<V> {
         let (hash, shard) = self.route(key);
@@ -338,6 +371,43 @@ mod tests {
             CaptureAdmission::Armed,
             MemoryWriteEvent::Set,
         )
+    }
+    #[test]
+    fn local_sample_is_taken_after_waiting_for_the_value_slot() {
+        use crate::time::local::CacheClock;
+        let CacheClock::Local(clock) = CacheClock::local() else {
+            unreachable!()
+        };
+        let store = std::sync::Arc::new(Sharded::new(MemoryExpiry::RealTime));
+        let before = clock.sample().0;
+        store.insert(
+            Arc::from("k"),
+            Entry::fresh(
+                1,
+                &EntryOptions::default(),
+                before,
+                Box::new([]),
+                None,
+                None,
+            ),
+            before,
+            Expected::Any,
+            CaptureAdmission::Armed,
+            MemoryWriteEvent::Set,
+        );
+        let (_, shard) = store.route("k");
+        let writer = write(shard);
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let reading = Arc::clone(&store);
+        let sampled = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            reading.with_local_ready("k", &clock, |_, now| now).unwrap()
+        });
+        started_rx.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(writer);
+        let sampled = sampled.join().unwrap();
+        assert!(sampled.saturating_duration_since(before) >= std::time::Duration::from_millis(20));
     }
     #[test]
     fn overlapping_clear_drains_preserve_all_newer_generations() {

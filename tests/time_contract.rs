@@ -102,3 +102,37 @@ fn clock_timing_capability_survives_explicit_trait_object_and_arc_wrappers() {
     assert_eq!(controlled.timing_model(), ClockTiming::Controlled);
     assert_eq!(Frozen.timing_model(), ClockTiming::Controlled);
 }
+
+struct FrozenRealTime(ManualClock);
+impl Clock for FrozenRealTime {
+    fn now(&self) -> Timestamp {
+        self.0.now()
+    }
+    fn timing_model(&self) -> ClockTiming {
+        ClockTiming::RealTime
+    }
+}
+#[tokio::test]
+async fn explicit_real_time_clock_keeps_elapsed_expiry_when_its_timestamp_stops() {
+    for capacity in [None, Some(2)] {
+        let clock = Arc::new(FrozenRealTime(ManualClock::default()));
+        let mut builder = amalgam::Cache::builder()
+            .clock(clock)
+            .default_options(amalgam::EntryOptions::new(Duration::from_millis(15)));
+        if let Some(capacity) = capacity {
+            builder = builder.max_capacity(capacity);
+        }
+        let cache = builder.build();
+        cache
+            .try_set("k", 7_u64)
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(45)).await;
+        assert!(cache.read("k", None).await.unwrap().into_value().is_none());
+        assert_eq!(cache.memory_usage().unwrap().entries, 0);
+        cache.shutdown().await.unwrap();
+    }
+}

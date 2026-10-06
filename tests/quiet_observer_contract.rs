@@ -56,3 +56,68 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     cache.try_remove("key").await.unwrap().wait().await.unwrap();
     cache.shutdown().await.unwrap();
 }
+
+#[derive(Clone)]
+struct CompletionValue {
+    number: u64,
+    subscribe_on_drop: Option<Arc<Observation>>,
+}
+impl Drop for CompletionValue {
+    fn drop(&mut self) {
+        if let Some(state) = &self.subscribe_on_drop {
+            let receiver = state.events.lock().unwrap().as_ref().unwrap().subscribe();
+            *state.receiver.lock().unwrap() = Some(receiver);
+        }
+    }
+}
+
+#[tokio::test]
+async fn observer_admitted_by_unused_default_drop_receives_the_hit_completion() {
+    let state = Arc::new(Observation::default());
+    let cache = Cache::new();
+    *state.events.lock().unwrap() = Some(cache.events().clone());
+    cache
+        .try_set(
+            "key",
+            CompletionValue {
+                number: 7,
+                subscribe_on_drop: None,
+            },
+        )
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let value = cache
+        .read_or_default(
+            "key",
+            CompletionValue {
+                number: 99,
+                subscribe_on_drop: Some(state.clone()),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(value.number, 7);
+    let mut receiver = state.receiver.lock().unwrap().take().unwrap();
+    assert!(
+        matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if &*key == "key")
+    );
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        CacheEvent::OperationCompleted {
+            operation: amalgam::CacheOperation::GetOrDefault,
+            outcome: OperationOutcome::Hit,
+            level: Some(amalgam::CacheLevel::Memory),
+            ..
+        }
+    ));
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+    drop(receiver);
+    cache.shutdown().await.unwrap();
+}

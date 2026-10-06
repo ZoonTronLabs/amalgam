@@ -1,15 +1,14 @@
 //! Cache configuration, validation and construction.
 use super::{
     Arc, AtomicBool, AtomicU64, AutoRecoveryService, Backplane, Cache, CacheInner, CacheScope,
-    CircuitBreaker, Clock, ClockTiming, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
+    CircuitBreaker, Clock, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
     DistributedLocker, DistributedSerializer, Duration, EntryOptions, Events, ExecutorOwnership,
     IdentityField, InitialPlugin, Instant, InvalidationStore, JitterSource, KeyModifierMode, Lanes,
     LeasePolicy, LeaseTtl, Lifecycle, LocalLocks, MarkerAccess, MarkerLifecycleAccess,
-    MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryExpiry,
-    MemoryLimits, Plugin, PluginContext, PluginHost, PublicLifetime, RandomJitterSource,
-    ReconciliationPolicy, RecoveryConfig, RecoveryExecutor, RemoveByTagBehavior, Result,
-    RuntimeComponent, Scopes, Storage, SystemClock, TagRegistry, Tasks, Timeout, ValueCloner,
-    validate_budget,
+    MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryLimits, Plugin,
+    PluginContext, PluginHost, PublicLifetime, RandomJitterSource, ReconciliationPolicy,
+    RecoveryConfig, RecoveryExecutor, RemoveByTagBehavior, Result, RuntimeComponent, Scopes,
+    Storage, TagRegistry, Tasks, Timeout, ValueCloner, validate_budget,
 };
 
 /// Builder for a [`Cache`].
@@ -583,11 +582,23 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             (None, _) => Storage::MemoryOnly,
             (Some(_), None) => return Err(ConfigError::DistributedWithoutSerializer.into()),
         };
-        let clock: Arc<dyn Clock> = self.clock.unwrap_or_else(|| Arc::new(SystemClock));
+        let clock_domain = if matches!(storage, Storage::MemoryOnly)
+            && matches!(markers, MarkerAccess::Local)
+            && self.backplane.is_none()
+            && self.distributed_locker.is_none()
+            && self.memory_storage.is_none()
+            && self.marker_memory_storage.is_none()
+        {
+            super::clock::ClockDomain::Local
+        } else {
+            super::clock::ClockDomain::Interoperable
+        };
+        let clock = super::clock::select(self.clock, clock_domain);
+        let expiry = super::clock::expiry(&clock);
         let recovery = if recovery_enabled {
             Some(AutoRecoveryService::try_new(
                 self.recovery_config,
-                Arc::clone(&clock),
+                clock.shared(),
             )?)
         } else {
             None
@@ -597,10 +608,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             PluginContext::new(&*name, &*instance_id, events.clone())?,
             Vec::new(),
         )?;
-        let expiry = match clock.timing_model() {
-            ClockTiming::RealTime => MemoryExpiry::RealTime,
-            ClockTiming::Controlled => MemoryExpiry::ClockDriven,
-        };
         let locks = LocalLocks::new(
             self.memory_locker,
             Arc::clone(&name),
@@ -628,7 +635,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 MarkerReads::OptionsControlled(Box::new(MarkerObservations::new(
                     self.marker_memory_storage,
                     limits,
-                    Arc::clone(&clock),
+                    clock.shared(),
                     expiry,
                     marker_lifecycle,
                     locks.for_markers(),
@@ -640,7 +647,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.memory_storage,
             MemoryLimits::new(self.max_capacity, self.max_weighted_capacity),
             events.clone(),
-            Arc::clone(&clock),
+            clock.shared(),
             expiry,
             self.eviction_capture,
             self.key_prefix.as_deref(),

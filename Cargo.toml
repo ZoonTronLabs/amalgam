@@ -25,6 +25,7 @@ name = "amalgam"
 
 [dependencies]
 async-trait = "0.1.89"
+ahash = "0.8.12"
 arc-swap = "1.9.1"
 hashbrown = { version = "0.17.1", default-features = false, features = ["raw-entry"] }
 dashmap = "6.2.1"

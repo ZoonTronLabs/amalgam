@@ -79,6 +79,13 @@ source tree; the published package has not been updated by this work.
 
 Entries have independent logical freshness and physical fail-safe retention. Fail-safe can serve a captured stale value after an ordinary origin failure or timeout, within its physical lifetime. Cancellation stays a cancellation and bypasses fail-safe.
 
+Built-in standalone caches measure duration lifetimes with a monotonic clock
+anchored to UTC at construction. Civil-clock corrections do not extend or shorten
+those local lifetimes. Hybrid caches, distributed lockers/backplanes and supplied
+storage or markers retain live UTC ordering and elapsed physical deadlines.
+Explicitly injecting `SystemClock` selects live system UTC; custom clock callbacks
+run outside L1 reader slots.
+
 Same-key requests coordinate through per-key ownership. A configured finite lock timeout deliberately permits the best-effort factory path when no fallback is available; it weakens unconditional single-flight. Different keys do not serialize because they happen to share a map shard.
 
 Soft factory timeout applies when a fail-safe fallback is available. With background completion enabled, the origin and its ownership move into supervised work; that continuation does not acquire a new hard-timeout budget. Eager refresh is request-driven and does not use the ordinary factory timeout. Adaptive options and conditional `not_modified` are validated before storage. Snapshot creation order and actual insertion time are separate: delayed origin work cannot invent newer source ordering or renew a replay's physical lifetime.
