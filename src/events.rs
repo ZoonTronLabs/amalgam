@@ -721,6 +721,20 @@ impl Events {
         }
     }
 
+    /// Keeps optional worker facts lazy while retaining selected callback leases.
+    pub(crate) fn emit_deferred_lazy(
+        &self,
+        make: impl FnOnce() -> CacheEvent,
+        defer: impl FnOnce(PendingPluginEvent),
+    ) {
+        let host = self.plugin_host();
+        if !self.has_broadcast_receivers() && host.as_ref().is_none_or(|host| !host.has_listeners())
+        {
+            return;
+        }
+        self.emit_deferred(make(), defer);
+    }
+
     /// Associates this hub with exactly one owning host. The reference is weak,
     /// so keeping an event hub/observer alive cannot prolong plugin lifecycle.
     pub fn attach_plugins(&self, host: &PluginHost) -> Result<(), PluginError> {

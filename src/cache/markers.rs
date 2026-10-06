@@ -194,7 +194,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     }
 
     fn marker_event(&self, kind: &MarkerKind, outcome: MarkerReadOutcome) {
-        self.inner.marker_event(kind, outcome);
+        self.memory.emit_lazy(|| CacheEvent::MarkerRead {
+            kind: kind.clone(),
+            outcome,
+        });
     }
 
     async fn read_control_marker(
@@ -264,7 +267,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             self.marker_lock_timeout(before_lock),
             observations.locks.lock(&key),
         )
-        .await?;
+        .await?
+        .map(|guard| self.memory.guard(guard));
         cancellation.check()?;
         if guard.is_none() && self.marker_fallback_eligible(before_lock) {
             // The current owner will refresh this marker: a contending reader
@@ -1158,12 +1162,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
             Err(error) => return Err(error),
         };
-        self.inner
-            .events
-            .emit_lazy(|| CacheEvent::MarkerSnapshotWrite {
-                kind: kind.clone(),
-                outcome,
-            });
+        self.memory.emit_lazy(|| CacheEvent::MarkerSnapshotWrite {
+            kind: kind.clone(),
+            outcome,
+        });
         Ok(effect)
     }
 

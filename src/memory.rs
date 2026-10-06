@@ -225,6 +225,10 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         self.events
             .emit_deferred(event, |pending| self.reclamation.defer(pending));
     }
+    pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> CacheEvent) {
+        self.events
+            .emit_deferred_lazy(make, |pending| self.reclamation.defer(pending));
+    }
     pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
         self.events
             .emit_layer_deferred(make, |pending| self.reclamation.defer(pending));

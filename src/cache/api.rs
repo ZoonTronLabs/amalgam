@@ -11,6 +11,14 @@ use super::{
     Result, ShutdownReport, Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
 };
 
+struct ReadOperation<'a> {
+    key: LookupKey,
+    options: Option<EntryOptions>,
+    cancellation: Option<FactoryCancellation>,
+    observation: OperationObservation,
+    permit: InlinePermit<'a>,
+}
+
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Starts validated construction.
     pub fn builder() -> CacheBuilder<V> {
@@ -733,8 +741,37 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 permit,
             } => (observation, Arc::<str>::from(key.as_ref()), permit),
         };
+        self.prepare_read(
+            ReadOperation {
+                key: self.lookup_key(key, full),
+                options,
+                cancellation: token,
+                observation,
+                permit,
+            },
+            policy,
+            complete,
+        )
+        .await
+    }
+    // Keep the synchronous ready path independent of the owned L2 preparation
+    // body. The existing scope still owns cancellation, callbacks and drainage.
+    #[cold]
+    #[inline(never)]
+    fn prepare_read<T: Send + 'static>(
+        &self,
+        operation: ReadOperation<'_>,
+        policy: L2ReadPolicy,
+        complete: impl FnOnce(MaybeValue<V>) -> T + Send + 'static,
+    ) -> impl Future<Output = Result<T>> + Send + 'static {
+        let ReadOperation {
+            key,
+            options,
+            cancellation: token,
+            observation,
+            permit,
+        } = operation;
         let worker = self.worker();
-        let key = self.lookup_key(key, full);
         let source = CancellationSource::new();
         let cancellation = source.token();
         self.execute_observed(
@@ -751,7 +788,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 ))
             },
         )
-        .await
     }
     /// Returns default only after a successful miss; errors remain errors.
     pub async fn read_or_default(

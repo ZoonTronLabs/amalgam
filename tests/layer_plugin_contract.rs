@@ -393,3 +393,162 @@ fn rejected_interest_introspection_stops_the_already_created_session() {
     ));
     assert_eq!(stops.load(Ordering::SeqCst), 1);
 }
+
+#[derive(Clone, Copy)]
+enum MarkerFact {
+    Read,
+    SnapshotWrite,
+}
+impl MarkerFact {
+    fn selects(self, event: &CacheEvent) -> bool {
+        let kind = match (self, event) {
+            (Self::Read, CacheEvent::MarkerRead { kind, .. })
+            | (Self::SnapshotWrite, CacheEvent::MarkerSnapshotWrite { kind, .. }) => kind,
+            _ => return false,
+        };
+        matches!(kind, MarkerKind::Tag(tag) if tag.as_str() == "watched")
+    }
+}
+struct MarkerReentrant {
+    runtime: BlockingRuntime,
+    fact: MarkerFact,
+    succeeded: Arc<AtomicUsize>,
+    seen: Arc<AtomicUsize>,
+}
+struct MarkerSession {
+    context: CachePluginContext<u64>,
+    runtime: BlockingRuntime,
+    fact: MarkerFact,
+    seen: Arc<AtomicUsize>,
+    succeeded: Arc<AtomicUsize>,
+}
+impl CachePlugin<u64> for MarkerReentrant {
+    fn name(&self) -> &str {
+        "marker-reentrant"
+    }
+    fn attach(
+        &self,
+        context: &CachePluginContext<u64>,
+    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+        Ok(Box::new(MarkerSession {
+            context: context.clone(),
+            runtime: self.runtime.clone(),
+            fact: self.fact,
+            seen: self.seen.clone(),
+            succeeded: self.succeeded.clone(),
+        }))
+    }
+}
+impl PluginSession for MarkerSession {
+    fn observations(&self) -> PluginObservations {
+        PluginObservations::All
+    }
+    fn on_event(&self, event: &CacheEvent) -> std::result::Result<(), PluginError> {
+        if self.fact.selects(event) && self.seen.fetch_add(1, Ordering::SeqCst) == 0 {
+            let value = self
+                .context
+                .cache()?
+                .blocking(self.runtime.clone())
+                .get_or_set_with(
+                    "caller",
+                    |_| panic!("completed origin must already be visible to its marker observer"),
+                    EntryOptions::new(Duration::from_secs(60))
+                        .with_lock_timeout(Timeout::After(Duration::from_millis(20))),
+                )
+                .map_err(|error| {
+                    PluginError::from_source("marker-reentrant", PluginStage::Event, error)
+                })?;
+            if value == 29 {
+                self.succeeded.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        Ok(())
+    }
+}
+fn marker_observer_after_value_commit(fact: MarkerFact) {
+    let clock = Arc::new(ManualClock::new(Timestamp::from_ticks(100)));
+    let backend = Arc::new(InMemoryDistributedCache::new(clock.clone()));
+    let store = backend.invalidation_store().unwrap();
+    let runtime = BlockingRuntime::new().unwrap();
+    runtime
+        .run(store.advance(
+            &CacheScope::new("", "v2", KeyModifierMode::Prefix).unwrap(),
+            MarkerKind::Tag(Tag::new("watched").unwrap()),
+            MarkerVersion::new(Timestamp::from_ticks(50)),
+        ))
+        .unwrap();
+    let opts = EntryOptions::new(Duration::from_millis(200))
+        .with_fail_safe(
+            true,
+            Some(Duration::from_secs(60)),
+            Some(Duration::from_millis(1)),
+        )
+        .with_skip_memory(true, false)
+        .with_skip_distributed_read_when_stale(false);
+    let seed = BlockingCache::<u64>::from_builder(
+        Cache::builder()
+            .clock(clock.clone())
+            .distributed(backend.clone())
+            .serializer(Arc::new(JsonSerializer))
+            .default_options(opts.clone()),
+    )
+    .unwrap();
+    seed.try_set_full(
+        "caller",
+        17,
+        None,
+        Box::from([Tag::new("watched").unwrap()]),
+    )
+    .unwrap()
+    .wait()
+    .unwrap();
+    clock.advance(Duration::from_millis(201));
+    let succeeded = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(AtomicUsize::new(0));
+    let cache = BlockingCache::<u64>::from_builder(
+        Cache::builder()
+            .clock(clock)
+            .distributed(backend)
+            .invalidation_store(store)
+            .serializer(Arc::new(JsonSerializer))
+            .default_options(opts)
+            .tags_default_options(
+                EntryOptions::tag_defaults()
+                    .with_skip_memory(true, false)
+                    .with_lock_timeout(Timeout::After(Duration::from_millis(20))),
+            )
+            .marker_read_policy(MarkerReadPolicy::OptionsControlled)
+            .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
+            .cache_plugin(Arc::new(MarkerReentrant {
+                runtime,
+                fact,
+                succeeded: succeeded.clone(),
+                seen: seen.clone(),
+            })),
+    )
+    .unwrap();
+    assert_eq!(
+        cache.get_or_set("caller", |ctx| Ok(ctx.value(29))).unwrap(),
+        29
+    );
+    cache.flush_pending().unwrap();
+    assert!(
+        seen.load(Ordering::SeqCst) >= 1,
+        "fixture must produce the selected marker fact"
+    );
+    assert_eq!(
+        succeeded.load(Ordering::SeqCst),
+        1,
+        "the marker callback must follow the outer value flight's commit and release"
+    );
+    cache.shutdown().unwrap();
+    seed.shutdown().unwrap();
+}
+#[test]
+fn selected_marker_read_observer_runs_after_the_ordinary_value_flight_and_commit() {
+    marker_observer_after_value_commit(MarkerFact::Read);
+}
+#[test]
+fn selected_marker_snapshot_observer_runs_after_the_ordinary_value_flight_and_commit() {
+    marker_observer_after_value_commit(MarkerFact::SnapshotWrite);
+}

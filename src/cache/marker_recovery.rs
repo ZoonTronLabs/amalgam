@@ -77,12 +77,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             | MarkerError::ZeroCapacity
             | MarkerError::ScopeCapacity { .. } => return Err(error.into()),
         };
-        self.inner
-            .events
-            .emit_lazy(|| CacheEvent::MarkerSnapshotWrite {
-                kind: commit.kind.clone(),
-                outcome: fault.write_outcome(),
-            });
+        self.memory.emit_lazy(|| CacheEvent::MarkerSnapshotWrite {
+            kind: commit.kind.clone(),
+            outcome: fault.write_outcome(),
+        });
         if matches!(policy, MarkerSnapshotWritePolicy::Replay) {
             return Err(error.into());
         }

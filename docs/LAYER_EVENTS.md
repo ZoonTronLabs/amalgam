@@ -61,8 +61,10 @@ Cache-owned `All` callbacks capture their sessions when a fact occurs and run af
 the operation's coordination guards and clones are released. No callback runs
 under a storage/lane/local-flight/retirement-queue guard. Background ownership can
 postpone delivery; callbacks and stop are drained by shutdown. This also applies
-to the opted-in logical callbacks originating within the owned worker. Legacy
-`Logical` handlers retain their original inline timing, including pre-refresh
+to the opted-in logical callbacks originating within the owned worker, including
+`MarkerRead`, `MarkerSnapshotWrite` success/failure and `MarkerEagerRefresh`.
+Marker coordination also retains the callback queue until its guard is released.
+Legacy `Logical` handlers retain their original inline timing, including pre-refresh
 `EagerRefresh`; they retain ordinary same-key coordination constraints. `OperationCompleted`
 and ready-path callbacks can arrive earlier than deferred physical facts; do
 not infer cross-stream/callback timing order. Original plugin failures are logged;

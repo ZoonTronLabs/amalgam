@@ -55,8 +55,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let Some(local) = observations.locks.try_lock(&key) else {
             return Ok(());
         };
-        self.inner
-            .events
+        let local = self.memory.guard(local);
+        self.memory
             .emit_lazy(|| CacheEvent::MarkerEagerRefresh { kind: kind.clone() });
         let worker = self.clone();
         let kind = kind.clone();
