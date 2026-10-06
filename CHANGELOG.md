@@ -46,6 +46,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Memory-only caches select a plain read plan at construction. Unobserved hits
+  carry no span or timing envelope; late subscribers still receive one terminal
+  event. Thread-bound admission publishes its own count and releases it with a
+  store, while transferred work and colliding thread indices retain independent
+  atomic accounting. Borrowed guards cannot enter parked futures.
 - Built-in L1 hits use padded reader slots sized for available parallelism,
   copy values under the slot without entry reference counting, borrow observers,
   and use striped shutdown admission. Custom callbacks and retired values remain

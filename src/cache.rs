@@ -6,6 +6,7 @@ use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
 mod markers;
 mod origin;
+mod plain_ready;
 mod plugin;
 mod read;
 mod ready;
@@ -66,7 +67,9 @@ use crate::marker_snapshots::{
 use crate::maybe::MaybeValue;
 use crate::memory::{CacheMemory, MemoryAdmission, MemoryExpiry, MemoryLimits};
 use crate::memory_locker::{LocalGuard, LocalLocks};
-use crate::observability::{OperationObservation, ReadyObservation, component_span};
+use crate::observability::{
+    OperationObservation, QuietObservation, ReadyObservation, component_span,
+};
 use crate::options::{
     EntryOptions, JitterSample, JitterSource, KeyModifierMode, RandomJitterSource,
     RemoveByTagBehavior,
@@ -281,6 +284,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     clock: Arc<dyn Clock>,
     default_options: EntryOptions,
     default_runtime: ready::RuntimeRequirement,
+    ready_plan: plain_ready::ReadyPlan,
     tags_default_options: EntryOptions,
     marker_reads: MarkerReads,
     key_prefix: Option<Arc<str>>,

@@ -297,7 +297,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 self.inner.scopes.inline()
             }
             PublicLifetime::PluginAccess(access) => {
-                access.scopes(&self.inner.scopes).inline_owned()
+                InlinePermit::from_owned(access.scopes(&self.inner.scopes).inline_owned())
             }
             PublicLifetime::NativeMemory(view) => view.source().inline(),
         }

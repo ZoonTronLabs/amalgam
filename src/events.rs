@@ -637,6 +637,9 @@ impl Events {
         }
     }
     /// Reads recipient interest without acquiring the idle plugin host.
+    pub(crate) fn is_quiet(&self) -> bool {
+        !self.observes_operations() && !self.has_layer_receivers()
+    }
     pub(crate) fn observes_operations(&self) -> bool {
         self.has_broadcast_receivers()
             || self

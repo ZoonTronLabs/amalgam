@@ -212,6 +212,65 @@ impl Drop for ReadyObservation<'_> {
     }
 }
 
+// A plain, untraced lookup has no span or timer state to transport. Late
+// recipients still observe its one terminal outcome, including unwind.
+pub(crate) struct QuietObservation<'a> {
+    events: &'a Events,
+    operation: CacheOperation,
+    state: ObservationState,
+}
+impl<'a> QuietObservation<'a> {
+    pub(crate) fn events(&self) -> &'a Events {
+        self.events
+    }
+    pub(crate) fn new(events: &'a Events, operation: CacheOperation) -> Self {
+        Self {
+            events,
+            operation,
+            state: ObservationState::Pending,
+        }
+    }
+    pub(crate) fn finish(mut self, outcome: OperationOutcome, level: Option<CacheLevel>) {
+        self.state = ObservationState::Completed;
+        self.events.emit_lazy(|| CacheEvent::OperationCompleted {
+            operation: self.operation,
+            outcome,
+            elapsed: Duration::ZERO,
+            level,
+        });
+    }
+    pub(crate) fn into_owned(mut self) -> OperationObservation {
+        self.state = ObservationState::Completed;
+        OperationObservation {
+            events: self.events.clone(),
+            observation: Observation {
+                operation: self.operation,
+                level: None,
+                timing: OperationTiming::Unobserved,
+                span: tracing::Span::none(),
+                state: ObservationState::Pending,
+            },
+        }
+    }
+}
+impl Drop for QuietObservation<'_> {
+    fn drop(&mut self) {
+        match self.state {
+            ObservationState::Pending => self.events.emit_lazy(|| CacheEvent::OperationCompleted {
+                operation: self.operation,
+                outcome: if std::thread::panicking() {
+                    OperationOutcome::Panicked
+                } else {
+                    OperationOutcome::Cancelled
+                },
+                elapsed: Duration::ZERO,
+                level: None,
+            }),
+            ObservationState::Completed => {}
+        }
+    }
+}
+
 #[cfg(feature = "metrics")]
 mod imp {
     use super::labels::{CacheLabelBudget, process_budget};

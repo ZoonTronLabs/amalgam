@@ -1,7 +1,11 @@
 //! Reader slots for short, synchronous L1 decisions.
 //!
-//! Each thread changes only its own padded lock word. A writer holds every
-//! slot, in the same order, before accessing the value. Slot counts grow with
+//! Each thread changes only its own padded lock word. A slot uses a mutex:
+//! overlapping readers in different slots need no shared reader count, and
+//! releasing a slot is a store rather than another reader-count RMW. Colliding
+//! thread indices wait for their slot; they never turn contention into a miss.
+//! Ordinary Clone must not recursively reacquire the same cache slot.
+//! A writer holds every slot, in the same order, before accessing the value. Slot counts grow with
 //! available parallelism; they are not limited to eight cores.
 //!
 //! This is the crate's only unsafe implementation boundary. Its safe guards
@@ -10,8 +14,8 @@
 //! destruction must run after these guards are released. Ordinary value Clone
 //! is the documented exception and must not reenter this cache.
 
-use parking_lot::RawRwLock;
-use parking_lot::lock_api::{GuardNoSend, RawRwLock as _};
+use parking_lot::RawMutex;
+use parking_lot::lock_api::{GuardNoSend, RawMutex as _};
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -43,7 +47,7 @@ fn slot_count() -> usize {
 }
 
 #[repr(align(128))]
-struct Slot(RawRwLock);
+struct Slot(RawMutex);
 
 pub(crate) struct ReaderSlots<T> {
     slots: Box<[Slot]>,
@@ -52,8 +56,9 @@ pub(crate) struct ReaderSlots<T> {
 // SAFETY: exclusive ownership of ReaderSlots also owns T. Guards borrow the
 // lock, so moving it cannot overlap any active access.
 unsafe impl<T: Send> Send for ReaderSlots<T> {}
-// SAFETY: readers hold one shared slot and expose only &T. Writers acquire all
-// slots exclusively before exposing &mut T. The fixed acquisition order also
+// SAFETY: readers hold one slot and expose only &T. Distinct reader slots
+// permit concurrent immutable access. Writers acquire all slots before exposing
+// &mut T. The fixed acquisition order also
 // prevents two writers from accessing T at once.
 unsafe impl<T: Send + Sync> Sync for ReaderSlots<T> {}
 
@@ -67,13 +72,13 @@ impl<T> ReaderSlots<T> {
             "slot count is an internal invariant"
         );
         Self {
-            slots: (0..slots).map(|_| Slot(RawRwLock::INIT)).collect(),
+            slots: (0..slots).map(|_| Slot(RawMutex::INIT)).collect(),
             value: UnsafeCell::new(value),
         }
     }
     pub(crate) fn read(&self) -> ReadGuard<'_, T> {
         let slot = &self.slots[reader_index() & (self.slots.len() - 1)];
-        slot.0.lock_shared();
+        slot.0.lock();
         ReadGuard {
             lock: self,
             slot,
@@ -83,7 +88,7 @@ impl<T> ReaderSlots<T> {
     pub(crate) fn write(&self) -> WriteGuard<'_, T> {
         let mut hold = WriterHold::new(self);
         for slot in &self.slots {
-            slot.0.lock_exclusive();
+            slot.0.lock();
             hold.acquired += 1;
         }
         WriteGuard { hold }
@@ -91,7 +96,7 @@ impl<T> ReaderSlots<T> {
     pub(crate) fn try_write(&self) -> Option<WriteGuard<'_, T>> {
         let mut hold = WriterHold::new(self);
         for slot in &self.slots {
-            if !slot.0.try_lock_exclusive() {
+            if !slot.0.try_lock() {
                 return None;
             }
             hold.acquired += 1;
@@ -108,7 +113,8 @@ pub(crate) struct ReadGuard<'a, T> {
 impl<T> Deref for ReadGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        // SAFETY: this guard holds a shared slot, excluding every writer.
+        // SAFETY: this guard holds one slot, excluding every writer;
+        // other slots expose only immutable access to the same T.
         unsafe { &*self.lock.value.get() }
     }
 }
@@ -116,7 +122,7 @@ impl<T> Drop for ReadGuard<'_, T> {
     fn drop(&mut self) {
         // SAFETY: read acquired exactly this slot. The non-Send guard releases
         // it once, on the acquiring thread, after all borrowed access ends.
-        unsafe { self.slot.0.unlock_shared() };
+        unsafe { self.slot.0.unlock() };
     }
 }
 
@@ -141,7 +147,7 @@ impl<T> Drop for WriterHold<'_, T> {
         for slot in self.lock.slots[..self.acquired].iter().rev() {
             // SAFETY: acquired counts only successfully locked slots, owned by
             // this non-Send reservation. Every slot is released exactly once.
-            unsafe { slot.0.unlock_exclusive() };
+            unsafe { slot.0.unlock() };
         }
     }
 }

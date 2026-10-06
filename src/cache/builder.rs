@@ -651,6 +651,20 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.backplane.is_some(),
             self.distributed_locker.is_some(),
         );
+        let ready_plan = if self.default_options_provider.is_none()
+            && self.key_prefix.is_none()
+            && self.backplane.is_none()
+            && (self.disable_tagging || !matches!(marker_reads, MarkerReads::OptionsControlled(_)))
+        {
+            super::plain_ready::ReadyPlan::select(
+                &storage,
+                &memory,
+                &self.default_options,
+                default_runtime,
+            )
+        } else {
+            super::plain_ready::ReadyPlan::General
+        };
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),
             name,
@@ -663,6 +677,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             clock,
             default_options: self.default_options,
             default_runtime,
+            ready_plan,
             tags_default_options: self.tags_default_options,
             marker_reads,
             key_prefix: self.key_prefix,

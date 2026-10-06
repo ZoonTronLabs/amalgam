@@ -9,7 +9,7 @@ use tokio::sync::{Notify, watch};
 
 use crate::error::{ConfigError, IdentityField};
 use crate::events::{CacheEvent, CacheOperation, ComponentRead, Events, LayerEvent};
-use crate::execution::{InlinePermit, Scopes};
+use crate::execution::{OwnedInlinePermit, Scopes};
 
 /// The lifecycle stage at which an external plugin failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -487,7 +487,7 @@ impl NotificationSelection {
 }
 pub(crate) struct NotificationBatch {
     callbacks: Vec<CallbackLease>,
-    _scope: InlinePermit<'static>,
+    _scope: OwnedInlinePermit,
 }
 impl NotificationBatch {
     fn notify(&self, event: Notification<'_>) -> Vec<PluginError> {

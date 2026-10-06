@@ -1,4 +1,5 @@
 //! Public operations and their observed execution boundaries.
+use super::plain_ready::QuietStart;
 use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
@@ -819,6 +820,26 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         options: Option<EntryOptions>,
         runtime: &super::BlockingRuntime,
     ) -> Result<MaybeValue<V>> {
+        match self.quiet_lookup(key, options.as_ref(), None, CacheOperation::TryGet) {
+            QuietStart::Ready(ready) => return ready.finish(key, None, MaybeValue::from_value),
+            QuietStart::Owned {
+                observation,
+                permit,
+            } => {
+                return runtime.run(self.prepare_read(
+                    ReadOperation {
+                        key: self.lookup_key(key, Arc::from(key)),
+                        options: None,
+                        cancellation: None,
+                        observation: observation.into_owned(),
+                        permit,
+                    },
+                    L2ReadPolicy::PreserveFailure,
+                    std::convert::identity,
+                ));
+            }
+            QuietStart::General => {}
+        }
         if options.is_some() || !self.inner.native_inline_read() {
             return runtime.run(self.read(key, options));
         }
@@ -885,30 +906,49 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         policy: L2ReadPolicy,
         complete: impl FnOnce(MaybeValue<V>) -> T + Send + 'static,
     ) -> Result<T> {
-        let (observation, full, permit, resolved) = match self.start_lookup(
-            key,
-            options.as_ref(),
-            token.as_ref(),
-            operation,
-            LookupMode::Read,
-        ) {
-            LookupStart::Ready(ready) => {
-                return ready.finish(token.as_ref(), &self.inner.events, move |value| {
-                    complete(MaybeValue::from_value(value))
-                });
-            }
-            LookupStart::Owned {
-                observation,
-                key,
-                permit,
-                resolved,
-            } => (
-                observation.into_owned(),
-                Arc::<str>::from(key.as_ref()),
-                permit,
-                resolved,
-            ),
-        };
+        // Both probes finish or transfer their thread-bound guard synchronously.
+        // No borrowed admission may remain in a parked, transferable future.
+        let (observation, full, permit, resolved) =
+            match self.quiet_lookup(key, options.as_ref(), token.as_ref(), operation) {
+                QuietStart::Ready(ready) => {
+                    return ready.finish(key, token.as_ref(), move |value| {
+                        complete(MaybeValue::from_value(value))
+                    });
+                }
+                QuietStart::Owned {
+                    observation,
+                    permit,
+                } => (
+                    observation.into_owned(),
+                    Arc::<str>::from(key),
+                    permit,
+                    None,
+                ),
+                QuietStart::General => match self.start_lookup(
+                    key,
+                    options.as_ref(),
+                    token.as_ref(),
+                    operation,
+                    LookupMode::Read,
+                ) {
+                    LookupStart::Ready(ready) => {
+                        return ready.finish(token.as_ref(), &self.inner.events, move |value| {
+                            complete(MaybeValue::from_value(value))
+                        });
+                    }
+                    LookupStart::Owned {
+                        observation,
+                        key,
+                        permit,
+                        resolved,
+                    } => (
+                        observation.into_owned(),
+                        Arc::<str>::from(key.as_ref()),
+                        permit,
+                        resolved,
+                    ),
+                },
+            };
         self.prepare_read(
             ReadOperation {
                 key: self.lookup_key(key, full),

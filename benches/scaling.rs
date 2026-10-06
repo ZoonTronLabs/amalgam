@@ -277,6 +277,26 @@ fn ready_costs() {
     use amalgam::Clock;
     println!("component,ns_per_op");
     cost("system_clock", || amalgam::SystemClock.now().ticks() as u64);
+    cost("system_time", || {
+        black_box(std::time::SystemTime::now());
+        1
+    });
+    cost("system_duration", || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    });
+    let hash = std::collections::hash_map::RandomState::new();
+    cost("key_hash", || {
+        use std::hash::BuildHasher;
+        hash.hash_one(black_box("key-0"))
+    });
+    let active = std::sync::atomic::AtomicUsize::new(0);
+    cost("counter_pair", || {
+        active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) as u64
+    });
     cost("monotonic_clock", || {
         black_box(Instant::now());
         1

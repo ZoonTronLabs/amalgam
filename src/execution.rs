@@ -189,10 +189,17 @@ trait CancelWork: Send + Sync {
 
 const ACTIVE_STRIPES: usize = 64;
 #[repr(align(128))]
-struct ActiveStripe(AtomicUsize);
+struct ActiveStripe {
+    owner: AtomicUsize,
+    local: AtomicUsize,
+    shared: AtomicUsize,
+}
 #[derive(Clone, Copy)]
-struct StripeIndex(usize);
-static NEXT_STRIPE: AtomicUsize = AtomicUsize::new(0);
+struct StripeIndex {
+    position: usize,
+    owner: std::num::NonZeroUsize,
+}
+static NEXT_STRIPE: AtomicUsize = AtomicUsize::new(1);
 thread_local! {
     // Const TLS has neither lazy runtime initialization nor a destructor.
     // The shared allocator is touched once per thread, never once per lookup.
@@ -202,7 +209,15 @@ fn current_stripe() -> StripeIndex {
     ACTIVE_STRIPE.with(|cached| match cached.get() {
         Some(index) => index,
         None => {
-            let index = StripeIndex(NEXT_STRIPE.fetch_add(1, Ordering::Relaxed) % ACTIVE_STRIPES);
+            let Some(owner) =
+                std::num::NonZeroUsize::new(NEXT_STRIPE.fetch_add(1, Ordering::Relaxed))
+            else {
+                unreachable!("the process cannot create usize::MAX threads");
+            };
+            let index = StripeIndex {
+                position: owner.get() % ACTIVE_STRIPES,
+                owner,
+            };
             cached.set(Some(index));
             index
         }
@@ -210,10 +225,12 @@ fn current_stripe() -> StripeIndex {
 }
 
 pub(crate) struct Scopes {
-    // Admission increments its stripe before reading closing; shutdown sets
+    // Admission publishes its stripe before reading closing; shutdown publishes
     // closing before scanning every stripe. SeqCst preserves the same Dekker
-    // argument for each stripe on weak-memory CPUs. No shared RMW is needed
-    // between readers assigned to different stripes.
+    // argument on weak-memory CPUs. Thread-bound guards use a single-writer
+    // count; transferable work and thread-index collisions use a separate RMW
+    // count. A non-Send guard prevents moving a local reservation to a writer
+    // thread, so releasing local activity needs only a Release store.
     closing: AtomicBool,
     scopes: Mutex<VecDeque<Weak<dyn CancelWork>>>,
     changed: Notify,
@@ -225,37 +242,64 @@ impl Scopes {
             closing: AtomicBool::new(false),
             scopes: Mutex::new(VecDeque::new()),
             changed: Notify::new(),
-            active: std::array::from_fn(|_| ActiveStripe(AtomicUsize::new(0))),
+            active: std::array::from_fn(|_| ActiveStripe {
+                owner: AtomicUsize::new(0),
+                local: AtomicUsize::new(0),
+                shared: AtomicUsize::new(0),
+            }),
         })
     }
     pub(crate) fn is_closed(&self) -> bool {
         self.closing.load(Ordering::SeqCst)
     }
-    fn activity(&self) -> Activity<'_> {
+    fn activity(&self) -> ThreadActivity<'_> {
         let stripe = current_stripe();
-        self.active[stripe.0].0.fetch_add(1, Ordering::SeqCst);
-        Activity::Borrowed(self, stripe)
+        let counter = &self.active[stripe.position];
+        let owner = counter.owner.load(Ordering::Acquire);
+        let local = owner == stripe.owner.get()
+            || owner == 0
+                && counter
+                    .owner
+                    .compare_exchange(0, stripe.owner.get(), Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok();
+        let activity = if local {
+            let count = counter.local.load(Ordering::Relaxed);
+            counter.local.store(count + 1, Ordering::SeqCst);
+            Activity::Local(self, stripe)
+        } else {
+            counter.shared.fetch_add(1, Ordering::SeqCst);
+            Activity::Shared(self, stripe)
+        };
+        ThreadActivity {
+            activity,
+            _thread: std::marker::PhantomData,
+        }
     }
     fn idle(&self) -> bool {
         // Check zero directly: a summed count could overflow, and drainage
         // needs only the absence of work, not a globally coherent total.
-        self.active
-            .iter()
-            .all(|stripe| stripe.0.load(Ordering::SeqCst) == 0)
+        self.active.iter().all(|stripe| {
+            stripe.local.load(Ordering::SeqCst) == 0 && stripe.shared.load(Ordering::SeqCst) == 0
+        })
     }
     /// A synchronous operation has no parked future to own. Count it through
     /// every user callback so close rejects its result and shutdown drains it.
     pub(crate) fn inline(&self) -> InlinePermit<'_> {
         let activity = self.activity();
-        InlinePermit { activity }
+        InlinePermit {
+            activity: InlineActivity::Thread(activity),
+        }
     }
     /// Transfers synchronous completion ownership through an internal result.
     /// It retains only the scope counter, never the public cache lifetime.
-    pub(crate) fn inline_owned(self: &Arc<Self>) -> InlinePermit<'static> {
+    pub(crate) fn inline_owned(self: &Arc<Self>) -> OwnedInlinePermit {
         let stripe = current_stripe();
-        self.active[stripe.0].0.fetch_add(1, Ordering::SeqCst);
-        InlinePermit {
-            activity: Activity::Owned(Arc::clone(self), stripe),
+        self.active[stripe.position]
+            .shared
+            .fetch_add(1, Ordering::SeqCst);
+        OwnedInlinePermit {
+            registry: Arc::clone(self),
+            stripe,
         }
     }
     pub(crate) fn execution<T: Send + 'static>(
@@ -348,41 +392,92 @@ impl Scopes {
 }
 
 enum Activity<'a> {
-    Borrowed(&'a Scopes, StripeIndex),
-    Owned(Arc<Scopes>, StripeIndex),
+    Local(&'a Scopes, StripeIndex),
+    Shared(&'a Scopes, StripeIndex),
 }
 impl Activity<'_> {
     fn registry(&self) -> &Scopes {
         match self {
-            Self::Borrowed(registry, _) => registry,
-            Self::Owned(registry, _) => registry,
-        }
-    }
-    fn stripe(&self) -> StripeIndex {
-        match self {
-            Self::Borrowed(_, stripe) | Self::Owned(_, stripe) => *stripe,
+            Self::Local(registry, _) | Self::Shared(registry, _) => registry,
         }
     }
 }
-impl Drop for Activity<'_> {
+struct ThreadActivity<'a> {
+    activity: Activity<'a>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl Drop for ThreadActivity<'_> {
     fn drop(&mut self) {
-        let registry = self.registry();
-        // An owned permit can move to another thread. Release the original
-        // admission stripe, not the destination thread's cached index.
-        if registry.active[self.stripe().0]
-            .0
+        let idle = match self.activity {
+            Activity::Local(registry, stripe) => {
+                // Only this thread modifies local; nested callbacks are counted.
+                let counter = &registry.active[stripe.position].local;
+                let count = counter.load(Ordering::Relaxed);
+                counter.store(count - 1, Ordering::Release);
+                count == 1
+            }
+            Activity::Shared(registry, stripe) => {
+                registry.active[stripe.position]
+                    .shared
+                    .fetch_sub(1, Ordering::SeqCst)
+                    == 1
+            }
+        };
+        if idle && self.activity.registry().is_closed() {
+            self.activity.registry().changed.notify_waiters();
+        }
+    }
+}
+pub(crate) struct OwnedInlinePermit {
+    registry: Arc<Scopes>,
+    stripe: StripeIndex,
+}
+impl OwnedInlinePermit {
+    pub(crate) fn admit(&self) -> Result<()> {
+        if self.registry.is_closed() {
+            Err(Error::CacheClosed)
+        } else {
+            Ok(())
+        }
+    }
+    pub(crate) fn status(&self, token: Option<&FactoryCancellation>) -> Result<()> {
+        status(&self.registry, token)
+    }
+}
+impl Drop for OwnedInlinePermit {
+    fn drop(&mut self) {
+        // A transferred reservation always releases the original shared stripe.
+        if self.registry.active[self.stripe.position]
+            .shared
             .fetch_sub(1, Ordering::SeqCst)
             == 1
-            && registry.is_closed()
+            && self.registry.is_closed()
         {
-            registry.changed.notify_waiters();
+            self.registry.changed.notify_waiters();
+        }
+    }
+}
+enum InlineActivity<'a> {
+    Thread(ThreadActivity<'a>),
+    Owned(OwnedInlinePermit),
+}
+impl InlineActivity<'_> {
+    fn registry(&self) -> &Scopes {
+        match self {
+            Self::Thread(activity) => activity.activity.registry(),
+            Self::Owned(permit) => &permit.registry,
         }
     }
 }
 pub(crate) struct InlinePermit<'a> {
-    activity: Activity<'a>,
+    activity: InlineActivity<'a>,
 }
 impl InlinePermit<'_> {
+    pub(crate) fn from_owned(permit: OwnedInlinePermit) -> Self {
+        Self {
+            activity: InlineActivity::Owned(permit),
+        }
+    }
     pub(crate) fn admit(&self) -> Result<()> {
         if self.activity.registry().is_closed() {
             Err(Error::CacheClosed)
@@ -390,19 +485,22 @@ impl InlinePermit<'_> {
             Ok(())
         }
     }
-    /// Cancellation has precedence over an inline value/clone result. Successful
-    /// completion linearizes at this check; callback drainage lasts until Drop.
+    /// Cancellation wins over a clone/completion result. Borrowed reservations
+    /// are thread-bound and released before handing a miss to owned execution.
     pub(crate) fn status(&self, token: Option<&FactoryCancellation>) -> Result<()> {
-        if let Some(reason) = token.and_then(FactoryCancellation::reason) {
-            return Err(Error::OperationCancelled { reason });
-        }
-        if self.activity.registry().is_closed() {
-            return Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown,
-            });
-        }
-        Ok(())
+        status(self.activity.registry(), token)
     }
+}
+fn status(registry: &Scopes, token: Option<&FactoryCancellation>) -> Result<()> {
+    if let Some(reason) = token.and_then(FactoryCancellation::reason) {
+        return Err(Error::OperationCancelled { reason });
+    }
+    if registry.is_closed() {
+        return Err(Error::OperationCancelled {
+            reason: Reason::CacheShutdown,
+        });
+    }
+    Ok(())
 }
 
 enum State<T> {
@@ -580,6 +678,42 @@ mod tests {
     use super::Scopes;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn nested_local_and_colliding_work_must_all_exit_before_drain() {
+        let scopes = Scopes::new();
+        let original = super::current_stripe();
+        let outer = scopes.inline();
+        let inner = scopes.inline();
+        let other = super::StripeIndex {
+            position: original.position,
+            owner: std::num::NonZeroUsize::new(original.owner.get() + super::ACTIVE_STRIPES)
+                .unwrap(),
+        };
+        // Simulate the identifier of another thread colliding with this stripe.
+        // It must use shared accounting even though local activity is live.
+        super::ACTIVE_STRIPE.with(|cached| cached.set(Some(other)));
+        let collision = scopes.inline();
+        super::ACTIVE_STRIPE.with(|cached| cached.set(Some(original)));
+        scopes.close();
+        drop(outer);
+        let mut drain = std::pin::pin!(scopes.drained());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut drain)
+                .await
+                .is_err()
+        );
+        drop(inner);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), &mut drain)
+                .await
+                .is_err()
+        );
+        drop(collision);
+        tokio::time::timeout(Duration::from_secs(1), drain)
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn transferred_inline_work_drains_only_after_its_destination_releases_it() {

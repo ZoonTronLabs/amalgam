@@ -32,3 +32,8 @@ FusionCache with at most six allocations. `--gate all` also requires replacement
 `set` at most three quarters of FusionCache with at most three allocations.
 `--gate report` records all measurements without enforcing speed ratios. CI
 currently enforces the hot milestone; later milestones promote the gate.
+
+The report also includes `ready-costs.csv`, a diagnostic breakdown of clock,
+hash, counter and framework costs. Constant controlled/real-time clocks isolate
+components in that file only; paired speed gates always use the real system
+clock and the same public APIs.
