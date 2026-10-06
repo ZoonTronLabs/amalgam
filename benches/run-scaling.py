@@ -156,6 +156,7 @@ def main():
         "eight_core_scaling_verified": cpu_count >= 8 and scaling >= 6,
         "measurements": rows, "failures": failures,
     }
+    execute([str(binary), "--costs"], root, env, output / "ready-costs.csv")
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print("scenario threads Rust_ns FC_ns Rust/FC Rust_alloc/op")
     for row in rows:

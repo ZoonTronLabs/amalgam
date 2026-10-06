@@ -220,6 +220,10 @@ fn mutations(rt: &tokio::runtime::Runtime) {
     });
 }
 fn main() {
+    if std::env::args().any(|argument| argument == "--costs") {
+        ready_costs();
+        return;
+    }
     let rt = runtime();
     let cache = cache();
     let keys: Vec<_> = (0..8).map(|id| format!("key-{id}")).collect();
@@ -243,4 +247,87 @@ fn main() {
     rt.block_on(cache.shutdown()).unwrap();
     synchronous_hit();
     mutations(&rt);
+}
+
+fn cost(label: &str, mut operation: impl FnMut() -> u64) {
+    for _ in 0..WARMUP {
+        black_box(operation());
+    }
+    let began = Instant::now();
+    let mut checksum = 0_u64;
+    for _ in 0..OPERATIONS {
+        checksum = checksum.wrapping_add(black_box(operation()));
+    }
+    black_box(checksum);
+    println!(
+        "{label},{:.3}",
+        began.elapsed().as_nanos() as f64 / OPERATIONS as f64
+    );
+}
+struct CostClock(amalgam::ClockTiming);
+impl amalgam::Clock for CostClock {
+    fn now(&self) -> amalgam::Timestamp {
+        amalgam::Timestamp::from_ticks(10_000_000_000)
+    }
+    fn timing_model(&self) -> amalgam::ClockTiming {
+        self.0
+    }
+}
+fn ready_costs() {
+    use amalgam::Clock;
+    println!("component,ns_per_op");
+    cost("system_clock", || amalgam::SystemClock.now().ticks() as u64);
+    cost("monotonic_clock", || {
+        black_box(Instant::now());
+        1
+    });
+    let duration = Duration::new(1_790_000_000, 123_456_789);
+    cost("duration_ticks", || {
+        amalgam::time::duration_to_ticks(black_box(duration)) as u64
+    });
+    let rt = runtime();
+    for (label, clock) in [
+        (
+            "controlled",
+            Arc::new(CostClock(amalgam::ClockTiming::Controlled)) as Arc<dyn Clock>,
+        ),
+        (
+            "physical",
+            Arc::new(CostClock(amalgam::ClockTiming::RealTime)) as Arc<dyn Clock>,
+        ),
+        ("system", Arc::new(amalgam::SystemClock) as Arc<dyn Clock>),
+    ] {
+        let builder = || {
+            Cache::builder()
+                .clock(clock.clone())
+                .default_options(EntryOptions::new(Duration::from_secs(3600)))
+        };
+        let cache = builder().build();
+        rt.block_on(async {
+            cache
+                .try_set("cost", 7_u64)
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+        });
+        rt.block_on(async {
+            cost(&format!("{label}_async"), || {
+                let mut future = std::pin::pin!(cache.read("cost", None));
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                match std::future::Future::poll(future.as_mut(), &mut context) {
+                    std::task::Poll::Ready(value) => value.unwrap().into_value().unwrap(),
+                    std::task::Poll::Pending => panic!("a warmed read must be ready"),
+                }
+            });
+        });
+        rt.block_on(cache.shutdown()).unwrap();
+        let native = BlockingCache::from_builder(builder()).unwrap();
+        native.try_set("cost", 7_u64).unwrap().wait().unwrap();
+        cost(&format!("{label}_native"), || {
+            native.read("cost", None).unwrap().into_value().unwrap()
+        });
+        native.shutdown().unwrap();
+    }
 }

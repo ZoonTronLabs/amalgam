@@ -180,6 +180,7 @@ jobs:
           name: scaling-report
           path: |
             /tmp/amalgam-scaling/report.json
+            /tmp/amalgam-scaling/ready-costs.csv
             /tmp/amalgam-scaling/pair-*.csv
             /tmp/amalgam-scaling/pair-*.stderr
           retention-days: 7
