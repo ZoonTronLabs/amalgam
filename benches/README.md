@@ -38,3 +38,5 @@ hash, counter and framework costs. Constant clocks isolate framework and
 physical-expiry overhead. Default live-clock reads and explicitly injected system
 UTC reads are reported separately. The performance gate uses the actual cache's
 default live clock and the same public APIs; constant clocks are diagnostic only.
+
+The report records available physical cores separately from logical CPUs. Eight-core qualification requires at least eight reported physical cores and sixfold scaling; unavailable topology remains unverified. The hosted-runner scaling floor and all relative FusionCache budgets remain unchanged.

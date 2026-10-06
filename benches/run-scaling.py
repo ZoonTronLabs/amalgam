@@ -57,6 +57,35 @@ def measurements(output, allocation_column):
     return rows
 
 
+def cpu_topology(available):
+    # Keep reported physical cores separate from logical scheduling capacity.
+    # Unavailable topology is unknown, never proof of eight-core scaling.
+    physical = None
+    model = None
+    if platform.system() == "Linux":
+        affinity = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else set(range(available))
+        try:
+            rows = []
+            for block in Path("/proc/cpuinfo").read_text().split("\n\n"):
+                row = dict(line.split(":", 1) for line in block.splitlines() if ":" in line)
+                row = {key.strip(): value.strip() for key, value in row.items()}
+                if "processor" in row and int(row["processor"]) in affinity:
+                    rows.append(row)
+            if len(rows) == len(affinity) and all("physical id" in row and "core id" in row for row in rows):
+                physical = len({(row["physical id"], row["core id"]) for row in rows})
+            if rows:
+                model = rows[0].get("model name")
+        except (OSError, ValueError):
+            pass
+    elif platform.system() == "Darwin":
+        try:
+            result = subprocess.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True, text=True, check=True)
+            physical = min(int(result.stdout.strip()), available)
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    return {"physical_cores_available": physical, "logical_cpus_available": available, "model": model}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pairs", type=int, default=7)
@@ -139,6 +168,7 @@ def main():
             if by_key[key]["rust_over_fusion"] > limit:
                 failures.append(f"{key}: {by_key[key]['rust_over_fusion']:.3f} x FC exceeds {limit:.2f}")
     cpu_count = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+    topology = cpu_topology(cpu_count)
     scaling = by_key[("distinct", 1)]["rust_ns"] / by_key[("distinct", 8)]["rust_ns"]
     # An oversubscribed hosted runner cannot demonstrate eight-core scaling.
     # It still runs all eight scenarios and checks the same relative FC budgets.
@@ -147,13 +177,13 @@ def main():
         failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {cpu_count} available CPUs")
     report = {
         "gate": args.gate, "pairs": args.pairs, "environment": {
-            "platform": platform.platform(), "available_cpus": cpu_count,
+            "platform": platform.platform(), "available_cpus": cpu_count, "cpu_topology": topology,
             "rust": execute(["rustc", "--version", "--verbose"], root, env).stdout.strip(),
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),
             "dotnet_tiered_compilation": "0", "fusion_identity": identity,
         }, "sources_sha256": frozen, "binaries_sha256": {"rust": digest(binary), "fusion_fixture": digest(reference)},
         "distinct_scaling": scaling, "scaling_limit": scaling_limit,
-        "eight_core_scaling_verified": cpu_count >= 8 and scaling >= 6,
+        "eight_core_scaling_verified": (topology["physical_cores_available"] or 0) >= 8 and scaling >= 6,
         "measurements": rows, "failures": failures,
     }
     execute([str(binary), "--costs"], root, env, output / "ready-costs.csv")

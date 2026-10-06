@@ -1,5 +1,6 @@
 //! Public operations and their observed execution boundaries.
 use super::plain_ready::QuietStart;
+use super::read_request::{ReadRequest, ReadStart};
 use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
@@ -803,13 +804,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
 
     /// Canonical read-only L1/L2 lookup. Expected failures retain their typed channel.
-    pub async fn read(
+    pub fn read<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
+        key: K,
         options: Option<EntryOptions>,
-    ) -> Result<MaybeValue<V>> {
-        self.read_impl(key.as_ref(), options, None, CacheOperation::TryGet)
-            .await
+    ) -> impl Future<Output = Result<MaybeValue<V>>> {
+        ReadRequest::new(self, key, options, None)
     }
     // A ready memory lookup borrows exactly the async admission/observation
     // path, but needs neither runtime entry nor block_in_place. True misses
@@ -840,6 +840,16 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
             QuietStart::General => {}
         }
+        self.native_read_general(key, options, runtime)
+    }
+    #[cold]
+    #[inline(never)]
+    fn native_read_general(
+        &self,
+        key: &str,
+        options: Option<EntryOptions>,
+        runtime: &super::BlockingRuntime,
+    ) -> Result<MaybeValue<V>> {
         if options.is_some() || !self.inner.native_inline_read() {
             return runtime.run(self.read(key, options));
         }
@@ -866,36 +876,86 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
     }
     /// Canonical read with explicit cancellation.
-    pub async fn read_cancellable(
+    pub fn read_cancellable<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
+        key: K,
         options: Option<EntryOptions>,
         cancellation: FactoryCancellation,
-    ) -> Result<MaybeValue<V>> {
-        self.read_impl(
-            key.as_ref(),
-            options,
-            Some(cancellation),
-            CacheOperation::TryGet,
-        )
-        .await
+    ) -> impl Future<Output = Result<MaybeValue<V>>> {
+        ReadRequest::new(self, key, options, Some(cancellation))
     }
-    async fn read_impl(
+    pub(super) fn begin_read(
         &self,
         key: &str,
-        options: Option<EntryOptions>,
+        options: Option<Box<EntryOptions>>,
         token: Option<FactoryCancellation>,
-        operation: CacheOperation,
-    ) -> Result<MaybeValue<V>> {
-        self.read_complete(
+    ) -> ReadStart<V> {
+        match self.quiet_lookup(
             key,
-            options,
-            token,
+            options.as_deref(),
+            token.as_ref(),
+            CacheOperation::TryGet,
+        ) {
+            QuietStart::Ready(ready) => {
+                ReadStart::Ready(ready.finish(key, token.as_ref(), MaybeValue::from_value))
+            }
+            QuietStart::Owned {
+                observation,
+                permit,
+            } => self.pending_read(ReadOperation {
+                key: self.lookup_key(key, Arc::from(key)),
+                options: options.map(|options| *options),
+                cancellation: token,
+                observation: observation.into_owned(),
+                permit,
+            }),
+            QuietStart::General => self.begin_general_read(key, options, token),
+        }
+    }
+    #[cold]
+    #[inline(never)]
+    fn begin_general_read(
+        &self,
+        key: &str,
+        options: Option<Box<EntryOptions>>,
+        token: Option<FactoryCancellation>,
+    ) -> ReadStart<V> {
+        match self.start_lookup(
+            key,
+            options.as_deref(),
+            token.as_ref(),
+            CacheOperation::TryGet,
+            LookupMode::Read,
+        ) {
+            LookupStart::Ready(ready) => ReadStart::Ready(ready.finish(
+                token.as_ref(),
+                &self.inner.events,
+                MaybeValue::from_value,
+            )),
+            LookupStart::Owned {
+                observation,
+                key: full,
+                permit,
+                resolved,
+            } => self.pending_read(ReadOperation {
+                key: self.lookup_key(key, Arc::from(full.as_ref())),
+                options: resolved
+                    .map(|options| *options)
+                    .or_else(|| options.map(|options| *options)),
+                cancellation: token,
+                observation: observation.into_owned(),
+                permit,
+            }),
+        }
+    }
+    #[cold]
+    #[inline(never)]
+    fn pending_read(&self, operation: ReadOperation<'_>) -> ReadStart<V> {
+        ReadStart::Pending(Box::pin(self.prepare_read(
             operation,
             L2ReadPolicy::PreserveFailure,
             std::convert::identity,
-        )
-        .await
+        )))
     }
     async fn read_complete<T: Send + 'static>(
         &self,

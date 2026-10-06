@@ -50,6 +50,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Canonical read queries carry a lazy input instead of reserving the asynchronous preparation frame on every hit. They create owned asynchronous work only after a real miss, preserving cancellation and observation; explicit per-call option snapshots pay for their own storage.
+
 - Built-in standalone caches use one UTC-anchored monotonic time sample for
   ready-read freshness and expiry. Local duration lifetimes remain steady across
   civil-clock corrections. Hybrid and external components, plus explicitly
