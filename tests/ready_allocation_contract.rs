@@ -127,3 +127,35 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
         "warmed ready reads allocated {allocations} blocks"
     );
 }
+
+#[test]
+fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
+    let cache = amalgam::BlockingCache::<u64>::from_builder(
+        Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
+    )
+    .unwrap();
+    cache.try_set("key", 19).unwrap().wait().unwrap();
+    for _ in 0..1000 {
+        assert_eq!(
+            cache
+                .get_or_set("key", |_| panic!("warm value invoked factory"))
+                .unwrap(),
+            19
+        );
+    }
+    let allocations = measure_allocations(|| {
+        for _ in 0..1000 {
+            assert_eq!(
+                cache
+                    .get_or_set("key", |_| panic!("warm value invoked factory"))
+                    .unwrap(),
+                19
+            );
+        }
+    });
+    cache.shutdown().unwrap();
+    assert_eq!(
+        allocations, 0,
+        "native warm factories allocated {allocations} unused blocks"
+    );
+}

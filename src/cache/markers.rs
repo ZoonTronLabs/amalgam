@@ -1368,7 +1368,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let marker = outcome.marker().clone();
             self.seed_marker(&marker, &opts).await?;
             if matches!(kind, MarkerKind::ClearRemove) {
-                self.memory.invalidate_all();
+                self.memory.invalidate_all()?;
             }
             match &kind {
                 MarkerKind::Tag(tag) => self.emit(CacheEvent::RemoveByTag {
@@ -1382,7 +1382,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 marker,
             )?);
             if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
-                self.memory.invalidate_all();
+                self.memory.invalidate_all()?;
                 self.seed_marker(
                     &StoredMarker::new(MarkerKind::ClearRemove, clear_remove),
                     &opts,

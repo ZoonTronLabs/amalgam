@@ -68,5 +68,6 @@ fallback, cause preservation, caller cancellation/drop, hard factory timeout,
 background guard retention, entry/marker namespace separation during a cold L2
 flight, value/marker eager attempts, native/async views, shared ownership and
 interrupted/idempotent teardown. Broader custom-provider/native option matrices
-remain part of the full contract inventory. Pluggable L1 is still missing; this
-addition does not complete that family or full FusionCache functionality.
+remain part of the full contract inventory. [Supplied value L1](MEMORY_STORAGE.md)
+is also implemented; the wider family and full FusionCache functionality remain
+open.

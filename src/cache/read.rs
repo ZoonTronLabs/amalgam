@@ -23,7 +23,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> Result<L1Read<V>> {
         let captured = self.inner.epoch.load(Ordering::Acquire);
         let now = self.inner.clock.now();
-        let Some(entry) = self.memory.get_at(key, now).await else {
+        let Some(entry) = self.memory.get_at(key, now).await? else {
             self.memory.emit_layer_lazy(|| {
                 LayerEvent::Memory(MemoryEvent::Miss {
                     key: Arc::clone(key),
@@ -39,7 +39,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         });
         self.reconcile_controlled_markers(&entry, cancellation)
             .await?;
-        self.ensure_health();
+        self.ensure_health()?;
         cancellation.check()?;
         let now = self.inner.clock.now();
         if self.inner.epoch.load(Ordering::Acquire) != captured
@@ -50,7 +50,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         Ok(match self.tags(&entry) {
             TagVerdict::Remove => {
-                if self.memory.remove_if_same(key, &entry).await.is_some() {
+                if self.memory.remove_if_same(key, &entry).await?.is_some() {
                     self.memory.emit_layer_lazy(|| {
                         LayerEvent::Memory(MemoryEvent::Remove {
                             key: Arc::clone(key),
@@ -191,7 +191,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(None);
         };
         cancellation.check()?;
-        let hydration = self.hydration_fence(key).await;
+        let hydration = self.hydration_fence(key).await?;
         self.memory
             .component_read(crate::events::ComponentRead::Distributed);
         let bytes = backend.get(&self.inner.l2_key(key)).await?;
@@ -225,19 +225,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             hydration,
         }))
     }
-    async fn hydration_fence(&self, key: &str) -> HydrationFence<V> {
+    async fn hydration_fence(&self, key: &str) -> Result<HydrationFence<V>> {
         let lane = self.inner.lanes.get(key);
         let fence = {
             let Ok(_guard) = Arc::clone(&lane.lock).try_lock_owned() else {
                 // A read overlapping an already started commit may return its
                 // snapshot, but cannot install it after that commit completes.
-                return HydrationFence::ConcurrentMutation;
+                return Ok(HydrationFence::ConcurrentMutation);
             };
             let _guard = self.memory.guard(_guard);
             lane.snapshot(&self.inner.epoch)
         };
-        let observed = self.memory.get_at(key, self.inner.clock.now()).await;
-        HydrationFence::Stable { fence, observed }
+        let observed = self.memory.get_at(key, self.inner.clock.now()).await?;
+        Ok(HydrationFence::Stable { fence, observed })
     }
     async fn hydrate(
         &self,
@@ -288,7 +288,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     local,
                     self.inner.clock.now(),
                 )
-                .await,
+                .await?,
         ))
     }
     pub(super) async fn read(
@@ -300,7 +300,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> Result<Observed<MaybeValue<V>>> {
         let opts = self.resolve_options(&key.raw, options)?;
         let key = key.full;
-        self.ensure_health();
+        self.ensure_health()?;
         let mut stale = None;
         if !opts.skip_memory_read() {
             match self.read_l1(&key, cancellation).await? {
@@ -510,7 +510,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let opts = self.resolve_options(&key.raw, options)?;
         let raw_key = key.raw;
         let key = key.full;
-        self.ensure_health();
+        self.ensure_health()?;
         let mut stale = None;
         if !opts.skip_memory_read() {
             match self.read_l1(&key, &caller).await? {
@@ -746,7 +746,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let value = self.copy(entry.value(), opts)?;
         if !opts.skip_memory_write() {
-            self.memory.insert_at(Arc::clone(key), entry, now).await;
+            self.memory.insert_at(Arc::clone(key), entry, now).await?;
         }
         self.emit(CacheEvent::FailSafeActivate {
             key: Arc::clone(key),

@@ -62,7 +62,7 @@ use crate::marker_snapshots::{
     MarkerSnapshotRenewal,
 };
 use crate::maybe::MaybeValue;
-use crate::memory::{MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore};
+use crate::memory::{CacheMemory, MemoryAdmission, MemoryExpiry, MemoryLimits};
 use crate::memory_locker::{LocalGuard, LocalLocks};
 use crate::observability::{OperationObservation, component_span};
 use crate::options::{
@@ -215,10 +215,25 @@ impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
         }
     }
 }
+// Capture factory ownership without allocating an unused retirement collector.
+struct WorkerSeed<V: Clone + Send + Sync + 'static> {
+    inner: Arc<CacheInner<V>>,
+    admission: WorkAdmission,
+}
+impl<V: Clone + Send + Sync + 'static> WorkerSeed<V> {
+    fn worker(self) -> Worker<V> {
+        Worker {
+            memory: self.inner.memory.for_operation(),
+            inner: self.inner,
+            admission: self.admission,
+        }
+    }
+}
+
 struct Worker<V: Clone + Send + Sync + 'static> {
     inner: Arc<CacheInner<V>>,
     admission: WorkAdmission,
-    memory: MemoryStore<V>,
+    memory: CacheMemory<V>,
 }
 impl<V: Clone + Send + Sync + 'static> Clone for Worker<V> {
     fn clone(&self) -> Self {
@@ -250,7 +265,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     owner: Weak<CacheInner<V>>,
     name: Arc<str>,
     instance_id: Arc<str>,
-    memory: MemoryStore<V>,
+    memory: CacheMemory<V>,
     locks: LocalLocks,
     lanes: Lanes,
     tags: TagRegistry,

@@ -295,7 +295,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .is_some_and(|recovery| recovery.is_current(ticket))
         {
             Ok(crate::ReplayOutcome::Superseded)
-        } else if !self.replay_admitted() {
+        } else if !self.replay_admitted()? {
             Ok(crate::ReplayOutcome::Paused)
         } else {
             self.commit_control_snapshot(
@@ -384,7 +384,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if !recovery.is_current(ticket) {
             return Ok(crate::ReplayOutcome::Superseded);
         }
-        if !self.replay_admitted() {
+        if !self.replay_admitted()? {
             return Ok(crate::ReplayOutcome::Paused);
         }
         cancellation.check()?;
@@ -463,7 +463,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if !recovery.is_current(ticket) {
             return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Superseded));
         }
-        if !self.replay_admitted() {
+        if !self.replay_admitted()? {
             return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Paused));
         }
         if let Some(backplane) = &self.inner.backplane {
@@ -512,7 +512,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     if !recovery.is_current(ticket) {
                         return Ok(crate::ReplayOutcome::Superseded);
                     }
-                    if !self.replay_admitted() {
+                    if !self.replay_admitted()? {
                         return Ok(crate::ReplayOutcome::Paused);
                     }
                     let effect = self
@@ -542,7 +542,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             if !recovery.is_current(ticket) {
                 return Ok(crate::ReplayOutcome::Superseded);
             }
-            if !self.replay_admitted() {
+            if !self.replay_admitted()? {
                 return Ok(crate::ReplayOutcome::Paused);
             }
             if let Some(backplane) = &self.inner.backplane {

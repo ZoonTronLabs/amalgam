@@ -65,6 +65,13 @@ eager refresh does not overwrite a warm value, and factory events are absent.
 These outcomes were executed against released FusionCache 2.9 and reproduced
 as Rust regressions before repair.
 
+Unreleased [supplied value L1](MEMORY_STORAGE.md) adds an actual in-process
+`MemoryStorage<V>` provider shared by native/async views. Immutable records,
+typed original failures, atomic conditional admission and prefix-scoped shared
+clear barriers preserve value eligibility and newer writes. Storage sharing does
+not imply shared factory ownership; providers own capacity and remain externally
+owned. Separate marker storage and broader provider matrices remain open.
+
 ## Observable behavior
 
 | Concern | Amalgam contract |

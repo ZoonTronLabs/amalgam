@@ -1,5 +1,6 @@
 //! Concurrent L1 storage with absolute expiry and optional capacity limits.
 //! Retired entries leave backend guards before observation or reclamation.
+mod custom;
 mod reclamation;
 mod sharded;
 use crate::entry::Entry;
@@ -9,6 +10,7 @@ use crate::events::{
 };
 use crate::options::Priority;
 use crate::time::{Clock, Timestamp};
+pub(crate) use custom::CacheMemory;
 use reclamation::Reclamation;
 pub(crate) use reclamation::{ReclamationFence, ReclamationGuard};
 use sharded::Sharded;
@@ -100,7 +102,7 @@ enum MemoryWriteEvent {
     Expire,
 }
 #[derive(Clone, Copy)]
-enum CaptureAdmission {
+pub(crate) enum CaptureAdmission {
     Armed,
     Unarmed,
 }
@@ -147,11 +149,8 @@ impl<V> Clone for Backend<V> {
 #[derive(Clone)]
 pub struct MemoryStore<V: Clone + Send + Sync + 'static> {
     backend: Backend<V>,
-    events: Events,
     clock: Option<Arc<dyn Clock>>,
-    evictions: MemoryEvictions<V>,
-    capture: EvictionCapture,
-    reclamation: Reclamation<V>,
+    observer: MemoryObserver<V>,
 }
 impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     /// Legacy entry-count configuration with real-time storage expiry.
@@ -190,59 +189,42 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         } else {
             Backend::Retained(Arc::new(Mutex::new(Retention::new(limits, mode))))
         };
-        let evictions = MemoryEvictions::with_capacity(events.capacity());
         Self {
             backend,
-            events,
             clock,
-            evictions,
-            capture: EvictionCapture::AtInsertion,
-            reclamation: Reclamation::Immediate,
+            observer: MemoryObserver::new(events, EvictionCapture::AtInsertion),
         }
     }
     /// Selects insertion-time or retirement-time original-value observation.
     #[must_use]
     pub fn with_eviction_capture(mut self, capture: EvictionCapture) -> Self {
-        self.capture = capture;
+        self.observer.capture = capture;
         self
     }
     /// Independent bounded subscriptions retain the actual stored value.
     pub fn evictions(&self) -> &MemoryEvictions<V> {
-        &self.evictions
+        &self.observer.evictions
     }
     pub(crate) fn for_operation(&self) -> Self {
         let mut memory = self.clone();
-        memory.reclamation = Reclamation::operation();
+        memory.observer.reclamation = Reclamation::operation();
         memory
     }
-    pub(crate) fn fence(&self) -> Option<Arc<dyn ReclamationFence>> {
-        self.reclamation.fence()
-    }
+    #[cfg(test)]
     pub(crate) fn guard<G>(&self, guard: G) -> ReclamationGuard<G> {
-        ReclamationGuard::new(guard, self.fence())
+        self.observer.guard(guard)
     }
     pub(crate) fn emit(&self, event: CacheEvent) {
-        self.events
-            .emit_deferred(event, |pending| self.reclamation.defer(pending));
-    }
-    pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> CacheEvent) {
-        self.events
-            .emit_deferred_lazy(make, |pending| self.reclamation.defer(pending));
+        self.observer.emit(event);
     }
     pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
-        self.events
-            .emit_layer_deferred(make, |pending| self.reclamation.defer(pending));
+        self.observer.emit_layer_lazy(make);
     }
-    pub(crate) fn component_read(&self, component: crate::events::ComponentRead) {
-        self.events
-            .component_read_deferred(component, |pending| self.reclamation.defer(pending));
+    fn component_read(&self, component: crate::events::ComponentRead) {
+        self.observer.component_read(component);
     }
     fn capture_admission(&self) -> CaptureAdmission {
-        if self.evictions.has_receivers() || self.events.has_layer_receivers() {
-            CaptureAdmission::Armed
-        } else {
-            CaptureAdmission::Unarmed
-        }
+        self.observer.capture_admission()
     }
     /// Reads under the selected physical expiration policy.
     pub async fn get(&self, key: &str) -> Option<Entry<V>> {
@@ -263,7 +245,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             MemoryRead::Present(entry) => Some(entry),
             MemoryRead::Absent => None,
             MemoryRead::Raced(entry) => {
-                self.reclamation.retain(entry);
+                self.observer.reclamation.retain(entry);
                 None
             }
             MemoryRead::Expired {
@@ -360,7 +342,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         event: MemoryWriteEvent,
     ) -> MemoryAdmission {
         if entry.is_physically_expired(now) {
-            self.reclamation.retain(entry);
+            self.observer.reclamation.retain(entry);
             return self.rejected(key, CapacityRejection::PhysicallyExpired);
         }
         let prepared = entry.at_insertion(now);
@@ -378,8 +360,8 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         }
         match commit.admission {
             MemoryAdmission::Rejected(reason) => {
-                self.reclamation.retain(prepared);
-                self.reclamation.retain(entry);
+                self.observer.reclamation.retain(prepared);
+                self.observer.reclamation.retain(entry);
                 self.rejected(key, reason)
             }
             MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
@@ -392,9 +374,9 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                 // A timestamp adjustment may create another V representation.
                 // Retain both through coordination, including concurrent clear.
                 if !entry.is_same_instance(&prepared) {
-                    self.reclamation.retain(entry);
+                    self.observer.reclamation.retain(entry);
                 }
-                self.reclamation.retain(prepared);
+                self.observer.reclamation.retain(prepared);
                 commit.admission
             }
         }
@@ -404,32 +386,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         MemoryAdmission::Rejected(reason)
     }
     fn retire(&self, retired: Retirement<V>) {
-        let Retirement {
-            key,
-            entry,
-            reason,
-            capture,
-        } = retired;
-        if reason.logical() {
-            self.emit(CacheEvent::Eviction {
-                key: Arc::clone(&key),
-            });
-        }
-        if let Some(reason) = reason.fact() {
-            self.emit_layer_lazy(|| {
-                LayerEvent::Memory(MemoryEvent::Eviction {
-                    key: Arc::clone(&key),
-                    reason,
-                })
-            });
-            if (matches!(capture, CaptureAdmission::Armed)
-                || self.capture == EvictionCapture::AtRetirement)
-                && let Some(old) = self.evictions.emit(&key, reason, &entry)
-            {
-                self.reclamation.retain(old);
-            }
-        }
-        self.reclamation.retain(entry);
+        self.observer.retire(retired);
     }
     fn removed(&self, key: &str, expected: Option<&Entry<V>>) -> Option<Entry<V>> {
         let retired = match &self.backend {
@@ -853,4 +810,89 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[derive(Clone)]
+pub(crate) struct MemoryObserver<V> {
+    events: Events,
+    evictions: MemoryEvictions<V>,
+    capture: EvictionCapture,
+    reclamation: Reclamation<V>,
+}
+impl<V: Clone + Send + Sync + 'static> MemoryObserver<V> {
+    fn new(events: Events, capture: EvictionCapture) -> Self {
+        Self {
+            evictions: MemoryEvictions::with_capacity(events.capacity()),
+            events,
+            capture,
+            reclamation: Reclamation::Immediate,
+        }
+    }
+    fn for_operation(&self) -> Self {
+        let mut observer = self.clone();
+        observer.reclamation = Reclamation::operation();
+        observer
+    }
+    fn for_owner(&self) -> Self {
+        let mut observer = self.clone();
+        observer.reclamation = Reclamation::Immediate;
+        observer
+    }
+    pub(crate) fn fence(&self) -> Option<Arc<dyn ReclamationFence>> {
+        self.reclamation.fence()
+    }
+    pub(crate) fn guard<G>(&self, guard: G) -> ReclamationGuard<G> {
+        ReclamationGuard::new(guard, self.fence())
+    }
+    pub(crate) fn emit(&self, event: CacheEvent) {
+        self.events
+            .emit_deferred(event, |pending| self.reclamation.defer(pending));
+    }
+    pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> CacheEvent) {
+        self.events
+            .emit_deferred_lazy(make, |pending| self.reclamation.defer(pending));
+    }
+    pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
+        self.events
+            .emit_layer_deferred(make, |pending| self.reclamation.defer(pending));
+    }
+    pub(crate) fn component_read(&self, component: crate::events::ComponentRead) {
+        self.events
+            .component_read_deferred(component, |pending| self.reclamation.defer(pending));
+    }
+    fn capture_admission(&self) -> CaptureAdmission {
+        if self.evictions.has_receivers() || self.events.has_layer_receivers() {
+            CaptureAdmission::Armed
+        } else {
+            CaptureAdmission::Unarmed
+        }
+    }
+    fn retire(&self, retired: Retirement<V>) {
+        let Retirement {
+            key,
+            entry,
+            reason,
+            capture,
+        } = retired;
+        if reason.logical() {
+            self.emit(CacheEvent::Eviction {
+                key: Arc::clone(&key),
+            });
+        }
+        if let Some(reason) = reason.fact() {
+            self.emit_layer_lazy(|| {
+                LayerEvent::Memory(MemoryEvent::Eviction {
+                    key: Arc::clone(&key),
+                    reason,
+                })
+            });
+            if (matches!(capture, CaptureAdmission::Armed)
+                || self.capture == EvictionCapture::AtRetirement)
+                && let Some(old) = self.evictions.emit(&key, reason, &entry)
+            {
+                self.reclamation.retain(old);
+            }
+        }
+        self.reclamation.retain(entry);
+    }
 }

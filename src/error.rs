@@ -19,6 +19,12 @@ pub enum DrainOperation {
 /// A rejected cache configuration. Configuration is checked before work starts.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
+    /// Supplied storage owns capacity policy; built-in limits cannot be applied.
+    #[error("configure capacity on the supplied memory storage, not built-in limits")]
+    SuppliedMemoryWithBuiltinLimits,
+    /// Supplied storage must expose one stable shared generation identity.
+    #[error("memory storage returned different epoch identities")]
+    UnstableMemoryStorageEpoch,
     /// Local-only reconciliation cannot cover an external data/notification provider.
     #[error("local-only reconciliation requires memory-only storage and no backplane")]
     LocalReconciliationWithExternalStorage,
@@ -345,6 +351,9 @@ pub enum Error {
     /// A custom local memory locker failed.
     #[error(transparent)]
     MemoryLocker(#[from] crate::memory_locker::MemoryLockerError),
+    /// A supplied L1 failed, preserving its original cause.
+    #[error(transparent)]
+    MemoryStorage(#[from] crate::memory_storage::MemoryStorageError),
 
     /// Typed recovery construction/lifecycle failure.
     #[error(transparent)]

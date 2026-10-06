@@ -9,13 +9,14 @@ use super::{
 };
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
-    pub(super) fn replay_admitted(&self) -> bool {
-        self.ensure_health();
-        self.inner
+    pub(super) fn replay_admitted(&self) -> Result<bool> {
+        self.ensure_health()?;
+        Ok(self
+            .inner
             .backplane
             .as_ref()
             .and_then(|backplane| backplane.connection_state())
-            .is_none_or(|state| matches!(*state.borrow(), BackplaneState::Connected { .. }))
+            .is_none_or(|state| matches!(*state.borrow(), BackplaneState::Connected { .. })))
     }
     async fn replay_legacy(
         &self,
@@ -33,7 +34,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         match item.action {
             RecoveryAction::Set => {
-                if let Some(entry) = self.memory.get_at(&item.key, self.inner.clock.now()).await {
+                if let Some(entry) = self
+                    .memory
+                    .get_at(&item.key, self.inner.clock.now())
+                    .await?
+                {
                     let snapshot = DistributedSnapshot::from_entry_with_options(
                         &entry,
                         &self.inner.default_options,
@@ -150,7 +155,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let Some(recovery) = &self.inner.recovery else {
             return Ok(ReplayOutcome::Superseded);
         };
-        if !self.replay_admitted() {
+        if !self.replay_admitted()? {
             return Ok(ReplayOutcome::Paused);
         }
         match ticket.work() {
@@ -188,7 +193,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }
-                if !self.replay_admitted() {
+                if !self.replay_admitted()? {
                     return Ok(ReplayOutcome::Paused);
                 }
                 let reconciled = self.reconcile_replay(item, mutation, cancellation).await?;
@@ -198,7 +203,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }
-                if !self.replay_admitted() {
+                if !self.replay_admitted()? {
                     return Ok(ReplayOutcome::Paused);
                 }
                 let command = match mutation {
@@ -247,7 +252,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }
-                if !self.replay_admitted() {
+                if !self.replay_admitted()? {
                     return Ok(ReplayOutcome::Paused);
                 }
                 if let Some(command) = command
@@ -273,7 +278,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }
-                if !self.replay_admitted() {
+                if !self.replay_admitted()? {
                     return Ok(ReplayOutcome::Paused);
                 }
                 if matches!(
@@ -312,7 +317,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }
-                if !self.replay_admitted() {
+                if !self.replay_admitted()? {
                     return Ok(ReplayOutcome::Paused);
                 }
                 if *stage != MarkerReplay::AdvanceOnly

@@ -152,6 +152,19 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             },
         }
     }
+    pub(super) fn worker_seed(&self) -> super::WorkerSeed<V> {
+        super::WorkerSeed {
+            inner: Arc::clone(&self.inner),
+            admission: match &*self.lifetime {
+                PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {
+                    WorkAdmission::Ordinary
+                }
+                PublicLifetime::PluginAccess(access) => {
+                    WorkAdmission::Plugin(access.scopes(&self.inner.scopes))
+                }
+            },
+        }
+    }
     fn lookup_key(&self, raw: &str, full: Arc<str>) -> LookupKey {
         let raw = if self.inner.key_prefix.as_deref().is_none_or(str::is_empty) {
             Arc::clone(&full)
@@ -195,7 +208,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 observation.finish(OperationOutcome::from_error(&Error::CacheClosed));
                 return Err(Error::CacheClosed);
             }
-            self.worker().start_maintenance();
+            // Startup is monotonic; avoid a temporary collector once it is running.
+            if !self.inner.maintenance.load(Ordering::Acquire) {
+                self.worker().start_maintenance();
+            }
             let worker = self.worker();
             let completion_token = source.token();
             // The scope owns the observer too: a parked caller can be cancelled and
@@ -314,11 +330,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         if opts.skip_memory_read() {
             return Ok(None);
         }
-        context.ensure_health();
+        context.ensure_health()?;
         permit.status(token)?;
         let now = self.inner.clock.now();
         permit.status(token)?;
-        let entry = self.inner.memory.ready_at(key, now);
+        let entry = self.inner.memory.ready_at(key, now)?;
         permit.status(token)?;
         let Some(entry) = entry else {
             return Ok(None);
@@ -1252,9 +1268,24 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Runs explicit memory maintenance; does not claim background commit completion.
     pub async fn run_pending_tasks(&self) {
-        self.inner.memory.run_pending_tasks().await;
+        if let Err(error) = self.try_run_pending_tasks().await {
+            self.legacy_error(&error);
+        }
+    }
+    /// Runs maintenance, preserving an external L1 provider's typed failure.
+    pub async fn try_run_pending_tasks(&self) -> Result<()> {
+        self.inner.memory.run_pending_tasks().await?;
         self.inner.locks.clean_idle(256);
         self.inner.lanes.clean(256);
+        Ok(())
+    }
+    /// The supplied L1 provider, when one was explicitly configured.
+    pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {
+        self.inner.memory.provider()
+    }
+    /// Retained count/weight in the actual L1 keyspace, including shared users.
+    pub fn memory_usage(&self) -> Result<crate::MemoryUsage> {
+        Ok(self.inner.memory.usage()?)
     }
     /// Waits currently scheduled effects and their cleanup without closing the cache.
     pub async fn flush_pending(&self) -> Result<()> {

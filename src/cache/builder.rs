@@ -6,10 +6,10 @@ use super::{
     IdentityField, InitialPlugin, Instant, InvalidationStore, JitterSource, KeyModifierMode, Lanes,
     LeasePolicy, LeaseTtl, Lifecycle, LocalLocks, MarkerAccess, MarkerLifecycleAccess,
     MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryExpiry,
-    MemoryLimits, MemoryStore, Plugin, PluginContext, PluginHost, PublicLifetime,
-    RandomJitterSource, ReconciliationPolicy, RecoveryConfig, RecoveryExecutor,
-    RemoveByTagBehavior, Result, RuntimeComponent, Scopes, Storage, SystemClock, TagRegistry,
-    Tasks, Timeout, ValueCloner, validate_budget,
+    MemoryLimits, Plugin, PluginContext, PluginHost, PublicLifetime, RandomJitterSource,
+    ReconciliationPolicy, RecoveryConfig, RecoveryExecutor, RemoveByTagBehavior, Result,
+    RuntimeComponent, Scopes, Storage, SystemClock, TagRegistry, Tasks, Timeout, ValueCloner,
+    validate_budget,
 };
 
 /// Builder for a [`Cache`].
@@ -45,6 +45,7 @@ pub struct CacheBuilder<V> {
     reconciliation: Option<ReconciliationPolicy>,
     lock_shards: usize,
     memory_locker: Option<Arc<dyn crate::MemoryLocker>>,
+    memory_storage: Option<Arc<dyn crate::MemoryStorage<V>>>,
     remove_by_tag_behavior: RemoveByTagBehavior,
     events_capacity: usize,
     eviction_capture: crate::EvictionCapture,
@@ -89,6 +90,7 @@ impl<V> CacheBuilder<V> {
             reconciliation: None,
             lock_shards: 1024,
             memory_locker: None,
+            memory_storage: None,
             remove_by_tag_behavior: RemoveByTagBehavior::default(),
             events_capacity: 256,
             eviction_capture: crate::EvictionCapture::default(),
@@ -109,6 +111,13 @@ impl<V> CacheBuilder<V> {
             wait_for_initial_backplane_subscribe: true,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    /// Supplies the actual L1 keyspace. The provider owns capacity policy and
+    /// is shared by Arc; cache shutdown does not dispose a shared provider.
+    pub fn memory_storage(mut self, storage: Arc<dyn crate::MemoryStorage<V>>) -> Self {
+        self.memory_storage = Some(storage);
+        self
     }
 
     /// Selects when entries become eligible for original-value eviction events.
@@ -604,17 +613,20 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 )))
             }
         };
+        let memory = crate::memory::CacheMemory::new(
+            self.memory_storage,
+            MemoryLimits::new(self.max_capacity, self.max_weighted_capacity),
+            events.clone(),
+            Arc::clone(&clock),
+            expiry,
+            self.eviction_capture,
+            self.key_prefix.as_deref(),
+        )?;
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),
             name,
             instance_id,
-            memory: MemoryStore::with_clock_and_expiry(
-                MemoryLimits::new(self.max_capacity, self.max_weighted_capacity),
-                events.clone(),
-                Arc::clone(&clock),
-                expiry,
-            )
-            .with_eviction_capture(self.eviction_capture),
+            memory,
             locks,
             lanes: Lanes::new(),
             tags: TagRegistry::new(),
@@ -677,7 +689,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             lifetime: Arc::new(lifetime),
             inner,
         };
-        cache.worker().start_listener();
+        cache.worker().start_listener()?;
         for plugin in self.plugins {
             cache
                 .inner

@@ -138,7 +138,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             LocalCommit::Applied(LocalEffect::Stored(
                 self.memory
                     .insert_at(Arc::clone(&key), entry.clone(), self.inner.clock.now())
-                    .await,
+                    .await?,
             ))
         };
         let command = self.data_command(BackplaneAction::Set, &key, entry.meta().created(), &opts);
@@ -494,7 +494,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 Ok(LocalEffect::Stored(
                     self.memory
                         .insert_at(Arc::clone(key), entry, self.inner.clock.now())
-                        .await,
+                        .await?,
                 ))
             }
         }
@@ -564,15 +564,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         } else {
             match mutation {
                 KeyMutation::Remove => {
-                    self.memory.remove(&key).await;
+                    self.memory.remove(&key).await?;
                     LocalEffect::Removed
                 }
                 KeyMutation::Expire(_) => {
-                    if let Some(entry) = self.memory.get_at(&key, now).await {
+                    if let Some(entry) = self.memory.get_at(&key, now).await? {
                         let expired = entry.with_logical_expiration(now);
                         self.memory
                             .expire_if_unchanged(Arc::clone(&key), &entry, expired, now)
-                            .await;
+                            .await?;
                     }
                     LocalEffect::Expired
                 }

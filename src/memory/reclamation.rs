@@ -8,8 +8,12 @@ pub(super) struct Garbage<V> {
     state: Mutex<Retired<V>>,
 }
 struct Retired<V> {
-    entries: Vec<Entry<V>>,
+    entries: Vec<Retained<V>>,
     notifications: Vec<PendingPluginEvent>,
+}
+enum Retained<V> {
+    Entry(Entry<V>),
+    Observer(crate::MemoryEvictions<V>),
 }
 impl<V> Drop for Garbage<V> {
     fn drop(&mut self) {
@@ -20,7 +24,13 @@ impl<V> Drop for Garbage<V> {
         for event in std::mem::take(&mut state.notifications) {
             event.deliver();
         }
-        // Entries are reclaimed after callbacks; no coordination/queue lock survives.
+        for retained in std::mem::take(&mut state.entries) {
+            match retained {
+                Retained::Entry(entry) => drop(entry),
+                Retained::Observer(observer) => drop(observer),
+            }
+        }
+        // All resource destruction follows callbacks without a queue lock.
     }
 }
 impl<V: Send + Sync> ReclamationFence for Garbage<V> {}
@@ -54,7 +64,18 @@ impl<V: Send + Sync + 'static> Reclamation<V> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .entries
-                .push(entry),
+                .push(Retained::Entry(entry)),
+        }
+    }
+    pub(super) fn retain_observer(&self, observer: crate::MemoryEvictions<V>) {
+        match self {
+            Self::Immediate => drop(observer),
+            Self::Operation(owner) => owner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entries
+                .push(Retained::Observer(observer)),
         }
     }
     pub(super) fn defer(&self, event: PendingPluginEvent) {
@@ -140,7 +161,7 @@ mod tests {
                 None,
                 None,
             );
-            memory.reclamation.retain(entry);
+            memory.observer.reclamation.retain(entry);
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .build()
                 .unwrap();

@@ -20,11 +20,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let current = *state.borrow_and_update();
             match current {
                 BackplaneState::Connected { epoch } => {
-                    self.ensure_health();
+                    self.ensure_health()?;
                     return Ok(BackplaneReadiness::Acknowledged(epoch));
                 }
                 BackplaneState::Disconnected { .. } => {
-                    self.ensure_health();
+                    self.ensure_health()?;
                 }
                 BackplaneState::Stopped => {
                     return Err(Error::Backplane("backplane provider stopped".into()));
@@ -35,7 +35,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         }
     }
-    fn continuity_gap(&self) {
+    fn continuity_gap(&self) -> Result<()> {
         if self.inner.reconciliation.invalidates_on_gap() {
             #[allow(
                 deprecated,
@@ -52,26 +52,27 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 tracing::error!("cache continuity generation exhausted");
                 self.inner.close();
             }
-            self.memory.invalidate_all();
+            self.memory.invalidate_all()?;
             self.inner.marker_reads.invalidate();
         }
         if let Some(recovery) = &self.inner.recovery {
             recovery.suspend();
         }
+        Ok(())
     }
-    pub(super) fn ensure_health(&self) {
+    pub(super) fn ensure_health(&self) -> Result<()> {
         let Some(health) = self
             .inner
             .backplane
             .as_ref()
             .and_then(|backplane| backplane.connection_state())
         else {
-            return;
+            return Ok(());
         };
         let current = *health.borrow();
         let mut seen = lock(&self.inner.health_seen);
         if seen.as_ref() == Some(&current) {
-            return;
+            return Ok(());
         }
         let previous = seen.replace(current);
         // Serialize barrier transitions with the observed state. Otherwise a
@@ -109,13 +110,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         drop(seen);
         if invalidate {
-            self.memory.invalidate_all();
+            self.memory.invalidate_all()?;
             self.inner.marker_reads.invalidate();
         }
         if exhausted {
             tracing::error!("cache continuity generation exhausted");
             self.inner.close();
         }
+        Ok(())
     }
     pub(super) fn start_maintenance(&self) {
         if self.inner.maintenance.load(Ordering::Acquire)
@@ -146,7 +148,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     let Some(inner) = weak.upgrade() else {
                         return Ok(());
                     };
-                    inner.memory.run_pending_tasks().await;
+                    inner.memory.run_pending_tasks().await?;
                     if let MarkerReads::OptionsControlled(observations) = &inner.marker_reads {
                         observations.memory.run_pending_tasks().await;
                         observations.locks.clean_idle(64);
@@ -170,7 +172,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                             }
                         };
                         if reconcile {
-                            inner.memory.invalidate_all();
+                            inner.memory.invalidate_all()?;
                         }
                     }
                 }
@@ -184,9 +186,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             execution,
         );
     }
-    pub(super) fn start_listener(&self) {
+    pub(super) fn start_listener(&self) -> Result<()> {
         let Some(backplane) = &self.inner.backplane else {
-            return;
+            return Ok(());
         };
         let mut messages = backplane.subscribe();
         let mut health = backplane.connection_state();
@@ -199,12 +201,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         let Some(inner)=weak.upgrade()else{return Ok(());};let worker=Worker::ordinary(inner);
                         match result {
                             Ok(message)=>worker.apply_backplane(message).await?,
-                            Err(broadcast::error::RecvError::Lagged(_))=>{worker.continuity_gap();worker.ensure_health();if let Some(recovery)=&worker.inner.recovery {recovery.pause_after_reconnect()?;}},
-                            Err(broadcast::error::RecvError::Closed)=>{worker.continuity_gap();return Ok(());}
+                            Err(broadcast::error::RecvError::Lagged(_))=>{worker.continuity_gap()?;worker.ensure_health()?;if let Some(recovery)=&worker.inner.recovery {recovery.pause_after_reconnect()?;}},
+                            Err(broadcast::error::RecvError::Closed)=>{worker.continuity_gap()?;return Ok(());}
                         }
                     },
                     ()=health_changed(&mut health)=>{
-                        if let Some(inner)=weak.upgrade(){Worker::ordinary(inner).ensure_health();}else{return Ok(());}
+                        if let Some(inner)=weak.upgrade(){Worker::ordinary(inner).ensure_health()?;}else{return Ok(());}
                     }
                 }
             }
@@ -215,7 +217,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             self.inner.events.clone(),
             execution,
         );
-        self.ensure_health();
+        self.ensure_health()
     }
     async fn apply_backplane(&self, message: BackplaneMessage) -> Result<()> {
         if self.inner.ignore_incoming_backplane {
@@ -231,10 +233,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: received })
                     });
                 }
-                self.continuity_gap();
+                self.continuity_gap()?;
                 // A rejected inner frame loses history without disconnecting
                 // the transport. Re-enter reconciliation even at the same ACK.
-                if self.replay_admitted()
+                if self.replay_admitted()?
                     && let Some(recovery) = &self.inner.recovery
                 {
                     recovery.pause_after_reconnect()?;
@@ -273,7 +275,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     return Ok(());
                 }
                 let now = self.inner.clock.now();
-                let existing = self.memory.get_at(&key, now).await;
+                let existing = self.memory.get_at(&key, now).await?;
                 if message.action == BackplaneAction::Set {
                     self.memory.emit_layer_lazy(|| {
                         LayerEvent::Memory(match &existing {
@@ -299,7 +301,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }
                 match message.action {
                     BackplaneAction::Remove => {
-                        self.memory.remove(&key).await;
+                        self.memory.remove(&key).await?;
                     }
                     BackplaneAction::Expire => {
                         if let Some(entry) = existing {
@@ -311,7 +313,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                     expired,
                                     self.inner.clock.now(),
                                 )
-                                .await;
+                                .await?;
                         }
                     }
                     BackplaneAction::Set => {
@@ -377,7 +379,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                     local,
                                     worker.inner.clock.now(),
                                 )
-                                .await;
+                                .await?;
                         }
                     }
                     Err(
@@ -386,7 +388,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         return Err(error);
                     }
                     Ok(Some(_)) | Ok(None) | Err(_) => {
-                        worker.memory.remove_if_same(&key, &expected).await;
+                        worker.memory.remove_if_same(&key, &expected).await?;
                     }
                 }
                 Ok(())

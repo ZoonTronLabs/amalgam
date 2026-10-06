@@ -21,9 +21,9 @@ impl<V: Clone + Send + Sync + 'static> ReadyContext<'_, V> {
         }
     }
 
-    pub(super) fn ensure_health(&self) {
+    pub(super) fn ensure_health(&self) -> Result<()> {
         match self {
-            Self::Borrowed(_) => {}
+            Self::Borrowed(_) => Ok(()),
             Self::Retiring(worker) => worker.ensure_health(),
         }
     }

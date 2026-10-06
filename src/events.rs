@@ -129,6 +129,8 @@ pub enum OperationOutcome {
     FactoryError,
     /// A lock failed.
     LockError,
+    /// A supplied in-process storage operation failed.
+    MemoryError,
     /// A backend operation failed.
     DistributedError,
     /// A codec operation failed.
@@ -166,6 +168,7 @@ impl OperationOutcome {
             Self::CloneError => "clone_error",
             Self::FactoryError => "factory_error",
             Self::LockError => "lock_error",
+            Self::MemoryError => "memory_error",
             Self::DistributedError => "distributed_error",
             Self::CodecError => "codec_error",
             Self::BackplaneError => "backplane_error",
@@ -197,6 +200,10 @@ impl OperationOutcome {
                 crate::tags::MarkerError::Unsupported
                 | crate::tags::MarkerError::BlankWireVersion
                 | crate::tags::MarkerError::ZeroCapacity => Self::ConfigurationError,
+            },
+            crate::Error::MemoryStorage(error) => match error {
+                crate::MemoryStorageError::Provider { .. } => Self::MemoryError,
+                crate::MemoryStorageError::GenerationExhausted => Self::Rejected,
             },
             crate::Error::MemoryLocker(error) => match error {
                 crate::MemoryLockerError::Provider { .. } => Self::LockError,

@@ -253,10 +253,11 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             default_present: fallback.has_value(),
             lineage: self.runtime.lineage(),
         };
-        let worker = self.cache.worker();
+        let seed = self.cache.worker_seed();
         let runtime = self.runtime.clone();
-        let origin =
-            move |ctx: FactoryContext<V>| run_factory(worker, runtime, dispatch, factory, ctx);
+        let origin = move |ctx: FactoryContext<V>| {
+            run_factory(seed.worker(), runtime, dispatch, factory, ctx)
+        };
         self.runtime.run(
             self.cache
                 .get_or_set_impl(key, origin, options, tags, fallback, token),
@@ -414,6 +415,18 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     /// Performs explicit physical memory/idle-lock maintenance.
     pub fn run_pending_tasks(&self) {
         self.runtime.run(self.cache.run_pending_tasks());
+    }
+    /// Performs maintenance while preserving a supplied L1 provider failure.
+    pub fn try_run_pending_tasks(&self) -> Result<()> {
+        self.runtime.run(self.cache.try_run_pending_tasks())
+    }
+    /// The explicitly configured shared L1 provider.
+    pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {
+        self.cache.memory_storage()
+    }
+    /// Diagnostic usage of the actual L1 keyspace.
+    pub fn memory_usage(&self) -> Result<crate::MemoryUsage> {
+        self.cache.memory_usage()
     }
     /// The configured distributed byte store, if enabled.
     pub fn distributed_cache(&self) -> Option<&Arc<dyn DistributedCache>> {
