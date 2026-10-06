@@ -667,9 +667,17 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
             .iter()
             .any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Remove { .. })))
     );
+    let expected_remove = LayerEvent::Memory(MemoryEvent::Remove {
+        key: key(&format!("{prefix}k")),
+    });
+    let mut removal_seen = false;
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if !b.read("k", None).await.unwrap().has_value() {
+            let absent = !b.read("k", None).await.unwrap().has_value();
+            // Consume the bounded stream while waiting for the received frame
+            // to finish its physical effect; reads produce their own events.
+            removal_seen |= drain(&mut eb).contains(&expected_remove);
+            if absent && removal_seen {
                 break;
             }
             tokio::task::yield_now().await;
@@ -677,11 +685,7 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
     })
     .await
     .unwrap();
-    assert!(
-        drain(&mut eb).contains(&LayerEvent::Memory(MemoryEvent::Remove {
-            key: key(&format!("{prefix}k"))
-        }))
-    );
+    assert!(removal_seen);
     for node in nodes {
         node.shutdown().await.unwrap();
     }
