@@ -197,7 +197,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.execute_observed(observation, token, source, ObservationAdmission::New, work)
             .await
     }
-    fn execute_observed<T: Send + 'static>(
+    pub(super) fn execute_observed<T: Send + 'static>(
         &self,
         mut observation: OperationObservation,
         token: Option<FactoryCancellation>,
@@ -695,6 +695,20 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         fallback: MaybeValue<V>,
         cancellation: Option<FactoryCancellation>,
     ) -> Result<CacheValue<V>> {
+        match self.begin_origin(key, origin, options, tags, fallback, cancellation) {
+            super::inline_cold::Start::Ready(result) => result,
+            super::inline_cold::Start::Pending(work) => work.await,
+        }
+    }
+    fn begin_origin<O: CacheOrigin<V>>(
+        &self,
+        key: &str,
+        origin: O,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fallback: MaybeValue<V>,
+        cancellation: Option<FactoryCancellation>,
+    ) -> super::inline_cold::Start<V> {
         let (observation, full, permit, resolved) = match self.start_lookup(
             key,
             options.as_ref(),
@@ -712,34 +726,65 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 let _entered = span.enter();
                 let ready = self.ready_origin(ready, key, origin, tags);
                 drop((fallback, options));
-                return ready
-                    .finish(
-                        cancellation.as_ref(),
-                        &self.inner.events,
-                        std::convert::identity,
-                    )
-                    .map(|value| CacheValue {
-                        value,
-                        commit: CommitReceipt::Unchanged,
-                    });
+                return super::inline_cold::Start::Ready(
+                    ready
+                        .finish(
+                            cancellation.as_ref(),
+                            &self.inner.events,
+                            std::convert::identity,
+                        )
+                        .map(|value| CacheValue {
+                            value,
+                            commit: CommitReceipt::Unchanged,
+                        }),
+                );
             }
             LookupStart::Owned {
                 observation,
                 key,
                 permit,
                 resolved,
-            } => (
-                observation.into_owned(),
-                Arc::<str>::from(key.as_ref()),
-                permit,
-                resolved,
-            ),
+            } => {
+                if self.supports_inline_cold(resolved.as_deref().or(options.as_ref())) {
+                    let full: Arc<str> = Arc::from(key.as_ref());
+                    let raw = if self.inner.key_prefix.as_deref().is_none_or(str::is_empty) {
+                        Arc::clone(&full)
+                    } else {
+                        Arc::from(
+                            key.strip_prefix(self.inner.key_prefix.as_deref().unwrap_or(""))
+                                .unwrap_or(&key),
+                        )
+                    };
+                    let start = self.prepare_inline_cold(
+                        super::inline_cold::Input {
+                            keys: LookupKey { raw, full },
+                            origin,
+                            options: resolved
+                                .map(|options| *options)
+                                .or(options)
+                                .unwrap_or_else(|| self.inner.default_options.clone()),
+                            tags,
+                            caller: cancellation,
+                            unused: fallback,
+                        },
+                        observation,
+                        permit,
+                    );
+                    return start;
+                }
+                (
+                    observation.into_owned(),
+                    Arc::<str>::from(key.as_ref()),
+                    permit,
+                    resolved,
+                )
+            }
         };
         let worker = self.worker();
         let key = self.lookup_key(key, full);
         let source = CancellationSource::new();
         let caller = source.token();
-        self.execute_observed(
+        super::inline_cold::Start::Pending(Box::pin(self.execute_observed(
             observation,
             cancellation,
             source,
@@ -756,8 +801,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     )
                     .await
             },
-        )
-        .await
+        )))
     }
     fn ready_origin<'a, O: CacheOrigin<V>>(
         &self,
@@ -1149,57 +1193,74 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
         }
     }
-    /// Canonical set using resolved per-key options.
-    pub async fn try_set(&self, key: impl AsRef<str>, value: V) -> Result<MutationReceipt> {
-        self.try_set_full(key, value, None, Box::from([])).await
-    }
-    /// Canonical set with tags/options.
-    pub async fn try_set_full(
+    /// Canonical set using resolved per-key options, started on first poll.
+    pub fn try_set<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
+        key: K,
+        value: V,
+    ) -> impl Future<Output = Result<MutationReceipt>> {
+        super::mutation_request::MutationRequest::new(self, key, value, None, Box::from([]), None)
+    }
+    /// Canonical set with tags/options, started on first poll.
+    pub fn try_set_full<K: AsRef<str>>(
+        &self,
+        key: K,
         value: V,
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
-    ) -> Result<MutationReceipt> {
-        self.set_impl(key.as_ref(), value, options, tags, None)
-            .await
+    ) -> impl Future<Output = Result<MutationReceipt>> {
+        super::mutation_request::MutationRequest::new(self, key, value, options, tags, None)
     }
     /// Canonical set with explicit cancellation until scheduled ownership transfer.
-    pub async fn try_set_full_cancellable(
+    pub fn try_set_full_cancellable<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
+        key: K,
         value: V,
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
         token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.set_impl(key.as_ref(), value, options, tags, Some(token))
-            .await
+    ) -> impl Future<Output = Result<MutationReceipt>> {
+        super::mutation_request::MutationRequest::new(self, key, value, options, tags, Some(token))
     }
-    async fn set_impl(
+    pub(super) fn set_impl(
         &self,
         key: &str,
         value: V,
-        options: Option<EntryOptions>,
+        options: Option<Box<EntryOptions>>,
         tags: Box<[Tag]>,
         token: Option<FactoryCancellation>,
-    ) -> Result<MutationReceipt> {
+    ) -> super::memory_inline::MutationStart<'_> {
         if self.inner.write_plan.is_inline() {
-            return self.inline_set(key, value, options, tags, token.as_ref());
+            return super::memory_inline::MutationStart::Ready(self.inline_set(
+                key,
+                value,
+                options,
+                tags,
+                token.as_ref(),
+            ));
         }
         let worker = self.worker();
         let raw: Arc<str> = Arc::from(key);
         let full = worker.full_key(key);
         let source = CancellationSource::new();
         let cancellation = source.token();
-        self.observed_using(
+        super::memory_inline::MutationStart::Pending(Box::pin(self.observed_using(
             CacheOperation::Set,
             Some(full),
             token,
             source,
-            Box::pin(async move { worker.set(raw, value, options, tags, &cancellation).await }),
-        )
-        .await
+            Box::pin(async move {
+                worker
+                    .set(
+                        raw,
+                        value,
+                        options.map(|options| *options),
+                        tags,
+                        &cancellation,
+                    )
+                    .await
+            }),
+        )))
     }
     /// Legacy unit adapter. Prefer try_set to inspect actual completion.
     pub async fn set(&self, key: impl AsRef<str>, value: V) {

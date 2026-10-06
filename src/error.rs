@@ -151,29 +151,68 @@ impl FactoryCancellationReason {
     }
 }
 
+/// Shared ownership of an unchanged concrete error. This deliberately
+/// dereferences to E instead of implementing Error: derived source() must expose
+/// the original E, not this ownership wrapper, so downcasting keeps working.
+#[derive(Debug)]
+pub struct SharedSource<
+    E: std::error::Error + Send + Sync + ?Sized + 'static = dyn std::error::Error + Send + Sync,
+> {
+    source: std::sync::Arc<E>,
+}
+impl<E: std::error::Error + Send + Sync + ?Sized + 'static> SharedSource<E> {
+    /// Shares the original cause without replacing its concrete identity.
+    pub fn from_arc(source: std::sync::Arc<E>) -> Self {
+        Self { source }
+    }
+}
+impl<E: std::error::Error + Send + Sync + ?Sized + 'static> Clone for SharedSource<E> {
+    fn clone(&self) -> Self {
+        Self {
+            source: std::sync::Arc::clone(&self.source),
+        }
+    }
+}
+impl<E: std::error::Error + Send + Sync + ?Sized + 'static> std::ops::Deref for SharedSource<E> {
+    type Target = E;
+    fn deref(&self) -> &E {
+        &self.source
+    }
+}
+impl<E: std::error::Error + Send + Sync + ?Sized + 'static> AsRef<E> for SharedSource<E> {
+    fn as_ref(&self) -> &E {
+        &self.source
+    }
+}
+impl<E: std::error::Error + Send + Sync + ?Sized + 'static> std::fmt::Display for SharedSource<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.as_ref(), f)
+    }
+}
+
 /// A deep-copy implementation failed. Its original cause remains available.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum CloneError {
     /// Encoding the value failed.
     #[error("deep-copy serialization failed: {source}")]
     Serialization {
         /// The codec's original failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
     /// Decoding the copied value failed.
     #[error("deep-copy deserialization failed: {source}")]
     Deserialization {
         /// The codec's original failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
     /// A custom cloning strategy failed.
     #[error("deep-copy failed: {source}")]
     Custom {
         /// The strategy's original failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
 }
 
@@ -181,46 +220,46 @@ impl CloneError {
     /// Preserves a custom strategy's source error.
     pub fn from_source(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Custom {
-            source: Box::new(source),
+            source: SharedSource::from_arc(std::sync::Arc::new(source)),
         }
     }
 }
 
 /// A distributed codec failure with its original concrete source.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum CodecError {
     /// Encoding a value or its snapshot metadata failed.
     #[error("serialization failed: {source}")]
     Serialization {
         /// The codec's unchanged failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
     /// Decoding a value or its snapshot metadata failed.
     #[error("deserialization failed: {source}")]
     Deserialization {
         /// The codec's unchanged failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
 }
 
 /// An external storage or notification failure with its original source.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum TransportError {
     /// Value storage failed.
     #[error("distributed cache error: {source}")]
     Distributed {
         /// The provider's unchanged failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
     /// Peer notification failed.
     #[error("backplane error: {source}")]
     Backplane {
         /// The provider's unchanged failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: SharedSource,
     },
 }
 
@@ -335,7 +374,7 @@ impl std::error::Error for ShutdownError {
 /// Note what is deliberately *absent*: a "cache miss" is not an error (it is a
 /// `None`/`MaybeValue::none`), and a factory that fails while fail-safe rescues
 /// a stale value never produces an `Error` at all.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 #[non_exhaustive]
 pub enum Error {
     /// A synchronous callback would wait for its own cache execution to finish.
@@ -411,6 +450,11 @@ pub enum Error {
         #[source]
         source: FactoryError,
     },
+
+    /// A coalesced factory panicked. Its initiating caller receives the original
+    /// panic payload; another waiting caller receives this typed outcome.
+    #[error("the coalesced factory panicked")]
+    FactoryPanicked,
 
     /// Cancellation is distinct from origin failure and fail-safe activation.
     #[error("factory cancelled: {description}", description = reason.as_str())]
@@ -491,7 +535,7 @@ impl Error {
     /// Preserves an encoding failure instead of converting it into a message.
     pub fn serialization(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         CodecError::Serialization {
-            source: Box::new(source),
+            source: SharedSource::from_arc(std::sync::Arc::new(source)),
         }
         .into()
     }
@@ -499,7 +543,7 @@ impl Error {
     /// Preserves a decoding failure instead of converting it into a message.
     pub fn deserialization(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         CodecError::Deserialization {
-            source: Box::new(source),
+            source: SharedSource::from_arc(std::sync::Arc::new(source)),
         }
         .into()
     }
@@ -507,7 +551,7 @@ impl Error {
     /// Preserves a value-storage failure at the provider boundary.
     pub fn distributed(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         TransportError::Distributed {
-            source: Box::new(source),
+            source: SharedSource::from_arc(std::sync::Arc::new(source)),
         }
         .into()
     }
@@ -515,7 +559,7 @@ impl Error {
     /// Preserves a peer-notification failure at the provider boundary.
     pub fn backplane(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         TransportError::Backplane {
-            source: Box::new(source),
+            source: SharedSource::from_arc(std::sync::Arc::new(source)),
         }
         .into()
     }
@@ -529,17 +573,17 @@ impl Error {
 ///
 /// It can wrap an arbitrary source error so the original cause is preserved in
 /// the error chain.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FactoryError {
     detail: FactoryErrorDetail,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum FactoryErrorDetail {
     Message(String),
     Source {
         message: String,
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: std::sync::Arc<dyn std::error::Error + Send + Sync>,
     },
     Cancelled(FactoryCancellationReason),
 }
@@ -563,7 +607,7 @@ impl FactoryError {
         Self {
             detail: FactoryErrorDetail::Source {
                 message: into_nonblank(source.to_string()),
-                source: Box::new(source),
+                source: std::sync::Arc::new(source),
             },
         }
     }

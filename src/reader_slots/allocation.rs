@@ -57,9 +57,9 @@ unsafe impl GlobalAlloc for CountingSystem {
 static ALLOCATOR: CountingSystem = CountingSystem;
 
 fn queued<T>(lock: &ReaderSlots<T>) -> usize {
-    let key = &lock.slots[0].0 as *const RawMutex as usize;
+    let key = &lock.changed as *const Condvar as usize;
     let mut found = 0;
-    // SAFETY: the address belongs to this live RawMutex. The filter only
+    // SAFETY: the address belongs to this live Condvar. The filter only
     // observes its queue: Skip never removes or wakes a waiter. Both callbacks
     // are infallible and invoke no parking_lot operation while the queue locks.
     unsafe {

@@ -71,6 +71,9 @@ impl Tasks {
     pub(crate) fn tracked_count(&self) -> usize {
         lock(&self.handles).len()
     }
+    pub(crate) fn can_execute(&self) -> bool {
+        self.runtime.get().is_some() || tokio::runtime::Handle::try_current().is_ok()
+    }
     fn executor(&self) -> Result<tokio::runtime::Handle> {
         let runtime = self
             .runtime

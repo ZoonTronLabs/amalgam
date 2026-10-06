@@ -165,8 +165,8 @@ impl Metadata {
 /// A cheaply-cloneable handle to a cached value and its metadata.
 ///
 /// Entries are immutable; "mutating" an entry (throttling a stale value,
-/// refreshing it) produces a new `Entry` that replaces the old one. This avoids
-/// interior mutability and makes every stored value safe to share across tasks.
+/// refreshing it) preserves every retained snapshot. Shared representations are
+/// immutable; built-in storage can reuse exclusively owned allocation capacity.
 #[derive(Debug)]
 pub struct Entry<V> {
     inner: Arc<EntryInner<V>>,
@@ -177,6 +177,77 @@ struct EntryInner<V> {
     value: V,
     meta: Metadata,
     eligibility: Eligibility,
+}
+
+/// Build-time preparation for default lifetimes without jitter/eager refresh.
+pub(crate) struct FreshPlan {
+    logical: crate::time::LifetimeSpan,
+    physical: crate::time::LifetimeSpan,
+    retention: RetentionMetadata,
+}
+impl FreshPlan {
+    pub(crate) fn for_options(options: &EntryOptions) -> Result<Option<Self>> {
+        if !options.jitter_max().is_zero() || options.eager_refresh_threshold().is_some() {
+            return Ok(None);
+        }
+        let size = options.size()?;
+        let retention = if size.is_some()
+            || options.priority() != Priority::Normal
+            || options.is_fail_safe_enabled()
+        {
+            RetentionMetadata::Specified {
+                size,
+                priority: options.priority(),
+            }
+        } else {
+            RetentionMetadata::Unspecified
+        };
+        Ok(Some(Self {
+            logical: crate::time::LifetimeSpan::new(options.resolved_memory_duration()),
+            physical: crate::time::LifetimeSpan::new(options.physical_ttl()),
+            retention,
+        }))
+    }
+    pub(crate) fn prepare<V>(&self, value: V, now: Timestamp, tags: Box<[Tag]>) -> FreshValue<V> {
+        let logical_expiration = self.logical.after(now);
+        let physical_expiration = self.physical.after(now).max(logical_expiration);
+        FreshValue(EntryInner {
+            value,
+            meta: Metadata {
+                created: now,
+                inserted_at: now,
+                logical_expiration,
+                physical_expiration,
+                backend_ttl: physical_expiration.saturating_duration_since(now),
+                origin: EntryOrigin::Fresh {
+                    eager_refresh_at: None,
+                },
+                etag: None,
+                last_modified: None,
+                tags,
+                retention: self.retention,
+            },
+            eligibility: Eligibility::Local,
+        })
+    }
+}
+
+/// Fully prepared metadata and value before shared snapshot ownership is needed.
+#[derive(Debug)]
+pub(crate) struct FreshValue<V>(EntryInner<V>);
+pub(crate) enum UniqueReplacement<V> {
+    Reused(FreshValue<V>),
+    SnapshotPinned(FreshValue<V>),
+}
+impl<V> FreshValue<V> {
+    pub(crate) fn meta(&self) -> &Metadata {
+        &self.0.meta
+    }
+    pub(crate) fn into_entry(self) -> Entry<V> {
+        Entry {
+            inner: Arc::new(self.0),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +282,14 @@ impl<V> Clone for Entry<V> {
 }
 
 impl<V> Entry<V> {
+    /// Reuse is possible only when no snapshot or weak reference can observe it.
+    /// Moving out the old payload does not run user Drop; retirement follows the guard.
+    pub(crate) fn replace_unique(&mut self, value: FreshValue<V>) -> UniqueReplacement<V> {
+        match Arc::get_mut(&mut self.inner) {
+            Some(inner) => UniqueReplacement::Reused(FreshValue(std::mem::replace(inner, value.0))),
+            None => UniqueReplacement::SnapshotPinned(value),
+        }
+    }
     /// Borrows the cached value.
     #[must_use]
     pub fn value(&self) -> &V {
@@ -444,6 +523,30 @@ impl<V> Entry<V> {
         etag: Option<String>,
         last_modified: Option<Timestamp>,
     ) -> Result<Self> {
+        Self::prepare_fresh_with_jitter(
+            value,
+            options,
+            snapshot_created,
+            inserted_at,
+            jitter,
+            tags,
+            etag,
+            last_modified,
+        )
+        .map(FreshValue::into_entry)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_fresh_with_jitter(
+        value: V,
+        options: &EntryOptions,
+        snapshot_created: Timestamp,
+        inserted_at: Timestamp,
+        jitter: JitterSample,
+        tags: Box<[Tag]>,
+        etag: Option<String>,
+        last_modified: Option<Timestamp>,
+    ) -> Result<FreshValue<V>> {
         let size = options.size()?;
         let logical_expiration = options.logical_expiration_with_jitter(inserted_at, jitter)?;
         let physical_expiration = inserted_at
@@ -478,13 +581,11 @@ impl<V> Entry<V> {
             tags,
             retention,
         };
-        Ok(Self {
-            inner: Arc::new(EntryInner {
-                value,
-                meta,
-                eligibility: Eligibility::Local,
-            }),
-        })
+        Ok(FreshValue(EntryInner {
+            value,
+            meta,
+            eligibility: Eligibility::Local,
+        }))
     }
 
     /// Builds a throttled fail-safe entry that re-serves an existing value for

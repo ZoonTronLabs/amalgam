@@ -18,7 +18,7 @@ use crate::error::Result;
 use crate::time::{Clock, Timeout, Timestamp};
 
 /// Expected lease rejection or infrastructure failure.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum LeaseError {
     /// Owned acquisition requires an active runtime before any effect.
     #[error("owned distributed acquisition requires a Tokio runtime")]
@@ -61,14 +61,14 @@ pub enum LeaseError {
     Task {
         /// Original task failure.
         #[source]
-        source: tokio::task::JoinError,
+        source: crate::error::SharedSource<tokio::task::JoinError>,
     },
     /// The provider failed, preserving its original error chain.
     #[error("distributed lease backend failed: {source}")]
     Backend {
         /// The original backend cause.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: crate::error::SharedSource,
     },
 }
 
@@ -76,7 +76,7 @@ impl LeaseError {
     /// Retains an external backend cause.
     pub fn backend(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Backend {
-            source: Box::new(source),
+            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
         }
     }
 }
@@ -801,9 +801,11 @@ impl LeaseCleanup {
             && let Err(source) = handle.await
             && !source.is_cancelled()
         {
-            inner
-                .owner
-                .supervise(Box::pin(async move { Err(LeaseError::Task { source }) }));
+            inner.owner.supervise(Box::pin(async move {
+                Err(LeaseError::Task {
+                    source: crate::error::SharedSource::from_arc(Arc::new(source)),
+                })
+            }));
         }
         self.renewal.take();
         bounded_release(inner.locker.as_ref(), &inner.key, inner.token.as_str()).await

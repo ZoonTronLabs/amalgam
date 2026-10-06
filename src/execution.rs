@@ -15,7 +15,7 @@ type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 /// Read-only cancellation state carried into owned cache work and origin factories.
 #[derive(Clone, Debug)]
 pub struct FactoryCancellation {
-    request: Arc<Request>,
+    request: Arc<dyn RequestOwner>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CancellationState {
@@ -52,8 +52,34 @@ impl CancellationState {
 }
 
 impl FactoryCancellation {
+    pub(crate) fn link_work(&self, erased: Arc<dyn CancelWork>, mode: LinkMode) {
+        {
+            let mut listeners = self.request.request().listeners.lock();
+            let count = listeners.len().min(4);
+            for _ in 0..count {
+                if let Some(old) = listeners.pop_front()
+                    && old.target.strong_count() != 0
+                {
+                    listeners.push_back(old);
+                }
+            }
+            listeners.push_back(Listener {
+                target: Arc::downgrade(&erased),
+                mode,
+            });
+        }
+        let reason = match CancellationState::load(&self.request.request().state) {
+            CancellationState::Active => None,
+            CancellationState::Cancelled(reason) => Some(reason),
+        };
+        if let Some(reason) = reason
+            && (mode == LinkMode::Explicit || reason != Reason::ScopeFinished)
+        {
+            erased.cancel(reason);
+        }
+    }
     pub(crate) fn reason(&self) -> Option<Reason> {
-        match CancellationState::load(&self.request.state) {
+        match CancellationState::load(&self.request.request().state) {
             CancellationState::Active => None,
             CancellationState::Cancelled(reason) => Some(reason),
         }
@@ -77,7 +103,7 @@ impl FactoryCancellation {
         loop {
             // Subscribe before checking terminal state so cancellation cannot
             // fall between the state read and notification registration.
-            let changed = self.request.changed.notified();
+            let changed = self.request.request().changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             if let Some(reason) = self.reason() {
@@ -100,52 +126,26 @@ pub enum CancellationRequest {
 /// Explicit caller cancellation. Clones address the same request.
 #[derive(Clone, Debug)]
 pub struct CancellationSource {
-    request: Arc<Request>,
+    request: Arc<dyn RequestOwner>,
 }
 #[derive(Debug)]
-struct Request {
+pub(crate) struct Request {
     state: AtomicU8,
     changed: Notify,
-    listeners: Mutex<VecDeque<Listener>>,
+    listeners: parking_lot::Mutex<VecDeque<Listener>>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LinkMode {
-    Explicit,
-    CallerScope,
+/// Cancellation can share the allocation of its owning flight.
+pub(crate) trait RequestOwner: std::fmt::Debug + Send + Sync + 'static {
+    fn request(&self) -> &Request;
 }
-struct Listener {
-    target: Weak<dyn CancelWork>,
-    mode: LinkMode,
-}
-impl std::fmt::Debug for Listener {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("CancellationListener")
+impl RequestOwner for Request {
+    fn request(&self) -> &Request {
+        self
     }
 }
-impl CancellationSource {
-    /// Creates an active request without needing a runtime.
-    pub fn new() -> Self {
-        Self {
-            request: Arc::new(Request {
-                state: AtomicU8::new(0),
-                changed: Notify::new(),
-                listeners: Mutex::new(VecDeque::new()),
-            }),
-        }
-    }
-    /// Obtains a read-only token.
-    pub fn token(&self) -> FactoryCancellation {
-        FactoryCancellation {
-            request: Arc::clone(&self.request),
-        }
-    }
-    /// Requests caller cancellation once.
-    pub fn cancel(&self) -> CancellationRequest {
-        self.cancel_with(Reason::CallerCancelled)
-    }
+impl Request {
     pub(crate) fn cancel_with(&self, reason: Reason) -> CancellationRequest {
         let changed = self
-            .request
             .state
             .compare_exchange(
                 0,
@@ -155,8 +155,10 @@ impl CancellationSource {
             )
             .is_ok();
         if changed {
-            self.request.changed.notify_waiters();
-            let listeners: Vec<_> = lock(&self.request.listeners)
+            self.changed.notify_waiters();
+            let listeners: Vec<_> = self
+                .listeners
+                .lock()
                 .iter()
                 .filter_map(|listener| {
                     listener
@@ -175,6 +177,52 @@ impl CancellationSource {
             CancellationRequest::AlreadyCancelled
         }
     }
+    pub(crate) fn new() -> Self {
+        Self {
+            state: AtomicU8::new(0),
+            changed: Notify::new(),
+            listeners: parking_lot::Mutex::new(VecDeque::new()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkMode {
+    Explicit,
+    CallerScope,
+}
+struct Listener {
+    target: Weak<dyn CancelWork>,
+    mode: LinkMode,
+}
+impl std::fmt::Debug for Listener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CancellationListener")
+    }
+}
+impl CancellationSource {
+    /// Creates an active request without needing a runtime.
+    pub fn new() -> Self {
+        Self {
+            request: Arc::new(Request::new()),
+        }
+    }
+    pub(crate) fn from_owner(request: Arc<dyn RequestOwner>) -> Self {
+        Self { request }
+    }
+    /// Obtains a read-only token.
+    pub fn token(&self) -> FactoryCancellation {
+        FactoryCancellation {
+            request: Arc::clone(&self.request),
+        }
+    }
+    /// Requests caller cancellation once.
+    pub fn cancel(&self) -> CancellationRequest {
+        self.cancel_with(Reason::CallerCancelled)
+    }
+    pub(crate) fn cancel_with(&self, reason: Reason) -> CancellationRequest {
+        self.request.request().cancel_with(reason)
+    }
 }
 impl Default for CancellationSource {
     fn default() -> Self {
@@ -182,7 +230,7 @@ impl Default for CancellationSource {
     }
 }
 
-trait CancelWork: Send + Sync {
+pub(crate) trait CancelWork: Send + Sync {
     fn cancel(&self, reason: Reason);
     fn finished(&self) -> bool;
 }
@@ -339,6 +387,11 @@ impl Scopes {
     }
     fn register_scope<T: Send + 'static>(self: &Arc<Self>, scope: Arc<Scope<T>>) -> Execution<T> {
         let erased: Arc<dyn CancelWork> = scope.clone();
+        self.register_work(erased);
+        Execution { scope }
+    }
+    /// Register only genuinely suspended work; initial Ready needs no entry.
+    pub(crate) fn register_work(&self, erased: Arc<dyn CancelWork>) {
         let closed = {
             let mut scopes = lock(&self.scopes);
             let count = scopes.len().min(4);
@@ -353,9 +406,8 @@ impl Scopes {
             self.is_closed()
         };
         if closed {
-            scope.cancel(Reason::CacheShutdown);
+            erased.cancel(Reason::CacheShutdown);
         }
-        Execution { scope }
     }
     pub(crate) fn close(&self) -> bool {
         let _activity = self.activity();
@@ -529,7 +581,7 @@ impl<T> ExecutionCheckpoint<T> {
 }
 impl<T> Scope<T> {
     fn drop_reason(&self) -> Reason {
-        match CancellationState::load(&self.source.request.state) {
+        match CancellationState::load(&self.source.request.request().state) {
             CancellationState::Cancelled(reason) => reason,
             CancellationState::Active if self.registry.is_closed() => Reason::CacheShutdown,
             CancellationState::Active => Reason::CallerDropped,
@@ -581,30 +633,7 @@ impl<T: Send + 'static> Execution<T> {
     }
     pub(crate) fn link(&self, token: &FactoryCancellation, mode: LinkMode) {
         let erased: Arc<dyn CancelWork> = self.scope.clone();
-        {
-            let mut listeners = lock(&token.request.listeners);
-            let count = listeners.len().min(4);
-            for _ in 0..count {
-                if let Some(old) = listeners.pop_front()
-                    && old.target.strong_count() != 0
-                {
-                    listeners.push_back(old);
-                }
-            }
-            listeners.push_back(Listener {
-                target: Arc::downgrade(&erased),
-                mode,
-            });
-        }
-        let reason = match CancellationState::load(&token.request.state) {
-            CancellationState::Active => None,
-            CancellationState::Cancelled(reason) => Some(reason),
-        };
-        if let Some(reason) = reason
-            && (mode == LinkMode::Explicit || reason != Reason::ScopeFinished)
-        {
-            self.cancel(reason);
-        }
+        token.link_work(erased, mode);
     }
 }
 struct PollLease<T: Send + 'static>(Arc<Scope<T>>);

@@ -678,6 +678,15 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.backplane.is_some(),
             self.distributed_locker.is_some(),
         );
+        let default_fresh_plan = if write_plan.is_inline() {
+            crate::entry::FreshPlan::for_options(&self.default_options)?
+        } else {
+            None
+        };
+        let flights = (write_plan.is_inline()
+            && matches!(locks, LocalLocks::Builtin(_))
+            && matches!(marker_reads, MarkerReads::DurableRequired))
+        .then(crate::single_flight::Flights::new);
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),
             name,
@@ -692,6 +701,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             default_runtime,
             ready_plan,
             write_plan,
+            default_fresh_plan,
+            flights,
             tags_default_options: self.tags_default_options,
             marker_reads,
             key_prefix: self.key_prefix,

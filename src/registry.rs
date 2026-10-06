@@ -30,7 +30,7 @@ pub trait DefaultEntryOptionsProvider: Send + Sync {
 }
 
 /// A named-cache resolution failure.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum RegistryError {
     /// Registry names must identify a cache.
     #[error("registry name must not be blank")]

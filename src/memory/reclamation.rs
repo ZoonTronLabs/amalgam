@@ -56,6 +56,18 @@ impl<V: Send + Sync + 'static> Reclamation<V> {
             }),
         }))
     }
+    pub(super) fn is_deferred(&self) -> bool {
+        match self {
+            Self::Immediate => false,
+            Self::Operation(_) => true,
+        }
+    }
+    pub(super) fn pin_for_outer_guard(&self, entry: &Entry<V>) -> Option<Entry<V>> {
+        match self {
+            Self::Immediate => None,
+            Self::Operation(_) => Some(entry.clone()),
+        }
+    }
     pub(super) fn retain(&self, entry: Entry<V>) {
         match self {
             Self::Immediate => drop(entry),

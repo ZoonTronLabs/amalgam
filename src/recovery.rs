@@ -73,7 +73,7 @@ impl Default for RecoveryConfig {
 }
 
 /// Failures of protocol construction or owned recovery lifecycle.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum RecoveryError {
     /// Ordering identifiers must never wrap and become current again.
     #[error("recovery generation sequence exhausted")]
@@ -113,7 +113,7 @@ pub enum RecoveryError {
     Task {
         /// Original task failure.
         #[source]
-        source: tokio::task::JoinError,
+        source: crate::error::SharedSource<tokio::task::JoinError>,
     },
 }
 
@@ -1166,7 +1166,9 @@ impl AutoRecoveryService {
             && let Err(source) = worker.await
             && !source.is_cancelled()
         {
-            return Err(RecoveryError::Task { source });
+            return Err(RecoveryError::Task {
+                source: crate::error::SharedSource::from_arc(Arc::new(source)),
+            });
         }
         Ok(())
     }

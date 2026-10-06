@@ -3,6 +3,25 @@ use super::{Clock, ClockTiming, SystemClock, Timestamp};
 use std::sync::Arc;
 use std::time::Instant;
 
+#[derive(Clone, Copy)]
+pub(crate) enum WriteTime {
+    Clock(Timestamp),
+    Elapsed { now: Timestamp, instant: Instant },
+}
+impl WriteTime {
+    pub(crate) fn now(self) -> Timestamp {
+        match self {
+            Self::Clock(now) | Self::Elapsed { now, .. } => now,
+        }
+    }
+    pub(crate) fn physical_start(self) -> Instant {
+        match self {
+            Self::Clock(_) => Instant::now(),
+            Self::Elapsed { instant, .. } => instant,
+        }
+    }
+}
+
 pub(crate) enum CacheClock {
     Local(Arc<LocalClock>),
     Shared(Arc<dyn Clock>),
@@ -24,6 +43,15 @@ impl CacheClock {
         match self {
             Self::Local(clock) => clock.now(),
             Self::Shared(clock) => clock.now(),
+        }
+    }
+    pub(crate) fn write_time(&self) -> WriteTime {
+        match self {
+            Self::Local(clock) => {
+                let (now, instant) = clock.sample();
+                WriteTime::Elapsed { now, instant }
+            }
+            Self::Shared(clock) => WriteTime::Clock(clock.now()),
         }
     }
     pub(crate) fn timing_model(&self) -> ClockTiming {

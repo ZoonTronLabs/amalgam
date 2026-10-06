@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 /// Failure of a custom local coordination provider.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum MemoryLockerError {
     /// The provider failed; its complete original cause remains available.
     #[error("local memory locker failed: {source}")]

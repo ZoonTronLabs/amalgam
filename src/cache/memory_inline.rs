@@ -7,6 +7,33 @@ use super::{
 };
 use crate::memory::{CacheMemory, MemoryStore};
 
+pub(super) enum MutationStart<'a> {
+    Ready(Result<MutationReceipt>),
+    Pending(
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<MutationReceipt>> + Send + 'a>>,
+    ),
+    Done,
+}
+impl std::future::Future for MutationStart<'_> {
+    type Output = Result<MutationReceipt>;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let state = self.get_mut();
+        match state {
+            Self::Pending(work) => work.as_mut().poll(context),
+            Self::Ready(_) => match std::mem::replace(state, Self::Done) {
+                Self::Ready(result) => std::task::Poll::Ready(result),
+                Self::Pending(_) | Self::Done => {
+                    unreachable!("ready mutation changed without polling")
+                }
+            },
+            Self::Done => panic!("a completed mutation must not be polled again"),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum WritePlan {
     InlineMemory,
@@ -47,15 +74,23 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         &self,
         raw: &str,
         value: V,
-        options: Option<EntryOptions>,
+        options: Option<Box<EntryOptions>>,
         tags: Box<[Tag]>,
         token: Option<&FactoryCancellation>,
     ) -> Result<MutationReceipt> {
         let permit = self.inline();
-        let key: Arc<str> = match &self.inner.key_prefix {
-            Some(prefix) => Arc::from(format!("{prefix}{raw}")),
-            None => Arc::from(raw),
+        let key = match &self.inner.key_prefix {
+            Some(prefix) => std::borrow::Cow::Owned(format!("{prefix}{raw}")),
+            None => std::borrow::Cow::Borrowed(raw),
         };
+        if self.inner.events.is_quiet()
+            && tracing::level_filters::LevelFilter::current() < tracing::Level::DEBUG
+        {
+            let observation = super::QuietObservation::new(&self.inner.events, CacheOperation::Set);
+            let result = self.inline_set_value(raw, &key, value, options, tags, token, &permit);
+            observation.finish(set_outcome(&result), None);
+            return result;
+        }
         let observation = ReadyObservation::new(
             &self.inner.events,
             &self.inner.name,
@@ -63,7 +98,22 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             CacheOperation::Set,
             Some(&key),
         );
-        let result = (|| {
+        let result = self.inline_set_value(raw, &key, value, options, tags, token, &permit);
+        observation.finish(set_outcome(&result));
+        result
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn inline_set_value(
+        &self,
+        raw: &str,
+        key: &str,
+        value: V,
+        options: Option<Box<EntryOptions>>,
+        tags: Box<[Tag]>,
+        token: Option<&FactoryCancellation>,
+        permit: &super::InlinePermit<'_>,
+    ) -> Result<MutationReceipt> {
+        (|| {
             permit.admit()?;
             permit.status(token)?;
             let resolved = options.or_else(|| {
@@ -71,13 +121,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     .default_options_provider
                     .as_ref()
                     .and_then(|provider| {
-                        provider.options_for_with_defaults(raw, &self.inner.default_options)
+                        provider
+                            .options_for_with_defaults(raw, &self.inner.default_options)
+                            .map(Box::new)
                     })
             });
             let opts = match &resolved {
                 Some(opts) => {
                     self.inner.validate_options(opts)?;
-                    opts
+                    opts.as_ref()
                 }
                 None => {
                     self.inner.default_runtime.validate()?;
@@ -91,36 +143,41 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 self.inner.jitter.sample(opts.jitter_max()),
                 opts.jitter_max(),
             )?;
-            let now = self.inner.clock.now();
+            let time = self.inner.clock.write_time();
+            let now = time.now();
             permit.status(token)?;
-            let entry =
-                Entry::try_fresh_with_jitter(stored, opts, now, now, jitter, tags, None, None)?;
+            let entry = match (&resolved, &self.inner.default_fresh_plan) {
+                (None, Some(plan)) => plan.prepare(stored, now, tags),
+                _ => Entry::prepare_fresh_with_jitter(
+                    stored, opts, now, now, jitter, tags, None, None,
+                )?,
+            };
             let CacheMemory::Builtin(memory) = &self.inner.memory else {
                 unreachable!("inline write plan requires builtin L1");
             };
             let local = if opts.skip_memory_write() {
-                memory.invalidate_origin(&key);
+                memory.invalidate_origin(key);
+                drop(entry);
                 LocalEffect::Skipped
             } else {
-                let prepared = memory.prepare_insert(Arc::clone(&key), entry, now);
-                let commit = memory.apply_insert(prepared);
-                LocalEffect::Stored(memory.finish_insert(commit))
+                LocalEffect::Stored(memory.insert_value_borrowed(key, entry, time))
             };
             self.inner.events.emit_lazy(|| CacheEvent::Set {
-                key: Arc::clone(&key),
+                key: Arc::from(key),
             });
             // The incoming representation can have its own destructor even
             // when the stored copy is pinned. Attribute a reentrant close now.
             drop(value);
             permit.status(token)?;
             Ok(receipt(local))
-        })();
-        let outcome = match &result {
-            Ok(_) => OperationOutcome::Stored,
-            Err(error) => OperationOutcome::from_error(error),
-        };
-        observation.finish(outcome);
-        result
+        })()
+    }
+}
+
+fn set_outcome(result: &Result<MutationReceipt>) -> OperationOutcome {
+    match result {
+        Ok(_) => OperationOutcome::Stored,
+        Err(error) => OperationOutcome::from_error(error),
     }
 }
 
@@ -141,12 +198,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         cancellation.check()?;
         let prepared = memory.prepare_insert(Arc::clone(&key), entry, now);
         if opts.skip_memory_write() {
-            let current = origin
-                .as_ref()
-                .is_none_or(|origin| origin.started_at.is_current());
-            if current {
-                memory.invalidate_origin(&key);
-            }
+            let current = match origin.as_ref().map(|origin| &origin.started_at) {
+                None => {
+                    memory.invalidate_origin(&key);
+                    true
+                }
+                Some(super::OriginVersion::Memory(version)) => memory.skip_origin(&key, version),
+                Some(super::OriginVersion::Ordered(_)) => {
+                    unreachable!("inline origin carries a memory version")
+                }
+            };
             drop(origin);
             drop(prepared);
             return Ok(receipt(if current {

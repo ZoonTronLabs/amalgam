@@ -194,22 +194,33 @@ impl<V> Sharded<V> {
     pub(super) fn origin_generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
-    pub(super) fn capture_origin(
+    pub(super) fn capture_origin_from(
         &self,
         key: &Arc<str>,
-    ) -> crate::Result<(Arc<super::origin::Revision>, u64, u64)> {
+        revision: Option<Arc<dyn super::RevisionSource>>,
+    ) -> crate::Result<(Arc<dyn super::RevisionSource>, u64, u64)> {
         let (_, shard) = self.route(key);
         let mut state = write(shard);
         let generation = self.origin_generation();
         if generation == u64::MAX {
             return Err(crate::RecoveryError::GenerationExhausted.into());
         }
-        let (revision, captured) = state.origins.capture(key)?;
+        let (revision, captured) = state.origins.capture_from(key, revision)?;
         Ok((revision, captured, generation))
     }
-    pub(super) fn forget_origin(&self, key: &str, revision: &Arc<super::origin::Revision>) {
+    pub(super) fn forget_origin(&self, key: &str, revision: &Arc<dyn super::RevisionSource>) {
         let (_, shard) = self.route(key);
         write(shard).origins.forget(key, revision);
+    }
+    pub(super) fn skip_origin(&self, key: &str, origin: &super::MemoryOrigin<V>) -> bool {
+        let (_, shard) = self.route(key);
+        let state = write(shard);
+        if origin.matches(self.origin_generation()) {
+            state.origins.advance(key);
+            true
+        } else {
+            false
+        }
     }
     pub(super) fn invalidate_origin(&self, key: &str) {
         let (_, shard) = self.route(key);
@@ -223,20 +234,26 @@ impl<V> Sharded<V> {
         state.weight -= entry_weight(&stored.entry);
         Some(stored.retire(key, Reason::Explicit))
     }
-    pub(super) fn insert(
+    pub(super) fn insert_prepared(
         &self,
-        key: Arc<str>,
-        entry: Entry<V>,
-        now: Timestamp,
+        key: &super::StorageKey<'_>,
+        entry: &mut super::PreparedEntry<V>,
+        time: crate::time::local::WriteTime,
         expected: Expected<'_, V>,
         capture: CaptureAdmission,
         event: MemoryWriteEvent,
     ) -> super::RetentionCommit<V> {
+        let now = time.now();
         let expiration = match self.expiry {
             MemoryExpiry::ClockDriven => None,
-            MemoryExpiry::RealTime => Instant::now().checked_add(entry.backend_ttl_at(now)),
+            MemoryExpiry::RealTime => time.physical_start().checked_add(
+                entry
+                    .meta()
+                    .physical_expiration()
+                    .saturating_duration_since(now),
+            ),
         };
-        let (hash, shard) = self.route(&key);
+        let (hash, shard) = self.route(key);
         let mut state = write(shard);
         let generation = self.generation.load(Ordering::Acquire);
         if generation == u64::MAX {
@@ -245,64 +262,105 @@ impl<V> Sharded<V> {
                 Vec::new(),
             );
         }
-        let current = state
-            .entries
-            .raw_entry()
-            .from_hash(hash, |k| k.as_ref() == key.as_ref());
-        let visible = current.filter(|(_, stored)| stored.generation == generation);
+        let Shard {
+            entries,
+            weight,
+            origins,
+        } = &mut *state;
+        let slot = entries
+            .raw_entry_mut()
+            .from_hash(hash, |stored| stored.as_ref() == key.as_ref());
+        let current = match &slot {
+            RawEntryMut::Occupied(slot) => Some(slot.get()),
+            RawEntryMut::Vacant(_) => None,
+        };
+        let visible = current.filter(|stored| stored.generation == generation);
         let replacing_visible = visible.is_some();
-        if !expected.matches_generation(visible.map(|(_, stored)| &stored.entry), generation) {
+        if !expected.matches_generation(visible.map(|stored| &stored.entry), generation) {
             return super::RetentionCommit::rejected(CapacityRejection::VersionChanged, Vec::new());
         }
         let capture = match (current, event) {
-            (Some((_, old)), MemoryWriteEvent::Expire) => old.capture,
+            (Some(old), MemoryWriteEvent::Expire) => old.capture,
             _ => capture,
         };
-        let value = Stored {
-            entry,
-            generation,
-            expiration,
-            capture,
-        };
-        let old_weight = current.map_or(0, |(_, stored)| entry_weight(&stored.entry));
-        let new_weight = entry_weight(&value.entry);
+        let old_weight = current.map_or(0, |stored| entry_weight(&stored.entry));
+        let new_weight = entry.meta().size().map_or(1, |size| size.units()) as u128;
         if expected.changes_origin() {
-            state.origins.advance(&key);
+            origins.advance(key);
         }
-        let retired = match state
-            .entries
-            .raw_entry_mut()
-            .from_hash(hash, |k| k.as_ref() == key.as_ref())
-        {
+        let retired = match slot {
             RawEntryMut::Occupied(mut slot) => {
-                let old = slot.insert(value);
-                Some(match event {
-                    MemoryWriteEvent::Set => {
-                        let reason = if old.generation == generation {
-                            Reason::Replaced
-                        } else {
-                            Reason::Continuity
-                        };
-                        old.retire(key, reason)
+                let key = Arc::clone(slot.key());
+                let old_capture = slot.get().capture;
+                let reason = match event {
+                    MemoryWriteEvent::Set if slot.get().generation == generation => {
+                        Reason::Replaced
                     }
-                    MemoryWriteEvent::Expire => old.retire(key, Reason::Metadata),
-                })
+                    MemoryWriteEvent::Set => Reason::Continuity,
+                    MemoryWriteEvent::Expire => Reason::Metadata,
+                };
+                if let Some(previous) = entry.try_reuse(&mut slot.get_mut().entry) {
+                    let stored = slot.get_mut();
+                    stored.generation = generation;
+                    stored.expiration = expiration;
+                    stored.capture = capture;
+                    super::Retirements::Reused {
+                        key,
+                        value: previous,
+                        reason,
+                        capture: old_capture,
+                    }
+                } else {
+                    let old = slot.insert(Stored {
+                        entry: entry.take_for_storage(),
+                        generation,
+                        expiration,
+                        capture,
+                    });
+                    super::Retirements::One(old.retire(key, reason))
+                }
             }
             RawEntryMut::Vacant(slot) => {
-                slot.insert_hashed_nocheck(hash, key, value);
-                None
+                slot.insert_hashed_nocheck(
+                    hash,
+                    key.shared(),
+                    Stored {
+                        entry: entry.take_for_storage(),
+                        generation,
+                        expiration,
+                        capture,
+                    },
+                );
+                super::Retirements::None
             }
         };
-        state.weight = state.weight - old_weight + new_weight;
+        *weight = *weight - old_weight + new_weight;
         let admission = if replacing_visible {
             MemoryAdmission::Replaced
         } else {
             MemoryAdmission::Admitted
         };
-        super::RetentionCommit {
-            admission,
-            retired: retired.into_iter().collect(),
-        }
+        super::RetentionCommit { admission, retired }
+    }
+    #[cfg(test)]
+    fn insert(
+        &self,
+        key: Arc<str>,
+        entry: Entry<V>,
+        now: Timestamp,
+        expected: Expected<'_, V>,
+        capture: CaptureAdmission,
+        event: MemoryWriteEvent,
+    ) -> super::RetentionCommit<V> {
+        let mut candidate = super::PreparedEntry::Candidate(entry);
+        self.insert_prepared(
+            &super::StorageKey::Shared(key),
+            &mut candidate,
+            crate::time::local::WriteTime::Clock(now),
+            expected,
+            capture,
+            event,
+        )
     }
     pub(super) fn begin_clear(&self) -> u64 {
         // MAX is terminal admission, never a reused continuity identity.

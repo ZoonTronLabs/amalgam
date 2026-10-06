@@ -4,6 +4,7 @@ mod custom;
 mod origin;
 pub(crate) use origin::MemoryOrigin;
 use origin::Origins;
+pub(crate) use origin::RevisionSource;
 mod reclamation;
 mod sharded;
 use crate::entry::Entry;
@@ -364,47 +365,150 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         key: Arc<str>,
         entry: Entry<V>,
         now: Timestamp,
-    ) -> PreparedWrite<V> {
-        self.prepare_write(key, entry, now, MemoryWriteEvent::Set)
+    ) -> PreparedWrite<'static, V> {
+        self.prepare_write(StorageKey::Shared(key), entry, now, MemoryWriteEvent::Set)
     }
     pub(crate) fn prepare_expire(
         &self,
         key: Arc<str>,
         entry: Entry<V>,
         now: Timestamp,
-    ) -> PreparedWrite<V> {
-        self.prepare_write(key, entry, now, MemoryWriteEvent::Expire)
+    ) -> PreparedWrite<'static, V> {
+        self.prepare_write(
+            StorageKey::Shared(key),
+            entry,
+            now,
+            MemoryWriteEvent::Expire,
+        )
     }
-    fn prepare_write(
+    /// Standalone writes need no retained outer-coordinator envelope.
+    pub(crate) fn insert_value_borrowed(
         &self,
-        key: Arc<str>,
+        key: &str,
+        value: crate::entry::FreshValue<V>,
+        time: crate::time::local::WriteTime,
+    ) -> MemoryAdmission {
+        if self.observer.reclamation.is_deferred() {
+            let prepared = self.prepare_value_borrowed(key, value, time);
+            return self.finish_insert(self.apply_insert(prepared));
+        }
+        let mut entry = PreparedEntry::Fresh(value);
+        let key = StorageKey::Borrowed(key);
+        let commit = if !time.now().is_before(entry.meta().physical_expiration()) {
+            self.invalidate_origin(&key);
+            RetentionCommit::rejected(CapacityRejection::PhysicallyExpired, Vec::new())
+        } else {
+            let capture = self.capture_admission();
+            match &self.backend {
+                Backend::Unbounded(store) => store.insert_prepared(
+                    &key,
+                    &mut entry,
+                    time,
+                    Expected::Mutation,
+                    capture,
+                    MemoryWriteEvent::Set,
+                ),
+                Backend::Retained(store) => lock(store).insert(
+                    &key,
+                    &mut entry,
+                    time.now(),
+                    Expected::Mutation,
+                    capture,
+                    MemoryWriteEvent::Set,
+                ),
+            }
+        };
+        commit.retired.finish(&self.observer);
+        drop(entry);
+        self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
+    }
+    fn finish_admission(
+        &self,
+        key: &StorageKey<'_>,
+        event: MemoryWriteEvent,
+        admission: MemoryAdmission,
+    ) -> MemoryAdmission {
+        match admission {
+            MemoryAdmission::Rejected(reason) => self.rejected(key.shared(), reason),
+            MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
+                self.emit_layer_lazy(|| {
+                    LayerEvent::Memory(match event {
+                        MemoryWriteEvent::Set => MemoryEvent::Set { key: key.shared() },
+                        MemoryWriteEvent::Expire => MemoryEvent::Expire { key: key.shared() },
+                    })
+                });
+                admission
+            }
+        }
+    }
+
+    pub(crate) fn prepare_value_borrowed<'a>(
+        &self,
+        key: &'a str,
+        value: crate::entry::FreshValue<V>,
+        time: crate::time::local::WriteTime,
+    ) -> PreparedWrite<'a, V> {
+        let now = time.now();
+        if self.observer.reclamation.is_deferred() {
+            return self.prepare_insert_borrowed(key, value.into_entry(), now);
+        }
+        PreparedWrite {
+            key: StorageKey::Borrowed(key),
+            entry: PreparedEntry::Fresh(value),
+            original: None,
+            retained: None,
+            time,
+            capture: self.capture_admission(),
+            event: MemoryWriteEvent::Set,
+        }
+    }
+    pub(crate) fn prepare_insert_borrowed<'a>(
+        &self,
+        key: &'a str,
+        entry: Entry<V>,
+        now: Timestamp,
+    ) -> PreparedWrite<'a, V> {
+        self.prepare_write(StorageKey::Borrowed(key), entry, now, MemoryWriteEvent::Set)
+    }
+    fn prepare_write<'a>(
+        &self,
+        key: StorageKey<'a>,
         entry: Entry<V>,
         now: Timestamp,
         event: MemoryWriteEvent,
-    ) -> PreparedWrite<V> {
+    ) -> PreparedWrite<'a, V> {
         let (prepared, original) = if entry.meta().inserted_at() == now {
             (entry, None)
         } else {
             (entry.at_insertion(now), Some(entry))
         };
+        let retained = self.observer.reclamation.pin_for_outer_guard(&prepared);
         PreparedWrite {
             key,
-            entry: prepared,
+            entry: PreparedEntry::Candidate(prepared),
+            retained,
             original,
-            now,
+            time: crate::time::local::WriteTime::Clock(now),
             event,
             capture: self.capture_admission(),
         }
     }
     pub(crate) fn capture_origin(&self, key: Arc<str>) -> crate::Result<MemoryOrigin<V>> {
+        self.capture_origin_from(key, None)
+    }
+    pub(crate) fn capture_origin_from(
+        &self,
+        key: Arc<str>,
+        revision: Option<Arc<dyn RevisionSource>>,
+    ) -> crate::Result<MemoryOrigin<V>> {
         let (revision, captured, generation) = match &self.backend {
-            Backend::Unbounded(store) => store.capture_origin(&key)?,
+            Backend::Unbounded(store) => store.capture_origin_from(&key, revision)?,
             Backend::Retained(store) => {
                 let mut state = lock(store);
                 if state.generation == u64::MAX {
                     return Err(crate::RecoveryError::GenerationExhausted.into());
                 }
-                let (revision, captured) = state.origins.capture(&key)?;
+                let (revision, captured) = state.origins.capture_from(&key, revision)?;
                 (revision, captured, state.generation)
             }
         };
@@ -416,31 +520,53 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             generation,
         ))
     }
+    pub(crate) fn skip_origin(&self, key: &str, origin: &MemoryOrigin<V>) -> bool {
+        match &self.backend {
+            Backend::Unbounded(store) => store.skip_origin(key, origin),
+            Backend::Retained(store) => {
+                let state = lock(store);
+                if origin.matches(state.generation) {
+                    state.origins.advance(key);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
     pub(crate) fn invalidate_origin(&self, key: &str) {
         match &self.backend {
             Backend::Unbounded(store) => store.invalidate_origin(key),
             Backend::Retained(store) => lock(store).origins.advance(key),
         }
     }
-    pub(crate) fn apply_insert(&self, write: PreparedWrite<V>) -> MemoryCommit<V> {
+    pub(crate) fn apply_insert<'a>(&self, write: PreparedWrite<'a, V>) -> MemoryCommit<'a, V> {
         self.apply_write(write, Expected::Mutation)
     }
-    pub(crate) fn apply_origin(
+    pub(crate) fn apply_origin<'a>(
         &self,
-        write: PreparedWrite<V>,
+        write: PreparedWrite<'a, V>,
         origin: &MemoryOrigin<V>,
-    ) -> MemoryCommit<V> {
+    ) -> MemoryCommit<'a, V> {
         self.apply_write(write, Expected::Origin(origin))
     }
-    pub(crate) fn apply_expire(
+    pub(crate) fn apply_expire<'a>(
         &self,
-        write: PreparedWrite<V>,
+        write: PreparedWrite<'a, V>,
         expected: &Entry<V>,
-    ) -> MemoryCommit<V> {
+    ) -> MemoryCommit<'a, V> {
         self.apply_write(write, Expected::MutationOf(expected))
     }
-    fn apply_write(&self, write: PreparedWrite<V>, expected: Expected<'_, V>) -> MemoryCommit<V> {
-        let commit = if write.entry.is_physically_expired(write.now) {
+    fn apply_write<'a>(
+        &self,
+        mut write: PreparedWrite<'a, V>,
+        expected: Expected<'_, V>,
+    ) -> MemoryCommit<'a, V> {
+        let commit = if !write
+            .time
+            .now()
+            .is_before(write.entry.meta().physical_expiration())
+        {
             // A rejected old factory must not invalidate a newer origin.
             if matches!(expected, Expected::Mutation) {
                 self.invalidate_origin(&write.key);
@@ -448,18 +574,18 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             RetentionCommit::rejected(CapacityRejection::PhysicallyExpired, Vec::new())
         } else {
             match &self.backend {
-                Backend::Unbounded(store) => store.insert(
-                    write.key.clone(),
-                    write.entry.clone(),
-                    write.now,
+                Backend::Unbounded(store) => store.insert_prepared(
+                    &write.key,
+                    &mut write.entry,
+                    write.time,
                     expected,
                     write.capture,
                     write.event,
                 ),
                 Backend::Retained(store) => lock(store).insert(
-                    write.key.clone(),
-                    write.entry.clone(),
-                    write.now,
+                    &write.key,
+                    &mut write.entry,
+                    write.time.now(),
                     expected,
                     write.capture,
                     write.event,
@@ -468,35 +594,31 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         };
         MemoryCommit { write, commit }
     }
-    pub(crate) fn finish_insert(&self, completed: MemoryCommit<V>) -> MemoryAdmission {
+    pub(crate) fn finish_insert(&self, completed: MemoryCommit<'_, V>) -> MemoryAdmission {
         let MemoryCommit { write, commit } = completed;
         let PreparedWrite {
             key,
             entry,
             original,
+            retained,
             event,
             ..
         } = write;
-        for retired in commit.retired {
-            self.retire(retired);
-        }
+        commit.retired.finish(&self.observer);
         if let Some(original) = original {
             self.observer.reclamation.retain(original);
         }
-        self.observer.reclamation.retain(entry);
-        match commit.admission {
-            MemoryAdmission::Rejected(reason) => self.rejected(key, reason),
-            MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
-                self.emit_layer_lazy(|| {
-                    LayerEvent::Memory(match event {
-                        MemoryWriteEvent::Set => MemoryEvent::Set { key },
-                        MemoryWriteEvent::Expire => MemoryEvent::Expire { key },
-                    })
-                });
-                commit.admission
-            }
+        match entry {
+            PreparedEntry::Candidate(entry) => self.observer.reclamation.retain(entry),
+            PreparedEntry::Fresh(value) => drop(value),
+            PreparedEntry::Stored => {}
         }
+        if let Some(retained) = retained {
+            self.observer.reclamation.retain(retained);
+        }
+        self.finish_admission(&key, event, commit.admission)
     }
+
     pub(crate) fn ready_at_for_mutation(&self, key: &str, now: Timestamp) -> Option<Entry<V>> {
         self.read(key, Some(now))
     }
@@ -530,7 +652,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         expected: Expected<'_, V>,
         event: MemoryWriteEvent,
     ) -> MemoryAdmission {
-        let prepared = self.prepare_write(key, entry, now, event);
+        let prepared = self.prepare_write(StorageKey::Shared(key), entry, now, event);
         let committed = self.apply_write(prepared, expected);
         self.finish_insert(committed)
     }
@@ -698,16 +820,83 @@ enum MemoryRead<V> {
     },
 }
 
-pub(crate) struct PreparedWrite<V> {
-    key: Arc<str>,
-    entry: Entry<V>,
+// An admitted candidate transfers its sole representation into storage. A
+// rejected candidate stays with the commit until outer coordination is gone.
+enum PreparedEntry<V> {
+    Candidate(Entry<V>),
+    Fresh(crate::entry::FreshValue<V>),
+    Stored,
+}
+impl<V> PreparedEntry<V> {
+    fn meta(&self) -> &crate::entry::Metadata {
+        match self {
+            Self::Candidate(entry) => entry.meta(),
+            Self::Fresh(value) => value.meta(),
+            Self::Stored => unreachable!("admitted entry is already owned by storage"),
+        }
+    }
+    fn try_reuse(&mut self, stored: &mut Entry<V>) -> Option<crate::entry::FreshValue<V>> {
+        if !matches!(self, Self::Fresh(_)) {
+            return None;
+        }
+        let Self::Fresh(value) = std::mem::replace(self, Self::Stored) else {
+            unreachable!()
+        };
+        match stored.replace_unique(value) {
+            crate::entry::UniqueReplacement::Reused(previous) => Some(previous),
+            crate::entry::UniqueReplacement::SnapshotPinned(value) => {
+                *self = Self::Fresh(value);
+                None
+            }
+        }
+    }
+    fn take_for_storage(&mut self) -> Entry<V> {
+        match std::mem::replace(self, Self::Stored) {
+            Self::Candidate(entry) => entry,
+            Self::Fresh(value) => value.into_entry(),
+            Self::Stored => unreachable!("a candidate transfers into storage only once"),
+        }
+    }
+}
+
+enum StorageKey<'a> {
+    Borrowed(&'a str),
+    Shared(Arc<str>),
+}
+impl StorageKey<'_> {
+    fn shared(&self) -> Arc<str> {
+        match self {
+            Self::Borrowed(key) => Arc::from(*key),
+            Self::Shared(key) => Arc::clone(key),
+        }
+    }
+}
+impl AsRef<str> for StorageKey<'_> {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Borrowed(key) => key,
+            Self::Shared(key) => key,
+        }
+    }
+}
+impl std::ops::Deref for StorageKey<'_> {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.as_ref()
+    }
+}
+pub(crate) struct PreparedWrite<'a, V> {
+    key: StorageKey<'a>,
+    entry: PreparedEntry<V>,
     original: Option<Entry<V>>,
-    now: Timestamp,
+    // Optional pin for a real outer coordinator; absent on inline L1 commits.
+    retained: Option<Entry<V>>,
+    time: crate::time::local::WriteTime,
     capture: CaptureAdmission,
     event: MemoryWriteEvent,
 }
-pub(crate) struct MemoryCommit<V> {
-    write: PreparedWrite<V>,
+pub(crate) struct MemoryCommit<'a, V> {
+    write: PreparedWrite<'a, V>,
     commit: RetentionCommit<V>,
 }
 pub(crate) struct DetachedRemoval<V> {
@@ -715,16 +904,75 @@ pub(crate) struct DetachedRemoval<V> {
     retired: Option<Retirement<V>>,
 }
 
+enum Retirements<V> {
+    None,
+    One(Retirement<V>),
+    Many(Vec<Retirement<V>>),
+    Reused {
+        key: Arc<str>,
+        value: crate::entry::FreshValue<V>,
+        reason: RetirementReason,
+        capture: CaptureAdmission,
+    },
+}
+impl<V> From<Option<Retirement<V>>> for Retirements<V> {
+    fn from(value: Option<Retirement<V>>) -> Self {
+        match value {
+            None => Self::None,
+            Some(value) => Self::One(value),
+        }
+    }
+}
+impl<V> From<Vec<Retirement<V>>> for Retirements<V> {
+    fn from(mut values: Vec<Retirement<V>>) -> Self {
+        match values.len() {
+            0 => Self::None,
+            1 => Self::One(values.pop().expect("one retirement was present")),
+            _ => Self::Many(values),
+        }
+    }
+}
+impl<V: Clone + Send + Sync + 'static> Retirements<V> {
+    fn finish(self, observer: &MemoryObserver<V>) {
+        match self {
+            Self::None => {}
+            Self::One(value) => observer.retire(value),
+            Self::Many(values) => {
+                for value in values {
+                    observer.retire(value);
+                }
+            }
+            Self::Reused {
+                key,
+                value,
+                reason,
+                capture,
+            } => observer.retire_unique(key, value, reason, capture),
+        }
+    }
+}
+#[cfg(test)]
+impl<V> std::ops::Deref for Retirements<V> {
+    type Target = [Retirement<V>];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::None => &[],
+            Self::One(value) => std::slice::from_ref(value),
+            Self::Many(values) => values,
+            Self::Reused { .. } => panic!("unique retirement has no pre-existing owned snapshot"),
+        }
+    }
+}
 struct RetentionCommit<V> {
     admission: MemoryAdmission,
-    retired: Vec<Retirement<V>>,
+    retired: Retirements<V>,
 }
 
 impl<V> RetentionCommit<V> {
     fn rejected(reason: CapacityRejection, retired: Vec<Retirement<V>>) -> Self {
         Self {
             admission: MemoryAdmission::Rejected(reason),
-            retired,
+            retired: retired.into(),
         }
     }
 }
@@ -855,8 +1103,8 @@ impl<V: Clone> Retention<V> {
 
     fn insert(
         &mut self,
-        key: Arc<str>,
-        entry: Entry<V>,
+        key: &StorageKey<'_>,
+        entry: &mut PreparedEntry<V>,
         now: Timestamp,
         expected: Expected<'_, V>,
         capture: CaptureAdmission,
@@ -869,15 +1117,22 @@ impl<V: Clone> Retention<V> {
             return RetentionCommit::rejected(CapacityRejection::VersionChanged, Vec::new());
         }
         if expected.changes_origin() {
-            self.origins.advance(&key);
+            self.origins.advance(key);
         }
-        let weight = entry_weight(&entry);
+        let weight = entry.meta().size().map_or(1, |size| size.units()) as u128;
         if !self.limits.fits(1, weight) {
             return RetentionCommit::rejected(CapacityRejection::Oversized, Vec::new());
         }
-        let retired = self.expire_under_pressure(&key, weight, now);
-        match self.plan(&key, weight, entry.meta().priority()) {
-            Ok(victims) => self.commit(key, entry, victims, retired, capture, event),
+        let retired = self.expire_under_pressure(key, weight, now);
+        match self.plan(key, weight, entry.meta().priority()) {
+            Ok(victims) => self.commit(
+                key.shared(),
+                entry.take_for_storage(),
+                victims,
+                retired,
+                capture,
+                event,
+            ),
             Err(reason) => RetentionCommit::rejected(reason, retired),
         }
     }
@@ -982,7 +1237,10 @@ impl<V: Clone> Retention<V> {
             None => MemoryAdmission::Admitted,
         };
         self.store(key, entry, capture);
-        RetentionCommit { admission, retired }
+        RetentionCommit {
+            admission,
+            retired: retired.into(),
+        }
     }
 
     fn store(&mut self, key: Arc<str>, entry: Entry<V>, capture: CaptureAdmission) {
@@ -1070,6 +1328,36 @@ impl<V: Clone + Send + Sync + 'static> MemoryObserver<V> {
         } else {
             CaptureAdmission::Unarmed
         }
+    }
+    fn retire_unique(
+        &self,
+        key: Arc<str>,
+        value: crate::entry::FreshValue<V>,
+        reason: RetirementReason,
+        capture: CaptureAdmission,
+    ) {
+        let interested = (matches!(capture, CaptureAdmission::Armed)
+            || self.capture == EvictionCapture::AtRetirement)
+            && self.evictions.has_receivers();
+        if interested || self.reclamation.is_deferred() {
+            self.retire(Retirement {
+                key,
+                entry: value.into_entry(),
+                reason,
+                capture,
+            });
+            return;
+        }
+        // Facts carry no original value; their payload remains lazy.
+        if reason.logical() {
+            self.emit(CacheEvent::Eviction {
+                key: Arc::clone(&key),
+            });
+        }
+        if let Some(reason) = reason.fact() {
+            self.emit_layer_lazy(|| LayerEvent::Memory(MemoryEvent::Eviction { key, reason }));
+        }
+        drop(value);
     }
     fn retire(&self, retired: Retirement<V>) {
         let Retirement {

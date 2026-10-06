@@ -71,9 +71,12 @@ impl LocalLocks {
     ) -> Result<Option<LocalGuard>> {
         parent.check()?;
         match self {
-            Self::Builtin(locker) => Ok(crate::cache::bounded(timeout, locker.lock(key))
-                .await?
-                .map(LocalGuard::Builtin)),
+            Self::Builtin(locker) => Ok(crate::cache::bounded(
+                timeout,
+                locker.lock_shared(Arc::clone(key)),
+            )
+            .await?
+            .map(LocalGuard::Builtin)),
             Self::Custom(locker) => {
                 Box::pin(locker.acquire(key, kind, timeout, parent, route)).await
             }

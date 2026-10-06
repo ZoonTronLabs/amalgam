@@ -45,6 +45,14 @@ impl<T> WeakSlots<T> {
         make: impl FnOnce() -> T,
         inspect: impl FnOnce(&Arc<T>) -> R,
     ) -> R {
+        self.get_arc_with(Arc::from(key), make, inspect)
+    }
+    pub(crate) fn get_arc_with<R>(
+        &self,
+        key: Arc<str>,
+        make: impl FnOnce() -> T,
+        inspect: impl FnOnce(&Arc<T>) -> R,
+    ) -> R {
         if self
             .lookups
             .fetch_add(1, Ordering::Relaxed)
@@ -52,7 +60,6 @@ impl<T> WeakSlots<T> {
         {
             self.clean(4);
         }
-        let key: Arc<str> = Arc::from(key);
         let (value, inserted) = match self.slots.entry(Arc::clone(&key)) {
             Entry::Occupied(mut slot) => match slot.get().upgrade() {
                 Some(value) => (inspect(&value), false),
@@ -135,6 +142,12 @@ impl KeyedLock {
         self.locks.clean(budget);
     }
 
+    pub(crate) async fn lock_shared(&self, key: Arc<str>) -> KeyGuard {
+        self.locks
+            .get_arc_with(key, || Mutex::new(()), Arc::clone)
+            .lock_owned()
+            .await
+    }
     /// Acquires the lock for `key`, waiting if necessary.
     pub async fn lock(&self, key: &str) -> KeyGuard {
         self.mutex_for(key).lock_owned().await

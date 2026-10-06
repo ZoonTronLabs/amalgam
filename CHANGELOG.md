@@ -7,6 +7,16 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Admit built-in L1 writes through a single writer gate and scan only reader
+  slots that were actually used. Readers keep thread-local reservations and
+  park through writer contention; contention never becomes a cache miss.
+  The reader table reserves at least 64 padded slots per storage shard.
+- Transfer admitted L1 representations into storage without an extra clone and
+  keep single-value retirements inline. Preserve lifetime pins when an actual
+  outer coordinator requires deferred reclamation.
+- Compare skipped factory writes against the active origin version atomically,
+  so an older completion cannot invalidate a newer origin.
+
 - Capture the origin version before invoking a factory. A late completion can
   return its computed value to its caller but cannot overwrite an awaited newer
   set, resurrect an awaited remove, or survive an intervening clear. Built-in
@@ -61,6 +71,25 @@ on [Keep a Changelog](https://keepachangelog.com/).
 - Per-key providers can derive options from the owning cache's current default snapshot using `options_for_with_defaults`; legacy hooks remain supported.
 
 ### Changed
+
+- Keep standalone mutation inputs lazy and create asynchronous work only for
+  actual hybrid writes. Default lifetimes without jitter/eager refresh are
+  prepared at construction; private local writes use one elapsed sample for
+  freshness and the physical deadline.
+- Borrow existing mutation keys and reuse uniquely owned entry allocations.
+  Retained snapshots and cloner sources remain immutable. Original-value
+  observations and destruction stay outside storage guards.
+
+- Plain built-in L1 factories share an active computation independently of caller
+  futures. Immediately ready factories commit without registered owned work or
+  a background task; pending factories retain one stable pinned address and an
+  independently cancellable observer. Dropping a caller does not cancel that
+  shared computation. Native, eager and advanced paths retain their existing
+  coordination during the migration.
+- Factory panics return their original payload to the leading caller and a typed
+  `FactoryPanicked` error to followers. Shared terminal errors retain the original
+  concrete source through `SharedSource`; public source fields now use that
+  shared wrapper instead of uniquely owned boxes.
 
 - Built-in memory-only caches select synchronous value commits at construction.
   Set and factory commits avoid the distributed owned pipeline, asynchronous

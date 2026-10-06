@@ -48,6 +48,7 @@ pub mod memory_storage;
 pub mod observability;
 pub mod options;
 pub mod plugins;
+mod single_flight;
 // Owner-approved private performance boundary. Cache logic keeps the unsafe ban.
 #[allow(unsafe_code)]
 mod reader_slots;

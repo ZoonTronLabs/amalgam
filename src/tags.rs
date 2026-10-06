@@ -90,7 +90,7 @@ where
 }
 
 /// Failures in the invalidation protocol, separate from ordinary value I/O.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum MarkerError {
     /// A marker capability was requested from a legacy byte store.
     #[error("the configured backend does not supply atomic invalidation storage")]
@@ -112,7 +112,7 @@ pub enum MarkerError {
     Backend {
         /// Original backend failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: crate::error::SharedSource,
     },
     /// A marker response or control frame violated the wire protocol.
     #[error("invalid invalidation protocol: {detail}")]
@@ -125,7 +125,7 @@ pub enum MarkerError {
     ProtocolWithSource {
         /// Original parser or boundary failure.
         #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: crate::error::SharedSource,
     },
 }
 
@@ -133,14 +133,14 @@ impl MarkerError {
     /// Preserves a control-protocol parser or validation failure.
     pub fn protocol(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::ProtocolWithSource {
-            source: Box::new(source),
+            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
         }
     }
 
     /// Preserves an external storage cause.
     pub fn backend(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Backend {
-            source: Box::new(source),
+            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
         }
     }
 }

@@ -87,7 +87,7 @@ pub(crate) fn reports(reports: Vec<CommitReport>) -> CommitReport {
     }
 }
 /// The in-process effect of a mutation.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum LocalEffect {
     /// The memory store evaluated admission.
     Stored(MemoryAdmission),

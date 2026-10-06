@@ -107,10 +107,10 @@ impl<V: serde::Serialize + serde::de::DeserializeOwned> ValueCloner<V>
 {
     fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
         let bytes = serde_json::to_vec(value).map_err(|source| CloneError::Serialization {
-            source: Box::new(source),
+            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
         })?;
         serde_json::from_slice(&bytes).map_err(|source| CloneError::Deserialization {
-            source: Box::new(source),
+            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
         })
     }
 }
@@ -134,10 +134,10 @@ mod messagepack {
     impl<V: Serialize + DeserializeOwned> ValueCloner<V> for MessagePackSerializer {
         fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
             let bytes = rmp_serde::to_vec(value).map_err(|source| CloneError::Serialization {
-                source: Box::new(source),
+                source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
             })?;
             rmp_serde::from_slice(&bytes).map_err(|source| CloneError::Deserialization {
-                source: Box::new(source),
+                source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
             })
         }
     }
@@ -185,10 +185,10 @@ mod postcard_serializer {
         fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
             let bytes =
                 postcard::to_allocvec(value).map_err(|source| CloneError::Serialization {
-                    source: Box::new(source),
+                    source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
                 })?;
             postcard::from_bytes(&bytes).map_err(|source| CloneError::Deserialization {
-                source: Box::new(source),
+                source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
             })
         }
     }

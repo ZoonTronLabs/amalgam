@@ -98,6 +98,18 @@ pub fn ticks_to_duration(ticks: i64) -> Duration {
     unsigned_ticks_to_duration(ticks.max(0) as u64)
 }
 
+/// Validated nonnegative lifetime prepared once from a Duration.
+#[derive(Clone, Copy)]
+pub(crate) struct LifetimeSpan(i128);
+impl LifetimeSpan {
+    pub(crate) fn new(duration: Duration) -> Self {
+        Self(duration_ticks_wide(duration))
+    }
+    pub(crate) fn after(self, timestamp: Timestamp) -> Timestamp {
+        Timestamp(i64::try_from(i128::from(timestamp.0) + self.0).unwrap_or(i64::MAX))
+    }
+}
+
 fn duration_ticks_wide(duration: Duration) -> i128 {
     // Duration's full u64-second range fits in i128 at 100ns precision.
     (duration.as_nanos() / NANOS_PER_TICK as u128) as i128

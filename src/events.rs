@@ -264,6 +264,7 @@ impl OperationOutcome {
                 crate::RegistryError::BlankName
                 | crate::RegistryError::RecursiveInitialization { .. } => Self::ConfigurationError,
             },
+            crate::Error::FactoryPanicked => Self::Panicked,
             crate::Error::Factory { .. } | crate::Error::FactoryWithSource { .. } => {
                 Self::FactoryError
             }

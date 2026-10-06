@@ -5,8 +5,10 @@ pub(crate) use blocking::MemoryAcquireRoute;
 use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
 mod clock;
+mod inline_cold;
 mod markers;
 mod memory_inline;
+mod mutation_request;
 mod origin;
 mod plain_ready;
 mod plugin;
@@ -289,6 +291,8 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     default_runtime: ready::RuntimeRequirement,
     ready_plan: plain_ready::ReadyPlan,
     write_plan: memory_inline::WritePlan,
+    default_fresh_plan: Option<crate::entry::FreshPlan>,
+    flights: Option<Arc<crate::single_flight::Flights<inline_cold::Value<V>>>>,
     tags_default_options: EntryOptions,
     marker_reads: MarkerReads,
     key_prefix: Option<Arc<str>>,

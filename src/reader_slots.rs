@@ -1,26 +1,22 @@
-//! Reader slots for short, synchronous L1 decisions.
+//! Private reader slots with a single writer admission gate.
 //!
-//! Each thread changes only its own padded lock word. A slot uses a mutex:
-//! overlapping readers in different slots need no shared reader count, and
-//! releasing a slot is a store rather than another reader-count RMW. Colliding
-//! thread indices wait for their slot; they never turn contention into a miss.
-//! Ordinary Clone must not recursively reacquire the same cache slot.
-//! A writer holds every slot, in the same order, before accessing the value. Slot counts grow with
-//! available parallelism; they are not limited to eight cores.
+//! Readers publish a padded count, cross a SeqCst fence, then check the writer
+//! gate. A writer closes the gate, crosses a SeqCst fence, then scans counts.
+//! The fence order prevents both sides from overlooking each other: either the
+//! writer observes the reservation or the reader observes the closed gate.
+//! Release/Acquire count handoff orders completed reads before mutable access;
+//! Release/Acquire gate handoff orders completed writes before admitted reads.
 //!
-//! This is the crate's only unsafe implementation boundary. Its safe guards
-//! cannot cross threads and are used only in synchronous storage decisions.
-//! Cache callbacks and retired value
-//! destruction must run after these guards are released. Ordinary value Clone
-//! is the documented exception and must not reenter this cache.
-
-use parking_lot::RawMutex;
-use parking_lot::lock_api::{GuardNoSend, RawMutex as _};
+//! Only a slot's permanent owner uses stores; colliding threads use a separate
+//! RMW count. Counts are thread-bound. A writer serializes with one mutex and
+//! waits for existing short readers to leave; ordinary value Clone must not reenter
+//! the same cache. No user callback or value retirement is allowed under guards.
+use parking_lot::{Condvar, Mutex, MutexGuard, lock_api::GuardNoSend};
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
 
 static NEXT_READER: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
@@ -31,23 +27,22 @@ fn reader_index() -> usize {
         Some(index) => index,
         None => {
             initialize_parking();
-            let index = NEXT_READER.fetch_add(1, Ordering::Relaxed);
+            let index = NEXT_READER
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    current.checked_add(1)
+                })
+                .expect("reader identity exhausted");
             reader.set(Some(index));
             index
         }
     })
 }
-
-// A thread's first actual park may allocate the parking table. Prime that
-// thread once, before acquiring any slot, so later contention does not turn a
-// warmed hit into an allocation. Rejected validation never enqueues or sleeps.
 #[cold]
 #[inline(never)]
 fn initialize_parking() {
     let address = 0_usize;
-    // SAFETY: this live owned address is only an opaque queue key. Validation
-    // always returns false before enqueue. The callbacks cannot panic or call
-    // parking_lot, and this thread holds no reader slot during initialization.
+    // SAFETY: an opaque live key; validation rejects before any enqueue and
+    // callbacks neither panic nor reenter parking_lot.
     unsafe {
         parking_lot_core::park(
             &address as *const usize as usize,
@@ -63,28 +58,38 @@ fn slot_count() -> usize {
     static COUNT: OnceLock<usize> = OnceLock::new();
     *COUNT.get_or_init(|| {
         std::thread::available_parallelism()
-            .map_or(8, usize::from)
-            .max(8)
+            .map_or(64, usize::from)
+            .max(64)
             .next_power_of_two()
     })
 }
-
 #[repr(align(128))]
-struct Slot(RawMutex);
-
+struct Slot {
+    owner: AtomicUsize,
+    local: AtomicUsize,
+    shared: AtomicUsize,
+    // Only group-start slots use this bitmap. It fits existing slot padding.
+    initialized: AtomicUsize,
+}
+enum Reservation<'a> {
+    Local(&'a Slot),
+    Shared(&'a Slot),
+}
 pub(crate) struct ReaderSlots<T> {
     slots: Box<[Slot]>,
+    writer: AtomicBool,
+    serial: Mutex<()>,
+    waiters: Mutex<()>,
+    waiting: AtomicUsize,
+    changed: Condvar,
     value: UnsafeCell<T>,
 }
-// SAFETY: exclusive ownership of ReaderSlots also owns T. Guards borrow the
-// lock, so moving it cannot overlap any active access.
+// SAFETY: moving exclusive ownership also moves T, without outstanding guards.
 unsafe impl<T: Send> Send for ReaderSlots<T> {}
-// SAFETY: readers hold one slot and expose only &T. Distinct reader slots
-// permit concurrent immutable access. Writers acquire all slots before exposing
-// &mut T. The fixed acquisition order also
-// prevents two writers from accessing T at once.
+// SAFETY: read reservations expose only &T. SeqCst admission excludes writers;
+// the serial mutex excludes other writers. Only a fully admitted writer can
+// expose &mut T, after every admitted reader has released its count.
 unsafe impl<T: Send + Sync> Sync for ReaderSlots<T> {}
-
 impl<T> ReaderSlots<T> {
     pub(crate) fn new(value: T) -> Self {
         Self::with_slots(value, slot_count())
@@ -95,82 +100,172 @@ impl<T> ReaderSlots<T> {
             "slot count is an internal invariant"
         );
         Self {
-            slots: (0..slots).map(|_| Slot(RawMutex::INIT)).collect(),
+            slots: (0..slots)
+                .map(|_| Slot {
+                    owner: AtomicUsize::new(0),
+                    local: AtomicUsize::new(0),
+                    shared: AtomicUsize::new(0),
+                    initialized: AtomicUsize::new(0),
+                })
+                .collect(),
+            writer: AtomicBool::new(false),
+            serial: Mutex::new(()),
+            waiters: Mutex::new(()),
+            waiting: AtomicUsize::new(0),
+            changed: Condvar::new(),
             value: UnsafeCell::new(value),
         }
     }
-    pub(crate) fn read(&self) -> ReadGuard<'_, T> {
-        let slot = &self.slots[reader_index() & (self.slots.len() - 1)];
-        slot.0.lock();
-        ReadGuard {
-            lock: self,
-            slot,
-            _thread: PhantomData,
+    fn reserve(&self) -> Reservation<'_> {
+        let reader = reader_index();
+        let index = reader & (self.slots.len() - 1);
+        let identity = reader + 1;
+        let slot = &self.slots[index];
+        let owner = slot.owner.load(Ordering::Acquire);
+        // Publish this slot's bitmap bit BEFORE publishing its owner. A
+        // colliding reader may immediately observe that owner and use shared.
+        // Acquire of the owner then observes the preceding bitmap publication.
+        if owner == 0 {
+            let width = usize::BITS as usize;
+            self.slots[index / width * width]
+                .initialized
+                .fetch_or(1 << (index % width), Ordering::Release);
+        }
+        let local = owner == identity
+            || owner == 0
+                && slot
+                    .owner
+                    .compare_exchange(0, identity, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok();
+        if local {
+            let count = slot.local.load(Ordering::Relaxed);
+            let next = count.checked_add(1).expect("reader reservation exhausted");
+            slot.local.store(next, Ordering::Release);
+            Reservation::Local(slot)
+        } else {
+            slot.shared
+                .fetch_update(Ordering::Release, Ordering::Relaxed, |count| {
+                    count.checked_add(1)
+                })
+                .expect("shared reader reservations exhausted");
+            Reservation::Shared(slot)
         }
     }
+    pub(crate) fn read(&self) -> ReadGuard<'_, T> {
+        loop {
+            let reservation = self.reserve();
+            fence(Ordering::SeqCst);
+            if !self.writer.load(Ordering::Acquire) {
+                return ReadGuard {
+                    lock: self,
+                    reservation,
+                    _thread: PhantomData,
+                };
+            }
+            drop(ReadGuard {
+                lock: self,
+                reservation,
+                _thread: PhantomData,
+            });
+            self.wait_for_writer();
+        }
+    }
+    fn wait_for_writer(&self) {
+        // Waiting interest is published before checking the gate. A writer's
+        // gate clear and interest check cross the same SeqCst fence. Its notification takes
+        // this mutex, so it cannot pass the check-to-park registration window.
+        self.waiting.fetch_add(1, Ordering::Release);
+        fence(Ordering::SeqCst);
+        {
+            let mut wait = self.waiters.lock();
+            while self.writer.load(Ordering::Acquire) {
+                self.changed.wait(&mut wait);
+            }
+        }
+        self.waiting.fetch_sub(1, Ordering::Release);
+    }
+    fn idle(&self) -> bool {
+        // A sparse bitmap visits only slots that have actually been used,
+        // regardless of the process-wide reader index or available core count.
+        self.slots.chunks(usize::BITS as usize).all(|group| {
+            let mut used = group[0].initialized.load(Ordering::Acquire);
+            while used != 0 {
+                let slot = &group[used.trailing_zeros() as usize];
+                if slot.local.load(Ordering::Acquire) != 0
+                    || slot.shared.load(Ordering::Acquire) != 0
+                {
+                    return false;
+                }
+                used &= used - 1;
+            }
+            true
+        })
+    }
     pub(crate) fn write(&self) -> WriteGuard<'_, T> {
-        let mut hold = WriterHold::new(self);
-        for slot in &self.slots {
-            slot.0.lock();
-            hold.acquired += 1;
+        let hold = WriterHold::new(self, self.serial.lock());
+        let mut spin = parking_lot_core::SpinWait::new();
+        // Readers hold only short synchronous decisions. A waiting writer
+        // yields after bounded spinning; it never requires reader-drop writes
+        // to a shared wakeup word. Long user Clone can prolong this wait.
+        while !self.idle() {
+            if !spin.spin() {
+                std::thread::yield_now();
+            }
         }
         WriteGuard { hold }
     }
     pub(crate) fn try_write(&self) -> Option<WriteGuard<'_, T>> {
-        let mut hold = WriterHold::new(self);
-        for slot in &self.slots {
-            if !slot.0.try_lock() {
-                return None;
-            }
-            hold.acquired += 1;
-        }
-        Some(WriteGuard { hold })
+        let hold = WriterHold::new(self, self.serial.try_lock()?);
+        self.idle().then_some(WriteGuard { hold })
     }
 }
-
 pub(crate) struct ReadGuard<'a, T> {
     lock: &'a ReaderSlots<T>,
-    slot: &'a Slot,
+    reservation: Reservation<'a>,
     _thread: PhantomData<GuardNoSend>,
 }
 impl<T> Deref for ReadGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        // SAFETY: this guard holds one slot, excluding every writer;
-        // other slots expose only immutable access to the same T.
+        // SAFETY: the counted reservation passed the writer gate check. A
+        // writer must see its count before obtaining exclusive value access.
         unsafe { &*self.lock.value.get() }
     }
 }
 impl<T> Drop for ReadGuard<'_, T> {
     fn drop(&mut self) {
-        // SAFETY: read acquired exactly this slot. The non-Send guard releases
-        // it once, on the acquiring thread, after all borrowed access ends.
-        unsafe { self.slot.0.unlock() };
+        match self.reservation {
+            Reservation::Local(slot) => {
+                let count = slot.local.load(Ordering::Relaxed);
+                slot.local.store(count - 1, Ordering::Release);
+            }
+            Reservation::Shared(slot) => {
+                slot.shared.fetch_sub(1, Ordering::Release);
+            }
+        }
     }
 }
-
-// Partial acquisition has no Deref implementation. It exists solely to release
-// earlier slots when try_write fails or acquisition unwinds.
 struct WriterHold<'a, T> {
     lock: &'a ReaderSlots<T>,
-    acquired: usize,
-    _thread: PhantomData<GuardNoSend>,
+    _serial: MutexGuard<'a, ()>,
 }
 impl<'a, T> WriterHold<'a, T> {
-    fn new(lock: &'a ReaderSlots<T>) -> Self {
+    fn new(lock: &'a ReaderSlots<T>, serial: MutexGuard<'a, ()>) -> Self {
+        lock.writer.store(true, Ordering::Release);
+        fence(Ordering::SeqCst);
         Self {
             lock,
-            acquired: 0,
-            _thread: PhantomData,
+            _serial: serial,
         }
     }
 }
 impl<T> Drop for WriterHold<'_, T> {
     fn drop(&mut self) {
-        for slot in self.lock.slots[..self.acquired].iter().rev() {
-            // SAFETY: acquired counts only successfully locked slots, owned by
-            // this non-Send reservation. Every slot is released exactly once.
-            unsafe { slot.0.unlock() };
+        self.lock.writer.store(false, Ordering::Release);
+        fence(Ordering::SeqCst);
+        if self.lock.waiting.load(Ordering::Acquire) != 0 {
+            let _wait = self.lock.waiters.lock();
+            self.lock.changed.notify_all();
         }
     }
 }
@@ -180,20 +275,85 @@ pub(crate) struct WriteGuard<'a, T> {
 impl<T> Deref for WriteGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
-        // SAFETY: WriteGuard is constructed only after acquiring every slot.
+        // SAFETY: all published readers left after the gate closed, and this
+        // guard retains the serial mutex through its complete value access.
         unsafe { &*self.hold.lock.value.get() }
     }
 }
 impl<T> DerefMut for WriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        // SAFETY: all slots exclude both readers and competing writers. The
-        // mutable borrow of this guard prevents overlapping access through it.
+        // SAFETY: the fully admitted exclusive guard and its mutable borrow
+        // exclude every other access to T.
         unsafe { &mut *self.hold.lock.value.get() }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn readers_never_see_torn_values_with_colliding_indices_and_competing_writers() {
+        let lock = Arc::new(ReaderSlots::with_slots((0_u64, 0_u64), 2));
+        let gate = Barrier::new(33);
+        std::thread::scope(|scope| {
+            for _ in 0..28 {
+                let lock = &lock;
+                let gate = &gate;
+                scope.spawn(move || {
+                    gate.wait();
+                    for _ in 0..10_000 {
+                        let value = lock.read();
+                        assert_eq!(value.0, value.1);
+                    }
+                });
+            }
+            for _ in 0..4 {
+                let lock = &lock;
+                let gate = &gate;
+                scope.spawn(move || {
+                    gate.wait();
+                    for _ in 0..10_000 {
+                        let mut value = lock.write();
+                        value.0 += 1;
+                        value.1 += 1;
+                    }
+                });
+            }
+            gate.wait();
+        });
+        assert_eq!(*lock.read(), (40_000, 40_000));
+    }
+    #[test]
+    fn rejected_writer_reopens_the_gate_and_panic_releases_both_kinds_of_guard() {
+        let lock = ReaderSlots::new(7_u64);
+        let read = lock.read();
+        assert!(lock.try_write().is_none());
+        assert_eq!(*lock.read(), 7);
+        drop(read);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut guard = lock.write();
+                *guard = 9;
+                panic!("writer panic");
+            }))
+            .is_err()
+        );
+        assert_eq!(*lock.read(), 9);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = lock.read();
+                panic!("reader panic");
+            }))
+            .is_err()
+        );
+        assert!(lock.try_write().is_some());
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
     use super::*;
     use std::sync::{Arc, Barrier};
 
@@ -207,10 +367,8 @@ mod tests {
     #[test]
     fn failed_writer_releases_every_partial_slot_and_readers_never_see_torn_values() {
         let lock = Arc::new(ReaderSlots::with_slots((0_u64, 0_u64), 32));
-        // Hold the last slot: try_write must roll back 31 earlier slots.
-        let previous = READER.with(|reader| reader.replace(Some(31)));
+        // A rejected writer must reopen admission for every reader slot.
         let guard = lock.read();
-        READER.with(|reader| reader.set(previous));
         assert!(lock.try_write().is_none());
         drop(guard);
         *lock.try_write().unwrap() = (1, 1);

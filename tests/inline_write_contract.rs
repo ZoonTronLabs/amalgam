@@ -102,3 +102,27 @@ fn retired_value_drop_can_reenter_the_same_key_after_the_commit() {
         assert!(value.action.is_none());
     }
 }
+
+#[test]
+fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
+    let cache = amalgam::Cache::<std::sync::Arc<u64>>::new();
+    let incoming = std::sync::Arc::new(17);
+    let weak = std::sync::Arc::downgrade(&incoming);
+    let pending = cache.try_set("lazy", incoming);
+    assert!(weak.upgrade().is_some());
+    let mut read = std::pin::pin!(cache.read("lazy", None));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let std::task::Poll::Ready(Ok(value)) = std::future::Future::poll(read.as_mut(), &mut context)
+    else {
+        panic!("a standalone miss must complete without a runtime");
+    };
+    assert!(
+        !value.has_value(),
+        "constructing a write must not store its value"
+    );
+    drop(pending);
+    assert!(
+        weak.upgrade().is_none(),
+        "an abandoned input must not stay in storage"
+    );
+}

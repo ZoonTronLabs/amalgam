@@ -712,7 +712,7 @@ async fn owned_worker_task_failures_distinguish_cancellation_and_contract_panic(
     let cancelled = tokio::spawn(std::future::pending::<()>());
     cancelled.abort();
     let error: Error = RecoveryError::Task {
-        source: cancelled.await.unwrap_err(),
+        source: amalgam::error::SharedSource::from_arc(Arc::new(cancelled.await.unwrap_err())),
     }
     .into();
     assert_eq!(
@@ -721,7 +721,7 @@ async fn owned_worker_task_failures_distinguish_cancellation_and_contract_panic(
     );
     let panicked = tokio::spawn(async { panic!("worker contract violation fixture") });
     let error: Error = LeaseError::Task {
-        source: panicked.await.unwrap_err(),
+        source: amalgam::error::SharedSource::from_arc(Arc::new(panicked.await.unwrap_err())),
     }
     .into();
     assert_eq!(

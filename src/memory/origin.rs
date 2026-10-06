@@ -9,10 +9,20 @@ use std::sync::{Arc, Weak};
 
 #[derive(Default)]
 pub(super) struct Origins {
-    active: HashMap<Arc<str>, Weak<Revision>>,
+    active: HashMap<Arc<str>, ActiveRevision>,
+}
+struct ActiveRevision {
+    revision: Weak<dyn RevisionSource>,
+    snapshots: usize,
+}
+/// Only private metadata implementations participate; methods run under storage
+/// coordination and must never invoke user code or retire values.
+pub(crate) trait RevisionSource: Send + Sync {
+    fn current(&self) -> u64;
+    fn advance(&self);
 }
 pub(super) struct Revision(AtomicU64);
-impl Revision {
+impl RevisionSource for Revision {
     fn current(&self) -> u64 {
         self.0.load(Ordering::Acquire)
     }
@@ -23,35 +33,69 @@ impl Revision {
     }
 }
 impl Origins {
-    pub(super) fn capture(&mut self, key: &Arc<str>) -> Result<(Arc<Revision>, u64)> {
-        let revision = match self.active.get(key.as_ref()).and_then(Weak::upgrade) {
+    #[cfg(test)]
+    pub(super) fn capture(&mut self, key: &Arc<str>) -> Result<(Arc<dyn RevisionSource>, u64)> {
+        self.capture_from(key, None)
+    }
+    pub(super) fn capture_from(
+        &mut self,
+        key: &Arc<str>,
+        provided: Option<Arc<dyn RevisionSource>>,
+    ) -> Result<(Arc<dyn RevisionSource>, u64)> {
+        let revision = match self
+            .active
+            .get(key.as_ref())
+            .and_then(|active| active.revision.upgrade())
+        {
             Some(revision) => revision,
-            None => {
-                let revision = Arc::new(Revision(AtomicU64::new(1)));
-                self.active
-                    .insert(Arc::clone(key), Arc::downgrade(&revision));
-                revision
-            }
+            None => provided.unwrap_or_else(|| Arc::new(Revision(AtomicU64::new(1)))),
         };
         let captured = revision.current();
         if captured == u64::MAX {
             return Err(crate::RecoveryError::GenerationExhausted.into());
         }
+        match self.active.get_mut(key.as_ref()) {
+            Some(active) if active.revision.ptr_eq(&Arc::downgrade(&revision)) => {
+                active.snapshots += 1
+            }
+            Some(active) => {
+                *active = ActiveRevision {
+                    revision: Arc::downgrade(&revision),
+                    snapshots: 1,
+                }
+            }
+            None => {
+                self.active.insert(
+                    Arc::clone(key),
+                    ActiveRevision {
+                        revision: Arc::downgrade(&revision),
+                        snapshots: 1,
+                    },
+                );
+            }
+        }
         Ok((revision, captured))
     }
     pub(super) fn advance(&self, key: &str) {
-        if let Some(revision) = self.active.get(key).and_then(Weak::upgrade) {
+        if self.active.is_empty() {
+            return;
+        }
+        if let Some(revision) = self
+            .active
+            .get(key)
+            .and_then(|active| active.revision.upgrade())
+        {
             revision.advance();
         }
     }
-    pub(super) fn forget(&mut self, key: &str, revision: &Arc<Revision>) {
-        if Arc::strong_count(revision) == 1
-            && self
-                .active
-                .get(key)
-                .is_some_and(|current| current.ptr_eq(&Arc::downgrade(revision)))
+    pub(super) fn forget(&mut self, key: &str, revision: &Arc<dyn RevisionSource>) {
+        if let Some(active) = self.active.get_mut(key)
+            && active.revision.ptr_eq(&Arc::downgrade(revision))
         {
-            self.active.remove(key);
+            active.snapshots -= 1;
+            if active.snapshots == 0 {
+                self.active.remove(key);
+            }
         }
     }
 }
@@ -59,7 +103,7 @@ impl Origins {
 pub(crate) struct MemoryOrigin<V> {
     key: Arc<str>,
     backend: Backend<V>,
-    revision: Arc<Revision>,
+    revision: Arc<dyn RevisionSource>,
     captured: u64,
     generation: u64,
 }
@@ -67,7 +111,7 @@ impl<V> MemoryOrigin<V> {
     pub(super) fn new(
         key: Arc<str>,
         backend: Backend<V>,
-        revision: Arc<Revision>,
+        revision: Arc<dyn RevisionSource>,
         captured: u64,
         generation: u64,
     ) -> Self {
@@ -217,8 +261,8 @@ mod tests {
             assert!(origins.active.is_empty());
         }
         let key: Arc<str> = Arc::from("terminal");
-        let (revision, _) = origins.capture(&key).unwrap();
-        revision.0.store(u64::MAX - 1, Ordering::Release);
+        let revision = Arc::new(Revision(AtomicU64::new(u64::MAX - 1)));
+        origins.capture_from(&key, Some(revision.clone())).unwrap();
         origins.advance(&key);
         origins.advance(&key);
         assert_eq!(revision.current(), u64::MAX);
