@@ -36,8 +36,13 @@ snapshot, including deferred stop after callbacks or a late startup race.
 
 Awaiting owning `shutdown` or `flush_pending` from this session's stop hook would
 wait for itself; it returns the existing typed `Error::ReentrantDrain`. Ordinary
-cache calls in callbacks must also respect same-key coordination: a callback
-cannot synchronously wait for a factory whose key is held by its own operation.
+cache calls in callbacks use normal coordination. Opted-in `PluginObservations::All` logical/layer
+callbacks are deferred until their originating coordination guards and operation
+clones are released, permitting same-key read/mutation from a cache-aware hook.
+Selected hooks and drainage are described in [LAYER_EVENTS.md](LAYER_EVENTS.md).
+Legacy `Logical` callbacks retain original inline timing and cannot wait for a
+factory whose key they hold. Calling an owning drain from a hook still attempts
+to wait for itself.
 
 After manual detach, retained operational views continue to use ordinary cache
 admission while application owners remain. After owning close, calls return

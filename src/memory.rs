@@ -221,6 +221,18 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     pub(crate) fn guard<G>(&self, guard: G) -> ReclamationGuard<G> {
         ReclamationGuard::new(guard, self.fence())
     }
+    pub(crate) fn emit(&self, event: CacheEvent) {
+        self.events
+            .emit_deferred(event, |pending| self.reclamation.defer(pending));
+    }
+    pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
+        self.events
+            .emit_layer_deferred(make, |pending| self.reclamation.defer(pending));
+    }
+    pub(crate) fn component_read(&self, component: crate::events::ComponentRead) {
+        self.events
+            .component_read_deferred(component, |pending| self.reclamation.defer(pending));
+    }
     fn capture_admission(&self) -> CaptureAdmission {
         if self.evictions.has_receivers() || self.events.has_layer_receivers() {
             CaptureAdmission::Armed
@@ -238,6 +250,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         self.read(key, Some(now))
     }
     fn read(&self, key: &str, now: Option<Timestamp>) -> Option<Entry<V>> {
+        self.component_read(crate::events::ComponentRead::Memory);
         let read = match &self.backend {
             Backend::Unbounded(store) => store.get(key, now),
             Backend::Retained(store) => lock(store).get(key, now),
@@ -265,8 +278,10 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             }
         }
     }
-    /// Immediately available reads never mutate or run a retirement callback.
+    /// Immediately available reads never mutate or retire values. Selected
+    /// component observers are notified before lookup, outside storage guards.
     pub(crate) fn ready_at(&self, key: &str, now: Timestamp) -> Option<Entry<V>> {
+        self.component_read(crate::events::ComponentRead::Memory);
         match &self.backend {
             Backend::Unbounded(store) => store.ready_at(key, now),
             Backend::Retained(store) => {
@@ -364,7 +379,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                 self.rejected(key, reason)
             }
             MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
-                self.events.emit_layer_lazy(|| {
+                self.emit_layer_lazy(|| {
                     LayerEvent::Memory(match event {
                         MemoryWriteEvent::Set => MemoryEvent::Set { key },
                         MemoryWriteEvent::Expire => MemoryEvent::Expire { key },
@@ -381,8 +396,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         }
     }
     fn rejected(&self, key: Arc<str>, reason: CapacityRejection) -> MemoryAdmission {
-        self.events
-            .emit(CacheEvent::MemoryAdmissionRejected { key, reason });
+        self.emit(CacheEvent::MemoryAdmissionRejected { key, reason });
         MemoryAdmission::Rejected(reason)
     }
     fn retire(&self, retired: Retirement<V>) {
@@ -393,21 +407,21 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             capture,
         } = retired;
         if reason.logical() {
-            self.events.emit(CacheEvent::Eviction {
+            self.emit(CacheEvent::Eviction {
                 key: Arc::clone(&key),
             });
         }
-        if let Some(reason) = reason.fact()
-            && (matches!(capture, CaptureAdmission::Armed)
-                || self.capture == EvictionCapture::AtRetirement)
-        {
-            self.events.emit_layer_lazy(|| {
+        if let Some(reason) = reason.fact() {
+            self.emit_layer_lazy(|| {
                 LayerEvent::Memory(MemoryEvent::Eviction {
                     key: Arc::clone(&key),
                     reason,
                 })
             });
-            if let Some(old) = self.evictions.emit(&key, reason, &entry) {
+            if (matches!(capture, CaptureAdmission::Armed)
+                || self.capture == EvictionCapture::AtRetirement)
+                && let Some(old) = self.evictions.emit(&key, reason, &entry)
+            {
                 self.reclamation.retain(old);
             }
         }
@@ -438,7 +452,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     /// Explicitly removes a value, including pinned data.
     pub async fn remove(&self, key: &str) -> Option<Entry<V>> {
         let removed = self.removed(key, None);
-        self.events.emit_layer_lazy(|| {
+        self.emit_layer_lazy(|| {
             LayerEvent::Memory(MemoryEvent::Remove {
                 key: Arc::from(key),
             })

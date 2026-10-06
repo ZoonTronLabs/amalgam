@@ -164,8 +164,20 @@ struct CacheSession {
     access: Arc<PluginAccess>,
 }
 impl PluginSession for CacheSession {
+    fn observations(&self) -> crate::plugins::PluginObservations {
+        self.session.observations()
+    }
+    fn on_layer_event(&self, event: &crate::LayerEvent) -> Result<(), PluginError> {
+        self.session.on_layer_event(event)
+    }
+    fn on_operation_started(&self, operation: crate::CacheOperation) -> Result<(), PluginError> {
+        self.session.on_operation_started(operation)
+    }
     fn on_event(&self, event: &crate::CacheEvent) -> Result<(), PluginError> {
         self.session.on_event(event)
+    }
+    fn on_component_read(&self, component: crate::ComponentRead) -> Result<(), PluginError> {
+        self.session.on_component_read(component)
     }
     fn stop(&self) -> Result<(), PluginError> {
         let _cleanup = self.access.cleanup();

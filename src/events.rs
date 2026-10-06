@@ -21,7 +21,10 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use crate::memory::CapacityRejection;
-use crate::plugins::{PluginError, PluginEventRoute, PluginHost, PluginHostInner};
+use crate::plugins::{
+    PendingPluginEvent, PluginError, PluginEventRoute, PluginHost, PluginHostInner,
+    PluginObservations,
+};
 
 /// A bounded logical-operation label used by spans and metrics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +65,15 @@ impl CacheOperation {
             Self::Clear => "clear",
         }
     }
+}
+
+/// A component whose value read was actually attempted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentRead {
+    /// An in-process lookup, including a nonblocking ready lookup.
+    Memory,
+    /// A distributed backend get admitted through its read policy.
+    Distributed,
 }
 
 /// A bounded cache component label.
@@ -363,12 +375,12 @@ pub enum CacheEvent {
         /// The cache key.
         key: Arc<str>,
     },
-    /// A timed-out factory later completed successfully in the background.
+    /// A timed-out or eager-refresh factory completed successfully in the background.
     BackgroundFactorySuccess {
         /// The cache key.
         key: Arc<str>,
     },
-    /// A timed-out factory later failed in the background.
+    /// A timed-out or eager-refresh factory failed in the background.
     BackgroundFactoryError {
         /// The cache key.
         key: Arc<str>,
@@ -562,9 +574,9 @@ impl Events {
         }
     }
 
-    /// Subscribes to physical component facts without changing the existing
-    /// logical stream or inline plugin callbacks. The channel is allocated only
-    /// on subscription; keys/payloads are built only while it has receivers.
+    /// Subscribes to physical component facts independently of logical events.
+    /// The channel is allocated only on subscription; keys/payloads are built
+    /// while a stream reader or an opted-in plugin can receive them.
     #[must_use]
     pub fn subscribe_layers(&self) -> broadcast::Receiver<LayerEvent> {
         self.inner
@@ -585,15 +597,60 @@ impl Events {
         }
     }
 
-    /// Emits a component fact to its independent stream. Zero receivers is a
-    /// normal lifecycle outcome. Inline logical plugin dispatch is unchanged.
+    /// Emits a physical fact to selected plugins and the independent stream.
     pub fn emit_layer(&self, event: LayerEvent) -> usize {
-        self.inner
+        let emission = self.emit_layer_checked(event);
+        for error in emission.plugin_errors {
+            tracing::warn!(%error, "amalgam: layer plugin event failed");
+        }
+        emission.subscribers
+    }
+    /// Preserves original plugin failures independently from stream delivery.
+    pub fn emit_layer_checked(&self, event: LayerEvent) -> EventEmission {
+        let plugin_errors = self
+            .plugin_host()
+            .map_or_else(Vec::new, |host| host.notify_layer(&event));
+        let subscribers = self
+            .inner
             .layers
             .get()
-            .map_or(0, |sender| sender.send(event).unwrap_or(0))
+            .map_or(0, |sender| sender.send(event).unwrap_or(0));
+        EventEmission {
+            subscribers,
+            plugin_errors,
+        }
+    }
+    pub(crate) fn operation_started(&self, operation: CacheOperation) {
+        if self
+            .inner
+            .plugins
+            .get()
+            .is_some_and(PluginEventRoute::has_observers)
+            && let Some(host) = self.plugin_host()
+        {
+            for error in host.notify_started(operation) {
+                tracing::warn!(%error, "amalgam: operation observer failed");
+            }
+        }
     }
 
+    pub(crate) fn component_read_deferred(
+        &self,
+        component: ComponentRead,
+        defer: impl FnOnce(PendingPluginEvent),
+    ) {
+        if self
+            .inner
+            .plugins
+            .get()
+            .is_some_and(PluginEventRoute::has_observers)
+            && let Some(batch) = self
+                .plugin_host()
+                .and_then(|host| host.capture(PluginObservations::All))
+        {
+            defer(batch.component_read(component));
+        }
+    }
     pub(crate) fn capacity(&self) -> usize {
         self.inner.capacity
     }
@@ -602,13 +659,65 @@ impl Events {
             .layers
             .get()
             .is_some_and(|sender| sender.receiver_count() > 0)
+            || self
+                .inner
+                .plugins
+                .get()
+                .is_some_and(PluginEventRoute::has_observers)
     }
 
     pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
-        if let Some(sender) = self.inner.layers.get()
-            && sender.receiver_count() > 0
+        self.emit_layer_deferred(make, PendingPluginEvent::deliver);
+    }
+    pub(crate) fn emit_layer_deferred(
+        &self,
+        make: impl FnOnce() -> LayerEvent,
+        defer: impl FnOnce(PendingPluginEvent),
+    ) {
+        let batch = if self
+            .inner
+            .plugins
+            .get()
+            .is_some_and(PluginEventRoute::has_observers)
         {
-            let _ = sender.send(make());
+            self.plugin_host()
+                .and_then(|host| host.capture(PluginObservations::All))
+        } else {
+            None
+        };
+        let sender = self
+            .inner
+            .layers
+            .get()
+            .filter(|sender| sender.receiver_count() > 0);
+        if batch.is_none() && sender.is_none() {
+            return;
+        }
+        let event = make();
+        if let Some(sender) = sender {
+            let _ = sender.send(event.clone());
+        }
+        if let Some(batch) = batch {
+            defer(batch.layer(event));
+        }
+    }
+    pub(crate) fn emit_deferred(&self, event: CacheEvent, defer: impl FnOnce(PendingPluginEvent)) {
+        let host = self.plugin_host();
+        let batch = host
+            .as_ref()
+            .and_then(|host| host.capture(PluginObservations::All));
+        // Existing Logical hooks retain their pre-effect timing. Opted-in All
+        // sessions use post-coordination delivery for logical and layer facts.
+        if let Some(host) = host {
+            for error in host.notify_legacy(&event) {
+                tracing::warn!(%error, "amalgam: plugin event failed");
+            }
+        }
+        if self.has_broadcast_receivers() {
+            let _ = self.inner.sender.send(event.clone());
+        }
+        if let Some(batch) = batch {
+            defer(batch.logical(event));
         }
     }
 

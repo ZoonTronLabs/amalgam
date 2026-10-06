@@ -7,8 +7,9 @@ use super::{
     EntryOptions, Error, FactoryCancellation, FactoryProduct, Fence, FlightGuard, Future,
     Instrument, KeyMutation, LayerEvent, LeaseError, LeasePolicy, LeasedMutation,
     LeasedWriteOutcome, LocalCommit, LocalEffect, MutationReceipt, Observed, OperationOutcome,
-    PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryItem, RecoveryWork,
-    Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker, lock, recovery_action,
+    OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryItem,
+    RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker, lock,
+    recovery_action,
 };
 use super::{RecoveryFence, component_span};
 
@@ -20,7 +21,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         started: Timestamp,
         guard: FlightGuard,
         cancellation: &FactoryCancellation,
-    ) -> Result<CacheValue<V>> {
+    ) -> Result<OriginCompletion<V>> {
         let product = product.into_payload()?;
         self.validate_options(&product.options)?;
         guard.proof()?;
@@ -43,16 +44,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 cancellation,
             )
             .await?;
-        match product.origin {
-            ProductOrigin::Modified => self.emit(CacheEvent::FactorySuccess {
-                key: Arc::clone(&key),
-            }),
-            ProductOrigin::NotModified | ProductOrigin::Constant => {}
-        }
         self.emit(CacheEvent::Set { key });
-        Ok(CacheValue {
+        let value = CacheValue {
             value,
             commit: CommitReceipt::Mutation(receipt),
+        };
+        Ok(match product.origin {
+            ProductOrigin::Modified | ProductOrigin::NotModified => {
+                OriginCompletion::Factory(value)
+            }
+            ProductOrigin::Constant => OriginCompletion::Constant(value),
         })
     }
     pub(super) async fn set(
@@ -250,7 +251,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         }
         self.close_circuit(CircuitComponent::Distributed);
-        self.inner.events.emit_layer_lazy(|| {
+        self.memory.emit_layer_lazy(|| {
             LayerEvent::Distributed(match data {
                 DataMutation::Set { .. } | DataMutation::Expire { .. } => DistributedEvent::Set {
                     key: Arc::from(key),
@@ -539,7 +540,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             ))
             .await?;
         self.close_circuit(CircuitComponent::Backplane);
-        self.inner.events.emit_layer_lazy(|| {
+        self.memory.emit_layer_lazy(|| {
             LayerEvent::Backplane(BackplaneEvent::MessagePublished { command: published })
         });
         self.emit(CacheEvent::MessagePublished { key });

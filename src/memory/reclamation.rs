@@ -1,10 +1,27 @@
 //! An operation retains retired values until its coordination guards are gone.
 use crate::entry::Entry;
+use crate::plugins::PendingPluginEvent;
 use std::sync::{Arc, Mutex};
 
 pub(crate) trait ReclamationFence: Send + Sync {}
 pub(super) struct Garbage<V> {
-    entries: Mutex<Vec<Entry<V>>>,
+    state: Mutex<Retired<V>>,
+}
+struct Retired<V> {
+    entries: Vec<Entry<V>>,
+    notifications: Vec<PendingPluginEvent>,
+}
+impl<V> Drop for Garbage<V> {
+    fn drop(&mut self) {
+        let state = self
+            .state
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for event in std::mem::take(&mut state.notifications) {
+            event.deliver();
+        }
+        // Entries are reclaimed after callbacks; no coordination/queue lock survives.
+    }
 }
 impl<V: Send + Sync> ReclamationFence for Garbage<V> {}
 
@@ -23,17 +40,32 @@ impl<V> Clone for Reclamation<V> {
 impl<V: Send + Sync + 'static> Reclamation<V> {
     pub(super) fn operation() -> Self {
         Self::Operation(Arc::new(Garbage {
-            entries: Mutex::new(Vec::new()),
+            state: Mutex::new(Retired {
+                entries: Vec::new(),
+                notifications: Vec::new(),
+            }),
         }))
     }
     pub(super) fn retain(&self, entry: Entry<V>) {
         match self {
             Self::Immediate => drop(entry),
             Self::Operation(owner) => owner
-                .entries
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entries
                 .push(entry),
+        }
+    }
+    pub(super) fn defer(&self, event: PendingPluginEvent) {
+        match self {
+            Self::Immediate => event.deliver(),
+            Self::Operation(owner) => owner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .notifications
+                .push(event),
         }
     }
     pub(super) fn fence(&self) -> Option<Arc<dyn ReclamationFence>> {

@@ -226,3 +226,47 @@ pub fn try_init_otlp(service_name: &str, endpoint: &str) -> Result<OtelGuard, Ot
         }
     }
 }
+
+/// Builds an application-owned native OTLP metric provider without modifying
+/// global tracing or the global meter provider. Use
+/// [`crate::OtelMetricsPlugin::from_provider`] with this provider, then shut caches
+/// down before flushing/shutting the provider down. With a current-thread Tokio
+/// runtime, invoke the SDK's blocking `force_flush`/`shutdown` via `spawn_blocking`.
+///
+/// # Errors
+/// Returns typed runtime, service identity or original exporter build failures.
+///
+/// ```no_run
+/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// let provider = amalgam::otel::otlp_meter_provider("service", "http://127.0.0.1:4317")?;
+/// let metrics = std::sync::Arc::new(amalgam::OtelMetricsPlugin::from_provider(&provider));
+/// let cache = amalgam::Cache::<u64>::builder().plugin(metrics).build();
+/// cache.try_set("key", 1).await?.wait().await?;
+/// cache.shutdown().await?;
+/// tokio::task::spawn_blocking(move || provider.shutdown()).await??;
+/// # Ok(())
+/// # }
+/// ```
+pub fn otlp_meter_provider(
+    service_name: &str,
+    endpoint: &str,
+) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, OtelInitError> {
+    if service_name.trim().is_empty() {
+        return Err(OtelInitError::BlankServiceName);
+    }
+    if tokio::runtime::Handle::try_current().is_err() {
+        return Err(OtelInitError::MissingRuntime);
+    }
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()?;
+    let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter).build();
+    let resource = Resource::builder()
+        .with_service_name(service_name.to_owned())
+        .build();
+    Ok(opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_reader(reader)
+        .with_resource(resource)
+        .build())
+}

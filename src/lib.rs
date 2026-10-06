@@ -92,8 +92,8 @@ pub use error::{
     ShutdownTask, TransportError,
 };
 pub use events::{
-    BackplaneEvent, CacheEvent, CacheLevel, CacheOperation, CircuitComponent, DistributedEvent,
-    EventEmission, EventStreamClosed, EventSubscription, Events, LayerEvent,
+    BackplaneEvent, CacheEvent, CacheLevel, CacheOperation, CircuitComponent, ComponentRead,
+    DistributedEvent, EventEmission, EventStreamClosed, EventSubscription, Events, LayerEvent,
     LayerEventSubscription, MemoryEvent, OperationOutcome,
 };
 pub use execution::{CancellationRequest, CancellationSource, FactoryCancellation};
@@ -116,8 +116,8 @@ pub use options::{
     Priority, RandomJitterSource, RemoveByTagBehavior,
 };
 pub use plugins::{
-    Plugin, PluginContext, PluginError, PluginHost, PluginRegistration, PluginSession, PluginStage,
-    PluginStopOutcome,
+    Plugin, PluginContext, PluginError, PluginHost, PluginObservations, PluginRegistration,
+    PluginSession, PluginStage, PluginStopOutcome,
 };
 pub use recovery::{
     AutoRecoveryService, DataMutation, EnqueueOutcome, MarkerMutationRecovery, MarkerMutationStage,
@@ -140,11 +140,17 @@ pub use serializers::MessagePackSerializer;
 #[cfg(feature = "postcard")]
 pub use serializers::PostcardSerializer;
 
+#[cfg(any(feature = "metrics", feature = "opentelemetry"))]
+pub use observability::CacheLabelBudget;
 #[cfg(feature = "metrics")]
-pub use observability::{CacheLabelBudget, MetricsPlugin};
+pub use observability::MetricsPlugin;
+#[cfg(feature = "opentelemetry")]
+pub use observability::{MetricTags, OtelMetricMeters, OtelMetricsPlugin};
 
 #[cfg(feature = "opentelemetry")]
-pub use otel::{OtelGuard, OtelInitError, init_otlp, otlp_layer, try_init_otlp};
+pub use otel::{
+    OtelGuard, OtelInitError, init_otlp, otlp_layer, otlp_meter_provider, try_init_otlp,
+};
 
 #[cfg(feature = "redis")]
 pub use redis_backend::{

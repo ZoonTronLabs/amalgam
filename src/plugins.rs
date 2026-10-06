@@ -8,8 +8,8 @@ use std::sync::{
 use tokio::sync::{Notify, watch};
 
 use crate::error::{ConfigError, IdentityField};
-use crate::events::{CacheEvent, Events};
-use crate::execution::Scopes;
+use crate::events::{CacheEvent, CacheOperation, ComponentRead, Events, LayerEvent};
+use crate::execution::{InlinePermit, Scopes};
 
 /// The lifecycle stage at which an external plugin failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +163,16 @@ impl PluginContext {
     }
 }
 
+/// Selects additional observation hooks without changing legacy callbacks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PluginObservations {
+    /// Existing logical events only.
+    #[default]
+    Logical,
+    /// Logical events, physical component facts and operation starts.
+    All,
+}
+
 /// Open plugin behavior. Existing implementations keep their legacy hooks;
 /// implementations needing per-cache state return an independent session.
 pub trait Plugin: Send + Sync {
@@ -172,6 +182,16 @@ pub trait Plugin: Send + Sync {
     fn on_start(&self) {}
     /// Legacy event callback.
     fn on_event(&self, event: &CacheEvent);
+    /// Selects additional callbacks; evaluated once on attachment.
+    fn observations(&self) -> PluginObservations {
+        PluginObservations::Logical
+    }
+    /// Observes a physical component fact when All was selected.
+    fn on_layer_event(&self, _event: &LayerEvent) {}
+    /// Observes a logical operation start when All was selected.
+    fn on_operation_started(&self, _operation: CacheOperation) {}
+    /// Observes an actual component read attempt when All was selected.
+    fn on_component_read(&self, _component: ComponentRead) {}
     /// Legacy teardown hook, called once for each owning cache.
     fn on_stop(&self) {}
     /// Whether attachment requires a Tokio runtime.
@@ -192,6 +212,22 @@ pub trait Plugin: Send + Sync {
 pub trait PluginSession: Send + Sync {
     /// Handles one event without blocking. Offload slow work to an owned task.
     fn on_event(&self, event: &CacheEvent) -> Result<(), PluginError>;
+    /// Selects additional callbacks; evaluated once on attachment.
+    fn observations(&self) -> PluginObservations {
+        PluginObservations::Logical
+    }
+    /// Observes a component fact after cache coordination guards are released.
+    fn on_layer_event(&self, _event: &LayerEvent) -> Result<(), PluginError> {
+        Ok(())
+    }
+    /// Observes the start independently from final completion/cancellation.
+    fn on_operation_started(&self, _operation: CacheOperation) -> Result<(), PluginError> {
+        Ok(())
+    }
+    /// Observes an attempted component read, independent of its result.
+    fn on_component_read(&self, _component: ComponentRead) -> Result<(), PluginError> {
+        Ok(())
+    }
     /// Releases this attachment's resources once.
     fn stop(&self) -> Result<(), PluginError> {
         Ok(())
@@ -215,13 +251,29 @@ enum Dispatch {
 }
 
 impl Dispatch {
-    fn event(&self, event: &CacheEvent) -> Result<(), PluginError> {
+    fn observations(&self) -> PluginObservations {
+        match self {
+            Self::Legacy(plugin) => plugin.observations(),
+            Self::Session(session) => session.observations(),
+        }
+    }
+    fn event(&self, notification: Notification<'_>) -> Result<(), PluginError> {
         match self {
             Self::Legacy(plugin) => {
-                plugin.on_event(event);
+                match notification {
+                    Notification::Logical(event) => plugin.on_event(event),
+                    Notification::Layer(event) => plugin.on_layer_event(event),
+                    Notification::Started(operation) => plugin.on_operation_started(operation),
+                    Notification::ComponentRead(component) => plugin.on_component_read(component),
+                }
                 Ok(())
             }
-            Self::Session(session) => session.on_event(event),
+            Self::Session(session) => match notification {
+                Notification::Logical(event) => session.on_event(event),
+                Notification::Layer(event) => session.on_layer_event(event),
+                Notification::Started(operation) => session.on_operation_started(operation),
+                Notification::ComponentRead(component) => session.on_component_read(component),
+            },
         }
     }
     fn stop(&self) -> Result<(), PluginError> {
@@ -250,6 +302,7 @@ enum SessionState {
 
 struct PluginSlot {
     name: Arc<str>,
+    observations: PluginObservations,
     state: Mutex<SessionState>,
     stopped: Notify,
 }
@@ -406,7 +459,88 @@ pub(crate) struct PluginHostInner {
     // Published under the slots write lock. Counts potential recipients,
     // including draining slots; actual admission still belongs to each slot.
     listeners: Arc<AtomicUsize>,
+    observers: Arc<AtomicUsize>,
     attachments: Arc<Scopes>,
+}
+
+#[derive(Clone, Copy)]
+enum Notification<'a> {
+    Logical(&'a CacheEvent),
+    Layer(&'a LayerEvent),
+    Started(CacheOperation),
+    ComponentRead(ComponentRead),
+}
+#[derive(Clone, Copy)]
+enum NotificationSelection {
+    Every,
+    Legacy,
+    Observers,
+}
+impl NotificationSelection {
+    fn selects(self, observations: PluginObservations) -> bool {
+        match self {
+            Self::Every => true,
+            Self::Legacy => observations == PluginObservations::Logical,
+            Self::Observers => observations == PluginObservations::All,
+        }
+    }
+}
+pub(crate) struct NotificationBatch {
+    callbacks: Vec<CallbackLease>,
+    _scope: InlinePermit<'static>,
+}
+impl NotificationBatch {
+    fn notify(&self, event: Notification<'_>) -> Vec<PluginError> {
+        let mut errors = Vec::new();
+        for callback in &self.callbacks {
+            let slot = &callback._guard.slot;
+            if let Err(error) = external(&slot.name, PluginStage::Event, || {
+                callback.dispatch.event(event)
+            }) {
+                errors.push(error);
+            }
+        }
+        errors
+    }
+    pub(crate) fn logical(self, event: CacheEvent) -> PendingPluginEvent {
+        PendingPluginEvent {
+            batch: self,
+            event: OwnedNotification::Logical(event),
+        }
+    }
+    pub(crate) fn component_read(self, component: ComponentRead) -> PendingPluginEvent {
+        PendingPluginEvent {
+            batch: self,
+            event: OwnedNotification::ComponentRead(component),
+        }
+    }
+    pub(crate) fn layer(self, event: LayerEvent) -> PendingPluginEvent {
+        PendingPluginEvent {
+            batch: self,
+            event: OwnedNotification::Layer(event),
+        }
+    }
+}
+enum OwnedNotification {
+    Logical(CacheEvent),
+    Layer(LayerEvent),
+    ComponentRead(ComponentRead),
+}
+pub(crate) struct PendingPluginEvent {
+    batch: NotificationBatch,
+    event: OwnedNotification,
+}
+impl PendingPluginEvent {
+    pub(crate) fn deliver(self) {
+        let event = match &self.event {
+            OwnedNotification::Logical(event) => Notification::Logical(event),
+            OwnedNotification::Layer(event) => Notification::Layer(event),
+            OwnedNotification::ComponentRead(component) => Notification::ComponentRead(*component),
+        };
+        for error in self.batch.notify(event) {
+            tracing::warn!(%error, "amalgam: deferred plugin event failed");
+        }
+    }
 }
 
 /// The event hub can check recipient admission without pinning an idle host.
@@ -414,9 +548,13 @@ pub(crate) struct PluginHostInner {
 pub(crate) struct PluginEventRoute {
     host: Weak<PluginHostInner>,
     listeners: Arc<AtomicUsize>,
+    observers: Arc<AtomicUsize>,
 }
 
 impl PluginEventRoute {
+    pub(crate) fn has_observers(&self) -> bool {
+        self.observers.load(Ordering::Acquire) != 0
+    }
     pub(crate) fn upgrade(&self) -> Option<Arc<PluginHostInner>> {
         if self.listeners.load(Ordering::Acquire) == 0 {
             None
@@ -436,17 +574,54 @@ impl PluginHostInner {
             HostState::Running(slots) => slots.len(),
             HostState::Stopped(_) => 0,
         };
+        let observers = match state {
+            HostState::Running(slots) => slots
+                .iter()
+                .filter(|slot| slot.observations == PluginObservations::All)
+                .count(),
+            HostState::Stopped(_) => 0,
+        };
+        self.observers.store(observers, Ordering::Release);
         self.listeners.store(count, Ordering::Release);
     }
 
     pub(crate) fn notify(&self, event: &CacheEvent) -> Vec<PluginError> {
-        if !self.has_listeners() {
-            return Vec::new();
+        self.capture(PluginObservations::Logical)
+            .map_or_else(Vec::new, |batch| batch.notify(Notification::Logical(event)))
+    }
+    pub(crate) fn notify_layer(&self, event: &LayerEvent) -> Vec<PluginError> {
+        self.capture(PluginObservations::All)
+            .map_or_else(Vec::new, |batch| batch.notify(Notification::Layer(event)))
+    }
+    pub(crate) fn notify_started(&self, operation: CacheOperation) -> Vec<PluginError> {
+        self.capture(PluginObservations::All)
+            .map_or_else(Vec::new, |batch| {
+                batch.notify(Notification::Started(operation))
+            })
+    }
+    pub(crate) fn notify_legacy(&self, event: &CacheEvent) -> Vec<PluginError> {
+        self.capture_selected(NotificationSelection::Legacy)
+            .map_or_else(Vec::new, |batch| batch.notify(Notification::Logical(event)))
+    }
+    pub(crate) fn capture(&self, observations: PluginObservations) -> Option<NotificationBatch> {
+        self.capture_selected(match observations {
+            PluginObservations::Logical => NotificationSelection::Every,
+            PluginObservations::All => NotificationSelection::Observers,
+        })
+    }
+    fn capture_selected(&self, selection: NotificationSelection) -> Option<NotificationBatch> {
+        let listeners = self.listeners.load(Ordering::Acquire);
+        let observers = self.observers.load(Ordering::Acquire);
+        let empty = match selection {
+            NotificationSelection::Every => listeners == 0,
+            NotificationSelection::Observers => observers == 0,
+            NotificationSelection::Legacy => listeners == observers,
+        };
+        if empty {
+            return None;
         }
-        let callback = self.attachments.inline();
-        if callback.admit().is_err() {
-            return Vec::new();
-        }
+        let scope = self.attachments.inline_owned();
+        scope.admit().ok()?;
         let slots = {
             let state = self
                 .slots
@@ -457,17 +632,19 @@ impl PluginHostInner {
                 HostState::Stopped(_) => Vec::new(),
             }
         };
-        let mut errors = Vec::new();
-        for slot in slots {
-            if let Some(callback) = slot.callback()
-                && let Err(error) = external(&slot.name, PluginStage::Event, || {
-                    callback.dispatch.event(event)
-                })
-            {
-                errors.push(error);
-            }
+        let callbacks: Vec<_> = slots
+            .into_iter()
+            .filter(|slot| selection.selects(slot.observations))
+            .filter_map(|slot| slot.callback())
+            .collect();
+        if callbacks.is_empty() {
+            None
+        } else {
+            Some(NotificationBatch {
+                callbacks,
+                _scope: scope,
+            })
         }
-        errors
     }
 
     fn closing_slots(&self) -> Vec<Arc<PluginSlot>> {
@@ -558,6 +735,7 @@ impl PluginHost {
                 context,
                 slots: RwLock::new(HostState::Running(Vec::with_capacity(plugins.len()))),
                 listeners: Arc::new(AtomicUsize::new(0)),
+                observers: Arc::new(AtomicUsize::new(0)),
                 attachments: Scopes::new(),
             }),
         };
@@ -615,8 +793,19 @@ impl PluginHost {
             Some(session) => Dispatch::Session(session),
             None => Dispatch::Legacy(plugin),
         };
+        let observations = match external(&name, PluginStage::Start, || Ok(dispatch.observations()))
+        {
+            Ok(observations) => observations,
+            Err(error) => {
+                if let Err(cleanup) = external(&name, PluginStage::Stop, || dispatch.stop()) {
+                    tracing::warn!(%cleanup, "amalgam: rejected observer attachment cleanup failed");
+                }
+                return Err(error);
+            }
+        };
         let slot = Arc::new(PluginSlot {
             name,
+            observations,
             state: Mutex::new(SessionState::Running {
                 dispatch: Arc::new(dispatch),
                 callbacks: 0,
@@ -715,6 +904,7 @@ impl PluginHost {
         PluginEventRoute {
             host: Arc::downgrade(&self.inner),
             listeners: Arc::clone(&self.inner.listeners),
+            observers: Arc::clone(&self.inner.observers),
         }
     }
 }

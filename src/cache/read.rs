@@ -6,9 +6,9 @@ use super::{
     FactoryContext, FallbackAvailability, FlightGuard, HitKind, HydrationFence, HydrationOutcome,
     Instrument, L1Read, L2ReadPolicy, LayerEvent, LeaseError, LeasePolicy, LinkMode,
     LocalParticipation, LockOutcome, LookupKey, MarkerReadPolicy, MaybeValue, MemoryEvent,
-    Observed, OperationOutcome, Ordering, OriginKind, ReadStale, Reason, Result, ShutdownTask,
-    SkipReason, Storage, Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded,
-    component_span, lease_lost, newer_of,
+    Observed, OperationOutcome, Ordering, OriginCompletion, OriginKind, ReadStale, Reason, Result,
+    ShutdownTask, SkipReason, Storage, Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised,
+    bounded, component_span, lease_lost, newer_of,
 };
 
 // Physical completion remains visible after a later marker timeout. The weak
@@ -24,14 +24,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let captured = self.inner.epoch.load(Ordering::Acquire);
         let now = self.inner.clock.now();
         let Some(entry) = self.memory.get_at(key, now).await else {
-            self.inner.events.emit_layer_lazy(|| {
+            self.memory.emit_layer_lazy(|| {
                 LayerEvent::Memory(MemoryEvent::Miss {
                     key: Arc::clone(key),
                 })
             });
             return Ok(L1Read::Miss);
         };
-        self.inner.events.emit_layer_lazy(|| {
+        self.memory.emit_layer_lazy(|| {
             LayerEvent::Memory(MemoryEvent::Hit {
                 key: Arc::clone(key),
                 stale: entry.is_logically_expired(now),
@@ -51,7 +51,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         Ok(match self.tags(&entry) {
             TagVerdict::Remove => {
                 if self.memory.remove_if_same(key, &entry).await.is_some() {
-                    self.inner.events.emit_layer_lazy(|| {
+                    self.memory.emit_layer_lazy(|| {
                         LayerEvent::Memory(MemoryEvent::Remove {
                             key: Arc::clone(key),
                         })
@@ -171,7 +171,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
     }
     fn distributed_miss(&self, key: &Arc<str>) {
-        self.inner.events.emit_layer_lazy(|| {
+        self.memory.emit_layer_lazy(|| {
             LayerEvent::Distributed(DistributedEvent::Miss {
                 key: Arc::clone(key),
             })
@@ -192,6 +192,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         cancellation.check()?;
         let hydration = self.hydration_fence(key).await;
+        self.memory
+            .component_read(crate::events::ComponentRead::Distributed);
         let bytes = backend.get(&self.inner.l2_key(key)).await?;
         self.close_circuit(CircuitComponent::Distributed);
         let Some(bytes) = bytes else {
@@ -209,7 +211,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             self.distributed_miss(key);
             return Ok(None);
         }
-        self.inner.events.emit_layer_lazy(|| {
+        self.memory.emit_layer_lazy(|| {
             LayerEvent::Distributed(DistributedEvent::Hit {
                 key: Arc::clone(key),
                 stale: source.is_logically_expired(now),
@@ -638,14 +640,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         };
         match result {
-            Some(Ok(value)) => Ok(Observed::new(
-                value,
-                OperationOutcome::Stored,
-                match O::KIND {
-                    OriginKind::Factory => Some(CacheLevel::Origin),
-                    OriginKind::Constant => None,
-                },
-            )),
+            Some(Ok(completion)) => {
+                let (value, level) = match completion {
+                    OriginCompletion::Factory(value) => {
+                        self.emit(CacheEvent::FactorySuccess {
+                            key: Arc::clone(&key),
+                        });
+                        (value, Some(CacheLevel::Origin))
+                    }
+                    OriginCompletion::Constant(value) => (value, None),
+                    OriginCompletion::Distributed(value) => (value, Some(CacheLevel::Distributed)),
+                };
+                Ok(Observed::new(value, OperationOutcome::Stored, level))
+            }
             Some(Err(error))
                 if matches!(
                     &error,
@@ -741,7 +748,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         });
         Ok(Some(value))
     }
-    fn background_origin(&self, key: Arc<str>, execution: Execution<CacheValue<V>>) {
+    fn background_origin(&self, key: Arc<str>, execution: Execution<OriginCompletion<V>>) {
         let worker = self.clone();
         let success = Arc::clone(&key);
         let _receiver = self.inner.tasks.spawn(
@@ -749,9 +756,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             key,
             self.inner.events.clone(),
             async move {
-                let result = execution.await?;
-                worker.emit(CacheEvent::BackgroundFactorySuccess { key: success });
-                drop(result);
+                match execution.await? {
+                    OriginCompletion::Factory(value) => {
+                        worker.emit(CacheEvent::BackgroundFactorySuccess { key: success });
+                        drop(value);
+                    }
+                    OriginCompletion::Constant(value) | OriginCompletion::Distributed(value) => {
+                        drop(value)
+                    }
+                }
                 Ok(())
             },
         );
@@ -782,7 +795,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::CooperativeLegacy=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
                 if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
-            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged});}
+            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}
             let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone()).with_invocation(crate::factory::FactoryInvocation::EagerRefresh);
             let started=worker.inner.clock.now();
             let origin=origin.invoke(ctx);

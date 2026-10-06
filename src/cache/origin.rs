@@ -1,7 +1,15 @@
 //! Statically dispatched factory and supplied-value origins.
 //! The distinct capture types avoid allocating or reserving a V-sized constant
 //! alternative in every user-factory future.
-use crate::{FactoryContext, FactoryError, FactoryProduct};
+use crate::{CacheValue, FactoryContext, FactoryError, FactoryProduct};
+
+/// A completed origin distinguishes actual factory work from supplied values
+/// and eager L2 reuse. The coordinator selects foreground/background once.
+pub(super) enum OriginCompletion<V> {
+    Factory(CacheValue<V>),
+    Constant(CacheValue<V>),
+    Distributed(CacheValue<V>),
+}
 use std::future::{Future, Ready, ready};
 
 #[derive(Clone, Copy)]

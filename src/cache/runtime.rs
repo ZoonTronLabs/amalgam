@@ -227,7 +227,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             Err(error) => {
                 if received.source_id.as_ref() != self.inner.instance_id.as_ref() {
                     self.close_circuit(CircuitComponent::Backplane);
-                    self.inner.events.emit_layer_lazy(|| {
+                    self.memory.emit_layer_lazy(|| {
                         LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: received })
                     });
                 }
@@ -247,7 +247,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         }
         self.close_circuit(CircuitComponent::Backplane);
-        self.inner.events.emit_layer_lazy(|| {
+        self.memory.emit_layer_lazy(|| {
             LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: received })
         });
         match command {
@@ -275,7 +275,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 let now = self.inner.clock.now();
                 let existing = self.memory.get_at(&key, now).await;
                 if message.action == BackplaneAction::Set {
-                    self.inner.events.emit_layer_lazy(|| {
+                    self.memory.emit_layer_lazy(|| {
                         LayerEvent::Memory(match &existing {
                             Some(entry) => MemoryEvent::Hit {
                                 key: Arc::clone(&key),

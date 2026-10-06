@@ -154,7 +154,7 @@ Unreleased `subscribe_layers()` exposes typed memory, distributed and backplane 
 
 Each cache has its own plugin sessions, including when a plugin object is shared. Dynamic registration detaches and stops exactly once. One event hub reports reads, misses, admission, eviction, origins, distributed effects and operation outcomes. Use the resilient event subscription when a slow observer must recover from broadcast lag.
 
-Metrics use a bounded cache-name label budget. Keys and instance IDs belong in traces rather than metric labels. OpenTelemetry exposes a composable layer; the convenience global initializer preserves an existing subscriber/provider on failure.
+Metrics use a bounded cache-name label budget. Keys and instance IDs belong in traces rather than metric labels. OpenTelemetry exposes a composable tracing layer and [native metric plugin](docs/NATIVE_METRICS.md) with application-owned providers and separate L1/L2/backplane scopes. The convenience tracing initializer preserves an existing subscriber/provider on failure.
 
 ## Features
 
@@ -165,7 +165,7 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 | `messagepack` | MessagePack snapshot/value-copy codec |
 | `postcard` | Postcard snapshot/value-copy codec |
 | `metrics` | Exporter-independent metrics plugin |
-| `opentelemetry` | Composable tracing and OTLP convenience initialization |
+| `opentelemetry` | Composable tracing, native metrics and OTLP provider helpers |
 | `full` | All integrations above |
 
 The default distributed namespace is **v2 with Prefix**. New codecs read legacy raw payloads, but running 0.2 nodes cannot read 0.3 framed snapshots. Use a coordinated fresh namespace. `KeyModifierMode::None` or intentional reuse of v1 requires a fresh physical prefix or a coordinated migration; it does not make a mixed-version rollout safe.

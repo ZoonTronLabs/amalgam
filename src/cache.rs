@@ -17,7 +17,7 @@ pub use blocking::{
     BlockingRuntimeError, BlockingThreadPool,
 };
 pub use builder::CacheBuilder;
-use origin::{CacheOrigin, ConstantOrigin, FactoryOrigin, OriginKind};
+use origin::{CacheOrigin, ConstantOrigin, FactoryOrigin, OriginCompletion, OriginKind};
 pub use plugin::{CachePlugin, CachePluginContext, PluginCache};
 use plugin::{InitialPlugin, PluginAccess, WorkAdmission};
 
@@ -667,7 +667,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     }
     fn emit(&self, event: CacheEvent) {
         if let CacheEvent::CircuitBreakerChange { component, closed } = &event {
-            self.inner.events.emit_layer_lazy(|| match component {
+            self.memory.emit_layer_lazy(|| match component {
                 CircuitComponent::Distributed => {
                     LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange {
                         closed: *closed,
@@ -679,21 +679,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             });
         }
         match &event {
-            CacheEvent::SerializationError { key, .. } => self.inner.events.emit_layer_lazy(|| {
+            CacheEvent::SerializationError { key, .. } => self.memory.emit_layer_lazy(|| {
                 LayerEvent::Distributed(DistributedEvent::SerializationError {
                     key: Arc::clone(key),
                 })
             }),
-            CacheEvent::DeserializationError { key, .. } => {
-                self.inner.events.emit_layer_lazy(|| {
-                    LayerEvent::Distributed(DistributedEvent::DeserializationError {
-                        key: Arc::clone(key),
-                    })
+            CacheEvent::DeserializationError { key, .. } => self.memory.emit_layer_lazy(|| {
+                LayerEvent::Distributed(DistributedEvent::DeserializationError {
+                    key: Arc::clone(key),
                 })
-            }
+            }),
             _ => {}
         }
-        self.inner.events.emit(event);
+        self.memory.emit(event);
     }
     #[inline]
     fn tags(&self, entry: &Entry<V>) -> TagVerdict {

@@ -52,12 +52,28 @@ retains the configured suppression policy. Real provider causes remain available
 through typed operation/receipt errors. Codecs and read deadlines do not declare
 the transport unhealthy. Breaker duration is zero (disabled) by default.
 
-Subscribers own their readers and handler scheduling. A cache-aware plugin may
-subscribe through `CachePluginContext::events()` and manage its reader in its
-session. Component broadcasts execute no new user callback under storage/lane
-locks. Legacy logical plugin dispatch and existing metrics remain unchanged.
-The channel is created on first subscription; payloads are built only while it
-has receivers. Late subscription observes future emissions, without replay.
+Subscribers own their readers and handler scheduling. Plugins can instead select
+`PluginObservations::All` once at attachment and implement `on_layer_event`,
+`on_operation_started` and `on_component_read`. Default `Logical` preserves the
+old callback set. Direct counted delivery does not depend on broadcast capacity.
+
+Cache-owned `All` callbacks capture their sessions when a fact occurs and run after
+the operation's coordination guards and clones are released. No callback runs
+under a storage/lane/local-flight/retirement-queue guard. Background ownership can
+postpone delivery; callbacks and stop are drained by shutdown. This also applies
+to the opted-in logical callbacks originating within the owned worker. Legacy
+`Logical` handlers retain their original inline timing, including pre-refresh
+`EagerRefresh`; they retain ordinary same-key coordination constraints. `OperationCompleted`
+and ready-path callbacks can arrive earlier than deferred physical facts; do
+not infer cross-stream/callback timing order. Original plugin failures are logged;
+explicit `Events::emit_layer_checked` returns the original failures while still
+sending the stream. Configurable scheduling/rethrow remains open.
+
+The channel is created on first subscription; payloads are built while a reader
+or selected plugin can receive them. Late attachment observes future facts,
+without replay. Physical retirement is observable even if the value was admitted
+before attachment; original-value capture remains separately configurable.
+[Native OpenTelemetry metrics](NATIVE_METRICS.md) use these counted hooks.
 
 ## Example
 
