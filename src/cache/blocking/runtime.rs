@@ -18,7 +18,7 @@ const MAX_ROOT_CALLBACKS: usize = 512;
 pub enum BlockingThreadPool {
     /// Workers driving asynchronous I/O and timers.
     IoWorkers,
-    /// Concurrent root synchronous callbacks; nested pools are separate.
+    /// Concurrent root callbacks per independent factory/acquisition pool.
     RootCallbacks,
 }
 /// Configuration rejection and operating-system failure remain distinct.
@@ -57,7 +57,7 @@ fn validate_threads(
 #[derive(Debug, thiserror::Error)]
 pub enum BlockingDispatchError {
     /// Nested callback dispatch exceeded the explicit resource bound.
-    #[error("synchronous factory nesting exceeds {limit} callbacks")]
+    #[error("synchronous callback nesting exceeds {limit} callbacks")]
     NestingLimit {
         /// Maximum number of offloaded callback ancestors, including this call.
         limit: usize,
@@ -71,8 +71,9 @@ pub enum BlockingDispatchError {
 }
 
 /// Driven executor for synchronous callers, independently of caller Tokio.
-/// A clone shares I/O and callback pools. Root callback concurrency is bounded;
-/// nested calls use up to 31 additional single-thread pools, created lazily.
+/// A clone shares I/O and callback pools. Factory and memory-acquisition roots
+/// each have the configured bound; blocking lock waiters cannot starve factories.
+/// Each class has up to 31 nested single-thread pools, created only as needed.
 #[derive(Clone)]
 pub struct BlockingRuntime {
     driver: Arc<Driver>,
@@ -81,7 +82,17 @@ struct Driver {
     handle: Handle,
     runtime: Option<Runtime>,
     root_callbacks: NonZeroUsize,
-    pools: Mutex<Vec<CallbackPool>>,
+    pools: Mutex<CallbackPools>,
+}
+#[derive(Default)]
+struct CallbackPools {
+    factories: Vec<CallbackPool>,
+    memory_locks: Vec<CallbackPool>,
+}
+#[derive(Clone, Copy)]
+enum CallbackClass {
+    Factory,
+    MemoryLock,
 }
 struct CallbackPool {
     runtime: Runtime,
@@ -95,8 +106,10 @@ impl Drop for Driver {
             .pools
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for pool in pools.drain(..) {
-            pool.runtime.shutdown_background();
+        for group in [&mut pools.factories, &mut pools.memory_locks] {
+            for pool in group.drain(..) {
+                pool.runtime.shutdown_background();
+            }
         }
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_background();
@@ -220,14 +233,15 @@ impl BlockingRuntime {
                 handle,
                 runtime: Some(runtime),
                 root_callbacks,
-                pools: Mutex::new(Vec::new()),
+                pools: Mutex::new(CallbackPools::default()),
             }),
         }
     }
     /// Positive I/O-worker and root-callback bounds are enforced by the types.
     /// I/O has its own 32-thread blocking bound, separate from callbacks.
-    /// Nested callbacks use separate lazy single-thread pools: at most 31 per
-    /// executor and 32 offloaded ancestors per call. Exceeding that depth returns
+    /// Factory and memory-acquisition callbacks have independent root bounds.
+    /// Each class has at most 31 lazy nested single-thread pools; each call has
+    /// at most 32 offloaded ancestors. Exceeding that depth returns
     /// a typed factory error; it does not park behind its own ancestor.
     /// Requests above 64 I/O workers or 512 root callbacks return a typed
     /// configuration error before any threads or queues are created.
@@ -287,10 +301,25 @@ impl BlockingRuntime {
         &self,
         parents: &FactoryLineage,
     ) -> Result<FactoryExecutor, BlockingDispatchError> {
-        // Every wait goes to a strictly deeper pool, even across drivers.
-        // Opposite A -> B and B -> A roots cannot wait on occupied root pools.
+        self.callback_executor(parents, CallbackClass::Factory)
+    }
+    pub(super) fn memory_lock_executor(
+        &self,
+        parents: &FactoryLineage,
+    ) -> Result<FactoryExecutor, BlockingDispatchError> {
+        self.callback_executor(parents, CallbackClass::MemoryLock)
+    }
+    fn callback_executor(
+        &self,
+        parents: &FactoryLineage,
+        class: CallbackClass,
+    ) -> Result<FactoryExecutor, BlockingDispatchError> {
+        // Lock waiters never occupy the slots needed by their owning factory.
+        // Nested callbacks also descend, including opposite cross-driver calls.
         let (pool, depth) = parents.depth.descend()?;
-        let (handle, permits) = self.pool(pool).map_err(BlockingDispatchError::Executor)?;
+        let (handle, permits) = self
+            .pool(pool, class)
+            .map_err(BlockingDispatchError::Executor)?;
         Ok(FactoryExecutor {
             handle,
             permits,
@@ -300,8 +329,16 @@ impl BlockingRuntime {
             },
         })
     }
-    fn pool(&self, depth: PoolDepth) -> std::io::Result<(Handle, Arc<Semaphore>)> {
-        let mut pools = lock(&self.driver.pools);
+    fn pool(
+        &self,
+        depth: PoolDepth,
+        class: CallbackClass,
+    ) -> std::io::Result<(Handle, Arc<Semaphore>)> {
+        let mut groups = lock(&self.driver.pools);
+        let pools = match class {
+            CallbackClass::Factory => &mut groups.factories,
+            CallbackClass::MemoryLock => &mut groups.memory_locks,
+        };
         while pools.len() <= depth.0 {
             let slots = if pools.is_empty() {
                 self.driver.root_callbacks.get()

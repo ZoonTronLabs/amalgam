@@ -114,8 +114,8 @@ pub use memory::{
     CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore, MemoryUsage,
 };
 pub use memory_locker::{
-    MemoryLock, MemoryLockGuard, MemoryLockKind, MemoryLockOutcome, MemoryLockRequest,
-    MemoryLocker, MemoryLockerContext, MemoryLockerError,
+    BlockingMemoryLocker, MemoryLock, MemoryLockGuard, MemoryLockKind, MemoryLockOutcome,
+    MemoryLockRequest, MemoryLocker, MemoryLockerContext, MemoryLockerError,
 };
 pub use memory_storage::{
     MemoryCondition, MemoryGeneration, MemoryNamespace, MemoryRecord, MemoryRetirement,

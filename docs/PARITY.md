@@ -70,7 +70,14 @@ Unreleased [supplied value L1](MEMORY_STORAGE.md) adds an actual in-process
 typed original failures, atomic conditional admission and prefix-scoped shared
 clear barriers preserve value eligibility and newer writes. Storage sharing does
 not imply shared factory ownership; providers own capacity and remain externally
-owned. Separate marker storage and broader provider matrices remain open.
+owned. Optional `BlockingMemoryLocker` now supplies a distinct synchronous
+acquisition callback; async views retain the async provider, and legacy
+implementations keep their adapter. Independent bounded callback pools prevent
+lock waiters from starving factories; started callbacks and late guards remain
+owned until real completion. `ShutdownTask::MemoryLockerAcquisition` is an
+additive closed variant requiring exhaustive downstream handling. See
+[local coordination](MEMORY_LOCKER.md). Separate marker storage and broader
+provider matrices remain open.
 
 ## Observable behavior
 

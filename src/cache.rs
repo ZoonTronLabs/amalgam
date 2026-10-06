@@ -1,6 +1,8 @@
 //! Multi-level orchestration with fallible boundaries and owned work.
 mod api;
 mod blocking;
+pub(crate) use blocking::MemoryAcquireRoute;
+use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
 mod markers;
 mod origin;
@@ -177,6 +179,7 @@ enum ExecutorOwnership {
     CacheOwned(BlockingRuntime),
 }
 enum PublicLifetime<V: Clone + Send + Sync + 'static> {
+    NativeMemory(NativeMemoryView<V>),
     PluginAccess(Arc<PluginAccess>),
     External(Arc<CacheInner<V>>),
     CacheOwned {
@@ -187,7 +190,7 @@ enum PublicLifetime<V: Clone + Send + Sync + 'static> {
 impl<V: Clone + Send + Sync + 'static> Drop for PublicLifetime<V> {
     fn drop(&mut self) {
         match self {
-            Self::PluginAccess(_) => {}
+            Self::PluginAccess(_) | Self::NativeMemory(_) => {}
             Self::External(inner) => {
                 inner.close();
             }

@@ -424,7 +424,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let local = match self
             .inner
             .locks
-            .acquire(key, crate::MemoryLockKind::Entry, timeout, cancellation)
+            .acquire(
+                key,
+                crate::MemoryLockKind::Entry,
+                timeout,
+                cancellation,
+                self.memory_acquire_route(),
+            )
             .await?
         {
             Some(local) => LocalParticipation::Held(self.memory.guard(local)),

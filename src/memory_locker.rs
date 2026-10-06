@@ -170,6 +170,20 @@ pub enum MemoryLockOutcome {
     Unavailable,
 }
 
+/// Optional synchronous acquisition used by the native cache view.
+///
+/// The host runs this callback on its bounded callback executor and enforces
+/// acquisition cancellation/deadlines without blocking I/O. A started callback
+/// remains owned until it finishes, including any late guard. Implementations
+/// should observe the request's acquisition-only cancellation token.
+pub trait BlockingMemoryLocker: Send + Sync + 'static {
+    /// Acquires synchronously; absence, original failure and cancellation differ.
+    fn acquire(
+        &self,
+        request: MemoryLockRequest,
+    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError>;
+}
+
 /// Independently supplied local coordination for entries and marker factories.
 #[allow(
     clippy::double_must_use,
@@ -177,6 +191,12 @@ pub enum MemoryLockOutcome {
 )]
 #[async_trait]
 pub trait MemoryLocker: Send + Sync + 'static {
+    /// Optional owned synchronous capability. Captured once during construction;
+    /// native calls select it, while async views retain `acquire` below.
+    /// Existing providers keep the asynchronous native adapter by default.
+    fn blocking_acquirer(&self) -> Option<Arc<dyn BlockingMemoryLocker>> {
+        None
+    }
     /// Acquires a guard. The host enforces the supplied timeout and cancellation;
     /// providers should also observe the token for their own cooperative work.
     async fn acquire(

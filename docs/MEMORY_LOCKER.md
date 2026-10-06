@@ -36,7 +36,31 @@ Success ends this acquisition token with `ScopeFinished`. The factory receives
 its separate active token; acquisition timeout cannot cancel it. With no guard,
 the existing memory-lock policy serves eligible stale data or permits an unlocked
 ordinary factory. Eager work uses `try_acquire`, which must never block; no guard
-means skip. Cooperative cancellation cannot interrupt opaque synchronous code.
+means skip.
+
+## Native and asynchronous acquisition
+
+`MemoryLocker::blocking_acquirer` optionally returns an owned
+`Arc<dyn BlockingMemoryLocker>`. The host captures it once during construction.
+Native value and marker calls select its synchronous `acquire`; `as_async()`
+always selects the original asynchronous method, including inside a native
+factory. Both capabilities must coordinate the same guards. Existing providers
+return `None` by default and retain the driven asynchronous native adapter.
+Eager refresh still selects nonblocking `try_acquire`.
+
+The host offloads blocking acquisition to a bounded pool independent of user
+factories. A waiting lock cannot occupy the factory slot required to release it.
+The acquisition callback has no caller-thread affinity guarantee. Cancellation
+and deadlines can return promptly even when a started callback ignores its
+signal; its execution, captures and late guard remain owned and counted until
+actual completion. The late guard is released once. An opaque callback that
+never finishes therefore prevents complete drainage, although the caller can
+cancel its wait. See [runtime bounds](SYNC.md).
+
+Acquisition and native guard release reject attempts to flush or shut down their
+own cache with `Error::ReentrantDrain`. Panic join causes remain intact and are
+reported under `ShutdownTask::MemoryLockerAcquisition`. This additive closed
+variant requires exhaustive consumers of `ShutdownTask` to handle it.
 
 Explicit owning-cache shutdown first drains factories, counted callbacks and
 owned cleanup, then awaits one provider hook for that cache context. The hook
@@ -57,17 +81,21 @@ The reference is FusionCache source v2.9.0 at
 `af09f81a3ea8d7ed71183b46501946da801a2a22`,
 [IFusionCacheMemoryLocker](https://github.com/ZiggyCreatures/FusionCache/blob/af09f81a3ea8d7ed71183b46501946da801a2a22/src/ZiggyCreatures.FusionCache/Locking/IFusionCacheMemoryLocker.cs).
 Its sync/async methods return an opaque lock object and release separately;
-Rust adapts ownership into a consuming guard and drives asynchronous acquisition
-through the existing native executor. The Rust provider API does not add a
-separate blocking acquisition callback. Its per-cache shutdown context permits
-sharing; it is not a claim of literal .NET IDisposable behavior.
+Rust adapts ownership into a consuming guard and supplies distinct synchronous
+and asynchronous acquisition through the optional capability above. The host's
+bounded offloading, cancellation and per-cache shutdown context are explicit
+Rust adaptations, not literal .NET thread-affinity or IDisposable behavior.
 
 `memory_locker_contract` supplies an external implementation and checks same-key
 single flight, independent keys, hot-hit bypass, finite waits, stale/null-lock
 fallback, cause preservation, caller cancellation/drop, hard factory timeout,
 background guard retention, entry/marker namespace separation during a cold L2
 flight, value/marker eager attempts, native/async views, shared ownership and
-interrupted/idempotent teardown. Broader custom-provider/native option matrices
-remain part of the full contract inventory. [Supplied value L1](MEMORY_STORAGE.md)
+interrupted/idempotent teardown. `blocking_memory_locker_contract` additionally
+checks distinct method selection, legacy fallback, mixed single flight,
+independent keys, root-one pool starvation, nested opposite caches, ignored
+cancellation/deadlines and late guards, queued cancellation, original errors,
+panics, marker/eager selection and native soft-timeout ownership. Broader
+custom-provider/native option matrices remain part of the full contract inventory. [Supplied value L1](MEMORY_STORAGE.md)
 is also implemented; the wider family and full FusionCache functionality remain
 open.

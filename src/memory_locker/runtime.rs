@@ -23,6 +23,7 @@ pub(crate) enum LocalLocks {
 }
 pub(crate) struct ConfiguredLocker {
     provider: Arc<dyn MemoryLocker>,
+    blocking: Option<Arc<dyn BlockingMemoryLocker>>,
     context: MemoryLockerContext,
     shutdown_started: AtomicBool,
 }
@@ -35,11 +36,18 @@ impl LocalLocks {
     ) -> Self {
         match provider {
             Some(provider) => Self::Custom(Arc::new(ConfiguredLocker {
+                blocking: provider.blocking_acquirer(),
                 provider,
                 context: MemoryLockerContext { name, instance_id },
                 shutdown_started: AtomicBool::new(false),
             })),
             None => Self::Builtin(Box::new(KeyedLock::new(shards))),
+        }
+    }
+    pub(crate) fn has_blocking_acquirer(&self) -> bool {
+        match self {
+            Self::Builtin(_) => false,
+            Self::Custom(locker) => locker.blocking.is_some(),
         }
     }
     pub(crate) fn for_markers(&self) -> Self {
@@ -59,13 +67,16 @@ impl LocalLocks {
         kind: MemoryLockKind,
         timeout: Timeout,
         parent: &FactoryCancellation,
+        route: crate::cache::MemoryAcquireRoute<'_>,
     ) -> Result<Option<LocalGuard>> {
         parent.check()?;
         match self {
             Self::Builtin(locker) => Ok(crate::cache::bounded(timeout, locker.lock(key))
                 .await?
                 .map(LocalGuard::Builtin)),
-            Self::Custom(locker) => Box::pin(locker.acquire(key, kind, timeout, parent)).await,
+            Self::Custom(locker) => {
+                Box::pin(locker.acquire(key, kind, timeout, parent, route)).await
+            }
         }
     }
     pub(crate) fn try_acquire(
@@ -149,12 +160,28 @@ impl ConfiguredLocker {
             cancellation,
         }
     }
+    async fn acquire_provider(
+        &self,
+        request: MemoryLockRequest,
+        route: crate::cache::MemoryAcquireRoute<'_>,
+    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+        match (route, &self.blocking) {
+            (crate::cache::MemoryAcquireRoute::Native(work), Some(provider)) => {
+                work.acquire(Arc::clone(provider), request).await
+            }
+            (crate::cache::MemoryAcquireRoute::Asynchronous, _)
+            | (crate::cache::MemoryAcquireRoute::Native(_), None) => {
+                self.provider.acquire(request).await
+            }
+        }
+    }
     async fn acquire(
         &self,
         key: &Arc<str>,
         kind: MemoryLockKind,
         timeout: Timeout,
         parent: &FactoryCancellation,
+        route: crate::cache::MemoryAcquireRoute<'_>,
     ) -> Result<Option<LocalGuard>> {
         crate::cache::validate_budget(timeout)?;
         if timeout == Timeout::After(std::time::Duration::ZERO) {
@@ -167,7 +194,7 @@ impl ConfiguredLocker {
         let scope = WaitScope::new(parent, dropped);
         let request = self.request(key, kind, timeout, scope.source.token());
         let wait = GuardedWait {
-            work: self.provider.acquire(request),
+            work: Box::pin(self.acquire_provider(request, route)),
             scope,
         };
         let result = tokio::select! {
@@ -217,10 +244,10 @@ struct GuardedWait<F> {
     work: F,
     scope: WaitScope,
 }
-impl<T> Future for GuardedWait<Pin<Box<dyn Future<Output = T> + Send + '_>>> {
-    type Output = T;
+impl<F: Future + Unpin> Future for GuardedWait<F> {
+    type Output = F::Output;
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let result = self.work.as_mut().poll(cx);
+        let result = Pin::new(&mut self.work).poll(cx);
         if result.is_ready() {
             self.scope.source.cancel_with(Reason::ScopeFinished);
         }

@@ -236,6 +236,8 @@ pub enum ShutdownTask {
     Maintenance,
     /// Releasing an owned distributed lease.
     LeaseRelease,
+    /// A supervised synchronous local lock acquisition and its late guard.
+    MemoryLockerAcquisition,
     /// Draining the configured local memory locker for this cache.
     MemoryLocker,
 }
@@ -251,6 +253,7 @@ impl ShutdownTask {
             Self::Recovery => "recovery",
             Self::Maintenance => "maintenance",
             Self::LeaseRelease => "lease_release",
+            Self::MemoryLockerAcquisition => "memory_locker_acquisition",
             Self::MemoryLocker => "memory_locker",
         }
     }

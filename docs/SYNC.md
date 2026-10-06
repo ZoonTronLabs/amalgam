@@ -37,17 +37,20 @@ rules: an explicit default can activate its soft budget without stale data.
 Released FusionCache 2.9 does not activate that soft budget without stale data;
 this remains a documented semantic difference.
 
-The default executor has two I/O workers and at most 32 root callback threads.
+The default executor has two I/O workers and at most 32 root callback threads
+per callback class. User factories and optional synchronous memory acquisition
+have independent lazy pools: lock waiters cannot occupy their owning factories'
+slots. The default built-in locker does not create an acquisition pool.
 `with_workers` accepts positive counts and rejects more than 64 I/O workers or
-512 root callback threads with `BlockingRuntimeError::ThreadLimit` before
-starting any threads. I/O has a separate 32-thread blocking allowance.
+512 root callback threads per class with `BlockingRuntimeError::ThreadLimit`
+before starting any threads. I/O has a separate 32-thread blocking allowance.
 
 Nested offloaded calls use their global callback depth, including across
 executors. Every child waits for a deeper callback pool; opposite A-to-B and
 B-to-A roots cannot wait on each other's occupied root pools. Up to 31 lazy
-single-thread nested pools exist per executor. More than 32 offloaded ancestors
-returns `BlockingDispatchError::NestingLimit` through the preserved factory
-error chain. These explicit resource bounds differ from .NET ThreadPool policy.
+single-thread nested pools exist per executor per callback class. More than 32
+offloaded ancestors returns `BlockingDispatchError::NestingLimit` through the
+preserved factory or memory-locker error chain. These explicit resource bounds differ from .NET ThreadPool policy.
 They do not make arbitrary user-created dependency cycles or barriers safe.
 
 Admission acquires a callback permit before submitting blocking work. Cancelled
@@ -60,7 +63,8 @@ result destruction and original panic join cause until actual completion.
 `flush_pending()` observes current scheduled work. Calling either drainage
 operation from an active synchronous factory of that cache returns
 `Error::ReentrantDrain` before changing lifecycle. This guard also applies
-through its async view and survives nested dispatch. Async factories awaiting
+through its async view and survives nested dispatch. It also covers optional
+synchronous memory acquisition and its guard release. Async factories awaiting
 their own shutdown are not covered by this synchronous callback guard.
 Dropping the last public sync/async handle requests close and retains the owned
 executor through asynchronous drainage. Explicit shutdown reports failures.
@@ -76,5 +80,6 @@ observes storage/publication and cleanup, not peer receipt of a notification.
 
 Public runtime, mixed-view and real Redis/Valkey contracts are in
 `blocking_contract`, `blocking_mixed_contract`, `blocking_scheduling`,
-`blocking_redis` and `constant_origin_contract`. They are targeted evidence,
+`blocking_redis`, `blocking_memory_locker_contract` and
+`constant_origin_contract`. They are targeted evidence,
 not a claim of complete FusionCache functionality. See [the open inventory](FULL_CONTRACT.md).

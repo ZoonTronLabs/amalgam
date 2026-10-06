@@ -19,15 +19,22 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         let cache = runtime.run(async move {
             builder.try_build_with_executor(ExecutorOwnership::CacheOwned(owned))
         })?;
+        let cache = NativeMemoryView::bind(cache, &runtime);
         Ok(Self { cache, runtime })
     }
     pub(in crate::cache) fn plugin_view(cache: Cache<V>, runtime: BlockingRuntime) -> Self {
+        let cache = NativeMemoryView::bind(cache, &runtime);
         Self { cache, runtime }
     }
     /// Borrows the same cache for asynchronous operations; cloned async handles
     /// retain its executor and participate in the same final-owner lifecycle.
     pub fn as_async(&self) -> &Cache<V> {
-        &self.cache
+        match &*self.cache.lifetime {
+            PublicLifetime::NativeMemory(view) => view.source(),
+            PublicLifetime::External(_)
+            | PublicLifetime::CacheOwned { .. }
+            | PublicLifetime::PluginAccess(_) => &self.cache,
+        }
     }
     /// Borrows the driven executor shared by this cache and its scheduled work.
     pub fn runtime(&self) -> &BlockingRuntime {

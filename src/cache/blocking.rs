@@ -8,7 +8,10 @@ use crate::commit::TaskResult;
 use crate::factory::FactoryInvocation;
 use std::thread::{self, ThreadId};
 mod api;
+mod memory_locker;
 mod runtime;
+pub(super) use memory_locker::NativeMemoryView;
+pub(crate) use memory_locker::{MemoryAcquireRoute, NativeMemoryWork};
 use runtime::FactoryLineage;
 pub use runtime::{
     BlockingDispatchError, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool,

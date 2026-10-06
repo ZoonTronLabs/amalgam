@@ -177,6 +177,7 @@ impl Tasks {
                         ShutdownTask::Factory
                             | ShutdownTask::Distributed
                             | ShutdownTask::LeaseRelease
+                            | ShutdownTask::MemoryLockerAcquisition
                     ) && !*task.finished.borrow()
                 })
                 .map(|task| task.finished.clone())

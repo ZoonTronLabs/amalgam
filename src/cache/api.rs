@@ -147,8 +147,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     WorkAdmission::Ordinary
                 }
                 PublicLifetime::PluginAccess(access) => {
-                    WorkAdmission::Plugin(access.scopes(&self.inner.scopes))
+                    WorkAdmission::plugin(access.scopes(&self.inner.scopes))
                 }
+                PublicLifetime::NativeMemory(view) => view.work(),
             },
         }
     }
@@ -160,8 +161,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     WorkAdmission::Ordinary
                 }
                 PublicLifetime::PluginAccess(access) => {
-                    WorkAdmission::Plugin(access.scopes(&self.inner.scopes))
+                    WorkAdmission::plugin(access.scopes(&self.inner.scopes))
                 }
+                PublicLifetime::NativeMemory(view) => view.work(),
             },
         }
     }

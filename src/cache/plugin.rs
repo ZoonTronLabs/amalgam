@@ -1,7 +1,7 @@
 //! Typed plugin access to the owning cache without a public lifetime cycle.
 use super::{
-    Arc, BlockingCache, BlockingRuntime, Cache, CacheInner, InlinePermit, PublicLifetime, Scopes,
-    Weak, Worker,
+    Arc, BlockingCache, BlockingRuntime, Cache, CacheInner, InlinePermit, MemoryAcquireRoute,
+    NativeMemoryWork, PublicLifetime, Scopes, Weak, Worker,
 };
 use crate::plugins::{Plugin, PluginContext, PluginError, PluginSession};
 use std::ops::Deref;
@@ -229,9 +229,44 @@ impl Drop for Cleanup<'_> {
 #[derive(Clone)]
 pub(super) enum WorkAdmission {
     Ordinary,
+    Scoped(Arc<WorkContext>),
+}
+pub(super) enum WorkContext {
     Plugin(Arc<Scopes>),
+    NativeMemory(NativeMemoryWork),
+}
+impl WorkAdmission {
+    #[cold]
+    pub(super) fn plugin(scopes: Arc<Scopes>) -> Self {
+        Self::Scoped(Arc::new(WorkContext::Plugin(scopes)))
+    }
+    #[cold]
+    pub(super) fn native(work: NativeMemoryWork) -> Self {
+        Self::Scoped(Arc::new(WorkContext::NativeMemory(work)))
+    }
+}
+impl WorkContext {
+    #[cold]
+    fn scopes(&self) -> &Arc<Scopes> {
+        match self {
+            Self::Plugin(scopes) => scopes,
+            Self::NativeMemory(work) => work.scopes(),
+        }
+    }
+    fn memory_acquire_route(&self) -> MemoryAcquireRoute<'_> {
+        match self {
+            Self::Plugin(_) => MemoryAcquireRoute::Asynchronous,
+            Self::NativeMemory(work) => MemoryAcquireRoute::Native(work),
+        }
+    }
 }
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
+    pub(in crate::cache) fn memory_acquire_route(&self) -> MemoryAcquireRoute<'_> {
+        match &self.admission {
+            WorkAdmission::Ordinary => MemoryAcquireRoute::Asynchronous,
+            WorkAdmission::Scoped(context) => context.memory_acquire_route(),
+        }
+    }
     pub(super) fn ordinary(inner: Arc<CacheInner<V>>) -> Self {
         Self {
             memory: inner.memory.for_operation(),
@@ -242,7 +277,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     pub(super) fn scopes(&self) -> &Arc<Scopes> {
         match &self.admission {
             WorkAdmission::Ordinary => &self.inner.scopes,
-            WorkAdmission::Plugin(scopes) => scopes,
+            WorkAdmission::Scoped(context) => context.scopes(),
         }
     }
 }
@@ -253,6 +288,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 Arc::clone(&self.inner.scopes)
             }
             PublicLifetime::PluginAccess(access) => access.scopes(&self.inner.scopes),
+            PublicLifetime::NativeMemory(view) => view.source().operation_scopes(),
         }
     }
     pub(super) fn inline(&self) -> InlinePermit<'_> {
@@ -263,10 +299,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             PublicLifetime::PluginAccess(access) => {
                 access.scopes(&self.inner.scopes).inline_owned()
             }
+            PublicLifetime::NativeMemory(view) => view.source().inline(),
         }
     }
     pub(super) fn check_plugin_drain(&self, operation: crate::DrainOperation) -> crate::Result<()> {
         match &*self.lifetime {
+            PublicLifetime::NativeMemory(view) => view.source().check_plugin_drain(operation),
             PublicLifetime::PluginAccess(access) if access.is_stopping() => {
                 Err(crate::Error::ReentrantDrain { operation })
             }

@@ -270,6 +270,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 crate::MemoryLockKind::Marker(kind.clone()),
                 self.marker_lock_timeout(before_lock),
                 cancellation,
+                self.memory_acquire_route(),
             )
             .await?
             .map(|guard| self.memory.guard(guard));
