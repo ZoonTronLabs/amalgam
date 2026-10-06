@@ -6,6 +6,7 @@ mod markers;
 mod origin;
 mod plugin;
 mod read;
+mod ready;
 mod recovery;
 mod runtime;
 mod write;
@@ -616,58 +617,17 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         Ok(opts)
     }
     fn validate_options(&self, opts: &EntryOptions) -> Result<()> {
-        opts.validate_with_cloner(self.inner.cloner.as_deref())?;
-        self.validate_execution_options(opts, OptionsTarget::Value)
+        self.inner.validate_options(opts)
     }
     fn validate_marker_options(&self, opts: &EntryOptions) -> Result<()> {
-        opts.validate()?;
-        self.validate_execution_options(opts, OptionsTarget::Marker)
+        self.inner.validate_marker_options(opts)
     }
     fn validate_execution_options(&self, opts: &EntryOptions, target: OptionsTarget) -> Result<()> {
-        for timeout in [
-            opts.memory_lock_timeout(),
-            opts.distributed_lock_timeout(),
-            opts.factory_soft_timeout(),
-            opts.factory_hard_timeout(),
-            opts.distributed_soft_timeout(),
-            opts.distributed_hard_timeout(),
-        ] {
-            validate_budget(timeout)?;
-        }
-        if self.options_require_runtime(opts, target)
-            && tokio::runtime::Handle::try_current().is_err()
-        {
-            return Err(ConfigError::MissingRuntime {
-                component: RuntimeComponent::Execution,
-            }
-            .into());
-        }
-        Ok(())
-    }
-    fn options_require_runtime(&self, opts: &EntryOptions, target: OptionsTarget) -> bool {
-        let timers = [
-            opts.memory_lock_timeout(),
-            opts.factory_soft_timeout(),
-            opts.factory_hard_timeout(),
-            opts.distributed_soft_timeout(),
-            opts.distributed_hard_timeout(),
-        ]
-        .into_iter()
-        .any(|timeout| matches!(timeout,Timeout::After(duration) if !duration.is_zero()));
-        let distributed = match target {
-            OptionsTarget::Value => matches!(self.inner.storage, Storage::Hybrid { .. }),
-            OptionsTarget::Marker => matches!(self.inner.markers, MarkerAccess::Durable(_)),
-        };
-        let background = opts.eager_refresh_threshold().is_some()
-            || opts.allow_background_distributed_operations() && distributed
-            || opts.allow_background_backplane_operations() && self.inner.backplane.is_some();
-        timers
-            || background
-            || !opts.skip_distributed_locker() && self.inner.distributed_locker.is_some()
+        self.inner.validate_execution_options(opts, target)
     }
     #[inline]
     fn copy(&self, value: &V, opts: &EntryOptions) -> Result<V> {
-        crate::serializers::copy_value(value, opts, self.inner.cloner.as_deref())
+        self.inner.copy(value, opts)
     }
     fn stale_info(&self, entry: &Entry<V>, opts: &EntryOptions) -> Result<StaleInfo<V>> {
         Ok(StaleInfo {
@@ -737,15 +697,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     }
     #[inline]
     fn tags(&self, entry: &Entry<V>) -> TagVerdict {
-        if self.inner.disable_tagging {
-            TagVerdict::Valid
-        } else {
-            self.inner.tags.evaluate(
-                entry.meta().created(),
-                entry.meta().tags(),
-                self.inner.remove_by_tag_behavior,
-            )
-        }
+        self.inner.tags(entry)
     }
     fn circuit(&self, component: CircuitComponent) -> bool {
         let circuit = match component {

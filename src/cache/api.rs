@@ -293,8 +293,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         permit: &InlinePermit<'_>,
     ) -> Result<Option<V>> {
         permit.status(token)?;
-        let worker = self.worker();
-        worker.start_maintenance();
+        let context = self.ready_context();
+        let ready = context.inner();
         if self.inner.wait_for_initial_backplane_subscribe
             && !self.inner.subscription_admitted.load(Ordering::Acquire)
             || options.is_none() && self.inner.default_options_provider.is_some()
@@ -302,11 +302,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             return Ok(None);
         }
         let opts = options.unwrap_or(&self.inner.default_options);
-        worker.validate_options(opts)?;
+        ready.validate_options(opts)?;
         if opts.skip_memory_read() {
             return Ok(None);
         }
-        worker.ensure_health();
+        context.ensure_health();
         permit.status(token)?;
         let now = self.inner.clock.now();
         permit.status(token)?;
@@ -315,10 +315,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let Some(entry) = entry else {
             return Ok(None);
         };
-        if worker.tags(&entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
+        if ready.tags(&entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
             return Ok(None);
         }
-        if !worker.marker_reads_ready(entry.meta().tags(), now) {
+        if !ready.marker_reads_ready(entry.meta().tags(), now) {
             return Ok(None);
         }
         match mode {
@@ -331,7 +331,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
             LookupMode::Read | LookupMode::ConstantValue => {}
         }
-        let value = worker.copy(entry.value(), opts);
+        let value = ready.copy(entry.value(), opts);
         self.inner.events.emit_layer_lazy(|| {
             LayerEvent::Memory(MemoryEvent::Hit {
                 key: Arc::from(key),
@@ -340,7 +340,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         });
         permit.status(token)?;
         let value = value?;
-        worker.marker_ready_events(entry.meta().tags(), now);
+        ready.marker_ready_events(entry.meta().tags(), now);
         permit.status(token)?;
         Ok(Some(value))
     }

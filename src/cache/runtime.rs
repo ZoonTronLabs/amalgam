@@ -118,10 +118,17 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
     }
     pub(super) fn start_maintenance(&self) {
-        if tokio::runtime::Handle::try_current().is_err() {
+        if self.inner.maintenance.load(Ordering::Acquire)
+            || tokio::runtime::Handle::try_current().is_err()
+        {
             return;
         }
-        if self.inner.maintenance.swap(true, Ordering::AcqRel) {
+        if self
+            .inner
+            .maintenance
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return;
         }
         let weak = Arc::downgrade(&self.inner);

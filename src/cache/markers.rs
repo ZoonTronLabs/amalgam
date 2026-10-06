@@ -8,7 +8,7 @@ use super::{
     MarkerPresence, MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy, MarkerReads,
     MarkerReplay, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotRead, MarkerSnapshotRenewal,
     MarkerVersion, MutationReceipt, Observed, OperationOutcome, OptionsTarget, Ordering, Reason,
-    Result, ShutdownTask, SkipReason, Storage, StoredMarker, Tag, Timeout, Timestamp, Worker,
+    Result, ShutdownTask, SkipReason, StoredMarker, Tag, Timeout, Timestamp, Worker,
     acquire_owned_supervised, bounded,
 };
 
@@ -118,50 +118,7 @@ impl MarkerProviderFault {
 }
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     fn marker_clear_shortcut(&self) -> bool {
-        matches!(self.inner.storage, Storage::Hybrid { .. }) && self.inner.backplane.is_some()
-    }
-
-    #[inline]
-    pub(super) fn marker_reads_ready(&self, tags: &[Tag], now: Timestamp) -> bool {
-        if self.inner.disable_tagging
-            || self.inner.marker_reads.policy() == MarkerReadPolicy::DurableRequired
-            || matches!(self.inner.markers, MarkerAccess::Local)
-        {
-            return true;
-        }
-        if matches!(self.inner.markers, MarkerAccess::Unavailable) {
-            return false;
-        }
-        let MarkerReads::OptionsControlled(observations) = &self.inner.marker_reads else {
-            return true;
-        };
-        let options = &self.inner.tags_default_options;
-        let epoch = self.inner.epoch.load(Ordering::Acquire);
-        Self::secondary_marker_kinds(tags).all(|kind| {
-            observations.ready(&kind, options, now, epoch, self.marker_clear_shortcut())
-        })
-    }
-
-    #[inline]
-    pub(super) fn marker_ready_events(&self, tags: &[Tag], now: Timestamp) {
-        if self.inner.disable_tagging {
-            return;
-        }
-        let MarkerReads::OptionsControlled(observations) = &self.inner.marker_reads else {
-            return;
-        };
-        let epoch = self.inner.epoch.load(Ordering::Acquire);
-        for kind in Self::secondary_marker_kinds(tags) {
-            if let Some(outcome) = observations.ready_outcome(
-                &kind,
-                &self.inner.tags_default_options,
-                now,
-                epoch,
-                self.marker_clear_shortcut(),
-            ) {
-                self.marker_event(&kind, outcome);
-            }
-        }
+        self.inner.marker_clear_shortcut()
     }
 
     pub(super) async fn reconcile_controlled_markers(
@@ -206,7 +163,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         cancellation.check()
     }
 
-    fn secondary_marker_kinds(tags: &[Tag]) -> impl Iterator<Item = MarkerKind> + '_ {
+    pub(super) fn secondary_marker_kinds(tags: &[Tag]) -> impl Iterator<Item = MarkerKind> + '_ {
         std::iter::once(MarkerKind::ClearRemove)
             .chain(tags.iter().cloned().map(MarkerKind::Tag))
             .chain(std::iter::once(MarkerKind::ClearExpire))
@@ -237,10 +194,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     }
 
     fn marker_event(&self, kind: &MarkerKind, outcome: MarkerReadOutcome) {
-        self.inner.events.emit_lazy(|| CacheEvent::MarkerRead {
-            kind: kind.clone(),
-            outcome,
-        });
+        self.inner.marker_event(kind, outcome);
     }
 
     async fn read_control_marker(
