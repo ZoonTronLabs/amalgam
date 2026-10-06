@@ -33,12 +33,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         match item.action {
             RecoveryAction::Set => {
-                if let Some(entry) = self
-                    .inner
-                    .memory
-                    .get_at(&item.key, self.inner.clock.now())
-                    .await
-                {
+                if let Some(entry) = self.memory.get_at(&item.key, self.inner.clock.now()).await {
                     let snapshot = DistributedSnapshot::from_entry_with_options(
                         &entry,
                         &self.inner.default_options,
@@ -178,6 +173,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     .ok_or(LeaseError::AcquisitionTimeout)?;
                     Some(FlightGuard {
                         local: LocalParticipation::ReplayOnly,
+                        _reclamation: self.memory.fence(),
                         lease: Some(lease),
                         tasks: Arc::clone(&self.inner.tasks),
                         events: self.inner.events.clone(),
@@ -188,7 +184,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     None
                 };
                 let lane = self.inner.lanes.get(&item.key);
-                let _lane = Arc::clone(&lane.lock).lock_owned().await;
+                let _lane = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }
@@ -271,7 +267,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     .await
             }
             RecoveryWork::Marker { command, stage } => {
-                let _lane_guard = Arc::clone(&self.inner.marker_lane).lock_owned().await;
+                let _lane_guard = self
+                    .memory
+                    .guard(Arc::clone(&self.inner.marker_lane).lock_owned().await);
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }

@@ -1408,7 +1408,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let marker = outcome.marker().clone();
             self.seed_marker(&marker, &opts).await?;
             if matches!(kind, MarkerKind::ClearRemove) {
-                self.inner.memory.invalidate_all();
+                self.memory.invalidate_all();
             }
             match &kind {
                 MarkerKind::Tag(tag) => self.emit(CacheEvent::RemoveByTag {
@@ -1422,7 +1422,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 marker,
             )?);
             if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
-                self.inner.memory.invalidate_all();
+                self.memory.invalidate_all();
                 self.seed_marker(
                     &StoredMarker::new(MarkerKind::ClearRemove, clear_remove),
                     &opts,
@@ -1489,7 +1489,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         created: Timestamp,
         cancellation: &FactoryCancellation,
     ) -> Result<MutationReceipt> {
-        let lane_guard = Arc::clone(&self.inner.marker_lane).lock_owned().await;
+        let lane_guard = self
+            .memory
+            .guard(Arc::clone(&self.inner.marker_lane).lock_owned().await);
         let mut notifications = Vec::with_capacity(2);
         let distributed = match &self.inner.markers {
             MarkerAccess::Local => EffectOutcome::NotConfigured,

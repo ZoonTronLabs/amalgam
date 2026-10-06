@@ -45,6 +45,10 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     pub fn events(&self) -> &Events {
         self.cache.events()
     }
+    /// Independent original-value eviction cursors, shared with the async view.
+    pub fn memory_evictions(&self) -> &crate::MemoryEvictions<V> {
+        self.cache.memory_evictions()
+    }
     /// Original per-entry defaults.
     pub fn entry_options(&self) -> EntryOptions {
         self.cache.entry_options()

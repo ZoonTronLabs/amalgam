@@ -77,6 +77,10 @@ impl<V: Clone + Send + Sync + 'static> CachePluginContext<V> {
             },
         })
     }
+    /// Acquires the owner's typed original-value stream without retaining it.
+    pub fn memory_evictions(&self) -> Result<crate::MemoryEvictions<V>, PluginError> {
+        Ok(self.cache()?.memory_evictions().clone())
+    }
 }
 
 /// A full operational view that never owns the application's cache lifetime.
@@ -218,6 +222,7 @@ pub(super) enum WorkAdmission {
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     pub(super) fn ordinary(inner: Arc<CacheInner<V>>) -> Self {
         Self {
+            memory: inner.memory.for_operation(),
             inner,
             admission: WorkAdmission::Ordinary,
         }

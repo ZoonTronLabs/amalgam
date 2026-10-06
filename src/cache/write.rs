@@ -115,7 +115,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             Storage::Hybrid { .. } => PreparedData::Skipped,
         };
         let lane = self.inner.lanes.get(&key);
-        let lane_guard = Arc::clone(&lane.lock).lock_owned().await;
+        let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
         if let Some(flight) = &flight {
             flight.proof()?;
         }
@@ -135,8 +135,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             LocalCommit::Store(entry.clone())
         } else {
             LocalCommit::Applied(LocalEffect::Stored(
-                self.inner
-                    .memory
+                self.memory
                     .insert_at(Arc::clone(&key), entry.clone(), self.inner.clock.now())
                     .await,
             ))
@@ -492,8 +491,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     flight.proof()?;
                 }
                 Ok(LocalEffect::Stored(
-                    self.inner
-                        .memory
+                    self.memory
                         .insert_at(Arc::clone(key), entry, self.inner.clock.now())
                         .await,
                 ))
@@ -557,7 +555,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let opts = self.resolve_options(&raw, options)?;
         let key = self.full_key(&raw);
         let lane = self.inner.lanes.get(&key);
-        let lane_guard = Arc::clone(&lane.lock).lock_owned().await;
+        let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
         let now = self.inner.clock.now();
         let fence = lane.advance(now, &self.inner.epoch)?;
         let local = if opts.skip_memory_write() {
@@ -565,14 +563,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         } else {
             match mutation {
                 KeyMutation::Remove => {
-                    self.inner.memory.remove(&key).await;
+                    self.memory.remove(&key).await;
                     LocalEffect::Removed
                 }
                 KeyMutation::Expire(_) => {
-                    if let Some(entry) = self.inner.memory.get_at(&key, now).await {
+                    if let Some(entry) = self.memory.get_at(&key, now).await {
                         let expired = entry.with_logical_expiration(now);
-                        self.inner
-                            .memory
+                        self.memory
                             .expire_if_unchanged(Arc::clone(&key), &entry, expired, now)
                             .await;
                     }

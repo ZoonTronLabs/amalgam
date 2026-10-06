@@ -52,7 +52,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 tracing::error!("cache continuity generation exhausted");
                 self.inner.close();
             }
-            self.inner.memory.invalidate_all();
+            self.memory.invalidate_all();
             self.inner.marker_reads.invalidate();
         }
         if let Some(recovery) = &self.inner.recovery {
@@ -109,7 +109,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         drop(seen);
         if invalidate {
-            self.inner.memory.invalidate_all();
+            self.memory.invalidate_all();
             self.inner.marker_reads.invalidate();
         }
         if exhausted {
@@ -261,12 +261,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     key: Arc::clone(&key),
                 });
                 let lane = self.inner.lanes.get(&key);
-                let lane_guard = Arc::clone(&lane.lock).lock_owned().await;
+                let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
                 if lock(&lane.timestamp).is_some_and(|at| at > message.timestamp) {
                     return Ok(());
                 }
                 let now = self.inner.clock.now();
-                let existing = self.inner.memory.get_at(&key, now).await;
+                let existing = self.memory.get_at(&key, now).await;
                 if message.action == BackplaneAction::Set {
                     self.inner.events.emit_layer_lazy(|| {
                         LayerEvent::Memory(match &existing {
@@ -292,13 +292,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }
                 match message.action {
                     BackplaneAction::Remove => {
-                        self.inner.memory.remove(&key).await;
+                        self.memory.remove(&key).await;
                     }
                     BackplaneAction::Expire => {
                         if let Some(entry) = existing {
                             let expired = entry.with_logical_expiration(message.timestamp);
-                            self.inner
-                                .memory
+                            self.memory
                                 .expire_if_unchanged(
                                     Arc::clone(&key),
                                     &entry,
@@ -343,7 +342,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         &cancellation,
                     )
                     .await;
-                let _lane = Arc::clone(&fence.lane.lock).lock_owned().await;
+                let _lane = worker
+                    .memory
+                    .guard(Arc::clone(&fence.lane.lock).lock_owned().await);
                 if !fence.passive_is_current() {
                     return Ok(());
                 }
@@ -362,7 +363,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                                 return Ok(());
                             }
                             worker
-                                .inner
                                 .memory
                                 .insert_if_unchanged(
                                     key,
@@ -379,7 +379,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         return Err(error);
                     }
                     Ok(Some(_)) | Ok(None) | Err(_) => {
-                        worker.inner.memory.remove_if_same(&key, &expected).await;
+                        worker.memory.remove_if_same(&key, &expected).await;
                     }
                 }
                 Ok(())

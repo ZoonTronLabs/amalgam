@@ -6,6 +6,11 @@
 //! [`CacheEvent`]s without blocking the cache's hot path, and handler execution
 //! is naturally decoupled from the operation that produced the event.
 
+mod eviction;
+pub use eviction::{
+    EvictionCapture, EvictionReceiveError, MemoryEviction, MemoryEvictionReason,
+    MemoryEvictionSubscription, MemoryEvictions,
+};
 mod layers;
 pub use layers::{BackplaneEvent, DistributedEvent, LayerEvent, MemoryEvent};
 
@@ -579,6 +584,16 @@ impl Events {
             .layers
             .get()
             .map_or(0, |sender| sender.send(event).unwrap_or(0))
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.inner.capacity
+    }
+    pub(crate) fn has_layer_receivers(&self) -> bool {
+        self.inner
+            .layers
+            .get()
+            .is_some_and(|sender| sender.receiver_count() > 0)
     }
 
     pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {

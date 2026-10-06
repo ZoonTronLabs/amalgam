@@ -151,3 +151,9 @@ pub use redis_backend::{
     RedisBackplane, RedisBackplaneStats, RedisClientId, RedisDistributedCache,
     RedisDistributedLocker, RedisInvalidationStore, RedisIoOptions,
 };
+
+/// Typed original-value memory observations.
+pub use events::{
+    EvictionCapture, EvictionReceiveError, MemoryEviction, MemoryEvictionReason,
+    MemoryEvictionSubscription, MemoryEvictions,
+};

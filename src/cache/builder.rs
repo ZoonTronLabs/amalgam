@@ -46,6 +46,7 @@ pub struct CacheBuilder<V> {
     lock_shards: usize,
     remove_by_tag_behavior: RemoveByTagBehavior,
     events_capacity: usize,
+    eviction_capture: crate::EvictionCapture,
     distributed: Option<Arc<dyn DistributedCache>>,
     serializer: Option<crate::distributed::Serializer<V>>,
     serialization_mode: crate::distributed::SerializationMode,
@@ -88,6 +89,7 @@ impl<V> CacheBuilder<V> {
             lock_shards: 1024,
             remove_by_tag_behavior: RemoveByTagBehavior::default(),
             events_capacity: 256,
+            eviction_capture: crate::EvictionCapture::default(),
             distributed: None,
             serializer: None,
             serialization_mode: crate::distributed::SerializationMode::default(),
@@ -105,6 +107,12 @@ impl<V> CacheBuilder<V> {
             wait_for_initial_backplane_subscribe: true,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    /// Selects when entries become eligible for original-value eviction events.
+    pub fn memory_eviction_capture(mut self, capture: crate::EvictionCapture) -> Self {
+        self.eviction_capture = capture;
+        self
     }
 
     /// Sets this instance's id (used to ignore its own backplane messages). A
@@ -575,7 +583,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 events.clone(),
                 Arc::clone(&clock),
                 expiry,
-            ),
+            )
+            .with_eviction_capture(self.eviction_capture),
             locks: KeyedLock::new(self.lock_shards),
             lanes: Lanes::new(),
             tags: TagRegistry::new(),

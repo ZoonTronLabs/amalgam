@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+- Typed original-value memory eviction subscriptions and physical reason facts;
+  explicit insertion/retirement capture, bounded independent lag and deferred
+  value reclamation through origin/lane guards. Independently locked unbounded
+  L1 replaces Moka; bounded priority/capacity admission is retained. New closed
+  enum variants require exhaustive consumers to handle their new cases.
+
+
 - Add independent typed component event subscriptions with actual memory/L2 effects, complete backplane commands/envelopes, lazy payloads and explicit loss accounting. Preserve the existing logical event/plugin stream. Distinguish `DistributedTimeout` from transport failure so the selected read budget does not trip the Redis breaker; canonical deadline errors stay typed. Original-value eviction and configurable handler policy remain open; see `docs/LAYER_EVENTS.md`.
 
 - Add `CachePlugin<V>`, `CachePluginContext<V>` and non-owning `PluginCache<V>` with the complete same-cache async/sync operation surface. Preserve interleaved legacy registration order. Stop uses bounded owned cleanup admission; final-owner closure, deferred startup/callback teardown, source failures and native Redis operations have public regressions. See `docs/PLUGIN_CACHE.md`.

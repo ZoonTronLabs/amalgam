@@ -23,7 +23,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> Result<L1Read<V>> {
         let captured = self.inner.epoch.load(Ordering::Acquire);
         let now = self.inner.clock.now();
-        let Some(entry) = self.inner.memory.get_at(key, now).await else {
+        let Some(entry) = self.memory.get_at(key, now).await else {
             self.inner.events.emit_layer_lazy(|| {
                 LayerEvent::Memory(MemoryEvent::Miss {
                     key: Arc::clone(key),
@@ -50,13 +50,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         Ok(match self.tags(&entry) {
             TagVerdict::Remove => {
-                if self
-                    .inner
-                    .memory
-                    .remove_if_same(key, &entry)
-                    .await
-                    .is_some()
-                {
+                if self.memory.remove_if_same(key, &entry).await.is_some() {
                     self.inner.events.emit_layer_lazy(|| {
                         LayerEvent::Memory(MemoryEvent::Remove {
                             key: Arc::clone(key),
@@ -237,9 +231,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 // snapshot, but cannot install it after that commit completes.
                 return HydrationFence::ConcurrentMutation;
             };
+            let _guard = self.memory.guard(_guard);
             lane.snapshot(&self.inner.epoch)
         };
-        let observed = self.inner.memory.get_at(key, self.inner.clock.now()).await;
+        let observed = self.memory.get_at(key, self.inner.clock.now()).await;
         HydrationFence::Stable { fence, observed }
     }
     async fn hydrate(
@@ -259,6 +254,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             // must not delay the read or install an older snapshot afterward.
             return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
         };
+        let _guard = self.memory.guard(_guard);
         let verdict = self.tags(&source.entry);
         if !fence.passive_is_current()
             || verdict == TagVerdict::Remove
@@ -283,8 +279,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
         }
         Ok(HydrationOutcome::Evaluated(
-            self.inner
-                .memory
+            self.memory
                 .insert_if_unchanged(
                     Arc::clone(key),
                     observed.as_ref(),
@@ -424,7 +419,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             opts.memory_lock_timeout()
         };
         let local = match bounded(timeout, self.inner.locks.lock(key)).await? {
-            Some(local) => LocalParticipation::Held(local),
+            Some(local) => LocalParticipation::Held(self.memory.guard(local)),
             None => {
                 if opts.is_fail_safe_enabled()
                     && let Some(stale) = stale
@@ -487,6 +482,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             events: self.inner.events.clone(),
             key: Arc::clone(key),
             policy: self.inner.lease_policy,
+            _reclamation: self.memory.fence(),
         };
         Ok(if unlocked {
             LockOutcome::UnlockedAfterTimeout(guard)
@@ -734,10 +730,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let value = self.copy(entry.value(), opts)?;
         if !opts.skip_memory_write() {
-            self.inner
-                .memory
-                .insert_at(Arc::clone(key), entry, now)
-                .await;
+            self.memory.insert_at(Arc::clone(key), entry, now).await;
         }
         self.emit(CacheEvent::FailSafeActivate {
             key: Arc::clone(key),
@@ -784,7 +777,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let token = source.token();
         let cancelled = source.clone();
         let execution=self.scopes().execution(async move {
-            let mut guard=FlightGuard {local:LocalParticipation::Held(local),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy};
+            let mut guard=FlightGuard {local:LocalParticipation::Held(worker.memory.guard(local)),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy,_reclamation:worker.memory.fence()};
             if !opts.skip_distributed_locker()&&let Some(locker)=&worker.inner.distributed_locker {
                 guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::CooperativeLegacy=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
                 if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}

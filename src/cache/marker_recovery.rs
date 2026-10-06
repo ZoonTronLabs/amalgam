@@ -287,7 +287,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             lease,
             local: MarkerLocalCommit::Admitted,
         };
-        let _lane = Arc::clone(&self.inner.marker_lane).lock_owned().await;
+        let _lane = self
+            .memory
+            .guard(Arc::clone(&self.inner.marker_lane).lock_owned().await);
         let result = if !self
             .inner
             .recovery
@@ -378,7 +380,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Err(RecoveryError::MarkerIdentityChanged.into());
         }
         let recovery = self.inner.recovery.as_ref().ok_or(RecoveryError::Stopped)?;
-        let _lane = Arc::clone(&self.inner.marker_lane).lock_owned().await;
+        let _lane = self
+            .memory
+            .guard(Arc::clone(&self.inner.marker_lane).lock_owned().await);
         if !recovery.is_current(ticket) {
             return Ok(crate::ReplayOutcome::Superseded);
         }

@@ -47,6 +47,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub fn events(&self) -> &Events {
         &self.inner.events
     }
+    /// Original stored values retired from L1, with independent bounded cursors.
+    pub fn memory_evictions(&self) -> &crate::MemoryEvictions<V> {
+        self.inner.memory.evictions()
+    }
     /// Starts a dynamic plugin session owned by its registration and this cache.
     /// Dropping or stopping the registration detaches it; shutdown waits callbacks.
     pub fn register_plugin(&self, plugin: Arc<dyn Plugin>) -> Result<crate::PluginRegistration> {
@@ -129,6 +133,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub(super) fn worker(&self) -> Worker<V> {
         Worker {
             inner: Arc::clone(&self.inner),
+            memory: self.inner.memory.for_operation(),
             admission: match &*self.lifetime {
                 PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {
                     WorkAdmission::Ordinary

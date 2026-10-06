@@ -32,7 +32,8 @@ event-listener = "5.4.2"
 h2 = { version = "0.4.16", optional = true }
 anyhow = { version = "1.0.103", optional = true }
 metrics = { version = "0.24.6", optional = true }
-moka = { version = "0.12.16", features = ["future"] }
+hashbrown = { version = "0.17.1", default-features = false, features = ["raw-entry"] }
+parking_lot = "0.12.5"
 opentelemetry = { version = "0.32", optional = true }
 opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "grpc-tonic"], optional = true }
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"], optional = true }

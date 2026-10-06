@@ -41,6 +41,13 @@ pub enum MemoryEvent {
         /// The processed logical key.
         key: Arc<str>,
     },
+    /// An eligible original stored representation was physically retired.
+    Eviction {
+        /// The processed logical key.
+        key: Arc<str>,
+        /// The physical retirement cause.
+        reason: super::MemoryEvictionReason,
+    },
     /// A physically live entry was logically expired in memory.
     Expire {
         /// The processed logical key.

@@ -174,4 +174,4 @@ See [migration and tested FusionCache contract](docs/PARITY.md), [validation and
 
 ## Acknowledgements
 
-[FusionCache](https://github.com/ZiggyCreatures/FusionCache) by ZiggyCreatures provides the resiliency model and comparison reference. Amalgam uses Tokio, Moka and the open Rust integration ecosystem. Distributed providers and copying strategies remain extensible; internal finite outcomes use typed enums. The crate forbids unsafe code.
+[FusionCache](https://github.com/ZiggyCreatures/FusionCache) by ZiggyCreatures provides the resiliency model and comparison reference. Amalgam uses Tokio, independently locked L1 storage and the open Rust integration ecosystem. Distributed providers and copying strategies remain extensible; internal finite outcomes use typed enums. The crate forbids unsafe code.

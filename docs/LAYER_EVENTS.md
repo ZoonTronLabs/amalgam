@@ -10,7 +10,7 @@ are best-effort diagnostics; receipt is never an invalidation acknowledgement.
 
 | Component | Closed event family |
 |---|---|
-| Memory | `Hit { key, stale }`, `Miss`, `Set`, `Remove`, `Expire` |
+| Memory | `Hit { key, stale }`, `Miss`, `Set`, `Remove`, `Expire`, `Eviction { key, reason }` |
 | Distributed | `Hit { key, stale }`, `Miss`, `Set`, `Remove`, `CircuitBreakerChange`, `SerializationError`, `DeserializationError` |
 | Backplane | `CircuitBreakerChange`, `MessagePublished { command }`, `MessageReceived { message }` |
 
@@ -31,8 +31,9 @@ under the key lock. No global one-event-per-call interpretation is valid.
 Memory Set requires actual admission; skipped, capacity-rejected or outdated
 candidates do not claim a Set. Passive L2 hydration can produce a Memory Set.
 Memory Expire describes successful logical expiry; an absent key emits none.
-Remove includes an explicit removal of an already absent key. Physical eviction
-still uses the existing key/reason logical event.
+Remove includes an explicit removal of an already absent key. Eligible physical
+evictions additionally expose a typed reason; the original stored value is
+available through [memory eviction subscriptions](MEMORY_EVICTIONS.md).
 
 Distributed writes/removals are reported only after successful provider effects,
 including fenced writes and recovery replay. Retained distributed expiry is a
@@ -93,10 +94,11 @@ oracle exercises 16 event names through 16 cases and 176 assertions. Rust public
 codec/provider/deadline/cancellation, rich notifications and real Redis
 L2/fenced/pub-sub effects. Reference doubles do not prove native Redis equivalence.
 
-Fifteen distinct Rust event forms do not close the full event contract. Original
-value-bearing memory eviction, configurable handler scheduling/exception policy,
-and the broader background/eager/replay/marker/locker matrix remain open in
-[FULL_CONTRACT.md](FULL_CONTRACT.md). Upstream mutable-message identity, literal
-.NET callback senders and Microsoft eviction reasons require explicit Rust
-ownership designs. This API does not claim those contracts. The published
+Sixteen distinct Rust event forms do not close the full event contract.
+Original-value eviction is available through a separate typed bounded stream,
+with explicit insertion/retirement capture and post-coordination reclamation.
+Configurable handler scheduling/exception policy and the broader
+background/eager/replay/marker/locker matrix remain open in
+[FULL_CONTRACT.md](FULL_CONTRACT.md). Literal .NET callback senders and every
+upstream mutable-message identity are separate ownership contracts. The published
 Amalgam 0.3.1 registry package is unchanged.

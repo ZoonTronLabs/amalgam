@@ -217,12 +217,14 @@ impl<V: Clone + Send + Sync + 'static> Clone for Cache<V> {
 struct Worker<V: Clone + Send + Sync + 'static> {
     inner: Arc<CacheInner<V>>,
     admission: WorkAdmission,
+    memory: MemoryStore<V>,
 }
 impl<V: Clone + Send + Sync + 'static> Clone for Worker<V> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
             admission: self.admission.clone(),
+            memory: self.memory.clone(),
         }
     }
 }
@@ -526,9 +528,10 @@ struct FlightGuard {
     events: Events,
     key: Arc<str>,
     policy: LeasePolicy,
+    _reclamation: Option<Arc<dyn crate::memory::ReclamationFence>>,
 }
 enum LocalParticipation {
-    Held(KeyGuard),
+    Held(crate::memory::ReclamationGuard<KeyGuard>),
     UnlockedAfterTimeout,
     ReplayOnly,
 }
@@ -842,6 +845,7 @@ enum LocalCommit<V> {
     Store(Entry<V>),
 }
 struct DataCommit<V> {
+    lane_guard: crate::memory::ReclamationGuard<tokio::sync::OwnedMutexGuard<()>>,
     key: Arc<str>,
     data: PreparedData,
     command: Option<BackplaneCommand>,
@@ -849,7 +853,6 @@ struct DataCommit<V> {
     fence: Arc<Fence>,
     flight: Option<FlightGuard>,
     local: LocalCommit<V>,
-    lane_guard: tokio::sync::OwnedMutexGuard<()>,
 }
 async fn lease_lost(state: &mut watch::Receiver<LeaseState>) {
     loop {
