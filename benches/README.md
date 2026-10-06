@@ -24,7 +24,8 @@ The `hot` gate requires zero Rust allocations on warmed hits, async/sync
 single-thread and same-key eight-thread costs at most half of FusionCache, and
 distinct-key eight-thread cost at most three quarters. Eight-core scaling must
 be at least six times. An oversubscribed hosted runner checks a proportional
-scaling floor and records that it cannot verify eight-core scaling; it still
+scaling floor based on known physical cores and records that it cannot verify
+eight-core scaling; it still
 runs all thread counts and the same relative FusionCache budgets.
 
 `--gate cold` additionally requires the cold factory at most three quarters of
@@ -39,4 +40,9 @@ physical-expiry overhead. Default live-clock reads and explicitly injected syste
 UTC reads are reported separately. The performance gate uses the actual cache's
 default live clock and the same public APIs; constant clocks are diagnostic only.
 
-The report records available physical cores separately from logical CPUs. Eight-core qualification requires at least eight reported physical cores and sixfold scaling; unavailable topology remains unverified. The hosted-runner scaling floor and all relative FusionCache budgets remain unchanged.
+The report records available physical cores separately from logical CPUs.
+Eight-core qualification requires at least eight reported physical cores and
+sixfold scaling. The hosted-runner floor is three quarters of available physical
+cores, capped at six; SMT siblings are not additional cores. Unavailable topology
+remains unverified. All relative FusionCache budgets and allocation limits apply
+regardless of topology.

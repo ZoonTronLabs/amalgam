@@ -121,8 +121,10 @@ impl State {
         self: &Arc<Self>,
         request: MemoryLockRequest,
     ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
-        self.record(Method::Blocking, &request);
+        // Publishing entry must mean the behavior for this call is fixed.
+        // Otherwise the test can switch it before this callback snapshots it.
         let behavior = self.behavior.lock().unwrap().clone();
+        self.record(Method::Blocking, &request);
         match behavior {
             Behavior::Unavailable => return Ok(MemoryLockOutcome::Unavailable),
             Behavior::Error => return Err(MemoryLockerError::from_source(Cause)),

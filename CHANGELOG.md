@@ -7,6 +7,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Initialize reader-thread parking metadata during its first slot admission,
+  before acquiring a slot. A warmed hit remains allocation-free when it first
+  contends with a writer; waiting still returns the current entry.
+- Synchronize eager-refresh and native-provider regressions with actual work
+  completion and captured provider behavior, preserving their original assertions.
+
 - Preserve the published shutdown cancellation reason when a caller drops nested work before shutdown reaches its registry entry; retain an existing cancellation during panic cleanup. Native provider callbacks still drain before shutdown completes.
 
 - Typed original-value memory eviction subscriptions and physical reason facts;

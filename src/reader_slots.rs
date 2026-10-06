@@ -30,11 +30,34 @@ fn reader_index() -> usize {
     READER.with(|reader| match reader.get() {
         Some(index) => index,
         None => {
+            initialize_parking();
             let index = NEXT_READER.fetch_add(1, Ordering::Relaxed);
             reader.set(Some(index));
             index
         }
     })
+}
+
+// A thread's first actual park may allocate the parking table. Prime that
+// thread once, before acquiring any slot, so later contention does not turn a
+// warmed hit into an allocation. Rejected validation never enqueues or sleeps.
+#[cold]
+#[inline(never)]
+fn initialize_parking() {
+    let address = 0_usize;
+    // SAFETY: this live owned address is only an opaque queue key. Validation
+    // always returns false before enqueue. The callbacks cannot panic or call
+    // parking_lot, and this thread holds no reader slot during initialization.
+    unsafe {
+        parking_lot_core::park(
+            &address as *const usize as usize,
+            || false,
+            || {},
+            |_, _| {},
+            parking_lot_core::DEFAULT_PARK_TOKEN,
+            None,
+        );
+    }
 }
 fn slot_count() -> usize {
     static COUNT: OnceLock<usize> = OnceLock::new();
@@ -254,3 +277,6 @@ mod tests {
         assert_eq!(*lock.read(), 9);
     }
 }
+
+#[cfg(test)]
+mod allocation;

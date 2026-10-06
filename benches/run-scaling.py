@@ -172,9 +172,13 @@ def main():
     scaling = by_key[("distinct", 1)]["rust_ns"] / by_key[("distinct", 8)]["rust_ns"]
     # An oversubscribed hosted runner cannot demonstrate eight-core scaling.
     # It still runs all eight scenarios and checks the same relative FC budgets.
-    scaling_limit = min(6, 0.75 * cpu_count)
-    if args.gate != "report" and scaling < scaling_limit:
-        failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {cpu_count} available CPUs")
+    # SMT siblings are logical threads, not additional physical cores. The
+    # required sixfold qualification still needs eight actual physical cores.
+    # Unknown topology cannot produce a supported proportional scaling claim.
+    physical = topology["physical_cores_available"]
+    scaling_limit = min(6, 0.75 * physical) if physical is not None else None
+    if args.gate != "report" and scaling_limit is not None and scaling < scaling_limit:
+        failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {physical} available physical cores")
     report = {
         "gate": args.gate, "pairs": args.pairs, "environment": {
             "platform": platform.platform(), "available_cpus": cpu_count, "cpu_topology": topology,
@@ -191,7 +195,10 @@ def main():
     print("scenario threads Rust_ns FC_ns Rust/FC Rust_alloc/op")
     for row in rows:
         print(f"{row['scenario']:8} {row['threads']:7} {row['rust_ns']:7.2f} {row['fusion_ns']:7.2f} {row['rust_over_fusion']:7.3f} {row['rust_allocations_per_op']:13.3f}")
-    print(f"Distinct scaling: {scaling:.2f}x; required {scaling_limit:.2f}x on {cpu_count} available CPUs")
+    if scaling_limit is None:
+        print(f"Distinct scaling: {scaling:.2f}x; physical topology unavailable, qualification unverified")
+    else:
+        print(f"Distinct scaling: {scaling:.2f}x; required {scaling_limit:.2f}x on {physical} available physical cores ({cpu_count} logical CPUs)")
     if failures:
         raise SystemExit("Gate failed:\n" + "\n".join(failures))
 

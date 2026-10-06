@@ -405,7 +405,12 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
     let b = build();
     a.set("k", 1).await;
     clock.advance(Duration::from_secs(6));
-    b.set("k", 2).await;
+    b.try_set("k", 2)
+        .await
+        .expect("newer write accepted")
+        .wait()
+        .await
+        .expect("newer L2 write completed");
     let calls = Arc::new(AtomicUsize::new(0));
     let factory_calls = calls.clone();
     assert_eq!(
@@ -417,7 +422,10 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
         .expect("fresh read"),
         1
     );
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::time::timeout(Duration::from_secs(3), a.flush_pending())
+        .await
+        .expect("eager refresh completed promptly")
+        .expect("eager refresh drained");
     let after = a.try_get("k", None).await;
     assert_eq!(
         (calls.load(Ordering::SeqCst), after.value().copied()),
