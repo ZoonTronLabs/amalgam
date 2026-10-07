@@ -173,16 +173,21 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: python3 benches/run-scaling.py --gate hot --output /tmp/amalgam-scaling
+      - name: Compare read and factory-retrieval APIs
+        run: |
+          amalgam_scaling_status=0
+          python3 benches/run-scaling.py --api read --gate hot --output /tmp/amalgam-scaling/read || amalgam_scaling_status=1
+          python3 benches/run-scaling.py --api get-or-set --gate hot --output /tmp/amalgam-scaling/get-or-set || amalgam_scaling_status=1
+          exit "$amalgam_scaling_status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: scaling-report
           path: |
-            /tmp/amalgam-scaling/report.json
-            /tmp/amalgam-scaling/ready-costs.csv
-            /tmp/amalgam-scaling/pair-*.csv
-            /tmp/amalgam-scaling/pair-*.stderr
+            /tmp/amalgam-scaling/*/report.json
+            /tmp/amalgam-scaling/*/ready-costs.csv
+            /tmp/amalgam-scaling/*/pair-*.csv
+            /tmp/amalgam-scaling/*/pair-*.stderr
           retention-days: 7
 
   ci:

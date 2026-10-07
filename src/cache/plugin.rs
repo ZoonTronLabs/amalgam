@@ -291,6 +291,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             PublicLifetime::NativeMemory(view) => view.source().operation_scopes(),
         }
     }
+    pub(super) fn callback_free_scopes(&self) -> Option<&Scopes> {
+        match &*self.lifetime {
+            PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {
+                Some(&self.inner.scopes)
+            }
+            PublicLifetime::PluginAccess(_) => None,
+            PublicLifetime::NativeMemory(view) => view.source().callback_free_scopes(),
+        }
+    }
     pub(super) fn inline(&self) -> InlinePermit<'_> {
         match &*self.lifetime {
             PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {

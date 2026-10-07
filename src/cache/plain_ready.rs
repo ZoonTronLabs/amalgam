@@ -13,6 +13,7 @@ use std::sync::Arc;
 #[derive(Clone, Copy)]
 pub(super) enum ReadyPlan {
     Plain,
+    CallbackFree,
     #[cfg(target_arch = "x86_64")]
     LocalSlots,
     General,
@@ -23,7 +24,7 @@ impl ReadyPlan {
         memory: &CacheMemory<V>,
         options: &EntryOptions,
         runtime: RuntimeRequirement,
-        #[cfg(target_arch = "x86_64")] clock: &crate::time::local::CacheClock,
+        clock: &crate::time::local::CacheClock,
     ) -> Self {
         if matches!(storage, Storage::MemoryOnly)
             && matches!(memory, CacheMemory::Builtin(_))
@@ -31,22 +32,36 @@ impl ReadyPlan {
             && !options.enable_auto_clone()
             && !options.skip_memory_read()
         {
-            #[cfg(target_arch = "x86_64")]
             if let (CacheMemory::Builtin(memory), crate::time::local::CacheClock::Local(_)) =
                 (memory, clock)
                 && memory.has_reader_slots()
             {
-                return Self::LocalSlots;
+                return Self::local_value::<V>();
             }
             Self::Plain
         } else {
             Self::General
         }
     }
+    fn local_value<V: 'static>() -> Self {
+        if super::callback_free::primitive::<V>() {
+            Self::CallbackFree
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            {
+                Self::LocalSlots
+            }
+            #[cfg(not(target_arch = "x86_64"))]
+            {
+                Self::Plain
+            }
+        }
+    }
 }
 
 pub(super) enum QuietStart<'a, V> {
     General,
+    Complete(Result<V>),
     Ready(QuietReady<'a, V>),
     Owned {
         observation: QuietObservation<'a>,
@@ -58,14 +73,14 @@ pub(super) enum QuietStart<'a, V> {
         permit: InlinePermit<'a>,
     },
 }
-enum QuietCopy<V> {
+pub(super) enum QuietCopy<V> {
     Value(V),
     EntryPolicy,
 }
 pub(super) struct QuietReady<'a, V> {
-    value: Result<V>,
-    observation: QuietObservation<'a>,
-    permit: InlinePermit<'a>,
+    pub(super) value: Result<V>,
+    pub(super) observation: QuietObservation<'a>,
+    pub(super) permit: InlinePermit<'a>,
 }
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub(super) fn quiet_lookup<'a>(
@@ -75,6 +90,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<&FactoryCancellation>,
         operation: CacheOperation,
         mode: LookupMode,
+        inputs: super::callback_free::Inputs,
     ) -> QuietStart<'a, V> {
         if matches!(self.inner.ready_plan, ReadyPlan::General)
             || options.is_some()
@@ -82,6 +98,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             || tracing::level_filters::LevelFilter::current() >= tracing::Level::DEBUG
         {
             return QuietStart::General;
+        }
+        if matches!(self.inner.ready_plan, ReadyPlan::CallbackFree)
+            && matches!(inputs, super::callback_free::Inputs::NoCallbacks)
+            && token.is_none()
+        {
+            return self.callback_free_lookup(key, operation, mode);
         }
         #[cfg(target_arch = "x86_64")]
         if let Some(start) = self.quiet_slots_lookup(key, token, operation, mode) {
@@ -134,7 +156,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             },
         }
     }
-    fn quiet_copy(
+    pub(super) fn quiet_copy(
         &self,
         entry: &super::Entry<V>,
         freshness: crate::entry::Freshness,
@@ -163,7 +185,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         mode: LookupMode,
     ) -> Option<QuietStart<'a, V>> {
         let (
-            ReadyPlan::LocalSlots,
+            ReadyPlan::LocalSlots | ReadyPlan::CallbackFree,
             CacheMemory::Builtin(memory),
             crate::time::local::CacheClock::Local(_),
         ) = (self.inner.ready_plan, &self.inner.memory, &self.inner.clock)

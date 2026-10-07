@@ -13,6 +13,7 @@ mod memory_inline;
 mod mutation_request;
 mod set_request;
 pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest};
+mod callback_free;
 mod origin;
 mod plain_ready;
 mod plugin;

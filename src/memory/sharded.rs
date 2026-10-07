@@ -137,6 +137,32 @@ impl<V> Sharded<V> {
             .is_none()
             .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed)))
     }
+    /// The build-selected caller only performs primitive copies and internal
+    /// decisions. Close is checked after reader admission, before value access.
+    pub(super) fn with_callback_free_local_ready<R>(
+        &self,
+        key: &str,
+        scopes: &crate::execution::Scopes,
+        read_entry: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
+    ) -> crate::Result<Option<R>> {
+        let (hash, shard) = self.route(key);
+        let state = read(shard);
+        if scopes.is_closed() {
+            return Err(crate::Error::CacheClosed);
+        }
+        let Some((_, stored)) = state
+            .entries
+            .raw_entry()
+            .from_hash(hash, |stored| stored.as_ref() == key)
+        else {
+            return Ok(None);
+        };
+        let elapsed = Instant::now();
+        Ok(stored
+            .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
+            .is_none()
+            .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed))))
+    }
     #[cfg(target_arch = "x86_64")]
     pub(super) fn with_admitted_local_ready<'a, R>(
         &self,

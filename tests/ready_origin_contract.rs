@@ -280,3 +280,72 @@ async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
     );
     cache.shutdown().await.unwrap();
 }
+
+struct NoDropClone(u64);
+struct CloneHook {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+static NO_DROP_CLONE_HOOK: Mutex<Option<CloneHook>> = Mutex::new(None);
+impl Clone for NoDropClone {
+    fn clone(&self) -> Self {
+        let hook = NO_DROP_CLONE_HOOK.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook.entered.send(()).unwrap();
+            hook.release.recv().unwrap();
+        }
+        Self(self.0)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_value_without_drop_can_still_have_a_user_clone() {
+    assert!(!std::mem::needs_drop::<NoDropClone>());
+    for native in [false, true] {
+        let cache = BlockingCache::new().unwrap();
+        cache
+            .try_set("hit", NoDropClone(7))
+            .unwrap()
+            .wait()
+            .unwrap();
+        let (entered, entry) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        *NO_DROP_CLONE_HOOK.lock().unwrap() = Some(CloneHook {
+            entered,
+            release: released,
+        });
+        let reader_cache = cache.clone();
+        let reader = std::thread::spawn(move || {
+            if native {
+                reader_cache.read("hit", None)
+            } else {
+                let request = reader_cache.as_async().read("hit", None);
+                let mut future = std::pin::pin!(std::future::IntoFuture::into_future(request));
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                match std::future::Future::poll(future.as_mut(), &mut context) {
+                    std::task::Poll::Ready(result) => result,
+                    std::task::Poll::Pending => panic!("a ready hit needs no runtime"),
+                }
+            }
+        });
+        entry.recv_timeout(Duration::from_secs(2)).unwrap();
+        cache.as_async().close();
+        let mut shutdown = Box::pin(cache.as_async().shutdown());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        assert!(matches!(
+            reader.join().unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown,
+            })
+        ));
+        tokio::time::timeout(Duration::from_secs(2), shutdown)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}

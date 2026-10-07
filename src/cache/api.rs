@@ -766,6 +766,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         fallback: MaybeValue<V>,
         cancellation: Option<FactoryCancellation>,
     ) -> super::inline_cold::Start<V> {
+        let inputs = super::callback_free::Inputs::origin(&make_origin, &tags, &fallback);
         let lookup = match self.quiet_lookup(
             key,
             options.as_ref(),
@@ -775,7 +776,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 OriginKind::Factory => LookupMode::GetOrSet,
                 OriginKind::Constant => LookupMode::ConstantValue,
             },
+            inputs,
         ) {
+            QuietStart::Complete(result) => {
+                drop((make_origin, tags, fallback, options));
+                return super::inline_cold::Start::Ready(result.map(|value| CacheValue {
+                    value,
+                    commit: CommitReceipt::Unchanged,
+                }));
+            }
             QuietStart::Ready(ready) => {
                 // Input destructors stay within the same admitted operation.
                 return super::inline_cold::Start::Ready(ready.finish(
@@ -1018,6 +1027,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         cancellation: Option<FactoryCancellation>,
         runtime: &super::BlockingRuntime,
     ) -> Result<CacheValue<V>> {
+        let inputs = super::callback_free::Inputs::origin(&make_origin, &tags, &fallback);
         match self.quiet_lookup(
             key,
             options.as_ref(),
@@ -1027,7 +1037,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 OriginKind::Factory => LookupMode::GetOrSet,
                 OriginKind::Constant => LookupMode::ConstantValue,
             },
+            inputs,
         ) {
+            QuietStart::Complete(result) => {
+                drop((make_origin, tags, fallback, options));
+                result.map(|value| CacheValue {
+                    value,
+                    commit: CommitReceipt::Unchanged,
+                })
+            }
             QuietStart::Ready(ready) => ready.finish(key, cancellation.as_ref(), move |value| {
                 drop((make_origin, options, tags, fallback));
                 CacheValue {
@@ -1115,7 +1133,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             None,
             CacheOperation::TryGet,
             LookupMode::Read,
+            super::callback_free::Inputs::NoCallbacks,
         ) {
+            QuietStart::Complete(result) => return result.map(MaybeValue::from_value),
             QuietStart::Ready(ready) => return ready.finish(key, None, MaybeValue::from_value),
             QuietStart::Owned {
                 observation,
@@ -1194,7 +1214,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             token.as_ref(),
             CacheOperation::TryGet,
             LookupMode::Read,
+            super::callback_free::Inputs::NoCallbacks,
         ) {
+            QuietStart::Complete(result) => ReadStart::Ready(result.map(MaybeValue::from_value)),
             QuietStart::Ready(ready) => {
                 ReadStart::Ready(ready.finish(key, token.as_ref(), MaybeValue::from_value))
             }
@@ -1276,7 +1298,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             token.as_ref(),
             operation,
             LookupMode::Read,
+            super::callback_free::Inputs::Destructors,
         ) {
+            QuietStart::Complete(_) => {
+                unreachable!("completion callbacks require counted admission")
+            }
             QuietStart::Ready(ready) => {
                 return ready.finish(key, token.as_ref(), move |value| {
                     complete(MaybeValue::from_value(value))

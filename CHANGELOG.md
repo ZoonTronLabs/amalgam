@@ -7,6 +7,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Select callback-free ready copies at construction for built-in primitive
+  values in standalone L1. Only inputs without destructors can use that plan;
+  custom `Clone`, observers, eager work, cancellation and mutations preserve
+  counted admission and shutdown drainage. A miss still retains factory work.
 - Compare identical mutation workloads in fresh processes, independently of
   the selected warm-read API. Replacement and cold samples now contain one
   million and one hundred thousand operations respectively in both runtimes;

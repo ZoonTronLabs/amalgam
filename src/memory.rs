@@ -242,7 +242,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
         self.observer.emit_layer_lazy(make);
     }
-    fn component_read(&self, component: crate::events::ComponentRead) {
+    pub(crate) fn component_read(&self, component: crate::events::ComponentRead) {
         self.observer.component_read(component);
     }
     fn capture_admission(&self) -> CaptureAdmission {
@@ -288,7 +288,6 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     }
     /// The builtin map holds a reader slot through internal checks and ordinary
     /// value Clone. Observers run before locking; optional callbacks run after it.
-    #[cfg(target_arch = "x86_64")]
     pub(crate) fn has_reader_slots(&self) -> bool {
         matches!(self.backend, Backend::Unbounded(_))
     }
@@ -311,6 +310,18 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             self.component_read(crate::events::ComponentRead::Memory);
         }
         (permit, result)
+    }
+    /// Internal primitive copies only: no observer executes before admission.
+    pub(crate) fn with_callback_free_local_ready<R>(
+        &self,
+        key: &str,
+        scopes: &crate::execution::Scopes,
+        read: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
+    ) -> crate::Result<Option<R>> {
+        let Backend::Unbounded(store) = &self.backend else {
+            unreachable!("callback-free plan requires builtin unbounded L1");
+        };
+        store.with_callback_free_local_ready(key, scopes, read)
     }
     pub(crate) fn with_local_ready<R>(
         &self,

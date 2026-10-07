@@ -701,7 +701,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 &memory,
                 &self.default_options,
                 default_runtime,
-                #[cfg(target_arch = "x86_64")]
                 &clock,
             )
         } else {
