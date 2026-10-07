@@ -186,7 +186,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     None
                 };
                 let lane = self.inner.lanes.get(&item.key);
-                let _lane = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
+                let _lane = self.memory.guard(lane.lock().await);
                 if !recovery.is_current(&ticket) {
                     return Ok(ReplayOutcome::Superseded);
                 }

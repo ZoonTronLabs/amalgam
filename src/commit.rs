@@ -7,7 +7,11 @@ use crate::recovery::{OperationGeneration, RecoveryError, RecoveryFence};
 use crate::time::Timestamp;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::{Mutex as AsyncMutex, oneshot};
+use tokio::sync::oneshot;
+
+mod ordered;
+pub(crate) use ordered::LaneGuard;
+use ordered::{Admission, QueueMap, QueueRef};
 
 /// Reason an optional storage/notification stage was omitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,14 +173,14 @@ pub struct CacheValue<V> {
 }
 
 pub(crate) struct KeyLane {
-    pub(crate) lock: Arc<AsyncMutex<()>>,
+    admission: Admission,
     pub(crate) generation: AtomicU64,
     pub(crate) timestamp: Mutex<Option<Timestamp>>,
 }
 impl KeyLane {
-    fn new() -> Self {
+    fn new(queue: QueueRef) -> Self {
         Self {
-            lock: Arc::new(AsyncMutex::new(())),
+            admission: Admission::new(queue),
             generation: AtomicU64::new(0),
             timestamp: Mutex::new(None),
         }
@@ -242,19 +246,24 @@ impl Fence {
 }
 pub(crate) struct Lanes {
     slots: WeakSlots<KeyLane>,
+    queues: QueueMap,
 }
 impl Lanes {
     pub(crate) fn new(plan: CoordinationPlan) -> Self {
         Self {
             slots: plan.slots(),
+            queues: QueueMap::new(),
         }
     }
     pub(crate) fn get(&self, key: &str) -> Arc<KeyLane> {
-        self.slots.get(key, KeyLane::new)
+        self.slots.get(key, || KeyLane::new(self.queues.bind(key)))
     }
     pub(crate) fn capture(&self, key: &str, epoch: &Arc<AtomicU64>) -> Fence {
-        self.slots
-            .get_with(key, KeyLane::new, |lane| lane.snapshot(epoch))
+        self.slots.get_with(
+            key,
+            || KeyLane::new(self.queues.bind(key)),
+            |lane| lane.snapshot(epoch),
+        )
     }
     pub(crate) fn clean(&self, budget: usize) {
         self.slots.clean(budget);

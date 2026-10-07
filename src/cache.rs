@@ -967,7 +967,7 @@ enum LocalCommit<V> {
     Store(Entry<V>),
 }
 struct DataCommit<V> {
-    lane_guard: crate::memory::ReclamationGuard<tokio::sync::OwnedMutexGuard<()>>,
+    lane_guard: crate::memory::ReclamationGuard<crate::commit::LaneGuard>,
     key: Arc<str>,
     data: PreparedData,
     command: Option<BackplaneCommand>,

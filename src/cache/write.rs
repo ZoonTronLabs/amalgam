@@ -129,7 +129,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             Storage::Hybrid { .. } => PreparedData::Skipped,
         };
         let lane = self.inner.lanes.get(&key);
-        let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
+        let lane_guard = self.memory.guard(lane.lock().await);
         if let Some(origin) = &flight {
             origin.guard.proof()?;
             if !origin.started_at.is_current() {
@@ -601,7 +601,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             ));
         }
         let lane = self.inner.lanes.get(&key);
-        let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
+        let lane_guard = self.memory.guard(lane.lock().await);
         let now = self.inner.clock.now();
         let fence = lane.advance(now, &self.inner.epoch)?;
         let local = if opts.skip_memory_write() {

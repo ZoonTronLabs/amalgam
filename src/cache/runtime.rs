@@ -289,7 +289,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     key: Arc::clone(&key),
                 });
                 let lane = self.inner.lanes.get(&key);
-                let lane_guard = self.memory.guard(Arc::clone(&lane.lock).lock_owned().await);
+                let lane_guard = self.memory.guard(lane.lock().await);
                 if lock(&lane.timestamp).is_some_and(|at| at > message.timestamp) {
                     return Ok(());
                 }
@@ -370,9 +370,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         &cancellation,
                     )
                     .await;
-                let _lane = worker
-                    .memory
-                    .guard(Arc::clone(&fence.lane.lock).lock_owned().await);
+                let _lane = worker.memory.guard(fence.lane.lock().await);
                 if !fence.passive_is_current() {
                     return Ok(());
                 }

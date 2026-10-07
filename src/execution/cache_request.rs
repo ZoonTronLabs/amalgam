@@ -6,25 +6,28 @@ use super::{
     finish_tracking,
 };
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 
 pub(crate) struct CacheBinding {
     pub(super) registry: Arc<Scopes>,
-    tracking: parking_lot::Mutex<Option<TrackedCancellation>>,
+    tracking: OnceLock<parking_lot::Mutex<Option<TrackedCancellation>>>,
 }
 impl CacheBinding {
     pub(super) fn new(registry: Arc<Scopes>) -> Self {
         Self {
             registry,
-            tracking: parking_lot::Mutex::new(None),
+            tracking: OnceLock::new(),
         }
     }
     pub(super) fn subscribe(&self, owner: Arc<dyn CancelWork>) {
-        self.registry.register_work(owner, &self.tracking);
+        let tracking = self.tracking.get_or_init(|| parking_lot::Mutex::new(None));
+        self.registry.register_work(owner, tracking);
     }
     pub(super) fn finish(&self) {
-        finish_tracking(&self.tracking);
+        if let Some(tracking) = self.tracking.get() {
+            finish_tracking(tracking);
+        }
     }
     pub(super) fn reason(&self) -> Option<Reason> {
         self.registry.is_closed().then_some(Reason::CacheShutdown)

@@ -101,3 +101,12 @@ then capture allocation stacks for one untimed lookup. The conflicting L1/L2
 seeds and no-factory assertions remain. Tracing uses a separate executable and
 allocator; it cannot change the timed scaling counter. Counts include platform
 runtime bookkeeping and must be compared on the same compiler and platform.
+
+Native CPU sampling is a separate diagnostic after paired measurement:
+`python3 benches/run-native-profile.py --reports /absolute/path/to/before-after --output /absolute/path/to/profile`.
+On Linux it profiles the exact frozen baseline/candidate binaries, verifies
+their paired-report hashes, repeats both L2 APIs, and saves self-time and stack
+reports. It uses [perf's DWARF call-graph recording](https://man7.org/linux/man-pages/man1/perf-record.1.html).
+Unavailable tools or incomplete profiles are recorded explicitly. Manual CI
+diagnostics prepare the Linux tool and upload rendered reports; raw samples
+stay on the ephemeral runner. Profile measurements are not performance gates.

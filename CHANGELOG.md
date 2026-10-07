@@ -7,6 +7,19 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Replace per-key Tokio mutation mutexes with scalar ready admission and
+  shard-local FIFO queues for suspended work. Cancellation releases queued and
+  unpolled granted claims; unrelated keys in a shard remain independent. Keep
+  fences, recovery/publication and reclamation order. Initialize queue storage
+  only when an ordered path is actually used.
+- Initialize cache-bound shutdown tracking only for an actual exported link.
+  Keep pure shutdown visibility during callbacks and late-link cancellation.
+  Eight queue and two cancellation regressions bring default coverage to 723.
+- Add optional untimed native CPU profiling of frozen paired binaries; timed
+  workloads and performance budgets remain unchanged.
+- Record completed 928f1be Linux qualification: 14 functional jobs and warmed,
+  cold/write budgets pass; L2 remains unqualified and same-runner factory
+  retrieval regresses 7.0%. Lower allocation counts do not imply a timing gain.
 - Count and pin default cache-bound work for its first poll; create an owned
   scope and shutdown subscription only after actual suspension. Transfer the
   same pinned future before admission ends. Keep explicit caller and specialized

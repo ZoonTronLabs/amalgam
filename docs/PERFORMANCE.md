@@ -10,8 +10,9 @@ Seven alternating process pairs per API on macOS 26.6.2 arm64, with 12 available
 physical cores and 12 logical CPUs. Rust 1.88.0; .NET SDK 10.0.300, runtime
 10.0.8; released FusionCache 2.9.0, locked by `packages.lock.json`.
 These working-tree measurements include the build-selected hybrid scalar-control
-pool, a typed observer handle and counted first-poll execution. Ready default
-operations create no owned scope; actual suspension promotes their pinned work.
+pool, a typed observer handle, counted first-poll execution, shard-local mutation
+queues and lazy shutdown-subscription coordination. Ready default operations
+create no owned scope; actual suspension promotes their pinned work.
 
 The workload uses `u64`, one hot key or one key per worker. Set and cold run in
 separate fresh processes with identical operation counts. L2 uses the in-memory
@@ -21,33 +22,70 @@ factory. Serialization, lookup and hydration remain inside the timed operation.
 
 | Operation | Amalgam ns/op | FusionCache ns/op | Qualification |
 |---|---:|---:|---|
-| Async L1 read, one worker | 36.850 | 300.490 | Pass |
-| Async L1 `get_or_set`, one worker | 45.891 | 340.700 | Pass |
-| Same key, eight workers, read | 5.089 | 66.230 | Pass |
-| Distinct keys, eight workers, read | 5.093 | 51.240 | Pass |
-| Same key, eight workers, `get_or_set` | 6.023 | 71.874 | Pass |
-| Distinct keys, eight workers, `get_or_set` | 6.011 | 50.078 | Pass |
-| L1 replacement | 89.720 | 142.738 | Pass |
-| Cold factory | 966.151 | 2134.264 | Pass |
-| L2 plus JSON, read | 1332.267 | 1793.057 | Pass |
-| L2 plus JSON, `get_or_set` | 1691.025 | 1961.862 | Pass |
+| Async L1 read, one worker | 37.238 | 298.000 | Pass |
+| Async L1 `get_or_set`, one worker | 46.413 | 342.745 | Pass |
+| Same key, eight workers, read | 4.916 | 70.471 | Pass |
+| Distinct keys, eight workers, read | 5.351 | 50.120 | Pass |
+| Same key, eight workers, `get_or_set` | 6.174 | 70.856 | Pass |
+| Distinct keys, eight workers, `get_or_set` | 6.145 | 57.520 | Pass |
+| L1 replacement | 89.905 | 141.945 | Pass |
+| Cold factory | 965.629 | 2149.070 | Pass |
+| L2 plus JSON, read | 1321.722 | 1807.018 | Pass |
+| L2 plus JSON, `get_or_set` | 1673.640 | 1969.775 | Pass |
 
 Eight-worker ns/op is elapsed time divided by all completed operations; it is
 aggregate throughput, not the latency experienced by one caller. Distinct-key
-scaling is 7.229x for read and 7.637x for `get_or_set`, exceeding the 6x budget
+scaling is 7.007x for read and 7.627x for `get_or_set`, exceeding the 6x budget
 on this machine with at least eight physical cores. Warm hits and L1 replacement
 allocate zero; cold allocates 5.009 per operation; both L2 APIs allocate 14.
 All local budgets pass for both APIs.
 
-Read L2 ranges were 1322.967–1347.179 ns versus
-1769.920–1821.268 ns. Factory-retrieval L2 ranges were
-1678.642–1733.800 ns versus 1938.551–1977.558 ns. Neither L2 pair overlaps.
+Read L2 ranges were 1308.453–1336.209 ns versus 1782.785–1870.162 ns. Factory-retrieval L2 ranges were 1665.198–1710.753 ns versus 1948.042–1986.201 ns. Neither L2 pair overlaps.
 
 These are working-tree measurements. Reports record runtime source and binary
 hashes, including unrelated local edits. Exact committed Linux source and the
 final release API require their own qualification.
 
-## Counted first poll, ownership after suspension
+## Shard-local mutation queues and lazy watches
+
+Mutation ordering now uses a key-local scalar admission word and shard-local
+queues for suspended claimants. No per-key Tokio mutation mutex remains. Ready
+claims create no waiter; handoff reserves the next claimant before waking it.
+Cancellation removes a queued claimant, or releases its already granted place
+before waking the next one. Distinct keys sharing one shard never await each
+other's I/O. Queue coordination holds no user payload and invokes no user waker.
+Existing fencing, recovery/publication order and reclamation guards remain.
+Inline-only caches never initialize the suspended-mutation queue storage.
+
+An unused cache-bound shutdown subscription no longer locks an empty tracking
+slot on every completion. Its coordination initializes only for an actual
+exported link. The pure child shutdown view remains: a callback can see closing
+even before queued parent notifications are delivered. Late links after close
+also cancel and retire without another caller poll.
+
+Eight queue contracts plus two cancellation regressions pass; all 723 default
+contracts/doctests and 105 x86 unit tests pass. Formatting and strict
+all-target/all-feature Rust 1.88 clippy pass on both architectures.
+
+Three counterbalanced pairs against `928f1be9b2dfe1f4f3fa138c968a82339862b19a`
+use the frozen original workload and the same two unrelated owner edits:
+
+| Operation | Baseline ns/op | Candidate ns/op | Interpretation |
+|---|---:|---:|---|
+| L2 plus JSON, read | 1341.115 | 1320.893 | Overlapping ranges and below 2%; no timing gain claimed; 14 allocations remain |
+| L2 plus JSON, `get_or_set` | 1678.813 | 1690.141 | Overlapping ranges; no timing gain claimed; 14 allocations remain |
+| L1 replacement | 89.700 | 91.034 | Below 2%; no timing gain claimed; zero allocations |
+| Cold factory | 966.200 | 957.020 | Overlapping ranges; no timing gain claimed; 5.009 allocations |
+
+Both local seven-pair FC comparisons pass all budgets, including eight-core
+scaling. This is an architectural ordering and disabled-feature cost change,
+not a claimed throughput improvement. Exact-source native qualification remains
+open. Optional native CPU profiles use the same frozen before/after binaries
+after timed samples finish, with hashes and separate outputs; profiler timings
+are not comparative evidence. Explicit and specialized execution ownership
+still need audit before the final API and release qualification.
+
+## Previous step: counted first poll, ownership after suspension
 
 Cache-bound default operations pin and count their work before admission
 transfers. A Ready first poll finishes and retires work without allocating an
@@ -83,8 +121,9 @@ L2 ranges are separate: read 1401.902–1429.955 versus 1310.308–1326.167 ns;
 factory retrieval 1693.604–1707.624 versus 1646.549–1677.921 ns. Some warmed
 read cases slow down, while synchronous factory retrieval improves. Unchanged
 timing for all L1 paths is not claimed. Local complete budgets pass both APIs;
-exact committed Linux source still requires qualification. The hybrid shard
-write queue and remaining specialized ownership paths remain open.
+its exact committed Linux result is recorded below. The later queue step
+addresses shard ordering; remaining specialized ownership and native budgets
+remain open.
 
 ## Previous step: typed execution observer
 
@@ -113,7 +152,7 @@ Factory-retrieval L2 ranges are separate: 1762.476–1805.581 versus
 not claimed. Warm hits and writes still allocate zero; cold retains 5.009.
 All 705 default contracts/doctests, 87 x86 unit tests, formatting, strict
 all-target/all-feature MSRV clippy on ARM/x86 and both ownership probes pass.
-Exact committed-source Linux qualification remains open for this candidate.
+Its historical exact-source Linux result is recorded below.
 
 ## Build-selected scalar coordination reuse
 
@@ -222,10 +261,43 @@ candidate has its own Linux qualification below.
 
 ## Latest native Linux comparison
 
+The [CI run for 928f1be](https://github.com/ZoonTronLabs/amalgam/actions/runs/37632808648)
+completed with all 14 functional milestone jobs passing. The comparative and
+aggregate jobs failed only the L2 performance budgets. The subsequent shard-queue
+and lazy-watch source above still requires its own native qualification.
+
+The runner was AMD EPYC 7763 with **two available physical cores and four logical
+CPUs**; Rust 1.88.0, .NET SDK 10.0.401/runtime 10.0.12, locked FC 2.9.0. Seven
+pairs ran per API. Eight threads here do not establish eight-core scaling.
+
+| Operation on 928f1be | Amalgam ns/op | FusionCache ns/op | Result |
+|---|---:|---:|---|
+| L2 plus JSON, read | 2780.475 | 2728.751 | Fail: 1.90% above budget; ranges overlap |
+| L2 plus JSON, `get_or_set` | 3784.797 | 3041.129 | Fail: 24.45% slower |
+| L1 replacement, read fixture | 256.255 | 373.066 | Pass |
+| L1 replacement, `get_or_set` fixture | 252.995 | 371.709 | Pass |
+| Cold factory, read fixture | 2582.423 | 4535.189 | Pass |
+| Cold factory, `get_or_set` fixture | 2613.562 | 4894.971 | Pass |
+
+Read L2 ranges were 2755.801–2821.248 versus 2680.636–2775.964 ns. The read
+gap is within 2% with overlap; it is not a reliable timing difference, but the
+budget still fails. Factory retrieval ranges were 3675.278–3890.446 versus
+3035.178–3151.138 ns. Both L2 APIs allocate 13; warm hits and writes allocate zero.
+All warmed, cold and write budgets pass on this runner.
+
+Same-runner three-pair 9872a5d→928f1be diagnostics measured read
+2739.582→2716.058 ns (-0.86%, overlapping ranges) and factory retrieval
+3443.123→3685.313 ns (**7.03% regression**, non-overlapping ranges). Both
+remove three allocations, 16→13. Set changes -0.22%; cold +2.32% with overlap.
+No native timing gain is claimed for first-poll execution. A smaller allocation
+count alone does not qualify the change. Separate hosted CPUs do not establish
+before/after improvement; native L2 and release qualification remain open.
+
+## Previous native source: typed observer
+
 The [CI run for 9872a5d](https://github.com/ZoonTronLabs/amalgam/actions/runs/37626045385)
 completed with all 14 functional milestone jobs passing. The comparative and
-aggregate jobs failed only the L2 performance budgets. The first-poll candidate
-above has not yet been measured on Linux.
+aggregate jobs failed only the L2 performance budgets. The later first-poll result is recorded above.
 
 The runner was Intel Xeon Platinum 8370C with **two available physical cores
 and four logical CPUs**; Rust 1.88.0, .NET SDK 10.0.401/runtime 10.0.12 and
@@ -369,7 +441,7 @@ export CARGO_INCREMENTAL=0
 export RUSTUP_TOOLCHAIN=1.88.0
 python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-read
 python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-get
-python3 benches/run-before-after.py --baseline 9872a5d9a6cd2900b1e2a033056d1d7eac2f1c5c --output /tmp/amalgam-before-after
+python3 benches/run-before-after.py --baseline 928f1be9b2dfe1f4f3fa138c968a82339862b19a --output /tmp/amalgam-before-after
 cargo +1.88.0 test --release --locked --bench l2_ownership -- --ignored --nocapture --test-threads=1
 ```
 

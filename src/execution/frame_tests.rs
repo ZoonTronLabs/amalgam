@@ -286,3 +286,61 @@ fn a_promoted_scope_owns_completion_before_source_notification() {
     scopes.close();
     assert_eq!(token.reason(), Some(Reason::ScopeFinished));
 }
+
+#[tokio::test]
+async fn linking_a_first_poll_view_after_close_cancels_and_retires_without_repoll() {
+    let a = Scopes::new();
+    let b = Scopes::new();
+    let owner = CancellationSource::for_cache(Arc::clone(&a));
+    a.close();
+    let source = CancellationSource::new();
+    let reasons = Arc::new(Mutex::new(Vec::new()));
+    let execution = b.execution(
+        Waiting {
+            _retirement: retirement(&source, &reasons),
+        },
+        source,
+    );
+    execution.link(&owner.token(), LinkMode::Explicit);
+    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
+    tokio::time::timeout(Duration::from_secs(1), a.drained())
+        .await
+        .unwrap();
+    assert!(a.tasks.is_empty());
+    assert!(matches!(
+        execution.await,
+        Err(Error::OperationCancelled {
+            reason: Reason::CacheShutdown
+        })
+    ));
+    b.close();
+    b.drained().await;
+}
+
+#[tokio::test]
+async fn an_owned_parents_child_sees_closing_before_queued_parent_notification() {
+    let scopes = Scopes::new();
+    let owner = CancellationSource::new();
+    let parent_token = owner.token();
+    let parent = scopes.execution(std::future::pending::<Result<u64>>(), owner);
+    let phase = super::BorrowedPhase::new(&scopes, &parent_token);
+    let child = phase.token();
+    assert_eq!(scopes.tasks.len(), 1);
+    // Exercise the interval after close publishes its gate but before queued
+    // owned-work notifications are delivered. Callback checks are pure reads.
+    scopes.closing.store(true, Ordering::SeqCst);
+    assert_eq!(parent_token.reason(), None);
+    assert_eq!(child.reason(), Some(Reason::CacheShutdown));
+    assert_eq!(scopes.tasks.len(), 1);
+    scopes.close();
+    tokio::time::timeout(Duration::from_secs(1), scopes.drained())
+        .await
+        .unwrap();
+    assert!(matches!(
+        parent.await,
+        Err(Error::OperationCancelled {
+            reason: Reason::CacheShutdown
+        })
+    ));
+    drop(phase);
+}

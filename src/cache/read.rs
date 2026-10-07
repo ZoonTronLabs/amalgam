@@ -227,7 +227,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn hydration_fence(&self, key: &str) -> Result<HydrationFence<V>> {
         let lane = self.inner.lanes.get(key);
         let fence = {
-            let Ok(_guard) = Arc::clone(&lane.lock).try_lock_owned() else {
+            let Some(_guard) = lane.try_lock() else {
                 // A read overlapping an already started commit may return its
                 // snapshot, but cannot install it after that commit completes.
                 return Ok(HydrationFence::ConcurrentMutation);
@@ -250,7 +250,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let HydrationFence::Stable { fence, observed } = &source.hydration else {
             return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
         };
-        let Ok(_guard) = Arc::clone(&fence.lane.lock).try_lock_owned() else {
+        let Some(_guard) = fence.lane.try_lock() else {
             // Hydration is optional. A newer mutation already owning this lane
             // must not delay the read or install an older snapshot afterward.
             return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));

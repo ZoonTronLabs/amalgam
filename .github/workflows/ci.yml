@@ -201,6 +201,23 @@ jobs:
             /tmp/amalgam-before-after/*.csv
             /tmp/amalgam-before-after/*.stderr
           retention-days: 7
+      - name: Optional native CPU diagnostics
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
+        continue-on-error: true
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y linux-tools-generic
+          python3 benches/run-native-profile.py --reports /tmp/amalgam-before-after --output /tmp/amalgam-profile
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
+        with:
+          name: native-profile
+          path: |
+            /tmp/amalgam-profile/report.json
+            /tmp/amalgam-profile/*.txt
+            /tmp/amalgam-profile/*.csv
+            /tmp/amalgam-profile/*.stderr
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
