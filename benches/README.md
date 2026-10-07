@@ -70,3 +70,15 @@ The replacement diagnostic separately measures writes before and after an
 actual read of the same L1 key. The paired replacement fixture performs its
 value-verification read after its timed loop. Preserve that distinction when
 reporting a storage optimization that applies only before reader registration.
+
+For a storage or execution change, run
+`python3 benches/run-before-after.py --baseline <local-commit> --output /absolute/path/outside/the/checkout`.
+This diagnostic requires identical dependency manifests and scaling workloads.
+It freezes both executables, restores the current source before measurement,
+and alternates their order for at least three pairs on the same machine. It
+reports enabled metadata costs, writes before and after a read, cold factories
+and both read scaling APIs. Raw counts, allocations, source fingerprints and
+timing ranges accompany the medians; it leaves the FusionCache gates intact.
+Use `--rust-target` only for an available cross target and identify emulated
+results as such. CI manual runs can select the optional `diagnostic_baseline`
+full commit SHA to collect native Linux before/after evidence on one runner.

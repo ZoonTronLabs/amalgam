@@ -126,3 +126,61 @@ fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
         "an abandoned input must not stay in storage"
     );
 }
+
+#[tokio::test]
+async fn scalar_zero_jitter_callback_still_drains_before_shutdown_completes() {
+    use amalgam::{Error, FactoryCancellationReason, JitterSource};
+    use std::sync::mpsc;
+
+    struct BlockingJitter {
+        started: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+    impl JitterSource for BlockingJitter {
+        fn sample(&self, maximum: Duration) -> Duration {
+            assert!(maximum.is_zero());
+            self.started.send(()).unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
+            Duration::ZERO
+        }
+    }
+    let (started, entered) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let cache = Cache::builder()
+        .default_options(EntryOptions::new(Duration::from_secs(60)))
+        .jitter_source(Arc::new(BlockingJitter {
+            started,
+            release: Mutex::new(released),
+        }))
+        .try_build()
+        .unwrap();
+    let writing = cache.clone();
+    let writer = std::thread::spawn(move || {
+        ready(std::future::IntoFuture::into_future(
+            writing.set("key", 9_u64),
+        ))
+    });
+    entered.recv_timeout(Duration::from_secs(2)).unwrap();
+    cache.close();
+    let mut shutdown = Box::pin(cache.shutdown());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+            .await
+            .is_err()
+    );
+    release.send(()).unwrap();
+    assert!(matches!(
+        writer.join().unwrap(),
+        Err(Error::OperationCancelled {
+            reason: FactoryCancellationReason::CacheShutdown,
+        })
+    ));
+    tokio::time::timeout(Duration::from_secs(2), shutdown)
+        .await
+        .unwrap()
+        .unwrap();
+}

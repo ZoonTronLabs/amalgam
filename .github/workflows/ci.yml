@@ -5,6 +5,11 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      diagnostic_baseline:
+        description: Optional full commit SHA for same-runner Rust diagnostics
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -179,6 +184,23 @@ jobs:
           python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-scaling/read || amalgam_scaling_status=1
           python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-scaling/get-or-set || amalgam_scaling_status=1
           exit "$amalgam_scaling_status"
+      - name: Optional same-runner before/after diagnostics
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
+        env:
+          AMALGAM_DIAGNOSTIC_BASELINE: ${{ inputs.diagnostic_baseline }}
+        run: |
+          [[ "$AMALGAM_DIAGNOSTIC_BASELINE" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "$AMALGAM_DIAGNOSTIC_BASELINE"
+          python3 benches/run-before-after.py --baseline "$AMALGAM_DIAGNOSTIC_BASELINE" --output /tmp/amalgam-before-after
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
+        with:
+          name: before-after-report
+          path: |
+            /tmp/amalgam-before-after/report.json
+            /tmp/amalgam-before-after/*.csv
+            /tmp/amalgam-before-after/*.stderr
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

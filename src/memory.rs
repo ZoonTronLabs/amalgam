@@ -524,6 +524,45 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         commit.retired.finish(&self.observer, &key);
         self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
     }
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn supports_shared_plain(&self) -> bool {
+        matches!(self.backend, Backend::Unbounded(_)) && !self.observer.reclamation.is_deferred()
+    }
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn insert_admitted_plain<'a>(
+        &self,
+        key: &str,
+        value: V,
+        metadata: crate::entry::PlainMetadata,
+        time: crate::time::local::WriteTime,
+        reservation: crate::execution::DeferredInlinePermit<'a>,
+    ) -> (
+        crate::execution::InlinePermit<'a>,
+        crate::Result<MemoryAdmission>,
+    ) {
+        debug_assert!(self.supports_shared_plain());
+        debug_assert!(time.now().is_before(metadata.physical()));
+        let Backend::Unbounded(store) = &self.backend else {
+            unreachable!("shared publication requires unbounded builtin L1");
+        };
+        let (permit, commit) = store.insert_admitted_plain(
+            key,
+            value,
+            metadata,
+            time,
+            CapturePolicy {
+                admission: self.capture_admission(),
+                timing: self.observer.capture,
+            },
+            reservation,
+        );
+        let result = commit.map(|commit| {
+            let key = StorageKey::Borrowed(key);
+            commit.retired.finish(&self.observer, &key);
+            self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
+        });
+        (permit, result)
+    }
     fn finish_admission(
         &self,
         key: &StorageKey<'_>,

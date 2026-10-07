@@ -196,3 +196,81 @@ fn one_storage_fence_also_publishes_shutdown_activity() {
         writer.join().unwrap();
     });
 }
+
+#[test]
+fn a_writer_fence_publishes_completion_activity_to_shutdown() {
+    struct Shared {
+        active: AtomicUsize,
+        readers: AtomicUsize,
+        closing: AtomicBool,
+        writer: AtomicBool,
+        stored: UnsafeCell<usize>,
+        callback: UnsafeCell<usize>,
+    }
+    // SAFETY: the model checks storage exclusion and post-commit drainage.
+    unsafe impl Sync for Shared {}
+    let mut model = loom::model::Builder::new();
+    model.preemption_bound = Some(3);
+    model.max_permutations = Some(20_000);
+    model.check(|| {
+        let state = Arc::new(Shared {
+            active: AtomicUsize::new(0),
+            readers: AtomicUsize::new(0),
+            closing: AtomicBool::new(false),
+            writer: AtomicBool::new(false),
+            stored: UnsafeCell::new(0),
+            callback: UnsafeCell::new(0),
+        });
+        let reading = state.clone();
+        let reader = loom::thread::spawn(move || {
+            reading.readers.store(1, Ordering::Release);
+            fence(Ordering::SeqCst);
+            if !reading.writer.load(Ordering::Acquire) {
+                reading.stored.with(|pointer| {
+                    // SAFETY: the reservation passed storage admission.
+                    assert!(unsafe { *pointer } <= 1);
+                });
+            }
+            reading.readers.store(0, Ordering::Release);
+        });
+        let writing = state.clone();
+        let writer = loom::thread::spawn(move || {
+            writing.active.store(1, Ordering::Release);
+            writing.writer.store(true, Ordering::Release);
+            fence(Ordering::SeqCst);
+            let admitted = !writing.closing.load(Ordering::SeqCst);
+            if admitted && writing.readers.load(Ordering::Acquire) == 0 {
+                writing.stored.with_mut(|pointer| {
+                    // SAFETY: the gate and reader scan excluded live readers.
+                    unsafe {
+                        *pointer = 1;
+                    }
+                });
+            }
+            writing.writer.store(false, Ordering::Release);
+            fence(Ordering::SeqCst);
+            if admitted {
+                writing.callback.with(|pointer| {
+                    // SAFETY: published operation activity covers completion
+                    // after storage coordination, including a late observer.
+                    assert_eq!(unsafe { *pointer }, 0);
+                    loom::thread::yield_now();
+                    assert_eq!(unsafe { *pointer }, 0);
+                });
+            }
+            writing.active.store(0, Ordering::Release);
+        });
+        state.closing.swap(true, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        if state.active.load(Ordering::SeqCst) == 0 {
+            state.callback.with_mut(|pointer| {
+                // SAFETY: completion finished or admission rejects the write.
+                unsafe {
+                    *pointer = 1;
+                }
+            });
+        }
+        reader.join().unwrap();
+        writer.join().unwrap();
+    });
+}

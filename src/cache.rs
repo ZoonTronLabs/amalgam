@@ -12,6 +12,8 @@ mod markers;
 mod memory_inline;
 mod mutation_request;
 mod set_request;
+#[cfg(target_arch = "x86_64")]
+mod slot_write;
 pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest};
 mod callback_free;
 mod origin;
