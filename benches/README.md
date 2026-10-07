@@ -8,9 +8,14 @@ report directory. The reference is the exact locked FusionCache 2.9.0 package.
 
 The fixtures use a scalar value, a one-hour lifetime and default memory-only
 storage. They verify actual returned values and compare public async reads for
-the same key and distinct keys at 1/2/4/8 threads. They also measure a native
+the same key and distinct keys at 1/2/4/8 threads. `--api read` measures read-only
+hits; `--api get-or-set` measures factory retrieval hits and the matching native
+operation in both libraries. Each mode applies the same allocation and ratio
+budgets, and its name is retained in the report. They also measure a native
 synchronous hit, replacement `set`, and a new-key immediately ready factory.
-Setup, keys, thread startup and warmup are outside timed loops. Parallel times
+Setup, keys, thread startup and warmup are outside timed loops. Both cold
+fixtures keep their preallocated input key collections alive during measurement;
+input-key destruction is outside the loop in both runtimes. Parallel times
 are aggregate elapsed time divided by all completed operations, rather than
 per-request latency. Rust allocations use a thread-local allocator counter;
 .NET reports allocated bytes, which are a different unit.
@@ -18,7 +23,8 @@ per-request latency. Rust allocations use a thread-local allocator counter;
 Release Rust is compared with fully optimized .NET JIT code. Tiered compilation
 is disabled in reference processes to keep tier transitions outside the timed
 work. Seven medians and ranges are reported; small changes within two percent
-need more evidence. Source and binary fingerprints make the report reproducible.
+need more evidence. Source and binary fingerprints make the report reproducible;
+the identity includes this Python driver and excludes generated C# files.
 
 The `hot` gate requires zero Rust allocations on warmed hits, async/sync
 single-thread and same-key eight-thread costs at most half of FusionCache, and

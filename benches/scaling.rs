@@ -77,7 +77,38 @@ fn cache() -> Cache<u64> {
         .default_options(EntryOptions::new(Duration::from_secs(3600)))
         .build()
 }
-fn scaling(cache: &Cache<u64>, keys: &[String], workers: usize, same: bool) {
+trait WarmHit {
+    async fn value(cache: &Cache<u64>, key: &str) -> u64;
+    fn native(cache: &BlockingCache<u64>, key: &str) -> u64;
+}
+struct ReadHit;
+impl WarmHit for ReadHit {
+    async fn value(cache: &Cache<u64>, key: &str) -> u64 {
+        cache.read(key, None).await.unwrap().into_value().unwrap()
+    }
+    fn native(cache: &BlockingCache<u64>, key: &str) -> u64 {
+        cache.read(key, None).unwrap().into_value().unwrap()
+    }
+}
+struct OriginHit;
+impl WarmHit for OriginHit {
+    async fn value(cache: &Cache<u64>, key: &str) -> u64 {
+        cache
+            .get_or_set(key, |ctx| async move {
+                Err(ctx.fail("a warmed factory must never run"))
+            })
+            .await
+            .unwrap()
+    }
+    fn native(cache: &BlockingCache<u64>, key: &str) -> u64 {
+        cache
+            .get_or_set(key, |ctx| {
+                Err(ctx.fail("a warmed native factory must never run"))
+            })
+            .unwrap()
+    }
+}
+fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same: bool) {
     let barrier = Arc::new(Barrier::new(workers + 1));
     std::thread::scope(|scope| {
         let threads: Vec<_> = (0..workers)
@@ -88,19 +119,14 @@ fn scaling(cache: &Cache<u64>, keys: &[String], workers: usize, same: bool) {
                 scope.spawn(move || {
                     runtime().block_on(async {
                         for _ in 0..WARMUP {
-                            assert_eq!(
-                                cache.read(key, None).await.unwrap().into_value(),
-                                Some(index as u64 + 1)
-                            );
+                            assert_eq!(H::value(cache, key).await, index as u64 + 1);
                         }
                         gate.wait();
                         gate.wait();
                         begin_counting();
                         let mut checksum = 0_u64;
                         for _ in 0..OPERATIONS {
-                            checksum += black_box(
-                                cache.read(key, None).await.unwrap().into_value().unwrap(),
-                            );
+                            checksum += black_box(H::value(cache, key).await);
                         }
                         let allocations = end_counting();
                         assert_eq!(checksum, OPERATIONS as u64 * (index as u64 + 1));
@@ -126,20 +152,20 @@ fn scaling(cache: &Cache<u64>, keys: &[String], workers: usize, same: bool) {
         assert_eq!(allocations, 0, "a warmed scalar hit allocated");
     });
 }
-fn synchronous_hit() {
+fn synchronous_hit<H: WarmHit>() {
     let cache = BlockingCache::from_builder(
         Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
     )
     .unwrap();
     cache.try_set("sync", 1_u64).unwrap().wait().unwrap();
     for _ in 0..WARMUP {
-        assert_eq!(cache.read("sync", None).unwrap().into_value(), Some(1));
+        assert_eq!(H::native(&cache, "sync"), 1);
     }
     begin_counting();
     let began = Instant::now();
     let mut checksum = 0_u64;
     for _ in 0..OPERATIONS {
-        checksum += black_box(cache.read("sync", None).unwrap().into_value().unwrap());
+        checksum += black_box(H::native(&cache, "sync"));
     }
     let elapsed = began.elapsed();
     let allocations = end_counting();
@@ -187,7 +213,7 @@ fn mutations(rt: &tokio::runtime::Runtime) {
         let keys: Vec<_> = (0..WARMUP).map(|id| format!("cold-{id}")).collect();
         begin_counting();
         let began = Instant::now();
-        for key in keys {
+        for key in &keys {
             assert_eq!(
                 black_box(
                     writes
@@ -212,6 +238,14 @@ fn main() {
         ready_costs();
         return;
     }
+    match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => run::<ReadHit>(),
+        [flag, value] if flag == "--api" && value == "read" => run::<ReadHit>(),
+        [flag, value] if flag == "--api" && value == "get-or-set" => run::<OriginHit>(),
+        args => panic!("expected --api read|get-or-set, got {args:?}"),
+    }
+}
+fn run<H: WarmHit>() {
     let rt = runtime();
     let cache = cache();
     let keys: Vec<_> = (0..8).map(|id| format!("key-{id}")).collect();
@@ -229,11 +263,11 @@ fn main() {
     println!("scenario,threads,operations,ns_per_op,allocations");
     for workers in [1, 2, 4, 8] {
         for same in [true, false] {
-            scaling(&cache, &keys, workers, same);
+            scaling::<H>(&cache, &keys, workers, same);
         }
     }
     rt.block_on(cache.shutdown()).unwrap();
-    synchronous_hit();
+    synchronous_hit::<H>();
     mutations(&rt);
 }
 

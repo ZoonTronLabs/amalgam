@@ -30,9 +30,10 @@ def digest(path):
 
 
 def sources(root):
-    paths = [root / "Cargo.toml", root / "Cargo.lock"]
+    paths = [root / "Cargo.toml", root / "Cargo.lock", root / "benches/run-scaling.py"]
     for directory, suffix in [("src", ".rs"), ("benches", ".rs"), ("benches/fusioncache", ".cs")]:
-        paths.extend((root / directory).rglob(f"*{suffix}"))
+        paths.extend(path for path in (root / directory).rglob(f"*{suffix}")
+                     if not {"obj", "bin"}.intersection(path.relative_to(root).parts))
     paths.extend([root / "benches/fusioncache/FusionBench.csproj", root / "benches/fusioncache/packages.lock.json"])
     return {str(path.relative_to(root)): digest(path) for path in sorted(set(paths))}
 
@@ -89,6 +90,7 @@ def cpu_topology(available):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pairs", type=int, default=7)
+    parser.add_argument("--api", choices=["read", "get-or-set"], default="read")
     parser.add_argument("--gate", choices=["report", "hot", "cold", "all"], default="hot")
     parser.add_argument("--output", type=Path, default=Path(os.environ.get("TMPDIR", "/tmp")) / "amalgam-scaling")
     args = parser.parse_args()
@@ -118,7 +120,7 @@ def main():
     reference = output / "dotnet-bin/FusionBench.dll"
     frozen = sources(root)
     records = {"rust": [], "fusion": []}
-    commands = {"rust": [str(binary)], "fusion": ["dotnet", str(reference)]}
+    commands = {"rust": [str(binary), "--api", args.api], "fusion": ["dotnet", str(reference), "--api", args.api]}
     identity = None
     for pair in range(args.pairs):
         order = ["rust", "fusion"] if pair % 2 == 0 else ["fusion", "rust"]
@@ -180,7 +182,7 @@ def main():
     if args.gate != "report" and scaling_limit is not None and scaling < scaling_limit:
         failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {physical} available physical cores")
     report = {
-        "gate": args.gate, "pairs": args.pairs, "environment": {
+        "api": args.api, "gate": args.gate, "pairs": args.pairs, "environment": {
             "platform": platform.platform(), "available_cpus": cpu_count, "cpu_topology": topology,
             "rust": execute(["rustc", "--version", "--verbose"], root, env).stdout.strip(),
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),

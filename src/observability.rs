@@ -239,6 +239,20 @@ impl<'a> QuietObservation<'a> {
             level,
         });
     }
+    /// Preserve one unobserved operation while a miss selects its origin plan.
+    pub(crate) fn into_ready(mut self) -> ReadyObservation<'a> {
+        self.state = ObservationState::Completed;
+        ReadyObservation {
+            events: self.events,
+            observation: Observation {
+                operation: self.operation,
+                level: None,
+                timing: OperationTiming::Unobserved,
+                span: tracing::Span::none(),
+                state: ObservationState::Pending,
+            },
+        }
+    }
     pub(crate) fn into_owned(mut self) -> OperationObservation {
         self.state = ObservationState::Completed;
         OperationObservation {

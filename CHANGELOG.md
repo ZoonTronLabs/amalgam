@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Default factory hits reuse the borrowed L1 plan, including native calls.
+  Native factory executor captures are created only for a miss or eager refresh.
+  Unused input destructors remain counted through final cancellation checks;
+  individually configured eager entries retain their refresh behavior.
+- Comparative benchmarks separately cover read-only and factory-retrieval hits,
+  including their matching synchronous APIs. Reports identify the selected API
+  and driver source; both cold fixtures retain preallocated input keys throughout
+  measurement so input destruction is excluded consistently.
 - Prepare logical and physical monotonic deadlines at insertion for the
   built-in standalone L1. Plain reads compare both boundaries with one
   elapsed sample under the reader slot, avoiding UTC projection per hit.

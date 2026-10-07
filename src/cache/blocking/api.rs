@@ -251,23 +251,31 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             + Send
             + 'static,
     {
-        let dispatch = FactoryDispatch {
-            caller: thread::current().id(),
-            cancellation: match token {
-                Some(_) => CallerCancellation::Explicit,
-                None => CallerCancellation::Absent,
+        let cancellation = match token {
+            Some(_) => CallerCancellation::Explicit,
+            None => CallerCancellation::Absent,
+        };
+        let default_present = fallback.has_value();
+        self.cache.native_origin_lazy(
+            key,
+            || {
+                let dispatch = FactoryDispatch {
+                    caller: thread::current().id(),
+                    cancellation,
+                    default_present,
+                    lineage: self.runtime.lineage(),
+                };
+                let seed = self.cache.worker_seed();
+                let runtime = self.runtime.clone();
+                FactoryOrigin::new(move |ctx: FactoryContext<V>| {
+                    run_factory(seed.worker(), runtime, dispatch, factory, ctx)
+                })
             },
-            default_present: fallback.has_value(),
-            lineage: self.runtime.lineage(),
-        };
-        let seed = self.cache.worker_seed();
-        let runtime = self.runtime.clone();
-        let origin = move |ctx: FactoryContext<V>| {
-            run_factory(seed.worker(), runtime, dispatch, factory, ctx)
-        };
-        self.runtime.run(
-            self.cache
-                .get_or_set_impl(key, origin, options, tags, fallback, token),
+            options,
+            tags,
+            fallback,
+            token,
+            &self.runtime,
         )
     }
     fn wrap_receipt(&self, receipt: MutationReceipt) -> BlockingMutationReceipt {

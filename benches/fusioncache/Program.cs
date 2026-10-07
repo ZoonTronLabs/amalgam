@@ -12,7 +12,22 @@ internal static class Program
         DefaultEntryOptions = new(TimeSpan.FromHours(1)),
         EnableAutoRecovery = false,
     });
-    private static void Scaling(FusionCache cache, string[] keys, int workers, bool same)
+    private interface IWarmHit
+    {
+        static abstract long AsyncValue(FusionCache cache, string key);
+        static abstract long Sync(FusionCache cache, string key);
+    }
+    private readonly struct ReadHit : IWarmHit
+    {
+        public static long AsyncValue(FusionCache cache, string key) => cache.TryGetAsync<long>(key).GetAwaiter().GetResult().Value;
+        public static long Sync(FusionCache cache, string key) => cache.TryGet<long>(key).Value;
+    }
+    private readonly struct OriginHit : IWarmHit
+    {
+        public static long AsyncValue(FusionCache cache, string key) => cache.GetOrSetAsync<long>(key, static (_, _) => Task.FromException<long>(new InvalidOperationException("A warmed factory must never run"))).GetAwaiter().GetResult();
+        public static long Sync(FusionCache cache, string key) => cache.GetOrSet<long>(key, static (_, _) => throw new InvalidOperationException("A warmed native factory must never run"));
+    }
+    private static void Scaling<H>(FusionCache cache, string[] keys, int workers, bool same) where H : struct, IWarmHit
     {
         using Barrier gate = new(workers + 1);
         Thread[] threads = new Thread[workers];
@@ -26,14 +41,14 @@ internal static class Program
             threads[id] = new Thread(() =>
             {
                 for (int n = 0; n < Warmup; n++)
-                    if (cache.TryGetAsync<long>(key).GetAwaiter().GetResult().Value != index + 1)
+                    if (H.AsyncValue(cache, key) != index + 1)
                         throw new InvalidOperationException("Warm value mismatch");
                 gate.SignalAndWait();
                 gate.SignalAndWait();
                 long before = GC.GetAllocatedBytesForCurrentThread();
                 long sum = 0;
                 for (int n = 0; n < Operations; n++)
-                    sum += cache.TryGetAsync<long>(key).GetAwaiter().GetResult().Value;
+                    sum += H.AsyncValue(cache, key);
                 allocations[worker] = GC.GetAllocatedBytesForCurrentThread() - before;
                 sums[worker] = sum;
             });
@@ -50,21 +65,27 @@ internal static class Program
         string label = same ? "same" : "distinct";
         Console.WriteLine(FormattableString.Invariant($"{label},{workers},{workers * Operations},{elapsed / (workers * Operations):F3},{allocations.Sum()}"));
     }
-    private static void SynchronousHit()
+    private static void SynchronousHit<H>() where H : struct, IWarmHit
     {
         using FusionCache cache = New();
         cache.Set("sync", 1L);
         for (int n = 0; n < Warmup; n++)
-            if (cache.TryGet<long>("sync").Value != 1) throw new InvalidOperationException("Sync warmup mismatch");
+            if (H.Sync(cache, "sync") != 1) throw new InvalidOperationException("Sync warmup mismatch");
         long before = GC.GetAllocatedBytesForCurrentThread();
         long began = Stopwatch.GetTimestamp();
         long sum = 0;
-        for (int n = 0; n < Operations; n++) sum += cache.TryGet<long>("sync").Value;
+        for (int n = 0; n < Operations; n++) sum += H.Sync(cache, "sync");
         double elapsed = Stopwatch.GetElapsedTime(began).TotalNanoseconds;
         if (sum != Operations) throw new InvalidOperationException("Sync checksum mismatch");
         Console.WriteLine(FormattableString.Invariant($"sync,1,{Operations},{elapsed / Operations:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
     }
-    public static async Task Main()
+    public static Task Main(string[] args) => args switch
+    {
+        [] or ["--api", "read"] => Run<ReadHit>(),
+        ["--api", "get-or-set"] => Run<OriginHit>(),
+        _ => throw new ArgumentException("Expected --api read|get-or-set"),
+    };
+    private static async Task Run<H>() where H : struct, IWarmHit
     {
         Assembly library = typeof(FusionCache).Assembly;
         Console.Error.WriteLine(library.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
@@ -75,8 +96,8 @@ internal static class Program
         for (int id = 0; id < keys.Length; id++) await cache.SetAsync(keys[id], (long)id + 1);
         Console.WriteLine("scenario,threads,operations,ns_per_op,allocated_bytes");
         foreach (int workers in new[] { 1, 2, 4, 8 })
-            foreach (bool same in new[] { true, false }) Scaling(cache, keys, workers, same);
-        SynchronousHit();
+            foreach (bool same in new[] { true, false }) Scaling<H>(cache, keys, workers, same);
+        SynchronousHit<H>();
         using FusionCache writes = New();
         for (int id = 0; id < Warmup; id++) await writes.SetAsync("replace", (long)id);
         long before = GC.GetAllocatedBytesForCurrentThread();

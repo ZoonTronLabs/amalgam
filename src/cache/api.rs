@@ -14,6 +14,7 @@ use super::{
     Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
 };
 use crate::marker_reads::MarkerReads;
+use crate::observability::QuietObservation;
 
 struct ReadOperation<'a> {
     key: LookupKey,
@@ -752,7 +753,20 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         fallback: MaybeValue<V>,
         cancellation: Option<FactoryCancellation>,
     ) -> super::inline_cold::Start<V> {
-        let (observation, full, permit, resolved) = match self.start_lookup(
+        self.begin_origin_lazy(key, move || origin, options, tags, fallback, cancellation)
+    }
+
+    /// A native adapter constructs its executor captures only after an L1 miss.
+    pub(in crate::cache) fn begin_origin_lazy<O: CacheOrigin<V>>(
+        &self,
+        key: &str,
+        make_origin: impl FnOnce() -> O,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fallback: MaybeValue<V>,
+        cancellation: Option<FactoryCancellation>,
+    ) -> super::inline_cold::Start<V> {
+        let lookup = match self.quiet_lookup(
             key,
             options.as_ref(),
             cancellation.as_ref(),
@@ -762,12 +776,106 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 OriginKind::Constant => LookupMode::ConstantValue,
             },
         ) {
+            QuietStart::Ready(ready) => {
+                // Input destructors stay within the same admitted operation.
+                return super::inline_cold::Start::Ready(ready.finish(
+                    key,
+                    cancellation.as_ref(),
+                    move |value| {
+                        drop((make_origin, tags, fallback, options));
+                        CacheValue {
+                            value,
+                            commit: CommitReceipt::Unchanged,
+                        }
+                    },
+                ));
+            }
+            QuietStart::Owned {
+                observation,
+                permit,
+            } => LookupStart::Owned {
+                observation: observation.into_ready(),
+                key: Cow::Borrowed(key),
+                permit,
+                resolved: None,
+            },
+            QuietStart::Recheck {
+                observation,
+                permit,
+            } => self.resume_plain_origin(key, observation, permit, cancellation.as_ref()),
+            QuietStart::General => self.start_lookup(
+                key,
+                options.as_ref(),
+                cancellation.as_ref(),
+                CacheOperation::GetOrSet,
+                match O::KIND {
+                    OriginKind::Factory => LookupMode::GetOrSet,
+                    OriginKind::Constant => LookupMode::ConstantValue,
+                },
+            ),
+        };
+        self.start_origin_lookup(
+            lookup,
+            key,
+            make_origin,
+            options,
+            tags,
+            fallback,
+            cancellation,
+        )
+    }
+
+    fn resume_plain_origin<'a>(
+        &'a self,
+        key: &'a str,
+        observation: QuietObservation<'a>,
+        permit: InlinePermit<'a>,
+        cancellation: Option<&FactoryCancellation>,
+    ) -> LookupStart<'a, V> {
+        let result = self.ready_value(key, None, cancellation, LookupMode::GetOrSet, &permit);
+        let observation = observation.into_ready();
+        match result {
+            Ok(None) => LookupStart::Owned {
+                observation,
+                key: Cow::Borrowed(key),
+                permit,
+                resolved: None,
+            },
+            Ok(Some(hit)) => LookupStart::Ready(ReadyLookup {
+                result: Ok(ReadyValue {
+                    value: hit.value,
+                    key: Cow::Borrowed(key),
+                    refresh: hit.refresh,
+                }),
+                observation,
+                permit,
+            }),
+            Err(error) => LookupStart::Ready(ReadyLookup {
+                result: Err(error),
+                observation,
+                permit,
+            }),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)] // Preserve the admitted lookup and its caller inputs together.
+    fn start_origin_lookup<'a, O: CacheOrigin<V>>(
+        &'a self,
+        lookup: LookupStart<'a, V>,
+        key: &str,
+        make_origin: impl FnOnce() -> O,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fallback: MaybeValue<V>,
+        cancellation: Option<FactoryCancellation>,
+    ) -> super::inline_cold::Start<V> {
+        let (observation, full, permit, resolved, origin) = match lookup {
             LookupStart::Ready(ready) => {
                 // These captures can execute user Drop code; keep them within
                 // the same counted operation before its final cancellation check.
                 let span = ready.observation.span();
                 let _entered = span.enter();
-                let ready = self.ready_origin(ready, key, origin, tags);
+                let ready = self.ready_origin(ready, key, make_origin, tags);
                 drop((fallback, options));
                 return super::inline_cold::Start::Ready(
                     ready
@@ -788,6 +896,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 permit,
                 resolved,
             } => {
+                // The native caller has entered its executor before this miss.
+                // Start incremental cleanup once, without a Worker on a hit.
+                drop(self.ready_context());
+                let origin = make_origin();
                 if self.supports_inline_cold(resolved.as_deref().or(options.as_ref())) {
                     let full: Arc<str> = Arc::from(key.as_ref());
                     let raw = if self.inner.key_prefix.as_deref().is_none_or(str::is_empty) {
@@ -820,6 +932,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     Arc::<str>::from(key.as_ref()),
                     permit,
                     resolved,
+                    origin,
                 )
             }
         };
@@ -854,7 +967,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         &self,
         ready: ReadyLookup<'a, V>,
         raw: &str,
-        origin: O,
+        make_origin: impl FnOnce() -> O,
         tags: Box<[Tag]>,
     ) -> ReadyLookup<'a, V> {
         let ReadyLookup {
@@ -865,7 +978,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let result = match result {
             Ok(mut hit) => {
                 match std::mem::replace(&mut hit.refresh, ReadyRefresh::Complete) {
-                    ReadyRefresh::Complete => drop((origin, tags)),
+                    ReadyRefresh::Complete => drop((make_origin, tags)),
                     ReadyRefresh::Eager(work) => {
                         let ReadyEager { current, options } = *work;
                         self.worker().eager(
@@ -876,14 +989,14 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                             options,
                             current,
                             tags,
-                            origin,
+                            make_origin(),
                         );
                     }
                 }
                 Ok(hit)
             }
             Err(error) => {
-                drop((origin, tags));
+                drop((make_origin, tags));
                 Err(error)
             }
         };
@@ -891,6 +1004,91 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             result,
             observation,
             permit,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)] // Native and async adapters share the same admitted origin inputs.
+    pub(in crate::cache) fn native_origin_lazy<O: CacheOrigin<V>>(
+        &self,
+        key: &str,
+        make_origin: impl FnOnce() -> O,
+        options: Option<EntryOptions>,
+        tags: Box<[Tag]>,
+        fallback: MaybeValue<V>,
+        cancellation: Option<FactoryCancellation>,
+        runtime: &super::BlockingRuntime,
+    ) -> Result<CacheValue<V>> {
+        match self.quiet_lookup(
+            key,
+            options.as_ref(),
+            cancellation.as_ref(),
+            CacheOperation::GetOrSet,
+            match O::KIND {
+                OriginKind::Factory => LookupMode::GetOrSet,
+                OriginKind::Constant => LookupMode::ConstantValue,
+            },
+        ) {
+            QuietStart::Ready(ready) => ready.finish(key, cancellation.as_ref(), move |value| {
+                drop((make_origin, options, tags, fallback));
+                CacheValue {
+                    value,
+                    commit: CommitReceipt::Unchanged,
+                }
+            }),
+            QuietStart::Owned {
+                observation,
+                permit,
+            } => runtime.run(async {
+                match self.start_origin_lookup(
+                    LookupStart::Owned {
+                        observation: observation.into_ready(),
+                        key: Cow::Borrowed(key),
+                        permit,
+                        resolved: None,
+                    },
+                    key,
+                    make_origin,
+                    options,
+                    tags,
+                    fallback,
+                    cancellation,
+                ) {
+                    super::inline_cold::Start::Ready(result) => result,
+                    super::inline_cold::Start::Pending(work) => work.await,
+                }
+            }),
+            QuietStart::Recheck {
+                observation,
+                permit,
+            } => runtime.run(async {
+                let lookup =
+                    self.resume_plain_origin(key, observation, permit, cancellation.as_ref());
+                match self.start_origin_lookup(
+                    lookup,
+                    key,
+                    make_origin,
+                    options,
+                    tags,
+                    fallback,
+                    cancellation,
+                ) {
+                    super::inline_cold::Start::Ready(result) => result,
+                    super::inline_cold::Start::Pending(work) => work.await,
+                }
+            }),
+            QuietStart::General => runtime.run(async {
+                match self.begin_origin_lazy(
+                    key,
+                    make_origin,
+                    options,
+                    tags,
+                    fallback,
+                    cancellation,
+                ) {
+                    super::inline_cold::Start::Ready(result) => result,
+                    super::inline_cold::Start::Pending(work) => work.await,
+                }
+            }),
         }
     }
 
@@ -911,7 +1109,13 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         options: Option<EntryOptions>,
         runtime: &super::BlockingRuntime,
     ) -> Result<MaybeValue<V>> {
-        match self.quiet_lookup(key, options.as_ref(), None, CacheOperation::TryGet) {
+        match self.quiet_lookup(
+            key,
+            options.as_ref(),
+            None,
+            CacheOperation::TryGet,
+            LookupMode::Read,
+        ) {
             QuietStart::Ready(ready) => return ready.finish(key, None, MaybeValue::from_value),
             QuietStart::Owned {
                 observation,
@@ -928,6 +1132,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     L2ReadPolicy::PreserveFailure,
                     std::convert::identity,
                 ));
+            }
+            QuietStart::Recheck { .. } => {
+                unreachable!("read-only lookup never selects origin refresh")
             }
             QuietStart::General => {}
         }
@@ -986,6 +1193,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             options.as_deref(),
             token.as_ref(),
             CacheOperation::TryGet,
+            LookupMode::Read,
         ) {
             QuietStart::Ready(ready) => {
                 ReadStart::Ready(ready.finish(key, token.as_ref(), MaybeValue::from_value))
@@ -1000,6 +1208,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 observation: observation.into_owned(),
                 permit,
             }),
+            QuietStart::Recheck { .. } => {
+                unreachable!("read-only lookup never selects origin refresh")
+            }
             QuietStart::General => self.begin_general_read(key, options, token),
         }
     }
@@ -1059,47 +1270,55 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<T> {
         // Both probes finish or transfer their thread-bound guard synchronously.
         // No borrowed admission may remain in a parked, transferable future.
-        let (observation, full, permit, resolved) =
-            match self.quiet_lookup(key, options.as_ref(), token.as_ref(), operation) {
-                QuietStart::Ready(ready) => {
-                    return ready.finish(key, token.as_ref(), move |value| {
+        let (observation, full, permit, resolved) = match self.quiet_lookup(
+            key,
+            options.as_ref(),
+            token.as_ref(),
+            operation,
+            LookupMode::Read,
+        ) {
+            QuietStart::Ready(ready) => {
+                return ready.finish(key, token.as_ref(), move |value| {
+                    complete(MaybeValue::from_value(value))
+                });
+            }
+            QuietStart::Owned {
+                observation,
+                permit,
+            } => (
+                observation.into_owned(),
+                Arc::<str>::from(key),
+                permit,
+                None,
+            ),
+            QuietStart::Recheck { .. } => {
+                unreachable!("read-only lookup never selects origin refresh")
+            }
+            QuietStart::General => match self.start_lookup(
+                key,
+                options.as_ref(),
+                token.as_ref(),
+                operation,
+                LookupMode::Read,
+            ) {
+                LookupStart::Ready(ready) => {
+                    return ready.finish(token.as_ref(), &self.inner.events, move |value| {
                         complete(MaybeValue::from_value(value))
                     });
                 }
-                QuietStart::Owned {
+                LookupStart::Owned {
                     observation,
+                    key,
                     permit,
+                    resolved,
                 } => (
                     observation.into_owned(),
-                    Arc::<str>::from(key),
+                    Arc::<str>::from(key.as_ref()),
                     permit,
-                    None,
+                    resolved,
                 ),
-                QuietStart::General => match self.start_lookup(
-                    key,
-                    options.as_ref(),
-                    token.as_ref(),
-                    operation,
-                    LookupMode::Read,
-                ) {
-                    LookupStart::Ready(ready) => {
-                        return ready.finish(token.as_ref(), &self.inner.events, move |value| {
-                            complete(MaybeValue::from_value(value))
-                        });
-                    }
-                    LookupStart::Owned {
-                        observation,
-                        key,
-                        permit,
-                        resolved,
-                    } => (
-                        observation.into_owned(),
-                        Arc::<str>::from(key.as_ref()),
-                        permit,
-                        resolved,
-                    ),
-                },
-            };
+            },
+        };
         self.prepare_read(
             ReadOperation {
                 key: self.lookup_key(key, full),

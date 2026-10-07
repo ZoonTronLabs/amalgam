@@ -1,8 +1,8 @@
 //! Build-selected plain L1 execution, without the optional observation envelope.
 use super::ready::RuntimeRequirement;
 use super::{
-    Cache, EntryOptions, Error, FactoryCancellation, InlinePermit, QuietObservation, Result,
-    Storage, TagVerdict,
+    Cache, EntryOptions, Error, FactoryCancellation, InlinePermit, LookupMode, QuietObservation,
+    Result, Storage, TagVerdict,
 };
 use crate::events::{
     CacheEvent, CacheLevel, CacheOperation, LayerEvent, MemoryEvent, OperationOutcome,
@@ -52,6 +52,15 @@ pub(super) enum QuietStart<'a, V> {
         observation: QuietObservation<'a>,
         permit: InlinePermit<'a>,
     },
+    // A stored entry can opt into eager refresh even when defaults are plain.
+    Recheck {
+        observation: QuietObservation<'a>,
+        permit: InlinePermit<'a>,
+    },
+}
+enum QuietCopy<V> {
+    Value(V),
+    EntryPolicy,
 }
 pub(super) struct QuietReady<'a, V> {
     value: Result<V>,
@@ -65,6 +74,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         options: Option<&EntryOptions>,
         token: Option<&FactoryCancellation>,
         operation: CacheOperation,
+        mode: LookupMode,
     ) -> QuietStart<'a, V> {
         if matches!(self.inner.ready_plan, ReadyPlan::General)
             || options.is_some()
@@ -74,7 +84,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             return QuietStart::General;
         }
         #[cfg(target_arch = "x86_64")]
-        if let Some(start) = self.quiet_slots_lookup(key, token, operation) {
+        if let Some(start) = self.quiet_slots_lookup(key, token, operation, mode) {
             return start;
         }
         let permit = self.inline();
@@ -86,8 +96,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 unreachable!("Plain plan requires built-in L1");
             };
             let copy = |entry: &super::Entry<V>, freshness: crate::entry::Freshness| {
-                (self.inner.tags(entry) == TagVerdict::Valid && freshness.is_fresh())
-                    .then(|| entry.value().clone())
+                self.quiet_copy(entry, freshness, mode)
             };
             let copied = match &self.inner.clock {
                 crate::time::local::CacheClock::Local(clock) => {
@@ -105,7 +114,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             Ok(copied)
         })();
         match value {
-            Ok(Some(value)) => QuietStart::Ready(QuietReady {
+            Ok(Some(QuietCopy::EntryPolicy)) => QuietStart::Recheck {
+                observation,
+                permit,
+            },
+            Ok(Some(QuietCopy::Value(value))) => QuietStart::Ready(QuietReady {
                 value: Ok(value),
                 observation,
                 permit,
@@ -121,6 +134,23 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             },
         }
     }
+    fn quiet_copy(
+        &self,
+        entry: &super::Entry<V>,
+        freshness: crate::entry::Freshness,
+        mode: LookupMode,
+    ) -> Option<QuietCopy<V>> {
+        if self.inner.tags(entry) != TagVerdict::Valid || !freshness.is_fresh() {
+            return None;
+        }
+        Some(
+            if matches!(mode, LookupMode::GetOrSet) && entry.meta().eager_refresh_at().is_some() {
+                QuietCopy::EntryPolicy
+            } else {
+                QuietCopy::Value(entry.value().clone())
+            },
+        )
+    }
     // x86's SeqCst store emits a separate locked instruction; the already
     // required reader fence can publish operation admission instead. ARM keeps
     // its direct release-store path, which measured faster without this frame.
@@ -130,6 +160,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         key: &str,
         token: Option<&FactoryCancellation>,
         operation: CacheOperation,
+        mode: LookupMode,
     ) -> Option<QuietStart<'a, V>> {
         let (
             ReadyPlan::LocalSlots,
@@ -143,15 +174,18 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let observation = QuietObservation::new(&self.inner.events, operation);
         let (permit, copied) =
             memory.with_admitted_local_ready(key, reservation, token, |entry, freshness| {
-                (self.inner.tags(entry) == TagVerdict::Valid && freshness.is_fresh())
-                    .then(|| entry.value().clone())
+                self.quiet_copy(entry, freshness, mode)
             });
         let value = match copied.map(Option::flatten) {
             Err(Error::CacheClosed) => Err(Error::CacheClosed),
             value => permit.status(token).and(value),
         };
         Some(match value {
-            Ok(Some(value)) => QuietStart::Ready(QuietReady {
+            Ok(Some(QuietCopy::EntryPolicy)) => QuietStart::Recheck {
+                observation,
+                permit,
+            },
+            Ok(Some(QuietCopy::Value(value))) => QuietStart::Ready(QuietReady {
                 value: Ok(value),
                 observation,
                 permit,
