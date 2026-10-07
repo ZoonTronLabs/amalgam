@@ -1,5 +1,5 @@
 #![cfg(target_arch = "x86_64")]
-use amalgam::{Cache, Error, FactoryCancellationReason};
+use amalgam::{BlockingCache, Cache, Error, FactoryCancellationReason};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -95,4 +95,71 @@ fn a_closed_plain_read_does_not_invoke_value_clone() {
         Err(Error::CacheClosed)
     ));
     assert!(entry.try_recv().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_shared_slot_publication_drains_a_started_clone_and_rejects_its_result() {
+    let cache = BlockingCache::new().unwrap();
+    let block = Arc::new(AtomicBool::new(false));
+    let (entered, entry) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    cache
+        .try_set(
+            "hit",
+            Value {
+                block: block.clone(),
+                entered,
+                release: Arc::new(Mutex::new(released)),
+            },
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+    let reader_cache = cache.clone();
+    block.store(true, Ordering::SeqCst);
+    let reader = std::thread::spawn(move || reader_cache.read("hit", None));
+    entry.recv_timeout(Duration::from_secs(2)).unwrap();
+    cache.as_async().close();
+    let mut shutdown = Box::pin(cache.as_async().shutdown());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+            .await
+            .is_err()
+    );
+    release.send(()).unwrap();
+    assert!(matches!(
+        reader.join().unwrap(),
+        Err(Error::OperationCancelled {
+            reason: FactoryCancellationReason::CacheShutdown
+        })
+    ));
+    tokio::time::timeout(Duration::from_secs(2), shutdown)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn a_closed_native_read_does_not_invoke_value_clone() {
+    let cache = BlockingCache::new().unwrap();
+    let block = Arc::new(AtomicBool::new(false));
+    let (entered, entry) = mpsc::channel();
+    let (_, released) = mpsc::channel();
+    cache
+        .try_set(
+            "hit",
+            Value {
+                block: block.clone(),
+                entered,
+                release: Arc::new(Mutex::new(released)),
+            },
+        )
+        .unwrap()
+        .wait()
+        .unwrap();
+    block.store(true, Ordering::SeqCst);
+    cache.as_async().close();
+    assert!(matches!(cache.read("hit", None), Err(Error::CacheClosed)));
+    assert!(entry.try_recv().is_err());
+    cache.shutdown().unwrap();
 }

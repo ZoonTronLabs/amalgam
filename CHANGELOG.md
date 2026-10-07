@@ -24,6 +24,9 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Native synchronous L1 reads now share the source cache’s x86 reader-slot
+  admission publication. Shutdown waits for a started value copy and closed
+  reads reject before invoking `Clone`.
 - Admit built-in L1 writes through a single writer gate and scan only reader
   slots that were actually used. Readers keep thread-local reservations and
   park through writer contention; contention never becomes a cache miss.

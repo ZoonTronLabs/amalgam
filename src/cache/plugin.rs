@@ -308,7 +308,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {
                 Some(self.inner.scopes.defer_inline())
             }
-            PublicLifetime::PluginAccess(_) | PublicLifetime::NativeMemory(_) => None,
+            PublicLifetime::PluginAccess(_) => None,
+            PublicLifetime::NativeMemory(view) => view.source().deferred_inline(),
         }
     }
     pub(super) fn check_plugin_drain(&self, operation: crate::DrainOperation) -> crate::Result<()> {
