@@ -63,6 +63,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Restore the live Redis fault fixture with an atomic journal replacement.
+  A concurrent retry can no longer commit into a temporary empty journal that
+  the fixture then overwrites. Maximum-version and original-lifetime assertions
+  remain unchanged.
+
 - General and hybrid factories now retain their commit and key ownership
   after a calling future is dropped. Other callers help or await that same
   work, including callers with different entry options. Explicit cancellation,

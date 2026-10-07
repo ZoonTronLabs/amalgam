@@ -176,11 +176,9 @@ async fn native_captured_clear_recovery_survives_lower_limit_compaction() {
     assert!(matches!(ticket.work(), RecoveryWork::MarkerMutation(work)
         if matches!(work.stage(), MarkerMutationStage::Advance { .. })));
     clock.set(time(12));
-    let _: i64 = redis::cmd("DEL")
-        .arg(&key)
-        .query_async(&mut connection)
-        .await
-        .unwrap();
+    // RENAME replaces the fault atomically. DEL followed by RENAME lets a
+    // concurrent replay commit into an empty journal before the saved journal
+    // overwrites that commit; the fixture itself would roll back authority.
     let _: () = redis::cmd("RENAME")
         .arg(&stash)
         .arg(&key)
