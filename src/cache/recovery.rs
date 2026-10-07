@@ -1,8 +1,8 @@
 //! Stage-aware replay of captured mutations.
 use super::{
     AcquisitionPolicy, Arc, BackplaneCommand, BackplaneState, CacheInner, CancellationSource,
-    CircuitComponent, DataMutation, DistributedSnapshot, Error, FactoryCancellation, FlightGuard,
-    LeaseError, LeasePolicy, LocalParticipation, MarkerAccess, MarkerAdvanceOutcome, MarkerCommand,
+    CircuitComponent, DataMutation, DistributedSnapshot, Error, FactoryCancellation, LeaseError,
+    LeasePolicy, LocalParticipation, MarkerAccess, MarkerAdvanceOutcome, MarkerCommand,
     MarkerError, MarkerKind, MarkerReplay, PendingMutation, RecoveryAction, RecoveryExecutor,
     RecoveryItem, RecoveryWork, ReplayOutcome, ReplayTicket, Result, Storage, StoredMarker,
     TagVerdict, Timestamp, Worker, acquire_owned_supervised, async_trait,
@@ -176,15 +176,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     )
                     .await?
                     .ok_or(LeaseError::AcquisitionTimeout)?;
-                    Some(FlightGuard {
-                        local: LocalParticipation::ReplayOnly,
-                        _reclamation: self.memory.fence(),
-                        lease: Some(lease),
-                        tasks: Arc::clone(&self.inner.tasks),
-                        events: self.inner.events.clone(),
-                        key: Arc::clone(&item.key),
-                        policy: LeasePolicy::Fenced,
-                    })
+                    Some(self.flight_guard(
+                        &item.key,
+                        LocalParticipation::ReplayOnly,
+                        Some(lease),
+                        LeasePolicy::Fenced,
+                    ))
                 } else {
                     None
                 };

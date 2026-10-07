@@ -613,11 +613,7 @@ impl<V> OriginVersion<V> {
 
 struct FlightGuard {
     local: LocalParticipation,
-    lease: Option<DistributedLease>,
-    tasks: Arc<Tasks>,
-    events: Events,
-    key: Arc<str>,
-    policy: LeasePolicy,
+    lease: ClusterParticipation,
     _reclamation: Option<Arc<dyn crate::memory::ReclamationFence>>,
 }
 enum LocalParticipation {
@@ -646,29 +642,83 @@ impl LeaseTaskOwner for CacheLeaseOwner {
             });
     }
 }
-impl FlightGuard {
+// Disabled distributed locking retains no cluster cleanup owners. Each leased
+// variant owns both its exact participation policy and the resources needed to
+// release it; an absent lease cannot carry unused task/event/key ownership.
+enum ClusterParticipation {
+    Local,
+    Cooperative(ClusterLease),
+    Fenced(ClusterLease),
+}
+struct ClusterLease {
+    lease: DistributedLease,
+    owner: CacheLeaseOwner,
+}
+impl ClusterParticipation {
+    fn new(
+        lease: Option<DistributedLease>,
+        policy: LeasePolicy,
+        owner: impl FnOnce() -> CacheLeaseOwner,
+    ) -> Self {
+        let Some(lease) = lease else {
+            return Self::Local;
+        };
+        let lease = ClusterLease {
+            lease,
+            owner: owner(),
+        };
+        match policy {
+            LeasePolicy::Cooperative => Self::Cooperative(lease),
+            LeasePolicy::Fenced => Self::Fenced(lease),
+        }
+    }
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+    fn is_fenced(&self) -> bool {
+        matches!(self, Self::Fenced(_))
+    }
+    fn state(&self) -> Option<tokio::sync::watch::Receiver<LeaseState>> {
+        match self {
+            Self::Local => None,
+            Self::Cooperative(owned) | Self::Fenced(owned) => Some(owned.lease.state()),
+        }
+    }
     fn proof(&self) -> Result<Option<crate::LeaseProof>> {
-        match &self.lease {
-            Some(lease) if self.policy == LeasePolicy::Fenced => Ok(Some(lease.proof()?)),
-            Some(lease) => {
-                if *lease.state().borrow() == LeaseState::Lost {
+        match self {
+            Self::Local => Ok(None),
+            Self::Fenced(owned) => Ok(Some(owned.lease.proof()?)),
+            Self::Cooperative(owned) => {
+                if *owned.lease.state().borrow() == LeaseState::Lost {
                     Err(LeaseError::Lost.into())
                 } else {
                     Ok(None)
                 }
             }
-            None => Ok(None),
         }
+    }
+    fn release(self) {
+        match self {
+            Self::Local => {}
+            Self::Cooperative(owned) | Self::Fenced(owned) => {
+                owned
+                    .owner
+                    .tasks
+                    .cleanup(owned.owner.key, owned.owner.events, async move {
+                        owned.lease.release().await.map_err(Error::from)
+                    });
+            }
+        }
+    }
+}
+impl FlightGuard {
+    fn proof(&self) -> Result<Option<crate::LeaseProof>> {
+        self.lease.proof()
     }
 }
 impl Drop for FlightGuard {
     fn drop(&mut self) {
-        if let Some(lease) = self.lease.take() {
-            self.tasks
-                .cleanup(Arc::clone(&self.key), self.events.clone(), async move {
-                    lease.release().await.map_err(Error::from)
-                });
-        }
+        std::mem::replace(&mut self.lease, ClusterParticipation::Local).release();
         std::mem::replace(&mut self.local, LocalParticipation::ReplayOnly).release();
     }
 }
@@ -689,12 +739,36 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         Ok(OriginCommit { guard, started_at })
     }
-    fn lease_owner(&self, key: &Arc<str>) -> Arc<dyn LeaseTaskOwner> {
-        Arc::new(CacheLeaseOwner {
+    fn lease_cleanup_owner(&self, key: &Arc<str>) -> CacheLeaseOwner {
+        CacheLeaseOwner {
             tasks: Arc::clone(&self.inner.tasks),
             events: self.inner.events.clone(),
             key: Arc::clone(key),
-        })
+        }
+    }
+    fn lease_owner(&self, key: &Arc<str>) -> Arc<dyn LeaseTaskOwner> {
+        Arc::new(self.lease_cleanup_owner(key))
+    }
+    fn cluster_participation(
+        &self,
+        key: &Arc<str>,
+        lease: Option<DistributedLease>,
+        policy: LeasePolicy,
+    ) -> ClusterParticipation {
+        ClusterParticipation::new(lease, policy, || self.lease_cleanup_owner(key))
+    }
+    fn flight_guard(
+        &self,
+        key: &Arc<str>,
+        local: LocalParticipation,
+        lease: Option<DistributedLease>,
+        policy: LeasePolicy,
+    ) -> FlightGuard {
+        FlightGuard {
+            local,
+            lease: self.cluster_participation(key, lease, policy),
+            _reclamation: self.memory.fence(),
+        }
     }
     fn full_key(&self, key: &str) -> Arc<str> {
         match &self.inner.key_prefix {

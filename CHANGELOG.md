@@ -7,6 +7,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Represent local, cooperative and fenced coordination as closed participation
+  states. Disabled distributed locking retains no lease cleanup task, event or
+  key owners. Actual leases keep supervised release, loss detection and fencing;
+  value retirement still follows local coordination.
 - Borrow nested L2 work from its existing cache-owned parent instead of owning
   a second boxed future and shutdown registration. Independent phase tokens,
   deadlines and progress checkpoints remain; parent shutdown drains pending

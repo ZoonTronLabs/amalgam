@@ -5,11 +5,11 @@ use super::{
     CommitReceipt, CommitReport, DataCommit, DataMutation, DistributedEvent,
     DistributedExpirePolicy, DistributedSnapshot, Duration, EffectOutcome, EnqueueOutcome, Entry,
     EntryOptions, Error, FactoryCancellation, FactoryProduct, Fence, FlightGuard, Future,
-    Instrument, KeyMutation, LayerEvent, LeaseError, LeasePolicy, LeasedMutation,
-    LeasedWriteOutcome, LocalCommit, LocalEffect, MutationReceipt, Observed, OperationOutcome,
-    OriginCommit, OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction,
-    RecoveryItem, RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker,
-    lock, recovery_action,
+    Instrument, KeyMutation, LayerEvent, LeaseError, LeasedMutation, LeasedWriteOutcome,
+    LocalCommit, LocalEffect, MutationReceipt, Observed, OperationOutcome, OriginCommit,
+    OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryItem,
+    RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker, lock,
+    recovery_action,
 };
 use super::{RecoveryFence, component_span};
 
@@ -407,9 +407,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }));
             }
             PreparedData::Ready(data) => {
-                let strict = flight.as_ref().is_some_and(|flight| {
-                    flight.policy == LeasePolicy::Fenced && flight.lease.is_some()
-                });
+                let strict = flight
+                    .as_ref()
+                    .is_some_and(|flight| flight.lease.is_fenced());
                 let result = if self.circuit(CircuitComponent::Distributed) {
                     self.write_data(&key, &data, flight.as_ref())
                         .instrument(component_span(

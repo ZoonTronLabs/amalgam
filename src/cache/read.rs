@@ -1,14 +1,13 @@
 //! Value reads, same-key origin work, fail-safe and eager refresh.
 use super::{
     AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CircuitComponent,
-    CommitReceipt, DistributedEvent, DistributedLease, DistributedLookup, Duration, Entry,
-    EntryOptions, Error, Execution, ExecutionCheckpoint, FactoryCancellation, FactoryContext,
-    FallbackAvailability, FlightGuard, HitKind, HydrationFence, HydrationOutcome, Instrument,
-    L1Read, L2ReadPolicy, LayerEvent, LeaseError, LeasePolicy, LocalParticipation, LockOutcome,
-    LookupKey, MarkerReadPolicy, MaybeValue, MemoryEvent, Observed, OperationOutcome, Ordering,
-    OriginCompletion, OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage,
-    Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded, component_span,
-    lease_lost, newer_of,
+    CommitReceipt, DistributedEvent, DistributedLookup, Duration, Entry, EntryOptions, Error,
+    Execution, ExecutionCheckpoint, FactoryCancellation, FactoryContext, FallbackAvailability,
+    HitKind, HydrationFence, HydrationOutcome, Instrument, L1Read, L2ReadPolicy, LayerEvent,
+    LeaseError, LeasePolicy, LocalParticipation, LockOutcome, LookupKey, MarkerReadPolicy,
+    MaybeValue, MemoryEvent, Observed, OperationOutcome, Ordering, OriginCompletion, OriginKind,
+    ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict, Timeout, Worker,
+    acquire_owned_supervised, bounded, component_span, lease_lost, newer_of,
 };
 
 // Physical completion remains visible after a later marker timeout. The
@@ -485,15 +484,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             None
         };
         let unlocked = matches!(local, LocalParticipation::UnlockedAfterTimeout);
-        let guard = FlightGuard {
-            local,
-            lease,
-            tasks: Arc::clone(&self.inner.tasks),
-            events: self.inner.events.clone(),
-            key: Arc::clone(key),
-            policy: self.inner.lease_policy,
-            _reclamation: self.memory.fence(),
-        };
+        let guard = self.flight_guard(key, local, lease, self.inner.lease_policy);
         Ok(if unlocked {
             LockOutcome::UnlockedAfterTimeout(guard)
         } else {
@@ -639,7 +630,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             },
             origin_cancellation.clone(),
         );
-        let lease_state = guard.lease.as_ref().map(DistributedLease::state);
+        let lease_state = guard.lease.state();
         let guard = self.capture_origin(&key, guard)?;
         let started = self.inner.clock.now();
         let worker = self.clone();
@@ -885,14 +876,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let background_key = Arc::clone(&key);
         let cancelled = source.clone();
         let execution=self.scopes().execution(async move {
-            let mut guard=FlightGuard {local:LocalParticipation::Held(worker.memory.guard(local)),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy,_reclamation:worker.memory.fence()};
+            let mut guard=worker.flight_guard(&key,LocalParticipation::Held(worker.memory.guard(local)),None,worker.inner.lease_policy);
             if !opts.skip_distributed_locker()&&let Some(locker)=&worker.inner.distributed_locker {
-                guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::Cooperative=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
-                if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
+                let lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::Cooperative=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;guard.lease=worker.cluster_participation(&key,lease,worker.inner.lease_policy);
+                if guard.lease.is_local(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
             if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}
             let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone()).with_invocation(crate::factory::FactoryInvocation::EagerRefresh);
-            let lease_state=guard.lease.as_ref().map(DistributedLease::state);
+            let lease_state=guard.lease.state();
             let guard=worker.capture_origin(&key,guard)?;
             let started=worker.inner.clock.now();
             let origin=origin.invoke(ctx);
