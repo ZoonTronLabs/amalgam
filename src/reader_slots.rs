@@ -11,16 +11,49 @@
 //! RMW count. Counts are thread-bound. A writer serializes with one mutex and
 //! waits for existing short readers to leave; ordinary value Clone must not reenter
 //! the same cache. No user callback or value retirement is allowed under guards.
-use parking_lot::{Condvar, Mutex, MutexGuard, lock_api::GuardNoSend};
-use std::cell::{Cell, UnsafeCell};
+#[cfg(loom)]
+use loom::cell::UnsafeCell;
+#[cfg(loom)]
+use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
+#[cfg(loom)]
+use loom::sync::{Condvar, Mutex, MutexGuard};
+use parking_lot::lock_api::GuardNoSend;
+#[cfg(not(loom))]
+use parking_lot::{Condvar, Mutex, MutexGuard};
+use std::cell::Cell;
+#[cfg(not(loom))]
+use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+#[cfg(not(loom))]
 use std::sync::OnceLock;
+#[cfg(not(loom))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
 
+#[cfg(not(loom))]
 static NEXT_READER: AtomicUsize = AtomicUsize::new(0);
-thread_local! {
-    static READER: Cell<Option<usize>> = const { Cell::new(None) };
+#[cfg(loom)]
+loom::lazy_static! { static ref NEXT_READER: AtomicUsize = AtomicUsize::new(0); }
+#[cfg(not(loom))]
+thread_local! { static READER: Cell<Option<usize>> = const { Cell::new(None) }; }
+#[cfg(loom)]
+loom::thread_local! { static READER: Cell<Option<usize>> = Cell::new(None); }
+
+#[cfg(not(loom))]
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock()
+}
+#[cfg(loom)]
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().expect("model mutex")
+}
+#[cfg(not(loom))]
+fn try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    mutex.try_lock()
+}
+#[cfg(loom)]
+fn try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    mutex.try_lock().ok()
 }
 #[allow(deprecated, reason = "Atomic::try_update is unavailable on Rust 1.88")]
 fn reader_index() -> usize {
@@ -38,6 +71,9 @@ fn reader_index() -> usize {
         }
     })
 }
+#[cfg(loom)]
+fn initialize_parking() {}
+#[cfg(not(loom))]
 #[cold]
 #[inline(never)]
 fn initialize_parking() {
@@ -55,6 +91,11 @@ fn initialize_parking() {
         );
     }
 }
+#[cfg(loom)]
+fn slot_count() -> usize {
+    2
+}
+#[cfg(not(loom))]
 fn slot_count() -> usize {
     static COUNT: OnceLock<usize> = OnceLock::new();
     *COUNT.get_or_init(|| {
@@ -155,20 +196,20 @@ impl<T> ReaderSlots<T> {
     }
     pub(crate) fn read(&self) -> ReadGuard<'_, T> {
         loop {
-            let reservation = self.reserve();
+            let reservation = ReservationGuard {
+                reservation: self.reserve(),
+            };
             fence(Ordering::SeqCst);
             if !self.writer.load(Ordering::Acquire) {
                 return ReadGuard {
                     lock: self,
+                    #[cfg(loom)]
+                    access: self.value.get(),
                     reservation,
                     _thread: PhantomData,
                 };
             }
-            drop(ReadGuard {
-                lock: self,
-                reservation,
-                _thread: PhantomData,
-            });
+            drop(reservation);
             self.wait_for_writer();
         }
     }
@@ -179,9 +220,14 @@ impl<T> ReaderSlots<T> {
         self.waiting.fetch_add(1, Ordering::Release);
         fence(Ordering::SeqCst);
         {
-            let mut wait = self.waiters.lock();
+            let mut wait = lock(&self.waiters);
             while self.writer.load(Ordering::Acquire) {
+                #[cfg(not(loom))]
                 self.changed.wait(&mut wait);
+                #[cfg(loom)]
+                {
+                    wait = self.changed.wait(wait).expect("model condvar");
+                }
             }
         }
         self.waiting.fetch_sub(1, Ordering::Release);
@@ -204,37 +250,69 @@ impl<T> ReaderSlots<T> {
         })
     }
     pub(crate) fn write(&self) -> WriteGuard<'_, T> {
-        let hold = WriterHold::new(self, self.serial.lock());
+        let hold = WriterHold::new(self, lock(&self.serial));
+        #[cfg(not(loom))]
         let mut spin = parking_lot_core::SpinWait::new();
         // Readers hold only short synchronous decisions. A waiting writer
         // yields after bounded spinning; it never requires reader-drop writes
         // to a shared wakeup word. Long user Clone can prolong this wait.
         while !self.idle() {
+            #[cfg(not(loom))]
             if !spin.spin() {
                 std::thread::yield_now();
             }
+            #[cfg(loom)]
+            loom::thread::yield_now();
         }
-        WriteGuard { hold }
+        WriteGuard {
+            #[cfg(loom)]
+            access: self.value.get_mut(),
+            hold,
+        }
     }
     pub(crate) fn try_write(&self) -> Option<WriteGuard<'_, T>> {
-        let hold = WriterHold::new(self, self.serial.try_lock()?);
-        self.idle().then_some(WriteGuard { hold })
+        let hold = WriterHold::new(self, try_lock(&self.serial)?);
+        if self.idle() {
+            Some(WriteGuard {
+                #[cfg(loom)]
+                access: self.value.get_mut(),
+                hold,
+            })
+        } else {
+            None
+        }
     }
 }
 pub(crate) struct ReadGuard<'a, T> {
+    #[cfg_attr(loom, allow(dead_code))]
     lock: &'a ReaderSlots<T>,
-    reservation: Reservation<'a>,
+    // Field order is deliberate: Loom's tracked access ends BEFORE the
+    // reservation is released. Native layout has no tracking field.
+    #[cfg(loom)]
+    access: loom::cell::ConstPtr<T>,
+    #[allow(dead_code, reason = "Drop releases the reader reservation")]
+    reservation: ReservationGuard<'a>,
     _thread: PhantomData<GuardNoSend>,
+}
+struct ReservationGuard<'a> {
+    reservation: Reservation<'a>,
 }
 impl<T> Deref for ReadGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
         // SAFETY: the counted reservation passed the writer gate check. A
         // writer must see its count before obtaining exclusive value access.
-        unsafe { &*self.lock.value.get() }
+        #[cfg(not(loom))]
+        unsafe {
+            &*self.lock.value.get()
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.access.deref()
+        }
     }
 }
-impl<T> Drop for ReadGuard<'_, T> {
+impl Drop for ReservationGuard<'_> {
     fn drop(&mut self) {
         match self.reservation {
             Reservation::Local(slot) => {
@@ -266,12 +344,16 @@ impl<T> Drop for WriterHold<'_, T> {
         self.lock.writer.store(false, Ordering::Release);
         fence(Ordering::SeqCst);
         if self.lock.waiting.load(Ordering::Acquire) != 0 {
-            let _wait = self.lock.waiters.lock();
+            let _wait = lock(&self.lock.waiters);
             self.lock.changed.notify_all();
         }
     }
 }
 pub(crate) struct WriteGuard<'a, T> {
+    // End tracked exclusive access before WriterHold reopens admission.
+    #[cfg(loom)]
+    access: loom::cell::MutPtr<T>,
+    #[cfg_attr(loom, allow(dead_code))]
     hold: WriterHold<'a, T>,
 }
 impl<T> Deref for WriteGuard<'_, T> {
@@ -279,18 +361,32 @@ impl<T> Deref for WriteGuard<'_, T> {
     fn deref(&self) -> &T {
         // SAFETY: all published readers left after the gate closed, and this
         // guard retains the serial mutex through its complete value access.
-        unsafe { &*self.hold.lock.value.get() }
+        #[cfg(not(loom))]
+        unsafe {
+            &*self.hold.lock.value.get()
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.access.deref()
+        }
     }
 }
 impl<T> DerefMut for WriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: the fully admitted exclusive guard and its mutable borrow
         // exclude every other access to T.
-        unsafe { &mut *self.hold.lock.value.get() }
+        #[cfg(not(loom))]
+        unsafe {
+            &mut *self.hold.lock.value.get()
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.access.deref()
+        }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
@@ -354,7 +450,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod compatibility_tests {
     use super::*;
     use std::sync::{Arc, Barrier};
@@ -438,5 +534,14 @@ mod compatibility_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
+#[path = "reader_slots/allocation.rs"]
 mod allocation;
+
+#[cfg(all(test, loom))]
+#[path = "reader_slots/loom_tests.rs"]
+mod loom_tests;
+
+#[cfg(all(test, not(loom)))]
+#[path = "reader_slots/safety_contract.rs"]
+mod safety_contract;

@@ -6,14 +6,15 @@ The published registry package remains 0.3.1 until release qualification finishe
 
 | Priority | Work | Current state |
 |---|---|---|
-| Must | Shared-write-free warmed L1 reads, tag verdicts and incremental maintenance | Reader slots, borrowed observations and build-selected primitive copies implemented; zero warm allocations and read budgets qualified for both APIs on Linux |
-| Must | Ready factory and inline L1 writes; ownership only for suspended work | Inline commits, unobserved payload retirement, default replacement lifetime facts and general/hybrid caller-drop ownership implemented; cold/write budgets pass on the latest Linux runner; final-source qualification pending |
+| Must | Shared-write-free warmed L1 reads, tag verdicts and incremental maintenance | Reader slots, borrowed observations and build-selected primitive copies implemented; zero warm allocations verified; hot reads frozen; final default-PGO qualification required |
+| Must | Ready factory and inline L1 writes; ownership only for suspended work | Inline commits, unobserved payload retirement, default replacement lifetime facts and general/hybrid caller-drop ownership implemented; cold meets the independent default-PGO comparison; set misses <=0.75x; final-source qualification pending |
 | Must | Hybrid ordered writes through shard queues; ownership only where work suspends | Scalar ready admission and key-local FIFO waiter queues in shards implemented; no per-key Tokio mutation mutex. Default cache-bound operations promote only after Pending and unused watches are lazy; explicit caller and specialized ownership still need audit |
+| Must | ReaderSlots safety and complexity | Actual cfg(loom) admission/guard/parking models pass, including deliberate race detection; x86-only branch removed and two ready plans retained; Miri/TSan CI added, remote results pending |
 | Must | Fail-safe, soft/hard timeouts, L2, backplane, eager, adaptive caching, tags and recovery | Existing contracts retained; finish the paired FC requirement matrix |
 | Must | FC defaults and explicit `strict()` | Availability defaults, early fencing validation and public default contracts implemented |
 | Must | Eight-operation API, overlays, string tags, `Option<V>`, provider/advanced modules | `set` and `get_or_set` are fluent and fallible; factory-value and remaining API migration open |
 | Must | Custom L2 tag compatibility | Ordinary marker fallback and construction advice still open |
-| Must | Benchmark budgets, packaged consumers, MSRV, live Redis, complete CI | Seven local pairs pass all budgets and eight-core scaling for both APIs; queue/watch changes claim no timing gain. Latest completed source 928f1be passes all 14 functional jobs and warm/cold/write budgets, but native L2 retrieval is 24.5% behind FC and first-poll retrieval regresses 7.0% in same-runner diagnostics. Native CPU evidence and final release gates remain open; see [measurements](PERFORMANCE.md) |
+| Must | Honest benchmarks, packaged consumers, MSRV, live Redis, complete CI | Default-PGO gate and separate TC=0 column implemented; both initial local matrices ran. Independent reproduction fails L2 and set; previous Linux functional jobs all passed, mandatory performance gate failed. No main merge or publication until honest final-source qualification; see [measurements](PERFORMANCE.md) |
 | Must | README, examples, migration and release tables | Update against the final API and qualified measurements before release |
 | Should | Sharded bounded admission, shared sync executor, simplified plugins, testing helpers | After Must; optional features must have no disabled-path overhead |
 | Won't | Runtime provider replacement, heterogeneous values, .NET DI/OutputCache adapters, cross-runtime value wire compatibility | Outside this release |
@@ -30,3 +31,7 @@ Full package, consumer, MSRV and Valkey gates run at a milestone. Step checks us
 formatting, strict clippy, contracts and scaling. Differences within measurement
 noise are not evidence of an improvement. Release descriptions and tables will
 state actual supported behavior and any remaining reference differences.
+
+The current work uses a visible branch and PR while mandatory gates are red.
+New performance work targets only L2 (<=1.0x honest FC) and set (<=0.75x).
+API 0.4, legacy removal and migration proceed as release Must work.

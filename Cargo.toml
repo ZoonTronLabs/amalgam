@@ -69,6 +69,9 @@ opentelemetry = [
 postcard = ["dep:postcard"]
 full = ["redis", "messagepack", "postcard", "metrics", "opentelemetry"]
 
+[target.'cfg(loom)'.dependencies]
+loom = "0.7.2"
+
 [dev-dependencies]
 loom = "0.7.2"
 metrics-exporter-prometheus = "0.18.3"
@@ -81,3 +84,6 @@ ignored = ["event-listener", "h2", "anyhow"]
 [[bench]]
 name = "scaling"
 harness = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

@@ -152,15 +152,18 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
         &self,
         key: &str,
         now: Timestamp,
-        read: impl FnOnce(&Entry<V>) -> R,
+        read: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
     ) -> StorageResult<Option<R>> {
         match self {
             Self::Builtin(store) => Ok(store.with_ready(key, now, read)),
-            Self::Supplied(store) => Ok(store.ready_at(key, now)?.as_ref().map(read)),
+            Self::Supplied(store) => Ok(store
+                .ready_at(key, now)?
+                .as_ref()
+                .map(|entry| read(entry, entry.freshness(now)))),
         }
     }
     pub(crate) fn ready_at(&self, key: &str, now: Timestamp) -> StorageResult<Option<Entry<V>>> {
-        self.with_ready(key, now, Entry::clone)
+        self.with_ready(key, now, |entry, _| entry.clone())
     }
     pub(crate) async fn insert_at(
         &self,

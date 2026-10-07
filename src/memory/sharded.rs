@@ -107,23 +107,6 @@ impl<V> Sharded<V> {
         &self,
         key: &str,
         now: Timestamp,
-        read_entry: impl FnOnce(&Entry<V>) -> R,
-    ) -> Option<R> {
-        let (hash, shard) = self.route(key);
-        let state = read(shard);
-        let (_, stored) = state
-            .entries
-            .raw_entry()
-            .from_hash(hash, |key_in_map| key_in_map.as_ref() == key)?;
-        stored
-            .retirement_reason(Some(now), self.generation.load(Ordering::Acquire))
-            .is_none()
-            .then(|| read_entry(&stored.entry))
-    }
-    /// Local freshness and physical expiry use the same post-admission sample.
-    pub(super) fn with_elapsed_ready<R>(
-        &self,
-        key: &str,
         read_entry: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
     ) -> Option<R> {
         let (hash, shard) = self.route(key);
@@ -131,12 +114,21 @@ impl<V> Sharded<V> {
         let (_, stored) = state
             .entries
             .raw_entry()
-            .from_hash(hash, |k| k.as_ref() == key)?;
-        let elapsed = Instant::now();
+            .from_hash(hash, |key_in_map| key_in_map.as_ref() == key)?;
+        // Local freshness is sampled after admission, just like the primitive
+        // plan. A writer can hold the gate across logical expiry while fail-safe
+        // keeps the value physically present. Supplied clocks stay outside guards.
+        let (elapsed, freshness) = match stored.deadlines {
+            super::deadlines::Deadlines::Local { .. } => {
+                let elapsed = Instant::now();
+                (Some(elapsed), stored.deadlines.freshness(elapsed))
+            }
+            super::deadlines::Deadlines::Interoperable(_) => (None, stored.entry.freshness(now)),
+        };
         stored
-            .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
+            .retirement_at(Some(now), self.generation.load(Ordering::Acquire), elapsed)
             .is_none()
-            .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed)))
+            .then(|| read_entry(&stored.entry, freshness))
     }
     /// The build-selected caller only performs primitive copies and internal
     /// decisions. Close is checked after reader admission, before value access.
@@ -163,38 +155,6 @@ impl<V> Sharded<V> {
             .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
             .is_none()
             .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed))))
-    }
-    #[cfg(target_arch = "x86_64")]
-    pub(super) fn with_admitted_local_ready<'a, R>(
-        &self,
-        key: &str,
-        reservation: crate::execution::DeferredInlinePermit<'a>,
-        token: Option<&crate::FactoryCancellation>,
-        read_entry: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
-    ) -> (crate::execution::InlinePermit<'a>, crate::Result<Option<R>>) {
-        let (hash, shard) = self.route(key);
-        let state = read(shard);
-        // read() crossed its SeqCst fence after the operation count was stored.
-        // Check close BEFORE Clone or any optional/user callback.
-        let permit = reservation.after_reader(&state);
-        let result = (|| {
-            permit.admit()?;
-            permit.status(token)?;
-            let Some((_, stored)) = state
-                .entries
-                .raw_entry()
-                .from_hash(hash, |stored| stored.as_ref() == key)
-            else {
-                return Ok(None);
-            };
-            let elapsed = Instant::now();
-            Ok(stored
-                .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
-                .is_none()
-                .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed))))
-        })();
-        drop(state);
-        (permit, result)
     }
     pub(super) fn get(&self, key: &str, now: Option<Timestamp>) -> MemoryRead<V> {
         let (hash, shard) = self.route(key);
@@ -527,46 +487,59 @@ mod tests {
     }
     #[test]
     fn local_freshness_is_checked_after_waiting_for_the_value_slot() {
-        use crate::time::local::CacheClock;
-        let CacheClock::Local(clock) = CacheClock::local() else {
-            unreachable!()
-        };
-        let store = std::sync::Arc::new(Sharded::with_local_clock(Arc::clone(&clock)));
-        let before = clock.sample().0;
-        store.insert(
-            Arc::from("k"),
-            Entry::fresh(
-                1,
-                &EntryOptions::new(std::time::Duration::from_millis(10)).with_fail_safe(
-                    true,
-                    Some(std::time::Duration::from_secs(60)),
+        for callback_free in [false, true] {
+            use crate::time::local::CacheClock;
+            let CacheClock::Local(clock) = CacheClock::local() else {
+                unreachable!()
+            };
+            let store = std::sync::Arc::new(Sharded::with_local_clock(Arc::clone(&clock)));
+            let before = clock.sample().0;
+            store.insert(
+                Arc::from("k"),
+                Entry::fresh(
+                    1,
+                    &EntryOptions::new(std::time::Duration::from_millis(10)).with_fail_safe(
+                        true,
+                        Some(std::time::Duration::from_secs(60)),
+                        None,
+                    ),
+                    before,
+                    Box::new([]),
+                    None,
                     None,
                 ),
                 before,
-                Box::new([]),
-                None,
-                None,
-            ),
-            before,
-            Expected::Any,
-            CaptureAdmission::Armed,
-            MemoryWriteEvent::Set,
-        );
-        let (_, shard) = store.route("k");
-        let writer = write(shard);
-        let (started, started_rx) = std::sync::mpsc::channel();
-        let reading = Arc::clone(&store);
-        let sampled = std::thread::spawn(move || {
-            started.send(()).unwrap();
-            reading
-                .with_elapsed_ready("k", |_, freshness| freshness)
-                .unwrap()
-        });
-        started_rx.recv().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        drop(writer);
-        let sampled = sampled.join().unwrap();
-        assert_eq!(sampled, crate::entry::Freshness::Stale);
+                Expected::Any,
+                CaptureAdmission::Armed,
+                MemoryWriteEvent::Set,
+            );
+            let (_, shard) = store.route("k");
+            let writer = write(shard);
+            let (started, started_rx) = std::sync::mpsc::channel();
+            let reading = Arc::clone(&store);
+            let sampled = std::thread::spawn(move || {
+                started.send(()).unwrap();
+                if callback_free {
+                    reading
+                        .with_callback_free_local_ready(
+                            "k",
+                            &crate::execution::Scopes::new(),
+                            |_, freshness| freshness,
+                        )
+                        .unwrap()
+                        .unwrap()
+                } else {
+                    reading
+                        .with_ready("k", before, |_, freshness| freshness)
+                        .unwrap()
+                }
+            });
+            started_rx.recv().unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(writer);
+            let sampled = sampled.join().unwrap();
+            assert_eq!(sampled, crate::entry::Freshness::Stale);
+        }
     }
     #[test]
     fn overlapping_clear_drains_preserve_all_newer_generations() {

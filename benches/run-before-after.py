@@ -25,7 +25,8 @@ def digest(value):
 
 
 def source_identity(root):
-    paths = [root / "Cargo.toml", root / "Cargo.lock", root / "benches/scaling.rs"]
+    paths = [root / "Cargo.toml", root / "Cargo.lock"]
+    paths.extend(sorted((root / "benches").rglob("*.rs")))
     paths.extend(sorted((root / "src").rglob("*.rs")))
     return {str(path.relative_to(root)): digest(path.read_bytes()) for path in paths}
 

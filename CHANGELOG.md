@@ -5,6 +5,27 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### ReaderSlots safety and simplification
+- Reduce ready selection to the general counted path and a build-proven primitive
+  path; remove the separate x86 admission branch and its unused helpers.
+- Instrument the exact production ReaderSlots module with cfg(loom), including
+  tracked value access for the full guard lifetime. Bounded models cover
+  first use, collisions, writer competition, nested reads and parking wakeups.
+  Remove the copied admission model; add mandatory Loom, Miri and TSan CI jobs.
+- Preserve post-admission logical freshness in both ready plans; waiting for
+  a writer cannot return an entry that expired during that wait as fresh.
+
+### Benchmark methodology correction
+- Gate against released FusionCache 2.9 with default .NET tiering/Dynamic PGO;
+  publish the TC=0 reference separately rather than using it to qualify release.
+- Replace fixed short warmup with identical three-second minimum settling in
+  both runtimes; record windows and reject unsettled qualification. Cold warmup
+  uses bounded batches of fresh entries instead of an ever-growing cache.
+- Withdraw earlier FC PASS claims as production-default release evidence;
+  archive their reports and the ADR implementation journal in docs. Next
+  performance work is limited to L2 and set, with hot reads frozen.
+
+
 ### Changed
 
 - Replace per-key Tokio mutation mutexes with scalar ready admission and
@@ -14,12 +35,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
   only when an ordered path is actually used.
 - Initialize cache-bound shutdown tracking only for an actual exported link.
   Keep pure shutdown visibility during callbacks and late-link cancellation.
-  Eight queue and two cancellation regressions bring default coverage to 723.
 - Add optional untimed native CPU profiling of frozen paired binaries; timed
   workloads and performance budgets remain unchanged.
-- Record completed 928f1be Linux qualification: 14 functional jobs and warmed,
-  cold/write budgets pass; L2 remains unqualified and same-runner factory
-  retrieval regresses 7.0%. Lower allocation counts do not imply a timing gain.
 - Count and pin default cache-bound work for its first poll; create an owned
   scope and shutdown subscription only after actual suspension. Transfer the
   same pinned future before admission ends. Keep explicit caller and specialized
@@ -27,17 +44,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
   during blocking callbacks; exported root/child tokens preserve cross-cache
   shutdown without caller re-poll. Completion and panic preserve retirement
   order. This removes five allocations from both local L2 fixtures.
-- Record exact-source 9872a5d Linux qualification: all 14 functional checks and
-  warm/cold/write budgets pass; native L2 remains unqualified. One fewer native
-  L2 allocation has no claimed timing gain in same-runner measurements.
 - Store suspended read/origin observers as typed execution handles instead of
   allocating a second boxed driver. Cache-owned work remains pinned and scoped.
   First-poll explicit cancellation propagates every terminal cause and retires
   pending work without caller re-poll; token ownership and failed-preparation
   capture lifetime remain. This removes one allocation from both L2 APIs.
-- Record the latest Linux milestone: all 14 functional jobs pass, while both
-  L2 budgets and the stricter L1 replacement advantage remain unqualified.
-  Local comparisons include the synchronous retrieval timing tradeoff.
 - Select a bounded shard-local pool of scalar key-coordination controls only
   for hybrid caches instead of rebuilding idle lanes and local mutexes on each
   distributed read. Standalone L1 uses transient coordination. Pool
@@ -141,8 +152,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
   shutdown and lease loss still stop it; explicit cancellation remains usable
   after caller destruction. Panics reach the leader unchanged and waiters as
   typed failures, while background supervision retains the original cause.
-- Native synchronous L1 reads now share the source cache’s x86 reader-slot
-  admission publication. Shutdown waits for a started value copy and closed
+- Native synchronous L1 reads share the source cache’s counted reader-slot
+  admission. Shutdown waits for a started value copy and closed
   reads reject before invoking `Clone`.
 - Admit built-in L1 writes through a single writer gate and scan only reader
   slots that were actually used. Readers keep thread-local reservations and

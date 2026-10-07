@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -55,11 +56,43 @@ def measurements(output, allocation_column, expected):
             "operations": int(row["operations"]),
             "allocated": int(row[allocation_column]),
         }
-        if rows[key]["ns"] <= 0 or rows[key]["operations"] <= 0:
+        if not math.isfinite(rows[key]["ns"]) or rows[key]["ns"] <= 0 or rows[key]["operations"] <= 0:
             raise SystemExit(f"Invalid measurement: {row}")
     if rows.keys() != expected:
         raise SystemExit(f"Measurement scenarios differ: {rows.keys() ^ expected}")
     return rows
+
+
+def default_jit_environment(inherited):
+    # Keep runtime discovery (DOTNET_ROOT, PATH, etc.), but remove inherited
+    # JIT overrides so the primary reference uses actual runtime defaults.
+    prefixes = ("Tiered", "TC_", "Jit", "ReadyToRun", "OSR")
+    removed = sorted(key for key in inherited
+                     if key.startswith(("DOTNET_", "COMPlus_"))
+                     and key.split("_", 1)[1].startswith(prefixes))
+    return {key: value for key, value in inherited.items() if key not in removed}, removed
+
+
+def warmup_records(stderr, fixture):
+    records = [json.loads(line.removeprefix("warmup "))
+               for line in stderr.splitlines() if line.startswith("warmup ")]
+    labels = {
+        "warm": {f"{scenario}:{workers}:{worker}" for scenario in ["same", "distinct"]
+                 for workers in [1, 2, 4, 8] for worker in range(workers)} | {"sync"},
+        "mutations": {"set", "cold"}, "distributed": {"l2_json"},
+    }[fixture]
+    if len(records) != len(labels) or {row["label"] for row in records} != labels:
+        raise SystemExit(f"Incomplete warmup evidence for {fixture}")
+    for row in records:
+        samples = row["windows_ns"]
+        if row["seconds"] < 3 or row["operations"] <= 0 or not samples:
+            raise SystemExit(f"Invalid warmup evidence: {row['label']}")
+        if any(not math.isfinite(ns) or ns <= 0 for ns in samples):
+            raise SystemExit(f"Invalid settling samples: {row['label']}")
+        stable = len(samples) >= 5 and max(samples[-5:]) / min(samples[-5:]) <= 1.10
+        if row["stable"] is not stable:
+            raise SystemExit(f"Inconsistent settling verdict: {row['label']}")
+    return records
 
 
 def cpu_topology(available):
@@ -105,12 +138,9 @@ def main():
     if output == root or root in output.parents:
         parser.error("Keep generated artifacts outside the checkout")
     output.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
+    env, removed_jit_overrides = default_jit_environment(dict(os.environ))
     env.setdefault("CARGO_TARGET_DIR", str(Path(os.environ.get("TMPDIR", "/tmp")) / "amalgam-build-shared"))
     env.update(CARGO_INCREMENTAL="0", CARGO_PROFILE_DEV_DEBUG="0", CARGO_PROFILE_TEST_DEBUG="0")
-    # Measure fully optimized JIT code without a tier transition inside a timed loop.
-    # This is shared by every reference run, including counterbalanced pairs.
-    env["DOTNET_TieredCompilation"] = "0"
     build = execute(["cargo", "build", "--locked", "--release", "--bench", "scaling", "--message-format=json"], root, env, output / "cargo-build.jsonl")
     artifacts = [json.loads(line) for line in build.stdout.splitlines() if line.startswith("{")]
     binaries = [row["executable"] for row in artifacts if row.get("reason") == "compiler-artifact" and row.get("target", {}).get("name") == "scaling" and row.get("executable")]
@@ -122,11 +152,17 @@ def main():
     execute(["dotnet", "restore", str(project), "--locked-mode", *properties], root, env, output / "dotnet-restore.log")
     execute(["dotnet", "build", str(project), "--no-restore", "-c", "Release", "-o", str(output / "dotnet-bin"), *properties], root, env, output / "dotnet-build.log")
     reference = output / "dotnet-bin/FusionBench.dll"
+    runtime_config = json.loads(reference.with_suffix(".runtimeconfig.json").read_text())
+    properties = runtime_config["runtimeOptions"].get("configProperties", {})
+    if any(key.startswith(("System.Runtime.Tiered", "System.Runtime.ReadyToRun")) for key in properties):
+        raise SystemExit("The fixture embeds a JIT override rather than runtime defaults")
     frozen = sources(root)
-    records = {"rust": [], "fusion": []}
-    commands = {
-        "rust": [str(binary)], "fusion": ["dotnet", str(reference)],
-    }
+    records = {"rust": [], "fusion": [], "fusion_no_tiering": []}
+    warmups = {label: [] for label in records}
+    commands = {"rust": [str(binary)], "fusion": ["dotnet", str(reference)],
+                "fusion_no_tiering": ["dotnet", str(reference)]}
+    environments = {"rust": env, "fusion": env,
+                    "fusion_no_tiering": dict(env, DOTNET_TieredCompilation="0")}
     fixtures = [
         ("warm", ["--api", args.api], HOT_SCENARIOS),
         ("mutations", ["--mutations"], MUTATION_SCENARIOS),
@@ -134,17 +170,26 @@ def main():
     ]
     identity = None
     for pair in range(args.pairs):
-        order = ["rust", "fusion"] if pair % 2 == 0 else ["fusion", "rust"]
+        # Rotate all six orderings; neither FC mode consistently runs first.
+        orders = [("rust", "fusion", "fusion_no_tiering"),
+                  ("fusion", "fusion_no_tiering", "rust"),
+                  ("fusion_no_tiering", "rust", "fusion"),
+                  ("fusion_no_tiering", "fusion", "rust"),
+                  ("rust", "fusion_no_tiering", "fusion"),
+                  ("fusion", "rust", "fusion_no_tiering")]
+        order = orders[pair % len(orders)]
         for label in order:
             trial = {}
+            settling = {}
             for fixture, arguments, expected in fixtures:
                 print(f"Pair {pair + 1}/{args.pairs}: {label}/{fixture}", file=sys.stderr, flush=True)
-                result = execute(commands[label] + arguments, root, env, output / f"pair-{pair + 1}-{label}-{fixture}.csv")
+                result = execute(commands[label] + arguments, root, environments[label], output / f"pair-{pair + 1}-{label}-{fixture}.csv")
                 rows = measurements(result.stdout, "allocations" if label == "rust" else "allocated_bytes", expected)
                 if not trial.keys().isdisjoint(rows):
                     raise SystemExit("Fixture scenarios overlap")
                 trial.update(rows)
-                if label == "fusion":
+                settling[fixture] = warmup_records(result.stderr, fixture)
+                if label != "rust":
                     lines = result.stderr.strip().splitlines()
                     if len(lines) < 3 or not lines[0].startswith("2.9.0+"):
                         raise SystemExit("The reference is not the released FusionCache 2.9.0 package")
@@ -153,14 +198,18 @@ def main():
                         raise SystemExit("The reference package or runtime changed during measurement")
                     identity = current
             records[label].append(trial)
+            warmups[label].append(settling)
         if sources(root) != frozen:
             raise SystemExit("Sources changed during the paired measurement")
     rows = []
-    failures = []
+    failures = [f"{label} pair {pair + 1} {fixture}/{row['label']}: warmup did not settle"
+                for label, trials in warmups.items() for pair, trial in enumerate(trials)
+                for fixture, values in trial.items() for row in values if not row["stable"]]
     for key in records["rust"][0]:
         rust = [trial[key] for trial in records["rust"]]
         fusion = [trial[key] for trial in records["fusion"]]
-        if {trial["operations"] for trial in rust + fusion} != {rust[0]["operations"]}:
+        legacy = [trial[key] for trial in records["fusion_no_tiering"]]
+        if {trial["operations"] for trial in rust + fusion + legacy} != {rust[0]["operations"]}:
             raise SystemExit(f"Operation counts differ: {key}")
         ns = {label: statistics.median(trial[key]["ns"] for trial in records[label]) for label in records}
         allocations = statistics.median(row["allocated"] / row["operations"] for row in rust)
@@ -169,8 +218,11 @@ def main():
         rows.append({
             "scenario": key[0], "threads": key[1], "rust_ns": ns["rust"], "fusion_ns": ns["fusion"],
             "rust_over_fusion": ns["rust"] / ns["fusion"], "rust_allocations_per_op": allocations,
+            "fusion_no_tiering_ns": ns["fusion_no_tiering"],
+            "rust_over_fusion_no_tiering": ns["rust"] / ns["fusion_no_tiering"],
             "rust_range_ns": [min(row["ns"] for row in rust), max(row["ns"] for row in rust)],
             "fusion_range_ns": [min(row["ns"] for row in fusion), max(row["ns"] for row in fusion)],
+            "fusion_no_tiering_range_ns": [min(row["ns"] for row in legacy), max(row["ns"] for row in legacy)],
         })
     by_key = {(row["scenario"], row["threads"]): row for row in rows}
     if args.gate != "report":
@@ -200,11 +252,18 @@ def main():
     if args.gate != "report" and scaling_limit is not None and scaling < scaling_limit:
         failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {physical} available physical cores")
     report = {
+        "schema_version": 2, "gate_reference": "fusion_default_tiering_pgo",
+        "warmup_policy": {"minimum_seconds": 3, "maximum_seconds": 15,
+                          "operation_window_milliseconds": 100, "stable_windows": 5,
+                          "maximum_window_ratio": 1.10}, "warmup_evidence": warmups,
         "api": args.api, "fixture_processes": ["warm", "mutations", "distributed"], "gate": args.gate, "pairs": args.pairs, "environment": {
             "platform": platform.platform(), "available_cpus": cpu_count, "cpu_topology": topology,
             "rust": execute(["rustc", "--version", "--verbose"], root, env).stdout.strip(),
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),
-            "dotnet_tiered_compilation": "0", "fusion_identity": identity,
+            "dotnet_tiered_compilation": "default", "fusion_identity": identity,
+            "removed_jit_override_names": removed_jit_overrides,
+            "fusion_modes": {"fusion": "runtime defaults; gate reference",
+                             "fusion_no_tiering": "DOTNET_TieredCompilation=0; diagnostic only"},
         }, "sources_sha256": frozen, "binaries_sha256": {"rust": digest(binary), "fusion_fixture": digest(reference)},
         "distinct_scaling": scaling, "scaling_limit": scaling_limit,
         "eight_core_scaling_verified": (topology["physical_cores_available"] or 0) >= 8 and scaling >= 6,
@@ -212,9 +271,9 @@ def main():
     }
     execute([str(binary), "--costs"], root, env, output / "ready-costs.csv")
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print("scenario threads Rust_ns FC_ns Rust/FC Rust_alloc/op")
+    print("scenario threads Rust_ns FC_default_ns FC_TC0_ns Rust/FC_default Rust/FC_TC0 Rust_alloc/op")
     for row in rows:
-        print(f"{row['scenario']:8} {row['threads']:7} {row['rust_ns']:7.2f} {row['fusion_ns']:7.2f} {row['rust_over_fusion']:7.3f} {row['rust_allocations_per_op']:13.3f}")
+        print(f"{row['scenario']:8} {row['threads']:7} {row['rust_ns']:7.2f} {row['fusion_ns']:7.2f} {row['fusion_no_tiering_ns']:7.2f} {row['rust_over_fusion']:7.3f} {row['rust_over_fusion_no_tiering']:7.3f} {row['rust_allocations_per_op']:13.3f}")
     if scaling_limit is None:
         print(f"Distinct scaling: {scaling:.2f}x; physical topology unavailable, qualification unverified")
     else:

@@ -10,13 +10,12 @@ use crate::events::{
 use crate::memory::CacheMemory;
 use std::sync::Arc;
 
+// Exactly two ready strategies: the general counted path and the
+// build-proven primitive path. Neither depends on the target architecture.
 #[derive(Clone, Copy)]
 pub(super) enum ReadyPlan {
-    Plain,
-    CallbackFree,
-    #[cfg(target_arch = "x86_64")]
-    LocalSlots,
     General,
+    CallbackFree,
 }
 impl ReadyPlan {
     pub(super) fn select<V: Clone + Send + Sync + 'static>(
@@ -27,34 +26,17 @@ impl ReadyPlan {
         clock: &crate::time::local::CacheClock,
     ) -> Self {
         if matches!(storage, Storage::MemoryOnly)
-            && matches!(memory, CacheMemory::Builtin(_))
             && matches!(runtime, RuntimeRequirement::Inline)
             && !options.enable_auto_clone()
             && !options.skip_memory_read()
-        {
-            if let (CacheMemory::Builtin(memory), crate::time::local::CacheClock::Local(_)) =
+            && super::callback_free::primitive::<V>()
+            && let (CacheMemory::Builtin(memory), crate::time::local::CacheClock::Local(_)) =
                 (memory, clock)
-                && memory.has_reader_slots()
-            {
-                return Self::local_value::<V>();
-            }
-            Self::Plain
-        } else {
-            Self::General
-        }
-    }
-    fn local_value<V: 'static>() -> Self {
-        if super::callback_free::primitive::<V>() {
+            && memory.has_reader_slots()
+        {
             Self::CallbackFree
         } else {
-            #[cfg(target_arch = "x86_64")]
-            {
-                Self::LocalSlots
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                Self::Plain
-            }
+            Self::General
         }
     }
 }
@@ -105,56 +87,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         {
             return self.callback_free_lookup(key, operation, mode);
         }
-        #[cfg(target_arch = "x86_64")]
-        if let Some(start) = self.quiet_slots_lookup(key, token, operation, mode) {
-            return start;
-        }
-        let permit = self.inline();
-        let observation = QuietObservation::new(&self.inner.events, operation);
-        let value = (|| {
-            permit.admit()?;
-            permit.status(token)?;
-            let CacheMemory::Builtin(memory) = &self.inner.memory else {
-                unreachable!("Plain plan requires built-in L1");
-            };
-            let copy = |entry: &super::Entry<V>, freshness: crate::entry::Freshness| {
-                self.quiet_copy(entry, freshness, mode)
-            };
-            let copied = match &self.inner.clock {
-                crate::time::local::CacheClock::Local(clock) => {
-                    memory.with_local_ready(key, clock, copy)
-                }
-                crate::time::local::CacheClock::Shared(clock) => {
-                    // User clock code stays outside the slot and inside admission.
-                    let now = clock.now();
-                    permit.status(token)?;
-                    memory.with_ready(key, now, |entry| copy(entry, entry.freshness(now)))
-                }
-            }
-            .flatten();
-            permit.status(token)?;
-            Ok(copied)
-        })();
-        match value {
-            Ok(Some(QuietCopy::EntryPolicy)) => QuietStart::Recheck {
-                observation,
-                permit,
-            },
-            Ok(Some(QuietCopy::Value(value))) => QuietStart::Ready(QuietReady {
-                value: Ok(value),
-                observation,
-                permit,
-            }),
-            Err(error) => QuietStart::Ready(QuietReady {
-                value: Err(error),
-                observation,
-                permit,
-            }),
-            Ok(None) => QuietStart::Owned {
-                observation,
-                permit,
-            },
-        }
+        QuietStart::General
     }
     pub(super) fn quiet_copy(
         &self,
@@ -172,56 +105,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 QuietCopy::Value(entry.value().clone())
             },
         )
-    }
-    // x86's SeqCst store emits a separate locked instruction; the already
-    // required reader fence can publish operation admission instead. ARM keeps
-    // its direct release-store path, which measured faster without this frame.
-    #[cfg(target_arch = "x86_64")]
-    fn quiet_slots_lookup<'a>(
-        &'a self,
-        key: &str,
-        token: Option<&FactoryCancellation>,
-        operation: CacheOperation,
-        mode: LookupMode,
-    ) -> Option<QuietStart<'a, V>> {
-        let (
-            ReadyPlan::LocalSlots | ReadyPlan::CallbackFree,
-            CacheMemory::Builtin(memory),
-            crate::time::local::CacheClock::Local(_),
-        ) = (self.inner.ready_plan, &self.inner.memory, &self.inner.clock)
-        else {
-            return None;
-        };
-        let reservation = self.deferred_inline()?;
-        let observation = QuietObservation::new(&self.inner.events, operation);
-        let (permit, copied) =
-            memory.with_admitted_local_ready(key, reservation, token, |entry, freshness| {
-                self.quiet_copy(entry, freshness, mode)
-            });
-        let value = match copied.map(Option::flatten) {
-            Err(Error::CacheClosed) => Err(Error::CacheClosed),
-            value => permit.status(token).and(value),
-        };
-        Some(match value {
-            Ok(Some(QuietCopy::EntryPolicy)) => QuietStart::Recheck {
-                observation,
-                permit,
-            },
-            Ok(Some(QuietCopy::Value(value))) => QuietStart::Ready(QuietReady {
-                value: Ok(value),
-                observation,
-                permit,
-            }),
-            Err(error) => QuietStart::Ready(QuietReady {
-                value: Err(error),
-                observation,
-                permit,
-            }),
-            Ok(None) => QuietStart::Owned {
-                observation,
-                permit,
-            },
-        })
     }
 }
 impl<V> QuietReady<'_, V> {

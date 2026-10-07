@@ -1,4 +1,3 @@
-#![cfg(target_arch = "x86_64")]
 use amalgam::{BlockingCache, Cache, Error, FactoryCancellationReason};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};

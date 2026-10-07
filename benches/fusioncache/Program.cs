@@ -6,7 +6,6 @@ using ZiggyCreatures.Caching.Fusion;
 internal static class Program
 {
     private const int Operations = 300_000;
-    private const int Warmup = 20_000;
     private const int SetOperations = 1_000_000;
     private const int ColdOperations = 100_000;
     private static FusionCache New() => new(new FusionCacheOptions
@@ -42,9 +41,16 @@ internal static class Program
             string key = keys[index];
             threads[id] = new Thread(() =>
             {
-                for (int n = 0; n < Warmup; n++)
-                    if (H.AsyncValue(cache, key) != index + 1)
-                        throw new InvalidOperationException("Warm value mismatch");
+                string workerLabel = same ? "same" : "distinct";
+                SteadyWarmup warmup = new($"{workerLabel}:{workers}:{worker}");
+                while (true)
+                {
+                    long batch = Stopwatch.GetTimestamp();
+                    for (int n = 0; n < SteadyWarmup.Batch; n++)
+                        if (H.AsyncValue(cache, key) != index + 1)
+                            throw new InvalidOperationException("Warm value mismatch");
+                    if (warmup.Record(Stopwatch.GetElapsedTime(batch), SteadyWarmup.Batch)) break;
+                }
                 gate.SignalAndWait();
                 gate.SignalAndWait();
                 long before = GC.GetAllocatedBytesForCurrentThread();
@@ -71,8 +77,14 @@ internal static class Program
     {
         using FusionCache cache = New();
         cache.Set("sync", 1L);
-        for (int n = 0; n < Warmup; n++)
-            if (H.Sync(cache, "sync") != 1) throw new InvalidOperationException("Sync warmup mismatch");
+        SteadyWarmup warmup = new("sync");
+        while (true)
+        {
+            long batch = Stopwatch.GetTimestamp();
+            for (int n = 0; n < SteadyWarmup.Batch; n++)
+                if (H.Sync(cache, "sync") != 1) throw new InvalidOperationException("Sync warmup mismatch");
+            if (warmup.Record(Stopwatch.GetElapsedTime(batch), SteadyWarmup.Batch)) break;
+        }
         long before = GC.GetAllocatedBytesForCurrentThread();
         long began = Stopwatch.GetTimestamp();
         long sum = 0;
@@ -117,17 +129,34 @@ internal static class Program
     private static async Task Mutations()
     {
         using FusionCache writes = New();
-        for (int id = 0; id < Warmup; id++) await writes.SetAsync("replace", (long)id);
+        SteadyWarmup warmup = new("set");
+        while (true)
+        {
+            long batch = Stopwatch.GetTimestamp();
+            for (int id = 0; id < SteadyWarmup.Batch; id++) await writes.SetAsync("replace", (long)id);
+            if (warmup.Record(Stopwatch.GetElapsedTime(batch), SteadyWarmup.Batch)) break;
+        }
         long before = GC.GetAllocatedBytesForCurrentThread();
         long began = Stopwatch.GetTimestamp();
         for (int id = 1; id <= SetOperations; id++) await writes.SetAsync("replace", (long)id);
         double elapsed = Stopwatch.GetElapsedTime(began).TotalNanoseconds;
         Console.WriteLine(FormattableString.Invariant($"set,1,{SetOperations},{elapsed / SetOperations:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
         if ((await writes.TryGetAsync<long>("replace")).Value != SetOperations) throw new InvalidOperationException("Replacement mismatch");
-        using (FusionCache warm = New())
-            for (int id = 0; id < Warmup; id++)
-                if (await warm.GetOrSetAsync<long>($"warm-{id}", static (_, _) => Task.FromResult(7L)) != 7)
-                    throw new InvalidOperationException("Factory warmup mismatch");
+        string[] warmKeys = Enumerable.Range(0, SteadyWarmup.Batch).Select(id => $"warm-{id}").ToArray();
+        warmup = new("cold");
+        while (true)
+        {
+            TimeSpan duration;
+            using (FusionCache warm = New())
+            {
+                long batch = Stopwatch.GetTimestamp();
+                foreach (string key in warmKeys)
+                    if (await warm.GetOrSetAsync<long>(key, static (_, _) => Task.FromResult(7L)) != 7)
+                        throw new InvalidOperationException("Factory warmup mismatch");
+                duration = Stopwatch.GetElapsedTime(batch);
+            }
+            if (warmup.Record(duration, SteadyWarmup.Batch)) break;
+        }
         string[] cold = Enumerable.Range(0, ColdOperations).Select(id => $"cold-{id}").ToArray();
         before = GC.GetAllocatedBytesForCurrentThread();
         began = Stopwatch.GetTimestamp();
@@ -165,9 +194,15 @@ internal static class Program
             SkipDistributedCacheWrite = true,
         };
         await cache.SetAsync("l2-json", 11L, localOnly);
-        for (int n = 0; n < Warmup; n++)
-            if (H.AsyncValue(cache, "l2-json") != 7)
-                throw new InvalidOperationException("Distributed warmup reused the wrong L1 value");
+        SteadyWarmup warmup = new("l2_json");
+        while (true)
+        {
+            long batch = Stopwatch.GetTimestamp();
+            for (int n = 0; n < SteadyWarmup.Batch; n++)
+                if (H.AsyncValue(cache, "l2-json") != 7)
+                    throw new InvalidOperationException("Distributed warmup reused the wrong L1 value");
+            if (warmup.Record(Stopwatch.GetElapsedTime(batch), SteadyWarmup.Batch)) break;
+        }
         long before = GC.GetAllocatedBytesForCurrentThread();
         long began = Stopwatch.GetTimestamp();
         long checksum = 0;

@@ -287,9 +287,9 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         kind: OriginKind,
     ) -> Option<MemoryRead<V>> {
         let now = self.clock.now();
-        let read = memory.with_ready(key, now, |entry| {
+        let read = memory.with_ready(key, now, |entry, freshness| {
             let candidate = match self.tags(entry) {
-                TagVerdict::Valid if entry.freshness(now).is_fresh() => {
+                TagVerdict::Valid if freshness.is_fresh() => {
                     MemoryRead::Fresh(entry.value().clone())
                 }
                 TagVerdict::Valid | TagVerdict::Expire if matches!(kind, OriginKind::Factory) => {
@@ -304,7 +304,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
                     MemoryRead::Origin(None)
                 }
             };
-            (entry.is_logically_expired(now), candidate)
+            (!freshness.is_fresh(), candidate)
         });
         memory.emit_layer_lazy(|| {
             super::LayerEvent::Memory(match &read {
