@@ -12,6 +12,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
   tracked value access for the full guard lifetime. Bounded models cover
   first use, collisions, writer competition, nested reads and parking wakeups.
   Remove the copied admission model; add mandatory Loom, Miri and TSan CI jobs.
+- Miri checks actual native guard borrowing and overlapping readers without
+  disabling UB/race checks. Native parking stress remains covered by TSan and
+  Loom; its Miri case explicitly records the released parking dependency's
+  upstream Linux futex ABI limitation.
 - Preserve post-admission logical freshness in both ready plans; waiting for
   a writer cannot return an entry that expired during that wait as fresh.
 
