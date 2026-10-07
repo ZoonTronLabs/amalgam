@@ -116,10 +116,10 @@ pub enum ClearMode {
 /// The distributed effect of logically expiring a key. L1 remains stale in both modes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DistributedExpirePolicy {
-    /// Preserve the physically live L2 snapshot for fail-safe. Existing Rust default.
-    #[default]
+    /// Preserve the physically live L2 snapshot for fail-safe, explicitly.
     RetainStale,
     /// Physically remove L2 while expiring L1, matching FusionCache 2.9.
+    #[default]
     Remove,
 }
 /// Explicit cluster-lock compatibility contract.
@@ -127,14 +127,19 @@ pub enum DistributedExpirePolicy {
 pub enum LeasePolicy {
     /// Require owned acquisition and atomic backend fencing.
     Fenced,
-    /// Deliberate cooperative legacy integration; cannot promise partition fencing.
-    CooperativeLegacy,
+    /// Cooperative ownership, as in FusionCache; backend errors follow rethrow options.
+    /// Does not promise partition-safe writes. This is the builder default.
+    Cooperative,
 }
 /// Durable reconciliation contract when notification continuity is unavailable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconciliationPolicy {
     /// No external storage or notifications exist; all invalidation is local.
     LocalOnly,
+    /// Retain L1 until its normal expiration, without periodic reconciliation.
+    /// External values may change without notifications; explicit invalidations
+    /// and normal tag/clear checks still apply.
+    Expiration,
     /// Periodically discard L1 so subsequent reads reconcile durable markers.
     Periodic(Duration),
     /// Trust an acknowledged continuous native backplane; gaps still discard L1.
@@ -151,7 +156,7 @@ impl ReconciliationPolicy {
     fn invalidates_on_gap(self) -> bool {
         match self {
             Self::LocalOnly | Self::Periodic(_) | Self::BackplaneContinuity => true,
-            Self::BackplaneBestEffort => false,
+            Self::Expiration | Self::BackplaneBestEffort => false,
         }
     }
 }

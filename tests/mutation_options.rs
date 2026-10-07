@@ -154,7 +154,15 @@ async fn explicit_mutation_options_bypass_provider_and_apply_each_layer() {
         clock.advance(Duration::from_millis(1));
         let receipt = match mutation {
             Mutation::Remove => cache.try_remove_with("tenant:item", Some(options())).await,
-            Mutation::Expire => cache.try_expire_with("tenant:item", Some(options())).await,
+            Mutation::Expire => {
+                cache
+                    .try_expire_with_policy(
+                        "tenant:item",
+                        Some(options()),
+                        amalgam::DistributedExpirePolicy::RetainStale,
+                    )
+                    .await
+            }
         }
         .unwrap();
         let report = receipt.wait().await.unwrap();

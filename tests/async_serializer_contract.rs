@@ -106,7 +106,7 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
         );
         clock.advance(Duration::from_millis(1));
         cache
-            .try_expire("value")
+            .try_expire_with_policy("value", None, amalgam::DistributedExpirePolicy::RetainStale)
             .await
             .unwrap()
             .wait()

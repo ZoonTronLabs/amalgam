@@ -65,7 +65,7 @@ impl Default for RecoveryConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            delay: Duration::from_secs(2),
+            delay: Duration::from_secs(5),
             max_items: Some(1024),
             max_retries: None,
         }

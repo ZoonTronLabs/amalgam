@@ -357,6 +357,7 @@ async fn audit_lagged_backplane_invalidates_possibly_stale_l1() {
     let backplane = Arc::new(InProcessBackplane::with_capacity(1));
     let cache: Cache<i32> = Cache::builder()
         .backplane(backplane.clone())
+        .reconciliation_policy(amalgam::ReconciliationPolicy::BackplaneContinuity)
         .default_options(opts().with_skip_backplane_notifications(true))
         .auto_recovery(no_recovery())
         .build();

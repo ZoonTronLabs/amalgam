@@ -76,7 +76,7 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
         .distributed(Arc::new(InMemoryDistributedCache::new(clock)))
         .serializer(Arc::new(JsonSerializer))
         .distributed_locker(locker.clone())
-        .lease_policy(LeasePolicy::CooperativeLegacy)
+        .lease_policy(LeasePolicy::Cooperative)
         .auto_recovery(RecoveryConfig {
             enabled: false,
             ..RecoveryConfig::default()

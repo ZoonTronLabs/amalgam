@@ -13,6 +13,23 @@ struct Store {
 }
 #[async_trait]
 impl DistributedCache for Store {
+    fn fenced_write_support(&self) -> FencedWriteSupport {
+        self.inner.fenced_write_support()
+    }
+    async fn write_with_lease(
+        &self,
+        key: &str,
+        mutation: LeasedMutation,
+        proof: &LeaseProof,
+    ) -> std::result::Result<LeasedWriteOutcome, LeaseError> {
+        if self.down.load(Ordering::SeqCst) {
+            Err(LeaseError::backend(std::io::Error::other(
+                "store unavailable",
+            )))
+        } else {
+            self.inner.write_with_lease(key, mutation, proof).await
+        }
+    }
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         if self.down.load(Ordering::SeqCst) {
@@ -104,6 +121,7 @@ impl Backplane for Notifications {
 }
 #[derive(Clone, Copy)]
 enum Coordination {
+    Default,
     Local,
     Fenced,
     Cooperative,
@@ -145,11 +163,14 @@ async fn fixture_with_reconciliation(
         });
     builder = match coordination {
         Coordination::Local => builder,
-        // Leave the policy unspecified to exercise the actual default.
-        Coordination::Fenced => builder.distributed_locker(locker.clone()),
+        Coordination::Default => builder.distributed_locker(locker.clone()),
+        // Fencing is explicit; cooperative construction is now the default.
+        Coordination::Fenced => builder
+            .distributed_locker(locker.clone())
+            .lease_policy(LeasePolicy::Fenced),
         Coordination::Cooperative => builder
             .distributed_locker(locker.clone())
-            .lease_policy(LeasePolicy::CooperativeLegacy),
+            .lease_policy(LeasePolicy::Cooperative),
     };
     if let Some(notifications) = notifications {
         builder = builder.backplane(notifications);
@@ -183,7 +204,7 @@ fn options() -> EntryOptions {
 }
 
 #[tokio::test]
-async fn default_fenced_miss_rejects_failed_lease_even_when_rethrow_is_false() {
+async fn explicit_fenced_miss_rejects_failed_lease_even_when_rethrow_is_false() {
     let fixture = fixture(Coordination::Fenced, options(), None).await;
     let calls = Arc::new(AtomicUsize::new(0));
     assert_lease_failure(origin(&fixture.cache, calls.clone()).await);
@@ -239,7 +260,13 @@ async fn a_notification_gap_turns_old_l1_into_a_miss_under_each_lease_policy() {
         Coordination::Cooperative,
     ] {
         let notifications = Arc::new(Notifications::new());
-        let fixture = fixture(coordination, options(), Some(notifications.clone())).await;
+        let fixture = fixture_with_reconciliation(
+            coordination,
+            options(),
+            Some(notifications.clone()),
+            Some(ReconciliationPolicy::BackplaneContinuity),
+        )
+        .await;
         fixture
             .cache
             .try_set("key", 42)
@@ -257,7 +284,7 @@ async fn a_notification_gap_turns_old_l1_into_a_miss_under_each_lease_policy() {
                 assert_lease_failure(result);
                 assert_eq!(calls.load(Ordering::SeqCst), 0);
             }
-            Coordination::Local | Coordination::Cooperative => {
+            Coordination::Default | Coordination::Local | Coordination::Cooperative => {
                 assert_eq!(result.unwrap(), 7);
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
             }
@@ -639,4 +666,32 @@ fn best_effort_reconciliation_requires_a_backplane() {
             ConfigError::BestEffortReconciliationWithoutBackplane
         ))
     ));
+}
+
+#[tokio::test]
+async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outage() {
+    let notifications = Arc::new(Notifications::new());
+    let fixture = fixture(
+        Coordination::Default,
+        options(),
+        Some(notifications.clone()),
+    )
+    .await;
+    fixture.cache.set("key", 42).await.unwrap();
+    fixture.store.down.store(true, Ordering::SeqCst);
+    notifications.disconnect();
+    let calls = Arc::new(AtomicUsize::new(0));
+    assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 42);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .cache
+            .get_or_set("cold", |ctx| async move { Ok(ctx.value(7)) })
+            .await
+            .unwrap(),
+        7
+    );
+    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 1);
+    fixture.cache.shutdown().await.unwrap();
 }

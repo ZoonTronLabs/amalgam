@@ -481,8 +481,8 @@ async fn disable_tagging_ignores_remove_by_tag() {
 }
 
 #[test]
-fn wait_for_initial_backplane_subscribe_defaults_true_and_is_configurable() {
-    let on: Cache<i32> = Cache::new();
+fn strict_initial_subscription_wait_is_configurable() {
+    let on: Cache<i32> = Cache::builder().strict().build();
     assert!(on.wait_for_initial_backplane_subscribe());
     let off: Cache<i32> = Cache::builder()
         .wait_for_initial_backplane_subscribe(false)

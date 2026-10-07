@@ -633,6 +633,10 @@ impl DistributedCache for RedisDistributedCache {
         Some(self.invalidation.clone())
     }
 
+    fn fenced_write_support(&self) -> crate::distributed::FencedWriteSupport {
+        crate::distributed::FencedWriteSupport::Atomic
+    }
+
     async fn write_with_lease(
         &self,
         key: &str,

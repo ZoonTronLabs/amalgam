@@ -452,7 +452,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         } else if let Some(locker) = &self.inner.distributed_locker {
             let policy = match self.inner.lease_policy {
                 LeasePolicy::Fenced => AcquisitionPolicy::TokenOwned,
-                LeasePolicy::CooperativeLegacy => AcquisitionPolicy::LegacyBackendContract,
+                LeasePolicy::Cooperative => AcquisitionPolicy::LegacyBackendContract,
             };
             let lock_key: Arc<str> = Arc::from(format!("amalgam:lock:{}", self.inner.l2_key(key)));
             match acquire_owned_supervised(
@@ -597,10 +597,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         let (timeout, soft, operation) = match O::KIND {
             OriginKind::Factory => {
-                let timeout =
-                    opts.appropriate_factory_timeout(stale.is_some() || default.has_value());
+                let timeout = opts.appropriate_factory_timeout(stale.is_some());
                 let soft = opts.is_fail_safe_enabled()
-                    && (stale.is_some() || default.has_value())
+                    && stale.is_some()
                     && timeout == opts.factory_soft_timeout()
                     && timeout != opts.factory_hard_timeout();
                 (timeout, soft, "factory")
@@ -814,7 +813,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let execution=self.scopes().execution(async move {
             let mut guard=FlightGuard {local:LocalParticipation::Held(worker.memory.guard(local)),lease:None,tasks:Arc::clone(&worker.inner.tasks),events:worker.inner.events.clone(),key:Arc::clone(&key),policy:worker.inner.lease_policy,_reclamation:worker.memory.fence()};
             if !opts.skip_distributed_locker()&&let Some(locker)=&worker.inner.distributed_locker {
-                guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::CooperativeLegacy=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
+                guard.lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::Cooperative=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;
                 if guard.lease.is_none(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
             if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}

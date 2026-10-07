@@ -721,6 +721,7 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
         fail: AtomicBool::new(true),
     });
     let c = Cache::<u64>::builder()
+        .strict()
         .backplane(bp.clone())
         .instance_id("local")
         .backplane_circuit_breaker(Duration::from_secs(60))

@@ -55,6 +55,12 @@ pub enum ConfigError {
     /// L2 was configured without a codec.
     #[error("a distributed cache requires a serializer")]
     DistributedWithoutSerializer,
+    /// Strict ownership requires a declared lifetime and caller-owned tokens.
+    #[error("fenced leases require a declared lifetime and caller-owned acquisition tokens")]
+    FencedLockerWithoutOwnedLifetime,
+    /// Strict commits require an atomic ownership-checking value backend.
+    #[error("fenced leases require an L2 provider with atomic lease-fenced writes")]
+    FencedDistributedWithoutAtomicWrites,
     /// Expiring marker snapshots require their explicit options-controlled read mode.
     #[error("cached marker snapshots require OptionsControlled marker reads")]
     MarkerLifecycleRequiresControlledReads,

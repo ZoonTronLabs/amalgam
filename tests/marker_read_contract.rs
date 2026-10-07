@@ -1189,6 +1189,7 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
         .distributed(backend)
         .invalidation_store(store.clone())
         .backplane(backplane.clone())
+        .reconciliation_policy(ReconciliationPolicy::BackplaneContinuity)
         .serializer(Arc::new(JsonSerializer))
         .default_options(value_options())
         .tags_default_options(control_options())

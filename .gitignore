@@ -1,3 +1,5 @@
 /target
 /benches/fusioncache/obj/
 /benches/fusioncache/bin/
+/tests/fusioncache/**/obj/
+/tests/fusioncache/**/bin/

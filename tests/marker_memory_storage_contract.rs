@@ -633,6 +633,7 @@ async fn full_node(
     bp: &Arc<SnapshotBackplane>,
 ) -> Cache<u64> {
     Cache::builder()
+        .strict()
         .clock(clock.clone())
         .default_options(options())
         .memory_storage(values.clone())

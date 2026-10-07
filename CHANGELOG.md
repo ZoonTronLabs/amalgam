@@ -5,6 +5,23 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- Ordinary builders now follow FusionCache outage availability: cooperative
+  distributed ownership, retained L1 across notification gaps, no periodic L1
+  clearing for L2-only caches, and no initial subscription wait. `strict()`
+  selects conservative reconciliation, subscription admission and fenced leases;
+  explicit policy setters can refine that profile.
+- `expire` removes L2 by default while retaining eligible L1 fail-safe data.
+  `DistributedExpirePolicy::RetainStale` remains an explicit advanced choice.
+- Factory soft timeouts require a stale fallback entry; a fail-safe default alone
+  does not enable them. The default recovery delay is now five seconds.
+- Rename the cooperative ownership policy to `LeasePolicy::Cooperative`.
+- Reject unsupported fenced ownership and value-store combinations at
+  construction with typed configuration errors. Native value providers declare
+  atomic fenced-write support; custom providers must advertise and implement it.
+
+
 ### Fixed
 
 - Admit built-in L1 writes through a single writer gate and scan only reader
@@ -42,7 +59,7 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 - Add `CachePlugin<V>`, `CachePluginContext<V>` and non-owning `PluginCache<V>` with the complete same-cache async/sync operation surface. Preserve interleaved legacy registration order. Stop uses bounded owned cleanup admission; final-owner closure, deferred startup/callback teardown, source failures and native Redis operations have public regressions. See `docs/PLUGIN_CACHE.md`.
 
-- Add `ReconciliationPolicy::BackplaneBestEffort` to retain local/hydrated fresh and physically retained stale L1 over notification gaps/reconnects. Combined with cooperative ownership and suppressed locker errors it supports ordinary outage availability. Known invalidations, deadlines, cancellation and recovery ownership still apply; strict defaults are unchanged. See `docs/BACKPLANE_OUTAGES.md`.
+- Add `ReconciliationPolicy::BackplaneBestEffort` to retain local/hydrated fresh and physically retained stale L1 over notification gaps/reconnects. Combined with cooperative ownership and suppressed locker errors it supports ordinary outage availability. Known invalidations, deadlines, cancellation and recovery ownership still apply; strict policies remain available explicitly. See `docs/BACKPLANE_OUTAGES.md`.
 
 - Clarify the existing Redis outage contract: strict fenced acquisition rejects errors even with locker rethrow disabled; cooperative foreground suppression and backplane L1 invalidation are separate policies. Add public outage-policy regressions.
 

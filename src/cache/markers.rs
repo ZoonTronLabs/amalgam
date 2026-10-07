@@ -701,7 +701,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let key = MarkerLeaseKey::new(&self.inner.scope, kind).into_arc();
         let policy = match self.inner.lease_policy {
             LeasePolicy::Fenced => AcquisitionPolicy::TokenOwned,
-            LeasePolicy::CooperativeLegacy => AcquisitionPolicy::LegacyBackendContract,
+            LeasePolicy::Cooperative => AcquisitionPolicy::LegacyBackendContract,
         };
         let locker = Arc::clone(locker);
         let ttl = self.inner.lease_ttl;
@@ -723,14 +723,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             Ok(Some(lease)) => Ok(MarkerLeaseAcquisition::Acquired(
                 match self.inner.lease_policy {
                     LeasePolicy::Fenced => MarkerLease::Fenced(lease),
-                    LeasePolicy::CooperativeLegacy => MarkerLease::Cooperative(lease),
+                    LeasePolicy::Cooperative => MarkerLease::Cooperative(lease),
                 },
             )),
             Ok(None) | Err(Error::Lease(LeaseError::AcquisitionTimeout)) => {
                 self.control_marker_contention(mode)
             }
             Err(Error::Lease(error @ LeaseError::Backend { .. }))
-                if self.inner.lease_policy == LeasePolicy::CooperativeLegacy
+                if self.inner.lease_policy == LeasePolicy::Cooperative
                     && !options.rethrow_distributed_locker_exceptions() =>
             {
                 tracing::warn!(%error, "explicit cooperative marker locker degradation");
@@ -750,10 +750,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             (MarkerFactoryMode::Foreground, LeasePolicy::Fenced) => {
                 Err(LeaseError::AcquisitionTimeout.into())
             }
-            (MarkerFactoryMode::Foreground, LeasePolicy::CooperativeLegacy) => {
+            (MarkerFactoryMode::Foreground, LeasePolicy::Cooperative) => {
                 Ok(MarkerLeaseAcquisition::Acquired(MarkerLease::Unleased))
             }
-            (MarkerFactoryMode::Eager, LeasePolicy::Fenced | LeasePolicy::CooperativeLegacy) => {
+            (MarkerFactoryMode::Eager, LeasePolicy::Fenced | LeasePolicy::Cooperative) => {
                 Ok(MarkerLeaseAcquisition::Contended)
             }
         }
@@ -767,7 +767,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> Result<T> {
         let released = match lease.release().await {
             Err(error @ LeaseError::Backend { .. })
-                if self.inner.lease_policy == LeasePolicy::CooperativeLegacy
+                if self.inner.lease_policy == LeasePolicy::Cooperative
                     && !self
                         .inner
                         .tags_default_options

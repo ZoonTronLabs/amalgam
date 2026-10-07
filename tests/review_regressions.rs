@@ -351,6 +351,7 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
         .distributed(backend.clone())
         .serializer(Arc::new(JsonSerializer))
         .backplane(bp.clone())
+        .reconciliation_policy(ReconciliationPolicy::BackplaneContinuity)
         .default_options(opts())
         .auto_recovery(RecoveryConfig {
             delay: Duration::from_millis(20),

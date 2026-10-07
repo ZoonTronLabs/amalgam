@@ -61,12 +61,11 @@ fn options() -> EntryOptions {
 }
 
 #[tokio::test]
-async fn disabled_initial_wait_allows_local_mutation_but_explicit_ready_still_needs_ack() {
+async fn default_initial_wait_allows_local_mutation_but_explicit_ready_still_needs_ack() {
     let backplane = Arc::new(AwaitingAcknowledgement::new());
     let cache = Cache::<i32>::builder()
         .backplane(backplane.clone())
         .default_options(options())
-        .wait_for_initial_backplane_subscribe(false)
         .auto_recovery(RecoveryConfig {
             enabled: false,
             ..RecoveryConfig::default()
@@ -107,6 +106,7 @@ async fn close_cancels_initial_ack_admission_before_local_or_notification_effect
     let backplane = Arc::new(AwaitingAcknowledgement::new());
     let cache = Cache::<i32>::builder()
         .backplane(backplane.clone())
+        .wait_for_initial_backplane_subscribe(true)
         .default_options(options())
         .auto_recovery(RecoveryConfig {
             enabled: false,

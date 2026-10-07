@@ -125,41 +125,31 @@ Circuit refusal is an admission outcome, not a new transport failure; skipped op
 
 Durable tag/clear operations require an atomic invalidation store. Existing custom byte stores remain usable for ordinary L2 reads/writes without that optional capability. A custom implementation cannot silently claim atomic markers or fencing that it does not provide.
 
-Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers. OptionsControlled may revalidate markers on L1 hits according to independent tag defaults. By default, backplane continuity gaps, broadcast overflow and changed Redis connection epochs discard L1; Redis reports connected only after a matching subscription acknowledgement. `ready()` or `try_build_ready()` can await admission; healthless adapters report an explicit `BestEffort` outcome. A healthless custom backplane defaults to periodic reconciliation. Explicit `BackplaneBestEffort` retains L1 for either kind; see [outage policies](BACKPLANE_OUTAGES.md). Timestamp-based marker ordering assumes a sufficiently consistent clock across participating nodes; injected clocks make local logic testable and do not solve distributed clock skew.
+Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers.
+OptionsControlled may revalidate markers on L1 hits according to independent tag
+defaults. The 0.4 source preserves L1 over notification gaps and does not
+periodically clear L2-only caches. `strict()` selects conservative continuity or
+periodic reconciliation. Native `ready()` and `try_build_ready()` explicitly
+await subscription acknowledgement. Timestamp-based cross-node marker ordering
+still depends on sufficiently consistent clocks.
 
+### Redis outage boundary: 0.3.1 versus 0.4 source
 
-### Redis outage boundary (0.3.1 and current source)
+Published 0.3.1 defaults to fenced acquisition and conservative L1 cleanup.
+The 0.4 source defaults to cooperative ownership, suppressed ordinary locker
+failures, retained L1 over backplane gaps, and no periodic L2-only L1 clearing.
+Hot hits remain local; cold misses can compute while Redis is unavailable.
+Received/local invalidations, physical deadlines and cancellation still apply.
+Missed peer changes may remain invisible until expiration. `strict()` restores
+conservative admission and requires explicit native/custom fenced capabilities.
+Construction rejects an unsupported ownership lifetime or atomic value-write
+capability before starting effects. Owned cleanup failures remain observable.
 
-`LeasePolicy::Fenced` is the default. Failed locker acquisition rejects ordinary
-origin work even with `with_rethrow_distributed_locker_exceptions(false)`.
-Explicit `CooperativeLegacy` and `false` permit the ordinary foreground origin
-to continue without that lease, with weaker cross-node ownership guarantees.
-The pinned FusionCache accessor instead suppresses an ordinary acquisition
-exception when its rethrow option is false and permits origin work; these
-contracts are not equivalent by default.
-
-By default, a Redis backplane continuity gap discards all L1 entries, including retained
-fail-safe values. The next read is a miss; it either computes through the
-origin or fails on the configured fenced locker. Losing only L2 or the locker
-without a backplane gap does not invalidate an otherwise fresh L1 hit. This is
-a deliberate correctness/availability tradeoff, not universal resiliency parity.
-An owned cleanup failure during the outage can remain in `shutdown()` after
-reconnection regardless of the acquisition rethrow option.
-
-The unreleased `ReconciliationPolicy::BackplaneBestEffort` preserves fresh and
-physically retained stale L1 over notification gaps and reconnects, without
-periodic discarding. Received/local invalidations, expiry and cancellation still
-apply. Combined with `CooperativeLegacy` and locker rethrow disabled, ordinary
-cold misses may compute during an outage. Selecting it does not relax `Fenced`
-miss admission. Missed peer changes can remain invisible until expiration;
-existing independent marker read/repair admission still applies.
-
-`locker_outage_contract` exercises both policies, local and hydrated L1 in
-bounded/unbounded storage, fail-safe/physical expiry, cancellation, received and
-local invalidations, and healthless-provider defaults. The independent
-registry-pinned 0.3.1 reproduction covers the older real Redis outage behavior;
-the new enum variant is absent from that package. [Outage policies](BACKPLANE_OUTAGES.md)
-keep these package and source boundaries explicit.
+The [public outage contracts](../tests/locker_outage_contract.rs),
+[availability-default contracts](../tests/fusion_defaults_contract.rs) and
+[pinned FC oracle](../tests/fusioncache/README.md) cover the ordinary outage and
+default scenarios. Strict hydration and retained-L2 expiration regressions use
+their policies explicitly, preserving their previous assertions.
 
 ## Selected defaults
 
@@ -169,19 +159,22 @@ keep these package and source boundaries explicit.
 | Fail-safe | Disabled; configured maximum retention one day, throttle 30 seconds |
 | Eager refresh / jitter | Disabled / zero |
 | Factory and lock budgets | Infinite |
-| Wait for initial backplane subscription | Enabled |
+| Wait for initial backplane subscription | Disabled; enabled by `strict()` |
 | Distributed read budgets | Infinite |
 | Background L2 operations | Disabled |
 | Background backplane operations | Enabled |
 | Rethrow serialization errors | Enabled |
 | Rethrow value transport/backplane errors | Disabled |
-| Lease policy | `Fenced`; failed acquisition rejects origin work |
+| Lease policy | `Cooperative`; suppressed ordinary acquisition failure permits origin work |
 | Rethrow locker acquisition errors | `false`; suppression applies to ordinary cooperative foreground acquisition |
 | Circuit breaker duration | Zero, disabled |
-| Recovery with configured distributed effects | Enabled; delay 2 seconds, queue bound 1024 |
+| Recovery with configured distributed effects | Enabled; delay 5 seconds, queue bound 1024 |
 | Distributed snapshot namespace | `v2`, Prefix modifier |
 
-These are selected Amalgam defaults. The pinned FusionCache 2.9 source defaults to **no initial subscription wait**, a **5-second recovery delay** and an **unlimited recovery queue**. Amalgam keeps its earlier 2-second delay, gates native operations on subscription acknowledgement by default, and introduces a 1024-item queue bound. Each choice is configurable; they are deliberate differences, so the defaults are not universally identical. Explicit `RecoveryConfig.max_items = None` selects unlimited admission. Retry counts represent additional attempts after the original operation.
+These describe the developing 0.4 source. FusionCache 2.9 has the same startup
+and recovery-delay defaults but an unlimited recovery queue. Amalgam retains a
+1024-item bound; `RecoveryConfig.max_items = None` selects unlimited admission.
+Retry counts represent additional attempts after the original operation.
 
 ## Migrating from 0.2
 

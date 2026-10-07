@@ -473,7 +473,7 @@ async fn skip_locker_uses_one_read_and_unfenced_renewal() {
 }
 #[tokio::test]
 async fn contention_is_explicit_strict_rejection_or_deliberate_cooperative_factory() {
-    for policy in [LeasePolicy::Fenced, LeasePolicy::CooperativeLegacy] {
+    for policy in [LeasePolicy::Fenced, LeasePolicy::Cooperative] {
         let f = fixture(options(), policy, "").await;
         *f.locker.acquisition.lock().unwrap() = Acquire::Contended;
         let read = f.cache.read("key", None).await;
@@ -485,7 +485,7 @@ async fn contention_is_explicit_strict_rejection_or_deliberate_cooperative_facto
                 ));
                 assert_eq!(f.store.snapshots.writes(), 0);
             }
-            LeasePolicy::CooperativeLegacy => {
+            LeasePolicy::Cooperative => {
                 assert_eq!(read.unwrap().value(), Some(&7));
                 assert_eq!(f.store.snapshots.writes(), 1);
             }
@@ -498,8 +498,8 @@ async fn contention_is_explicit_strict_rejection_or_deliberate_cooperative_facto
 #[tokio::test]
 async fn acquisition_original_fault_policy_is_independent_from_value_defaults() {
     for (policy, rethrow, fails) in [
-        (LeasePolicy::CooperativeLegacy, false, false),
-        (LeasePolicy::CooperativeLegacy, true, true),
+        (LeasePolicy::Cooperative, false, false),
+        (LeasePolicy::Cooperative, true, true),
         (LeasePolicy::Fenced, false, true),
     ] {
         let f = fixture(
@@ -532,7 +532,7 @@ async fn explicit_release_honors_tag_fault_flag_and_preserves_cause() {
     for rethrow in [false, true] {
         let f = fixture(
             options().with_rethrow_distributed_locker_exceptions(rethrow),
-            LeasePolicy::CooperativeLegacy,
+            LeasePolicy::Cooperative,
             "",
         )
         .await;
@@ -578,7 +578,7 @@ async fn locker_deadline_does_not_use_value_or_distributed_read_deadlines() {
 }
 #[tokio::test]
 async fn cancelling_parked_acquisition_cleans_known_token_and_does_not_degrade() {
-    let f = fixture(options(), LeasePolicy::CooperativeLegacy, "").await;
+    let f = fixture(options(), LeasePolicy::Cooperative, "").await;
     let gate = Gate::new();
     *f.locker.acquisition.lock().unwrap() = Acquire::Park(gate.clone());
     let source = CancellationSource::new();
@@ -1032,7 +1032,7 @@ async fn a_newer_fresh_peer_snapshot_hydrates_eager_without_locker_or_duplicate_
 }
 #[tokio::test]
 async fn eager_contention_stops_and_consumes_attempt_for_both_lease_policies() {
-    for policy in [LeasePolicy::Fenced, LeasePolicy::CooperativeLegacy] {
+    for policy in [LeasePolicy::Fenced, LeasePolicy::Cooperative] {
         let f = fixture(eager_options(), policy, "").await;
         found(&f.cache).await;
         *f.locker.acquisition.lock().unwrap() = Acquire::Contended;
@@ -1282,7 +1282,7 @@ async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() 
     assert_eq!(f.locker.releases(), 1);
     f.clock.set(time(12));
     *f.store.snapshots.mode.lock().unwrap() = Write::Pass;
-    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::time::advance(RecoveryConfig::default().delay).await;
     tokio::time::timeout(Duration::from_secs(3), async {
         while f.cache.pending_recovery() != 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;

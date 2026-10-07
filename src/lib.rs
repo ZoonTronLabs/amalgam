@@ -82,9 +82,9 @@ pub use commit::{
 };
 pub use distributed::{
     AsyncDistributedSerializer, DistributedCache, DistributedEntry, DistributedSerializer,
-    DistributedSnapshot, InMemoryDistributedCache, InMemoryInvalidationStore, InvalidationStore,
-    JsonSerializer, LeasedMutation, LeasedWriteOutcome, MarkerReadError, SerializationMode,
-    SnapshotRetention,
+    DistributedSnapshot, FencedWriteSupport, InMemoryDistributedCache, InMemoryInvalidationStore,
+    InvalidationStore, JsonSerializer, LeasedMutation, LeasedWriteOutcome, MarkerReadError,
+    SerializationMode, SnapshotRetention,
 };
 pub use distributed_lock::{
     AcquisitionPolicy, DistributedLease, DistributedLocker, InMemoryDistributedLocker, LeaseError,

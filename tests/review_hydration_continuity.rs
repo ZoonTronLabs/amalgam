@@ -106,6 +106,7 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         .serializer(Arc::new(JsonSerializer))
         .value_cloner(boundary.clone())
         .backplane(backplane.clone())
+        .reconciliation_policy(ReconciliationPolicy::BackplaneContinuity)
         .auto_recovery(recovery())
         .default_options(options().with_enable_auto_clone(true));
     let reader = if bounded {
@@ -268,6 +269,7 @@ async fn gap_during_storage_insertion(bounded: bool) {
         .serializer(Arc::new(JsonSerializer))
         .value_cloner(cloner.clone())
         .backplane(backplane.clone())
+        .reconciliation_policy(ReconciliationPolicy::BackplaneContinuity)
         .auto_recovery(recovery())
         .default_options(options().with_enable_auto_clone(true));
     let reader = if bounded {

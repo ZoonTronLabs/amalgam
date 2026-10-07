@@ -11,6 +11,12 @@ use super::{
     Storage, TagRegistry, Tasks, Timeout, ValueCloner, validate_budget,
 };
 
+#[derive(Clone, Copy)]
+enum ConfigurationProfile {
+    FusionCache,
+    Strict,
+}
+
 /// Builder for a [`Cache`].
 ///
 /// ```
@@ -25,6 +31,7 @@ use super::{
 /// ```
 #[must_use = "a builder does nothing until `.build()` is called"]
 pub struct CacheBuilder<V> {
+    profile: ConfigurationProfile,
     name: Option<Arc<str>>,
     instance_id: Option<Arc<str>>,
     key_prefix: Option<Arc<str>>,
@@ -71,6 +78,7 @@ impl<V> CacheBuilder<V> {
     /// Creates a builder with default settings.
     pub fn new() -> Self {
         Self {
+            profile: ConfigurationProfile::FusionCache,
             name: None,
             instance_id: None,
             key_prefix: None,
@@ -86,7 +94,7 @@ impl<V> CacheBuilder<V> {
             value_cloner: None,
             jitter: Arc::new(RandomJitterSource),
             invalidation_store: None,
-            lease_policy: LeasePolicy::Fenced,
+            lease_policy: LeasePolicy::Cooperative,
             lease_ttl: Duration::from_secs(30),
             reconciliation: None,
             lock_shards: 1024,
@@ -109,9 +117,19 @@ impl<V> CacheBuilder<V> {
             distributed_wire_version: Arc::from("v2"),
             distributed_key_modifier_mode: KeyModifierMode::default(),
             disable_tagging: false,
-            wait_for_initial_backplane_subscribe: true,
+            wait_for_initial_backplane_subscribe: false,
             _marker: std::marker::PhantomData,
         }
+    }
+
+    /// Selects partition-safe leases and conservative reconciliation defaults.
+    /// Explicit policy setters can refine these defaults afterward. Ordinary
+    /// construction instead follows FusionCache availability during outages.
+    pub fn strict(mut self) -> Self {
+        self.profile = ConfigurationProfile::Strict;
+        self.wait_for_initial_backplane_subscribe = true;
+        self.lease_policy = LeasePolicy::Fenced;
+        self
     }
 
     /// Supplies the actual L1 keyspace. The provider owns capacity policy and
@@ -293,10 +311,10 @@ impl<V> CacheBuilder<V> {
         self.invalidation_store = Some(store);
         self
     }
-    /// Chooses strict native fencing (the default) or cooperative ownership.
+    /// Chooses cooperative ownership (the default) or strict native fencing.
     ///
     /// `Fenced` rejects failed acquisition even when the entry's rethrow option
-    /// is false. `CooperativeLegacy` permits ordinary origin work without a
+    /// is false. `Cooperative` permits ordinary origin work without a
     /// lease when that option is false; cross-node fencing is then unavailable.
     pub fn lease_policy(mut self, policy: LeasePolicy) -> Self {
         self.lease_policy = policy;
@@ -309,9 +327,9 @@ impl<V> CacheBuilder<V> {
     }
     /// Declares notification/durable-marker reconciliation behavior.
     ///
-    /// Native backplanes default to [`ReconciliationPolicy::BackplaneContinuity`],
-    /// discarding L1 after a gap. [`ReconciliationPolicy::BackplaneBestEffort`]
-    /// preserves normal L1 freshness/fail-safe retention across gaps instead;
+    /// Backplanes default to [`ReconciliationPolicy::BackplaneBestEffort`],
+    /// preserving L1 freshness/fail-safe retention across gaps. [`Self::strict`]
+    /// selects continuity or periodic reconciliation instead;
     /// missed peer invalidations then remain undetected until expiration.
     /// This does not relax the independent [`LeasePolicy`] on a cold miss.
     pub fn reconciliation_policy(mut self, policy: ReconciliationPolicy) -> Self {
@@ -476,6 +494,11 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         if self.distributed.is_some() && self.serializer.is_none() {
             return Err(ConfigError::DistributedWithoutSerializer.into());
         }
+        validate_fencing(
+            self.lease_policy,
+            self.distributed_locker.as_deref(),
+            self.distributed.as_deref(),
+        )?;
         let cloner = self.value_cloner.or_else(|| {
             self.serializer
                 .as_ref()
@@ -500,20 +523,30 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         }
         let lease_ttl = LeaseTtl::new(self.lease_ttl)?;
         let reconciliation = self.reconciliation.unwrap_or_else(|| {
-            if self.backplane.is_none() && self.distributed.is_none() {
-                ReconciliationPolicy::LocalOnly
-            } else if self
-                .backplane
-                .as_ref()
-                .and_then(|backplane| backplane.connection_state())
-                .is_some()
-            {
-                ReconciliationPolicy::BackplaneContinuity
-            } else {
-                ReconciliationPolicy::Periodic(Duration::from_secs(1))
+            match (
+                self.profile,
+                self.backplane.as_ref(),
+                self.distributed.as_ref(),
+            ) {
+                (_, None, None) => ReconciliationPolicy::LocalOnly,
+                (ConfigurationProfile::FusionCache, None, Some(_)) => {
+                    ReconciliationPolicy::Expiration
+                }
+                (ConfigurationProfile::FusionCache, Some(_), _) => {
+                    ReconciliationPolicy::BackplaneBestEffort
+                }
+                (ConfigurationProfile::Strict, Some(backplane), _)
+                    if backplane.connection_state().is_some() =>
+                {
+                    ReconciliationPolicy::BackplaneContinuity
+                }
+                (ConfigurationProfile::Strict, _, _) => {
+                    ReconciliationPolicy::Periodic(Duration::from_secs(1))
+                }
             }
         });
         match reconciliation {
+            ReconciliationPolicy::Expiration => {}
             ReconciliationPolicy::LocalOnly => {
                 if self.backplane.is_some() || self.distributed.is_some() {
                     return Err(ConfigError::LocalReconciliationWithExternalStorage.into());
@@ -746,9 +779,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             recovery.try_set_executor(Arc::downgrade(&executor))?;
             recovery.try_spawn()?;
         }
-        if self.lease_policy == LeasePolicy::CooperativeLegacy && inner.distributed_locker.is_some()
-        {
-            tracing::warn!(cache=%inner.name,"explicit cooperative legacy lease policy: partition fencing is unavailable");
+        if self.lease_policy == LeasePolicy::Cooperative && inner.distributed_locker.is_some() {
+            tracing::warn!(cache=%inner.name,"cooperative lease policy: partition fencing is unavailable");
         }
         let lifetime = match executor {
             ExecutorOwnership::External => PublicLifetime::External(Arc::clone(&inner)),
@@ -770,4 +802,26 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         }
         Ok(cache)
     }
+}
+
+fn validate_fencing(
+    policy: LeasePolicy,
+    locker: Option<&dyn DistributedLocker>,
+    backend: Option<&dyn DistributedCache>,
+) -> Result<()> {
+    if policy != LeasePolicy::Fenced {
+        return Ok(());
+    }
+    if locker.is_some_and(|locker| {
+        locker.lease_support() == crate::LeaseSupport::OpaqueLegacy
+            || locker.token_acquisition() != crate::TokenAcquisition::CallerSelected
+    }) {
+        return Err(ConfigError::FencedLockerWithoutOwnedLifetime.into());
+    }
+    if backend.is_some_and(|backend| {
+        backend.fenced_write_support() != crate::distributed::FencedWriteSupport::Atomic
+    }) {
+        return Err(ConfigError::FencedDistributedWithoutAtomicWrites.into());
+    }
+    Ok(())
 }

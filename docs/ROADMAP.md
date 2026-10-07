@@ -1,39 +1,31 @@
-# Amalgam roadmap — 2026-10-06
+# Amalgam 0.4 roadmap
 
-Delivered implementation: main `7ee0308`,663 all-feature runtime tests and
-140 independent full-feature archive checks. Exact CI is tracked separately;
-its bounded layer-event consumer test is being repaired.
-FusionCache reference is pinned released2.9. Registry0.3.1 remains unchanged.
-This plan orders the remaining work; it is not a claim of completed parity.
+The target is FusionCache 2.9 behavior for Rust, with an eight-operation fluent
+API, predictable destruction/shutdown, and comparative performance budgets.
+The published registry package remains 0.3.1 until release qualification finishes.
 
-| Order | Work | Completion evidence |
+| Priority | Work | Current state |
 |---|---|---|
-| 1 — delivered | Actual external tag/clear L1: shared local/durable observations, namespaces, original failures, atomic races and owned native/async work | Independent contracts, full pinned/current-toolchain gates, actual package Redis/OTLP checks and exact-source before/after measurements; then deliver verified main |
-| 2 — next/current performance | Profile and improve writes and parallel public hits first; then cold factory and sync get_or_set | Same payload/options/semantics, alternating repeated before/after runs against actual released FusionCache; report ranges, allocations and remaining slow operations |
-| 3 — remaining functionality | Typed heterogeneous values/registry; runtime component/default replacement; event scheduling/fault policy; trace/log options; supported automatic recovery and portable atomic tag/clear; complete native/provider/options evidence | Close explicit items in FULL_CONTRACT with working public contracts and reference comparisons; retain deliberate differences explicitly |
-| 4 — release readiness | Repeat outage/recovery and cross-node checks, package consumer and final benchmark report; document migration and supported guarantees | Verified archive, exact-source green CI, release notes and a complete capability/speed table |
+| Must | Shared-write-free warmed L1 reads, tag verdicts and incremental maintenance | Reader slots and lazy observations implemented; one-thread Linux budgets still open |
+| Must | Ready factory and inline L1 writes; ownership only for suspended work | Plain builtin path implemented; hybrid caller-drop ownership still open |
+| Must | Fail-safe, soft/hard timeouts, L2, backplane, eager, adaptive caching, tags and recovery | Existing contracts retained; finish the paired FC requirement matrix |
+| Must | FC defaults and explicit `strict()` | Availability defaults, early fencing validation and public default contracts implemented |
+| Must | Eight-operation API, overlays, string tags, `Option<V>`, provider/advanced modules | Ordinary `set` is fluent and fallible; remaining API migration open |
+| Must | Custom L2 tag compatibility | Ordinary marker fallback and construction advice still open |
+| Must | Benchmark budgets, packaged consumers, MSRV, live Redis, complete CI | Comparative harness present; final milestone gates still open |
+| Must | README, examples, migration and release tables | Update against the final API and qualified measurements before release |
+| Should | Sharded bounded admission, shared sync executor, simplified plugins, testing helpers | After Must; optional features must have no disabled-path overhead |
+| Won't | Runtime provider replacement, heterogeneous values, .NET DI/OutputCache adapters, cross-runtime value wire compatibility | Outside this release |
 
-Current performance priority uses five fresh triples for7ee0308: replacement3.56×,
-same-key8-thread2.81×,distinct-key8-thread4.61×,cold factory1.67× and native
-get_or_set1.17× FusionCache time. Replacement is4–5% faster than preceding main. Async scalar reads are already faster. These
-are defined workloads, not a universal claim. L2 in this suite is in-memory JSON.
+## Acceptance
 
-Each completed block is visible in the main checkout. Keep one shared build
-cache with the existing5GiB cleanup guard; do not accumulate new targets or
-Docker images. Deliver each verified block with its own checks and measurements.
-The goal is equal or better supported behavior and speed; Rust alone is not the
-completion criterion. See FULL_CONTRACT for the still-open capability inventory.
+Every Must needs a public Rust contract and an executed FC 2.9 counterpart where
+behavior is observable. Rust-only destruction, cancellation and shutdown rules
+remain separately tested. Measurements use alternating processes on the same
+machine, medians and 1/2/4/8 threads. Warm hits allocate zero; cold/set budgets
+must pass before release. A local pass does not replace Linux qualification.
 
-```mermaid
-flowchart TD
-    A["1. Delivered: actual value and marker L1, native locker"] --> B["2. Performance: writes and parallel hits"]
-    B --> C["Cold factory and native get_or_set"]
-    C --> D["3. Remaining APIs and option/provider matrices"]
-    D --> E["4. Final Redis outages, package and benchmark report"]
-    E --> F["Release readiness with explicit parity and speed guarantees"]
-```
-
-The current CI repair consumes the bounded event stream during every convergence
-probe and still requires both value absence and the physical Remove event without
-lag. It changes test scheduling only; implementation hashes remain those measured
-for7ee0308. No registry release is implied by main delivery.
+Full package, consumer, MSRV and Valkey gates run at a milestone. Step checks use
+formatting, strict clippy, contracts and scaling. Differences within measurement
+noise are not evidence of an improvement. Release descriptions and tables will
+state actual supported behavior and any remaining reference differences.

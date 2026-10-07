@@ -116,7 +116,7 @@ fresh result preserves its original deadlines and avoids duplicate renewal.
 
 `LeasePolicy::Fenced` requires token ownership and actual provider fencing.
 Contention, lost ownership and unsupported fencing remain typed failures. A
-deliberate `CooperativeLegacy` policy allows best-effort contention and selected
+deliberate `Cooperative` policy allows best-effort contention and selected
 backend-fault fallback; it does not acquire strict authority through suppression.
 Acquisition, snapshot read, factory selection and write use their own phases.
 Normal foreground release is awaited; allowed background renewal retains its

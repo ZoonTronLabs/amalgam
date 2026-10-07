@@ -14,7 +14,7 @@
 
 A Rust hybrid cache with async operations, inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
-This README describes **0.3.1**. Install the crate from crates.io:
+The published package is **0.3.1**; **0.4 is under development** in this checkout. The outage-policy section describes the new source defaults. Install the published crate from crates.io:
 
 ```toml
 [dependencies]
@@ -90,7 +90,7 @@ Same-key requests coordinate through per-key ownership. A configured finite lock
 
 Soft factory timeout applies when a fail-safe fallback is available. With background completion enabled, the origin and its ownership move into supervised work; that continuation does not acquire a new hard-timeout budget. Eager refresh is request-driven and does not use the ordinary factory timeout. Adaptive options and conditional `not_modified` are validated before storage. Snapshot creation order and actual insertion time are separate: delayed origin work cannot invent newer source ordering or renew a replay's physical lifetime.
 
-An explicit caller token and `FactoryContext` cancellation state identify cancellation reasons. `close` initiates cancellation; `shutdown` waits for owned work and plugin cleanup. Dropping the last public cache handle also initiates cleanup. Ordinary late origin completion after a concurrent remove remains a FusionCache-compatible behavior; cache removal does not cancel unrelated origin work.
+An explicit caller token and `FactoryContext` cancellation state identify cancellation reasons. `close` initiates cancellation; `shutdown` waits for owned work and plugin cleanup. Dropping the last public cache handle also initiates cleanup. Built-in standalone origin versions prevent a late completion from replacing a newer awaited mutation; removing a key does not cancel unrelated origin work.
 
 ## Distributed storage and continuity
 
@@ -100,46 +100,33 @@ Default healthy L1 reads stay local. Cold L2 reads reconcile durable tag/clear m
 
 Unreleased [expiring marker snapshots](docs/MARKER_SNAPSHOTS.md) add independent remote lifetimes and nonzero read repair through an optional atomic provider capability. Snapshot expiry preserves the durable invalidation fact; this addition does not close the remaining marker eager/locker/recovery contract.
 
-By default, a backplane continuity gap, queue overflow or changed connection epoch requires reconciliation. Native Redis becomes connected only after a matching subscription acknowledgement. `ready()` and `try_build_ready()` expose that admission; the default initial-wait policy gates operations. A healthless adapter explicitly reports `BackplaneReadiness::BestEffort`. Custom backplanes without a health stream default to periodic reconciliation. Unreleased `ReconciliationPolicy::BackplaneBestEffort` explicitly retains L1 over gaps with either provider kind; see [backplane outage policies](docs/BACKPLANE_OUTAGES.md).
+In the 0.4 source, backplane gaps and reconnects preserve L1 within its normal
+freshness and fail-safe deadlines. L2-only caches have no periodic global L1
+clearing. Known invalidations still apply. `ready()` and `try_build_ready()` can
+await native subscription acknowledgement; ordinary operations do not wait by
+default. `CacheBuilder::strict()` selects conservative reconciliation and initial
+subscription admission. See [backplane outage policies](docs/BACKPLANE_OUTAGES.md).
 
 Distributed lease capabilities are explicit. Native owned acquisition, renewal and token-checked release prevent abandoned ownership. Strict stale-owner commit rejection additionally requires an atomic backend ownership check; renewal alone cannot provide it during a partition. An explicitly selected legacy provider mode carries weaker guarantees; an opaque acquisition that never completes cannot promise bounded cancellation drainage. A finite lock timeout, deliberate lock skipping or another writer outside the protocol can also permit duplicate origin work.
 
 
 ### Redis outages and lease policy
 
-The default `LeasePolicy::Fenced` rejects a cache miss when the distributed
-locker cannot acquire ownership, including when
-`with_rethrow_distributed_locker_exceptions(false)` is set. Ordinary fresh L1
-hits remain local if the value store or locker alone is unavailable.
+The 0.4 source defaults to `LeasePolicy::Cooperative`: a suppressed distributed
+locker error permits the ordinary factory to run. Fresh L1 hits contact neither
+the locker nor L2. Retained stale data can serve configured fail-safe during
+an outage. Nodes may compute concurrently while distributed coordination is
+unavailable, and missed peer invalidations can remain invisible until expiration.
 
-By default, a native backplane disconnect discards L1, including retained fail-safe values,
-because invalidations may have been missed. A previously warm key then needs
-L2 or the origin. With a failing fenced locker this returns `Error::Lease`;
-without a locker the origin may run again. Reconnection also reconciles L1.
-This default prioritizes invalidation correctness and does not provide the same
-outage availability as FusionCache's ordinary suppressed-locker-error path.
+Use `Cache::<V>::builder().strict()` when invalidation continuity and lease-fenced
+commits take priority over outage availability. Fenced configuration is rejected
+at construction if the locker lacks owned-token lifetime support or L2 lacks
+atomic fenced writes. Custom providers declare those capabilities explicitly.
 
-For FusionCache-style ordinary outage availability in the unreleased source,
-select best-effort notification reconciliation and cooperative ownership:
-
-```rust
-use amalgam::{Cache, EntryOptions, LeasePolicy, ReconciliationPolicy};
-
-let builder = Cache::<String>::builder()
-    .reconciliation_policy(ReconciliationPolicy::BackplaneBestEffort)
-    .lease_policy(LeasePolicy::CooperativeLegacy)
-    .default_options(EntryOptions::default()
-        .with_rethrow_distributed_locker_exceptions(false));
-```
-
-Keep the Redis providers on that builder. This permits duplicate origin work
-across nodes during an outage and gives up strict stale-owner commit fencing.
-The selected backplane mode keeps pre-disconnect fresh/stale L1 within its
-normal deadlines; missed peer invalidations can leave old values until expiration.
-It requires a configured backplane and is absent from published **0.3.1**.
-Explicit cancellation remains an error. Supervised acquisition cleanup can also make `shutdown()` report
-outage failures after Redis has recovered; the rethrow option does not erase
-those owned-work diagnostics.
+Published **0.3.1** has different defaults: fenced ownership, conservative gap
+cleanup, and periodic clearing for L2-only configurations. Updating this source
+does not update an existing consumer. Explicit cancellation remains an error;
+owned cleanup failures can still be reported by `shutdown()` after recovery.
 
 Failed or skipped distributed effects can enter recovery with their original bytes, remaining lifetime and pending stage. Local same-key commit lanes order replay, foreground effects and publication. This protects an awaited newer local mutation from an older replay. Independent nodes and custom writes are not globally linearizable without a participating conditional backend protocol.
 

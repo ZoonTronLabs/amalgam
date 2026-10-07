@@ -1319,7 +1319,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.key_mutation(
             key.as_ref(),
             options,
-            KeyMutation::Expire(DistributedExpirePolicy::RetainStale),
+            KeyMutation::Expire(DistributedExpirePolicy::default()),
             None,
         )
         .await
@@ -1334,7 +1334,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.key_mutation(
             key.as_ref(),
             options,
-            KeyMutation::Expire(DistributedExpirePolicy::RetainStale),
+            KeyMutation::Expire(DistributedExpirePolicy::default()),
             Some(token),
         )
         .await

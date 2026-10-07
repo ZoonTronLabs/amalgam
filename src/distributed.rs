@@ -552,6 +552,18 @@ where
     }
 }
 
+/// Atomic ownership validation available for value writes.
+///
+/// A declaration is a provider contract: `Atomic` requires `write_with_lease`
+/// to validate ownership and commit in one indivisible backend operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FencedWriteSupport {
+    /// Ordinary value I/O cannot authorize a lease-fenced commit.
+    Unavailable,
+    /// The provider implements atomic ownership-checked value writes.
+    Atomic,
+}
+
 /// A byte-oriented L2 distributed cache backend.
 ///
 /// Implement this over Redis, Memcached, a database, etc. The cache layer adds
@@ -582,6 +594,11 @@ pub trait DistributedCache: Send + Sync {
     /// An optional real atomic marker provider; ordinary legacy I/O stays usable.
     fn invalidation_store(&self) -> Option<Arc<dyn InvalidationStore>> {
         None
+    }
+
+    /// Declares the atomic capability checked by strict cache construction.
+    fn fenced_write_support(&self) -> FencedWriteSupport {
+        FencedWriteSupport::Unavailable
     }
 
     /// Atomically checks ownership and commits a value mutation. Renewal alone
@@ -996,6 +1013,10 @@ impl DistributedCache for InMemoryDistributedCache {
     }
     fn invalidation_store(&self) -> Option<Arc<dyn InvalidationStore>> {
         Some(self.invalidation.clone())
+    }
+
+    fn fenced_write_support(&self) -> FencedWriteSupport {
+        FencedWriteSupport::Atomic
     }
 
     async fn write_with_lease(

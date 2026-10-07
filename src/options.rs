@@ -509,7 +509,7 @@ impl EntryOptions {
 
     /// Controls ordinary foreground acquisition errors in cooperative lease mode.
     ///
-    /// With [`crate::LeasePolicy::CooperativeLegacy`], `false` permits origin
+    /// With [`crate::LeasePolicy::Cooperative`], `false` permits origin
     /// work without a lease after an acquisition failure. The default
     /// [`crate::LeasePolicy::Fenced`] always propagates acquisition failures;
     /// this option cannot authorize an unfenced commit. Ordinary fresh L1

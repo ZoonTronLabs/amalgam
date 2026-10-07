@@ -17,6 +17,16 @@ fn no_recovery() -> RecoveryConfig {
         ..RecoveryConfig::default()
     }
 }
+struct TrackedOriginDrop {
+    count: Arc<AtomicUsize>,
+    finished: Arc<Notify>,
+}
+impl Drop for TrackedOriginDrop {
+    fn drop(&mut self) {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        self.finished.notify_one();
+    }
+}
 struct DropSignal(Arc<AtomicUsize>);
 impl Drop for DropSignal {
     fn drop(&mut self) {
@@ -414,6 +424,9 @@ struct LostAtWrite {
 }
 #[async_trait]
 impl DistributedCache for LostAtWrite {
+    fn fenced_write_support(&self) -> FencedWriteSupport {
+        FencedWriteSupport::Atomic
+    }
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         self.inner.get(key).await
     }
@@ -448,6 +461,7 @@ async fn native_backend_fence_loss_does_not_commit_l1_l2_or_publish() {
         .distributed(l2.clone())
         .serializer(Arc::new(JsonSerializer))
         .distributed_locker(locker.clone())
+        .lease_policy(LeasePolicy::Fenced)
         .backplane(backplane)
         .default_options(opts())
         .auto_recovery(no_recovery())
@@ -723,6 +737,9 @@ struct FencedFault {
 }
 #[async_trait]
 impl DistributedCache for FencedFault {
+    fn fenced_write_support(&self) -> FencedWriteSupport {
+        FencedWriteSupport::Atomic
+    }
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         self.inner.get(key).await
     }
@@ -771,6 +788,7 @@ async fn failed_origin_commit_recovery_reacquires_and_uses_native_fenced_write()
         .distributed(backend.clone())
         .serializer(Arc::new(JsonSerializer))
         .distributed_locker(locker.clone())
+        .lease_policy(LeasePolicy::Fenced)
         .default_options(opts())
         .auto_recovery(recovery_config())
         .try_build()
@@ -806,6 +824,7 @@ async fn initial_native_ack_gates_operations_and_close_releases_parked_admission
     });
     let cache = Cache::<i32>::builder()
         .backplane(bp.clone())
+        .wait_for_initial_backplane_subscribe(true)
         .default_options(opts())
         .auto_recovery(no_recovery())
         .try_build()
@@ -927,10 +946,15 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
         let (token_tx, token_rx) = oneshot::channel();
         let dropped = Arc::new(AtomicUsize::new(0));
         let origin_drop = dropped.clone();
+        let finished = Arc::new(Notify::new());
+        let origin_finished = finished.clone();
         assert_eq!(
             cache
                 .get_or_set("k", move |ctx| async move {
-                    let _drop = DropSignal(origin_drop);
+                    let _drop = TrackedOriginDrop {
+                        count: origin_drop,
+                        finished: origin_finished,
+                    };
                     token_tx.send(ctx.cancellation().clone()).unwrap();
                     pending::<()>().await;
                     Ok(ctx.value(2))
@@ -949,6 +973,9 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
             token_rx.await.unwrap().cancelled().await,
             FactoryCancellationReason::CacheShutdown
         );
+        tokio::time::timeout(Duration::from_secs(2), finished.notified())
+            .await
+            .unwrap();
         assert_eq!(dropped.load(Ordering::SeqCst), 1);
         locker.release_entered.notified().await;
         let shutting = {
@@ -1107,7 +1134,13 @@ async fn cold_expire_read_failure_retains_intent_and_original_physical_deadline(
         .try_build()
         .unwrap();
     backend.read_down.store(true, Ordering::SeqCst);
-    let report = cache.try_expire("k").await.unwrap().wait().await.unwrap();
+    let report = cache
+        .try_expire_with_policy("k", None, DistributedExpirePolicy::RetainStale)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(matches!(
         report.distributed,
         EffectOutcome::RecoveryQueued { .. }

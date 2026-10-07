@@ -154,7 +154,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let source = CancellationSource::new();
         let interval = match self.inner.reconciliation {
             ReconciliationPolicy::Periodic(interval) => interval.min(Duration::from_millis(125)),
-            ReconciliationPolicy::LocalOnly
+            ReconciliationPolicy::Expiration
+            | ReconciliationPolicy::LocalOnly
             | ReconciliationPolicy::BackplaneContinuity
             | ReconciliationPolicy::BackplaneBestEffort => Duration::from_millis(125),
         };
@@ -175,7 +176,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     if matches!(inner.reconciliation, ReconciliationPolicy::Periodic(_)) {
                         let interval = match inner.reconciliation {
                             ReconciliationPolicy::Periodic(interval) => interval,
-                            ReconciliationPolicy::LocalOnly
+                            ReconciliationPolicy::Expiration
+                            | ReconciliationPolicy::LocalOnly
                             | ReconciliationPolicy::BackplaneContinuity
                             | ReconciliationPolicy::BackplaneBestEffort => Duration::ZERO,
                         };
