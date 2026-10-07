@@ -1,5 +1,6 @@
 //! Ready standalone factories commit within borrowed admission. Only a genuinely
 //! Pending factory registers cache-owned work and an observer future.
+use super::observed_execution::ObservedExecution;
 use super::{
     Arc, Cache, CacheEvent, CacheInner, CacheLevel, CacheOrigin, CacheValue, CommitReceipt, Entry,
     EntryOptions, Error, FactoryCancellation, FactoryContext, InlinePermit, LookupKey,
@@ -9,8 +10,6 @@ use super::{
 use crate::execution::LinkMode;
 use crate::memory::CacheMemory;
 use crate::single_flight::Completion;
-use std::future::Future;
-use std::pin::Pin;
 use tracing::Instrument;
 
 enum MemoryRead<V> {
@@ -19,9 +18,9 @@ enum MemoryRead<V> {
 }
 
 pub(super) type Value<V> = Observed<CacheValue<V>>;
-pub(super) enum Start<V> {
+pub(super) enum Start<V: Send + 'static> {
     Ready(Result<CacheValue<V>>),
-    Pending(Pin<Box<dyn Future<Output = Result<CacheValue<V>>> + Send + 'static>>),
+    Pending(ObservedExecution<CacheValue<V>>),
 }
 pub(super) struct Input<O, V> {
     pub(super) keys: LookupKey,
@@ -145,7 +144,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             },
         );
         drop(_entered);
-        Start::Pending(Box::pin(pending))
+        Start::Pending(pending)
     }
 }
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {

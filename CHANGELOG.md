@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Store suspended read/origin observers as typed execution handles instead of
+  allocating a second boxed driver. Cache-owned work remains pinned and scoped.
+  First-poll explicit cancellation propagates every terminal cause and retires
+  pending work without caller re-poll; token ownership and failed-preparation
+  capture lifetime remain. This removes one allocation from both L2 APIs.
+- Record the latest Linux milestone: all 14 functional jobs pass, while both
+  L2 budgets and the stricter L1 replacement advantage remain unqualified.
+  Local comparisons include the synchronous retrieval timing tradeoff.
 - Select a bounded shard-local pool of scalar key-coordination controls only
   for hybrid caches instead of rebuilding idle lanes and local mutexes on each
   distributed read. Standalone L1 uses transient coordination. Pool

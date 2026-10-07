@@ -1,22 +1,22 @@
 //! A lazy read owns asynchronous work only after a real miss.
+use super::observed_execution::ObservedExecution;
 use super::{Cache, EntryOptions, FactoryCancellation, MaybeValue, Result};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-type Pending<V> = Pin<Box<dyn Future<Output = Result<MaybeValue<V>>> + Send + 'static>>;
-pub(super) enum ReadStart<V> {
+pub(super) enum ReadStart<V: Send + 'static> {
     Ready(Result<MaybeValue<V>>),
-    Pending(Pending<V>),
+    Pending(ObservedExecution<MaybeValue<V>>),
 }
 struct Input<K> {
     key: K,
     options: Option<Box<EntryOptions>>,
     token: Option<FactoryCancellation>,
 }
-enum State<K, V> {
+enum State<K, V: Send + 'static> {
     Start(Input<K>),
-    Pending(Pending<V>),
+    Pending(ObservedExecution<MaybeValue<V>>),
     Finished,
 }
 pub(super) struct ReadRequest<'a, K, V: Clone + Send + Sync + 'static> {
@@ -24,7 +24,8 @@ pub(super) struct ReadRequest<'a, K, V: Clone + Send + Sync + 'static> {
     state: State<K, V>,
 }
 // The key is never structurally pinned or projected as Pin. It is an input,
-// not a future; the only pinned field is already behind its stable heap pointer.
+// not a future. The movable observer handle never projects cache-owned work
+// out of its stable pinned allocation.
 impl<K, V: Clone + Send + Sync + 'static> Unpin for ReadRequest<'_, K, V> {}
 impl<'a, K, V: Clone + Send + Sync + 'static> ReadRequest<'a, K, V> {
     pub(super) fn new(
@@ -62,7 +63,7 @@ impl<K: AsRef<str>, V: Clone + Send + Sync + 'static> Future for ReadRequest<'_,
         let State::Pending(work) = &mut this.state else {
             panic!("completed cache read was polled again");
         };
-        let result = work.as_mut().poll(cx);
+        let result = Pin::new(work).poll(cx);
         if result.is_ready() {
             this.state = State::Finished;
         }

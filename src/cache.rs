@@ -14,6 +14,7 @@ mod mutation_request;
 mod set_request;
 pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest};
 mod callback_free;
+mod observed_execution;
 mod origin;
 mod plain_ready;
 mod plugin;

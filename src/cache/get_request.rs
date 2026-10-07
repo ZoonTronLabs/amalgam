@@ -1,5 +1,6 @@
 //! Lazy origin requests. Input choices are separate from pinned execution.
 use super::inline_cold::Start;
+use super::observed_execution::ObservedExecution;
 use super::{
     Cache, CacheValue, EntryOptions, FactoryCancellation, FactoryContext, FactoryError,
     FactoryOrigin, FactoryProduct, MaybeValue, Result, Tag,
@@ -98,10 +99,9 @@ macro_rules! settings {
 settings!(GetOrSetRequest);
 settings!(ReceiptGetOrSetRequest);
 
-type Pending<V> = Pin<Box<dyn Future<Output = Result<CacheValue<V>>> + Send + 'static>>;
-enum State<K, F, V> {
+enum State<K, F, V: Send + 'static> {
     Start(Input<K, F, V>),
-    Pending(Pending<V>),
+    Pending(ObservedExecution<CacheValue<V>>),
     Finished,
 }
 
@@ -112,7 +112,7 @@ pub struct GetOrSetFuture<'a, K, F, V: Clone + Send + Sync + 'static, T = V> {
     output: PhantomData<fn() -> T>,
 }
 // K/F/V are unpinned input captures, consumed before user work is created. The
-// only polled future is already behind its separate stable pinned pointer.
+// movable observer retains work in its separate stable pinned allocation.
 impl<K, F, V: Clone + Send + Sync + 'static, T> Unpin for GetOrSetFuture<'_, K, F, V, T> {}
 
 trait Output<V> {
@@ -185,7 +185,7 @@ where
         let State::Pending(work) = &mut this.state else {
             panic!("completed cache origin was polled again");
         };
-        let result = work.as_mut().poll(cx);
+        let result = Pin::new(work).poll(cx);
         if result.is_ready() {
             this.state = State::Finished;
         }

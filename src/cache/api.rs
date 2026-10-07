@@ -1,4 +1,5 @@
 //! Public operations and their observed execution boundaries.
+use super::observed_execution::ObservedExecution;
 use super::plain_ready::QuietStart;
 use super::read_request::{ReadRequest, ReadStart};
 use super::{
@@ -11,7 +12,7 @@ use super::{
     MaybeValue, MemoryEvent, MutationReceipt, ObservationAdmission, Observed, OperationObservation,
     OperationOutcome, Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyEager, ReadyHit,
     ReadyLookup, ReadyObservation, ReadyRefresh, ReadyValue, ReplayTicket, Result, ShutdownReport,
-    Storage, Tag, TagVerdict, WorkAdmission, Worker, drive,
+    Storage, Tag, TagVerdict, WorkAdmission, Worker,
 };
 use crate::marker_reads::MarkerReads;
 use crate::observability::QuietObservation;
@@ -205,9 +206,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         source: CancellationSource,
         admission: ObservationAdmission<'_>,
         work: impl Future<Output = Result<Observed<T>>> + Send + 'static,
-    ) -> impl Future<Output = Result<T>> + Send + 'static {
-        // Transfer the large cold-path work into its owned scope before
-        // creating the small observer future stored in a caller's state.
+    ) -> ObservedExecution<T> {
+        // The scope owns and pins work before borrowed admission ends. The
+        // caller stores only its typed handle, without a second boxed driver.
         let prepared: Result<Execution<T>> = (|| {
             let span = observation.span();
             if self.operation_scopes().is_closed() {
@@ -276,7 +277,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
             Ok(execution)
         })();
-        async move { drive(prepared?, token).await }
+        ObservedExecution::new(prepared, token)
     }
     fn start_lookup<'a>(
         &'a self,
@@ -950,7 +951,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let source = CancellationSource::new();
         let caller = source.token();
         let explicit = cancellation.clone();
-        super::inline_cold::Start::Pending(Box::pin(self.execute_observed(
+        super::inline_cold::Start::Pending(self.execute_observed(
             observation,
             cancellation,
             source,
@@ -970,7 +971,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     )
                     .await
             },
-        )))
+        ))
     }
     fn ready_origin<'a, O: CacheOrigin<V>>(
         &self,
@@ -1275,11 +1276,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     #[cold]
     #[inline(never)]
     fn pending_read(&self, operation: ReadOperation<'_>) -> ReadStart<V> {
-        ReadStart::Pending(Box::pin(self.prepare_read(
+        ReadStart::Pending(self.prepare_read(
             operation,
             L2ReadPolicy::PreserveFailure,
             std::convert::identity,
-        )))
+        ))
     }
     async fn read_complete<T: Send + 'static>(
         &self,
@@ -1367,7 +1368,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         operation: ReadOperation<'_>,
         policy: L2ReadPolicy,
         complete: impl FnOnce(MaybeValue<V>) -> T + Send + 'static,
-    ) -> impl Future<Output = Result<T>> + Send + 'static {
+    ) -> ObservedExecution<T> {
         let ReadOperation {
             key,
             options,
