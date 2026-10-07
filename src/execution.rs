@@ -702,21 +702,20 @@ impl<T> Scope<T> {
 impl<T: Send + 'static> CancelWork for Scope<T> {
     fn cancel(&self, reason: Reason) {
         let _activity = self.registry.activity();
-        let (pending, terminal) = {
+        let (pending, terminal, recorded) = {
             let mut state = lock(&self.state);
             match &mut *state {
                 State::Pending(_) => match std::mem::replace(&mut *state, State::Cancelled(reason))
                 {
-                    State::Pending(work) => (Some(work), true),
+                    State::Pending(work) => (Some(work), true, reason),
                     _ => unreachable!("pending state was matched"),
                 },
                 State::Polling { cancellation } => {
-                    if cancellation.is_none() {
-                        *cancellation = Some(reason);
-                    }
-                    (None, false)
+                    let recorded = *cancellation.get_or_insert(reason);
+                    (None, false, recorded)
                 }
-                State::Cancelled(_) | State::Completed => (None, true),
+                State::Cancelled(recorded) => (None, true, *recorded),
+                State::Completed => (None, true, Reason::ScopeFinished),
             }
         };
         let retirement = Retirement {
@@ -727,7 +726,7 @@ impl<T: Send + 'static> CancelWork for Scope<T> {
                 None
             },
         };
-        self.source.cancel_with(reason);
+        self.source.cancel_with(recorded);
         drop(retirement);
         let waker = lock(&self.waker).take();
         if let Some(waker) = waker {
@@ -788,7 +787,10 @@ impl<T: Send + 'static> Future for Execution<T> {
             let mut state = lock(&self.scope.state);
             match &*state {
                 State::Cancelled(reason) => {
-                    return Poll::Ready(Err(Error::OperationCancelled { reason: *reason }));
+                    let reason = *reason;
+                    drop(state);
+                    self.scope.source.cancel_with(reason);
+                    return Poll::Ready(Err(Error::OperationCancelled { reason }));
                 }
                 State::Completed => panic!("completed cache execution was polled again"),
                 State::Polling { .. } => panic!("cache execution was polled concurrently"),
@@ -806,7 +808,13 @@ impl<T: Send + 'static> Future for Execution<T> {
             let cancellation = match &*state {
                 State::Polling { cancellation } => *cancellation,
                 _ => unreachable!("poll lease owns the state"),
-            };
+            }
+            .or_else(|| {
+                self.scope
+                    .registry
+                    .is_closed()
+                    .then_some(Reason::CacheShutdown)
+            });
             *state = match (&result, cancellation) {
                 (_, Some(reason)) => State::Cancelled(reason),
                 (Poll::Ready(_), None) => State::Completed,
@@ -816,11 +824,16 @@ impl<T: Send + 'static> Future for Execution<T> {
                 *state = State::Pending(work);
             } else {
                 drop(state);
-                let tracking = self.scope.tracking.lock().take();
-                drop(Retirement {
+                let retirement = Retirement {
                     _work: work,
-                    _tracking: tracking,
-                });
+                    _tracking: self.scope.tracking.lock().take(),
+                };
+                // The terminal scope state owns the reason. Publish it before
+                // user destruction or a result can expose completion to callers.
+                self.scope
+                    .source
+                    .cancel_with(cancellation.unwrap_or(Reason::ScopeFinished));
+                drop(retirement);
             }
             cancellation
         };
@@ -829,7 +842,6 @@ impl<T: Send + 'static> Future for Execution<T> {
             return Poll::Ready(Err(Error::OperationCancelled { reason }));
         }
         if result.is_ready() {
-            self.scope.source.cancel_with(Reason::ScopeFinished);
             self.scope.registry.changed.notify_waiters();
         }
         result
@@ -963,6 +975,99 @@ mod close_drop_cause_tests {
         assert!(closer.join().unwrap());
         drop(blocker);
         assert_eq!(observed, Some(Reason::CacheShutdown));
+    }
+
+    enum Finish {
+        Value,
+        Closed,
+    }
+    struct CloseThenReady {
+        scopes: Arc<Scopes>,
+        token: FactoryCancellation,
+        finish: Finish,
+        dropped: Arc<Mutex<Vec<Option<Reason>>>>,
+    }
+    impl Future for CloseThenReady {
+        type Output = Result<u8>;
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            // Reach close's publication-to-notification window deterministically.
+            // No shutdown notification has reached this polling scope yet.
+            self.scopes.closing.store(true, Ordering::SeqCst);
+            Poll::Ready(match self.finish {
+                Finish::Value => Ok(7),
+                Finish::Closed => Err(Error::CacheClosed),
+            })
+        }
+    }
+    impl Drop for CloseThenReady {
+        fn drop(&mut self) {
+            lock(&self.dropped).push(self.token.reason());
+        }
+    }
+    #[test]
+    fn ready_during_close_publishes_shutdown_before_retiring_the_future() {
+        for finish in [Finish::Value, Finish::Closed] {
+            let scopes = Scopes::new();
+            let source = CancellationSource::new();
+            let token = source.token();
+            let dropped = Arc::new(Mutex::new(Vec::new()));
+            let execution = scopes.execution(
+                CloseThenReady {
+                    scopes: scopes.clone(),
+                    token: token.clone(),
+                    finish,
+                    dropped: dropped.clone(),
+                },
+                source,
+            );
+            let mut execution = std::pin::pin!(execution);
+            let result = execution
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()));
+            assert!(matches!(
+                result,
+                Poll::Ready(Err(Error::OperationCancelled {
+                    reason: Reason::CacheShutdown
+                }))
+            ));
+            assert_eq!(token.reason(), Some(Reason::CacheShutdown));
+            assert_eq!(*lock(&dropped), [Some(Reason::CacheShutdown)]);
+            assert!(!scopes.close());
+            let mut drain = std::pin::pin!(scopes.drained());
+            assert!(
+                drain
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_ready()
+            );
+        }
+    }
+    #[test]
+    fn terminal_state_owns_the_reason_before_token_notification() {
+        for (state, expected) in [
+            (
+                State::Cancelled(Reason::CallerCancelled),
+                Reason::CallerCancelled,
+            ),
+            (State::Completed, Reason::ScopeFinished),
+        ] {
+            let scopes = Scopes::new();
+            let source = CancellationSource::new();
+            let token = source.token();
+            let execution = scopes.execution(std::future::pending::<Result<()>>(), source);
+            // Reach the interval after committing the terminal scope state but
+            // before publishing its token. A later notification must preserve it.
+            let pending = {
+                let mut current = lock(&execution.scope.state);
+                std::mem::replace(&mut *current, state)
+            };
+            drop(pending);
+            assert_eq!(token.reason(), None);
+            execution.cancel(Reason::CacheShutdown);
+            assert_eq!(token.reason(), Some(expected));
+            drop(execution);
+            assert!(scopes.close());
+        }
     }
 
     #[test]

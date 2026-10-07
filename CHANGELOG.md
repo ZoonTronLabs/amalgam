@@ -94,7 +94,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 - Synchronize eager-refresh and native-provider regressions with actual work
   completion and captured provider behavior, preserving their original assertions.
 
-- Preserve the published shutdown cancellation reason when a caller drops nested work before shutdown reaches its registry entry; retain an existing cancellation during panic cleanup. Native provider callbacks still drain before shutdown completes.
+- Preserve the first terminal cancellation reason when shutdown overlaps
+  caller destruction, polling completion or delayed notification. Publish that
+  reason before returning a result or retiring the owned future; successful
+  completion before shutdown keeps `ScopeFinished`. Native provider callbacks
+  still drain before shutdown completes.
 
 - Typed original-value memory eviction subscriptions and physical reason facts;
   explicit insertion/retirement capture, bounded independent lag and deferred
