@@ -302,9 +302,10 @@ impl<V> Sharded<V> {
         entry: &mut super::PreparedEntry<V>,
         time: crate::time::local::WriteTime,
         expected: Expected<'_, V>,
-        capture: CaptureAdmission,
+        policy: super::CapturePolicy,
         event: MemoryWriteEvent,
     ) -> super::RetentionCommit<V> {
+        let capture = policy.admission;
         let deadlines = self.timing.prepare(entry.meta(), time, self.expiry);
         let (hash, shard) = self.route(key);
         let mut state = write(shard);
@@ -351,7 +352,9 @@ impl<V> Sharded<V> {
                     MemoryWriteEvent::Set => Reason::Continuity,
                     MemoryWriteEvent::Expire => Reason::Metadata,
                 };
-                if let Some(previous) = entry.try_reuse(&mut slot.get_mut().entry) {
+                if policy.permits_payload_only(old_capture)
+                    && let Some(previous) = entry.try_reuse_payload(&mut slot.get_mut().entry)
+                {
                     let stored = slot.get_mut();
                     stored.generation = generation;
                     stored.deadlines = deadlines;
@@ -359,7 +362,6 @@ impl<V> Sharded<V> {
                     super::Retirements::Reused {
                         value: previous,
                         reason,
-                        capture: old_capture,
                     }
                 } else {
                     let key = Arc::clone(slot.key());
@@ -410,7 +412,10 @@ impl<V> Sharded<V> {
             &mut candidate,
             crate::time::local::WriteTime::Clock(now),
             expected,
-            capture,
+            super::CapturePolicy {
+                admission: capture,
+                timing: super::EvictionCapture::AtInsertion,
+            },
             event,
         )
     }

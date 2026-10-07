@@ -6,9 +6,9 @@ use super::{
     IdentityField, InitialPlugin, Instant, InvalidationStore, JitterSource, KeyModifierMode, Lanes,
     LeasePolicy, LeaseTtl, Lifecycle, LocalLocks, MarkerAccess, MarkerLifecycleAccess,
     MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryLimits, Plugin,
-    PluginContext, PluginHost, PublicLifetime, RandomJitterSource, ReconciliationPolicy,
-    RecoveryConfig, RecoveryExecutor, RemoveByTagBehavior, Result, RuntimeComponent, Scopes,
-    Storage, TagRegistry, Tasks, Timeout, ValueCloner, validate_budget,
+    PluginContext, PluginHost, PublicLifetime, ReconciliationPolicy, RecoveryConfig,
+    RecoveryExecutor, RemoveByTagBehavior, Result, RuntimeComponent, Scopes, Storage, TagRegistry,
+    Tasks, Timeout, ValueCloner, validate_budget,
 };
 
 #[derive(Clone, Copy)]
@@ -45,7 +45,7 @@ pub struct CacheBuilder<V> {
     max_capacity: Option<u64>,
     max_weighted_capacity: Option<u64>,
     value_cloner: Option<Arc<dyn ValueCloner<V>>>,
-    jitter: Arc<dyn JitterSource>,
+    jitter: Option<Arc<dyn JitterSource>>,
     invalidation_store: Option<Arc<dyn InvalidationStore>>,
     lease_policy: LeasePolicy,
     lease_ttl: Duration,
@@ -92,7 +92,7 @@ impl<V> CacheBuilder<V> {
             max_capacity: None,
             max_weighted_capacity: None,
             value_cloner: None,
-            jitter: Arc::new(RandomJitterSource),
+            jitter: None,
             invalidation_store: None,
             lease_policy: LeasePolicy::Cooperative,
             lease_ttl: Duration::from_secs(30),
@@ -303,7 +303,7 @@ impl<V> CacheBuilder<V> {
     }
     /// Supplies expiration jitter outside pure entry construction.
     pub fn jitter_source(mut self, jitter: Arc<dyn JitterSource>) -> Self {
-        self.jitter = jitter;
+        self.jitter = Some(jitter);
         self
     }
     /// Supplies genuine atomic invalidation storage for a custom byte backend.
@@ -717,6 +717,10 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         } else {
             None
         };
+        let default_copy = crate::serializers::DefaultValueCopy::validated(
+            &self.default_options,
+            cloner.as_ref(),
+        )?;
         let flights = (write_plan.is_inline()
             && matches!(locks, LocalLocks::Builtin(_))
             && matches!(marker_reads, MarkerReads::DurableRequired))
@@ -736,6 +740,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             ready_plan,
             write_plan,
             default_fresh_plan,
+            default_copy,
             flights,
             origin_work: std::sync::OnceLock::new(),
             tags_default_options: self.tags_default_options,
@@ -761,7 +766,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             disable_tagging: self.disable_tagging,
             wait_for_initial_backplane_subscribe: self.wait_for_initial_backplane_subscribe,
             cloner,
-            jitter: self.jitter,
+            jitter: crate::options::JitterPlan::select(self.jitter),
             scopes: Scopes::new(),
             tasks: Tasks::new(),
             epoch: Arc::new(AtomicU64::new(0)),

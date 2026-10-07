@@ -7,6 +7,17 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Retire only the replaced user value for unobserved, exclusively owned L1
+  representations. User destruction still follows storage coordination;
+  subscribed eviction values, retirement-time capture and retained snapshots
+  keep their full immutable representation and original metadata.
+- Select a validated copy policy for default inline writes at construction.
+  Explicit options and inline factory products validate one copy capability
+  before using it, including configured deep-copy strategies.
+- Keep the standard jitter strategy without a shared owner or dynamic call.
+  Explicit user strategies remain invoked and validated even at a zero maximum.
+- Enforce cold and L1-write budgets in the comparative CI job for both
+  read-only and factory-retrieval APIs, alongside warm allocations and scaling.
 - Select callback-free ready copies at construction for built-in primitive
   values in standalone L1. Only inputs without destructors can use that plan;
   custom `Clone`, observers, eager work, cancellation and mutations preserve

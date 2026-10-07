@@ -176,8 +176,8 @@ jobs:
       - name: Compare read and factory-retrieval APIs
         run: |
           amalgam_scaling_status=0
-          python3 benches/run-scaling.py --api read --gate hot --output /tmp/amalgam-scaling/read || amalgam_scaling_status=1
-          python3 benches/run-scaling.py --api get-or-set --gate hot --output /tmp/amalgam-scaling/get-or-set || amalgam_scaling_status=1
+          python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-scaling/read || amalgam_scaling_status=1
+          python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-scaling/get-or-set || amalgam_scaling_status=1
           exit "$amalgam_scaling_status"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

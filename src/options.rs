@@ -39,6 +39,28 @@ impl JitterSource for RandomJitterSource {
     }
 }
 
+/// The standard strategy has no shared owner or dynamic call. User algorithms
+/// remain open behavior, including when their requested maximum is zero.
+pub(crate) enum JitterPlan {
+    Standard,
+    Configured(std::sync::Arc<dyn JitterSource>),
+}
+impl JitterPlan {
+    pub(crate) fn select(source: Option<std::sync::Arc<dyn JitterSource>>) -> Self {
+        match source {
+            None => Self::Standard,
+            Some(source) => Self::Configured(source),
+        }
+    }
+    pub(crate) fn sample(&self, maximum: Duration) -> Result<JitterSample, ConfigError> {
+        match self {
+            Self::Standard if maximum.is_zero() => Ok(JitterSample::ZERO),
+            Self::Standard => JitterSample::new(RandomJitterSource.sample(maximum), maximum),
+            Self::Configured(source) => JitterSample::new(source.sample(maximum), maximum),
+        }
+    }
+}
+
 /// A bounded jitter sample, separate from random sampling behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JitterSample(Duration);

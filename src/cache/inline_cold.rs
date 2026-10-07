@@ -219,14 +219,11 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
             })?
             .into_payload()?;
         token.check()?;
-        self.validate_options(&product.options)?;
-        let value = self.copy(&product.value, &product.options)?;
-        let stored = self.copy(&product.value, &product.options)?;
+        let copy = self.validated_value_copy(&product.options)?;
+        let value = copy.copy(&product.value)?;
+        let stored = copy.copy(&product.value)?;
         let now = self.clock.now();
-        let jitter = super::JitterSample::new(
-            self.jitter.sample(product.options.jitter_max()),
-            product.options.jitter_max(),
-        )?;
+        let jitter = self.jitter.sample(product.options.jitter_max())?;
         token.check()?;
         let entry = Entry::try_fresh_with_jitter(
             stored,

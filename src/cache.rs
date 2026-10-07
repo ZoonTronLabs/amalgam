@@ -81,8 +81,7 @@ use crate::observability::{
     OperationObservation, QuietObservation, ReadyObservation, component_span,
 };
 use crate::options::{
-    EntryOptions, JitterSample, JitterSource, KeyModifierMode, RandomJitterSource,
-    RemoveByTagBehavior,
+    EntryOptions, JitterSample, JitterSource, KeyModifierMode, RemoveByTagBehavior,
 };
 use crate::plugins::{Plugin, PluginContext, PluginHost};
 use crate::recovery::{
@@ -302,6 +301,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     ready_plan: plain_ready::ReadyPlan,
     write_plan: memory_inline::WritePlan,
     default_fresh_plan: Option<crate::entry::FreshPlan>,
+    default_copy: crate::serializers::DefaultValueCopy<V>,
     flights: Option<Arc<crate::single_flight::Flights<inline_cold::Value<V>>>>,
     origin_work: std::sync::OnceLock<crate::retained_origin::RetainedOrigins<OriginCompletion<V>>>,
     tags_default_options: EntryOptions,
@@ -327,7 +327,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     disable_tagging: bool,
     wait_for_initial_backplane_subscribe: bool,
     cloner: Option<Arc<dyn ValueCloner<V>>>,
-    jitter: Arc<dyn JitterSource>,
+    jitter: crate::options::JitterPlan,
     scopes: Arc<Scopes>,
     tasks: Arc<Tasks>,
     epoch: Arc<AtomicU64>,
@@ -760,10 +760,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         )
     }
     fn jitter_sample(&self, options: &EntryOptions) -> Result<JitterSample> {
-        Ok(JitterSample::new(
-            self.inner.jitter.sample(options.jitter_max()),
-            options.jitter_max(),
-        )?)
+        Ok(self.inner.jitter.sample(options.jitter_max())?)
     }
     fn emit(&self, event: CacheEvent) {
         if let CacheEvent::CircuitBreakerChange { component, closed } = &event {

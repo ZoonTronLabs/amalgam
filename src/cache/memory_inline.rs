@@ -125,23 +125,20 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                             .map(Box::new)
                     })
             });
-            let opts = match &resolved {
-                Some(opts) => {
-                    self.inner.validate_options(opts)?;
-                    opts.as_ref()
-                }
+            let (opts, copy) = match &resolved {
+                Some(opts) => (opts.as_ref(), self.inner.validated_value_copy(opts)?),
                 None => {
                     self.inner.default_runtime.validate()?;
-                    &self.inner.default_options
+                    (
+                        &self.inner.default_options,
+                        self.inner.default_copy.borrowed(),
+                    )
                 }
             };
             permit.status(token)?;
-            let stored = self.inner.copy(&value, opts)?;
+            let stored = copy.copy(&value)?;
             // No user Clone, random source or clock callback runs under revision/storage locks.
-            let jitter = super::JitterSample::new(
-                self.inner.jitter.sample(opts.jitter_max()),
-                opts.jitter_max(),
-            )?;
+            let jitter = self.inner.jitter.sample(opts.jitter_max())?;
             let time = self.inner.clock.write_time();
             let now = time.now();
             permit.status(token)?;

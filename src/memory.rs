@@ -111,6 +111,18 @@ pub(crate) enum CaptureAdmission {
     Armed,
     Unarmed,
 }
+/// Capture at insertion and willingness to observe a later retirement are
+/// independent inputs. Only an unarmed insertion policy can discard metadata.
+#[derive(Clone, Copy)]
+struct CapturePolicy {
+    admission: CaptureAdmission,
+    timing: EvictionCapture,
+}
+impl CapturePolicy {
+    fn permits_payload_only(self, original: CaptureAdmission) -> bool {
+        self.timing == EvictionCapture::AtInsertion && matches!(original, CaptureAdmission::Unarmed)
+    }
+}
 #[derive(Clone, Copy)]
 enum RetirementReason {
     Explicit,
@@ -458,7 +470,10 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                     &mut entry,
                     time,
                     Expected::Mutation,
-                    capture,
+                    CapturePolicy {
+                        admission: capture,
+                        timing: self.observer.capture,
+                    },
                     MemoryWriteEvent::Set,
                 ),
                 Backend::Retained(store) => lock(store).insert(
@@ -659,7 +674,10 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                     &mut write.entry,
                     write.time,
                     expected,
-                    write.capture,
+                    CapturePolicy {
+                        admission: write.capture,
+                        timing: self.observer.capture,
+                    },
                     write.event,
                 ),
                 Backend::Retained(store) => lock(store).insert(
@@ -915,20 +933,16 @@ impl<V> PreparedEntry<V> {
             Self::Stored => unreachable!("admitted entry is already owned by storage"),
         }
     }
-    fn try_reuse(&mut self, stored: &mut Entry<V>) -> Option<crate::entry::FreshValue<V>> {
+    fn try_reuse_payload(&mut self, stored: &mut Entry<V>) -> Option<V> {
         if !matches!(self, Self::Fresh(_)) {
             return None;
         }
-        let Self::Fresh(value) = std::mem::replace(self, Self::Stored) else {
-            unreachable!()
-        };
-        match stored.replace_unique(value) {
-            crate::entry::UniqueReplacement::Reused(previous) => Some(previous),
-            crate::entry::UniqueReplacement::SnapshotPinned(value) => {
-                *self = Self::Fresh(value);
-                None
-            }
-        }
+        stored.replace_unique_payload(|| {
+            let Self::Fresh(value) = std::mem::replace(self, Self::Stored) else {
+                unreachable!("fresh payload was checked before replacement")
+            };
+            value
+        })
     }
     fn take_for_storage(&mut self) -> Entry<V> {
         match std::mem::replace(self, Self::Stored) {
@@ -988,11 +1002,7 @@ enum Retirements<V> {
     None,
     One(Retirement<V>),
     Many(Vec<Retirement<V>>),
-    Reused {
-        value: crate::entry::FreshValue<V>,
-        reason: RetirementReason,
-        capture: CaptureAdmission,
-    },
+    Reused { value: V, reason: RetirementReason },
 }
 impl<V> From<Option<Retirement<V>>> for Retirements<V> {
     fn from(value: Option<Retirement<V>>) -> Self {
@@ -1021,11 +1031,7 @@ impl<V: Clone + Send + Sync + 'static> Retirements<V> {
                     observer.retire(value);
                 }
             }
-            Self::Reused {
-                value,
-                reason,
-                capture,
-            } => observer.retire_unique(key, value, reason, capture),
+            Self::Reused { value, reason } => observer.retire_payload(key, value, reason),
         }
     }
 }
@@ -1407,25 +1413,9 @@ impl<V: Clone + Send + Sync + 'static> MemoryObserver<V> {
             CaptureAdmission::Unarmed
         }
     }
-    fn retire_unique(
-        &self,
-        key: &str,
-        value: crate::entry::FreshValue<V>,
-        reason: RetirementReason,
-        capture: CaptureAdmission,
-    ) {
-        let interested = (matches!(capture, CaptureAdmission::Armed)
-            || self.capture == EvictionCapture::AtRetirement)
-            && self.evictions.has_receivers();
-        if interested || self.reclamation.is_deferred() {
-            self.retire(Retirement {
-                key: Arc::from(key),
-                entry: value.into_entry(),
-                reason,
-                capture,
-            });
-            return;
-        }
+    fn retire_payload(&self, key: &str, value: V, reason: RetirementReason) {
+        // Only immediate, unarmed insertion capture reaches this route. A
+        // late layer subscriber still receives its reason/key after the guard.
         // Borrow the operation's still-live key. Disabled observations do not
         // clone a shared cache line or materialize an event-owned string.
         if reason.logical() {

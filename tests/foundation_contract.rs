@@ -12,9 +12,9 @@ use amalgam::serializers::copy_value;
 use amalgam::{
     Cache, CacheEvent, CacheLevel, CacheOperation, CacheRegistry, CapacityRejection, Clock,
     CloneError, ConfigError, DistributedSerializer, EagerThreshold, EntryOptions, EntryWeight,
-    Error, Events, FactoryCancellationReason, FactoryError, JitterSample, JsonSerializer,
-    ManualClock, MemoryAdmission, MemoryLimits, MemoryStore, OperationOutcome, Plugin,
-    PluginContext, PluginError, PluginHost, PluginSession, PluginStage, PluginStopOutcome,
+    Error, Events, FactoryCancellationReason, FactoryError, JitterSample, JitterSource,
+    JsonSerializer, ManualClock, MemoryAdmission, MemoryLimits, MemoryStore, OperationOutcome,
+    Plugin, PluginContext, PluginError, PluginHost, PluginSession, PluginStage, PluginStopOutcome,
     Priority, RegistryError, Timestamp, ValueCloner,
 };
 
@@ -1327,4 +1327,58 @@ fn cloned_shutdown_report_keeps_the_same_nonempty_failure_sources() {
         }),
         OperationOutcome::Cancelled
     );
+}
+
+#[tokio::test]
+async fn configured_jitter_is_invoked_and_validated_even_with_zero_maximum() {
+    enum Answer {
+        Zero,
+        OutsideRange,
+    }
+    struct Source {
+        calls: Arc<AtomicUsize>,
+        answer: Answer,
+    }
+    impl JitterSource for Source {
+        fn sample(&self, maximum: Duration) -> Duration {
+            assert_eq!(maximum, Duration::ZERO);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.answer {
+                Answer::Zero => Duration::ZERO,
+                Answer::OutsideRange => Duration::from_nanos(1),
+            }
+        }
+    }
+    for answer in [Answer::Zero, Answer::OutsideRange] {
+        let valid = matches!(answer, Answer::Zero);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = Cache::<u64>::builder()
+            .jitter_source(Arc::new(Source {
+                calls: calls.clone(),
+                answer,
+            }))
+            .try_build()
+            .unwrap();
+        let set = cache.set("set", 1).await;
+        let cold = cache
+            .get_or_set("cold", |ctx| async move { Ok(ctx.value(2)) })
+            .await;
+        if valid {
+            set.unwrap();
+            assert_eq!(cold.unwrap(), 2);
+        } else {
+            assert!(matches!(
+                set,
+                Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
+            ));
+            assert!(matches!(
+                cold,
+                Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
+            ));
+            assert!(!cache.read("set", None).await.unwrap().has_value());
+            assert!(!cache.read("cold", None).await.unwrap().has_value());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        cache.shutdown().await.unwrap();
+    }
 }

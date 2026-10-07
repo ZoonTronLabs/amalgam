@@ -235,10 +235,6 @@ impl FreshPlan {
 /// Fully prepared metadata and value before shared snapshot ownership is needed.
 #[derive(Debug)]
 pub(crate) struct FreshValue<V>(EntryInner<V>);
-pub(crate) enum UniqueReplacement<V> {
-    Reused(FreshValue<V>),
-    SnapshotPinned(FreshValue<V>),
-}
 impl<V> FreshValue<V> {
     pub(crate) fn meta(&self) -> &Metadata {
         &self.0.meta
@@ -282,13 +278,20 @@ impl<V> Clone for Entry<V> {
 }
 
 impl<V> Entry<V> {
-    /// Reuse is possible only when no snapshot or weak reference can observe it.
-    /// Moving out the old payload does not run user Drop; retirement follows the guard.
-    pub(crate) fn replace_unique(&mut self, value: FreshValue<V>) -> UniqueReplacement<V> {
-        match Arc::get_mut(&mut self.inner) {
-            Some(inner) => UniqueReplacement::Reused(FreshValue(std::mem::replace(inner, value.0))),
-            None => UniqueReplacement::SnapshotPinned(value),
-        }
+    /// Unobserved replacement needs only the old user value for retirement.
+    /// A pinned snapshot refuses reuse before consuming the incoming value.
+    /// Metadata contains only crate-owned strings, tags and scalar state; its
+    /// replacement cannot invoke user callbacks. V::drop follows every guard.
+    pub(crate) fn replace_unique_payload(
+        &mut self,
+        take: impl FnOnce() -> FreshValue<V>,
+    ) -> Option<V> {
+        let inner = Arc::get_mut(&mut self.inner)?;
+        let FreshValue(fresh) = take();
+        let previous = std::mem::replace(&mut inner.value, fresh.value);
+        inner.meta = fresh.meta;
+        inner.eligibility = fresh.eligibility;
+        Some(previous)
     }
     /// Borrows the cached value.
     #[must_use]

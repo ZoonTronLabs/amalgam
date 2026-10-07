@@ -6,13 +6,13 @@ The published registry package remains 0.3.1 until release qualification finishe
 
 | Priority | Work | Current state |
 |---|---|---|
-| Must | Shared-write-free warmed L1 reads, tag verdicts and incremental maintenance | Reader slots, borrowed observations and build-selected primitive copies implemented; zero warm allocations verified for both APIs; updated Linux qualification pending |
-| Must | Ready factory and inline L1 writes; ownership only for suspended work | Plain inline path and general/hybrid caller-drop ownership implemented; cold Linux budget open |
+| Must | Shared-write-free warmed L1 reads, tag verdicts and incremental maintenance | Reader slots, borrowed observations and build-selected primitive copies implemented; zero warm allocations and read budgets qualified for both APIs on Linux |
+| Must | Ready factory and inline L1 writes; ownership only for suspended work | Inline commits, unobserved payload retirement and general/hybrid caller-drop ownership implemented; cold budget qualified on Linux; final write-budget qualification pending |
 | Must | Fail-safe, soft/hard timeouts, L2, backplane, eager, adaptive caching, tags and recovery | Existing contracts retained; finish the paired FC requirement matrix |
 | Must | FC defaults and explicit `strict()` | Availability defaults, early fencing validation and public default contracts implemented |
 | Must | Eight-operation API, overlays, string tags, `Option<V>`, provider/advanced modules | `set` and `get_or_set` are fluent and fallible; factory-value and remaining API migration open |
 | Must | Custom L2 tag compatibility | Ordinary marker fallback and construction advice still open |
-| Must | Benchmark budgets, packaged consumers, MSRV, live Redis, complete CI | Comparative harness present; final milestone gates still open |
+| Must | Benchmark budgets, packaged consumers, MSRV, live Redis, complete CI | Both APIs have paired CI measurements; comparative CI now enforces warm, cold and write budgets; final release gates still open |
 | Must | README, examples, migration and release tables | Update against the final API and qualified measurements before release |
 | Should | Sharded bounded admission, shared sync executor, simplified plugins, testing helpers | After Must; optional features must have no disabled-path overhead |
 | Won't | Runtime provider replacement, heterogeneous values, .NET DI/OutputCache adapters, cross-runtime value wire compatibility | Outside this release |

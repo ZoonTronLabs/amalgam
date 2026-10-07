@@ -87,11 +87,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
 
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
     pub(super) fn validate_options(&self, opts: &EntryOptions) -> Result<()> {
-        opts.validate_with_cloner(self.cloner.as_deref())?;
-        self.validate_execution_options(opts, OptionsTarget::Value)
+        self.validated_value_copy(opts).map(|_| ())
     }
     pub(super) fn validate_marker_options(&self, opts: &EntryOptions) -> Result<()> {
-        opts.validate()?;
         self.validate_execution_options(opts, OptionsTarget::Marker)
     }
     pub(super) fn validate_execution_options(
@@ -100,6 +98,9 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         target: OptionsTarget,
     ) -> Result<()> {
         opts.validate()?;
+        self.validate_runtime_options(opts, target)
+    }
+    fn validate_runtime_options(&self, opts: &EntryOptions, target: OptionsTarget) -> Result<()> {
         if self.options_require_runtime(opts, target)
             && tokio::runtime::Handle::try_current().is_err()
         {
@@ -109,6 +110,14 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
             .into());
         }
         Ok(())
+    }
+    pub(super) fn validated_value_copy(
+        &self,
+        opts: &EntryOptions,
+    ) -> Result<crate::serializers::ValueCopy<'_, V>> {
+        let copy = crate::serializers::ValueCopy::validated(opts, self.cloner.as_deref())?;
+        self.validate_runtime_options(opts, OptionsTarget::Value)?;
+        Ok(copy)
     }
     pub(super) fn options_require_runtime(
         &self,

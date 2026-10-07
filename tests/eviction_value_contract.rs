@@ -613,3 +613,53 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
         }
     });
 }
+
+#[tokio::test]
+async fn replacement_preserves_late_value_capture_and_original_metadata() {
+    for limit in [None, Some(2)] {
+        for capture in [EvictionCapture::AtInsertion, EvictionCapture::AtRetirement] {
+            let clock = clock();
+            let cache = builder::<Arc<String>>(limit, clock.clone())
+                .memory_eviction_capture(capture)
+                .try_build()
+                .unwrap();
+            let first = Arc::new("first".to_owned());
+            let second = Arc::new("second".to_owned());
+            let created = clock.now();
+            cache
+                .set("key", first.clone())
+                .tags(["first-tag"])
+                .await
+                .unwrap();
+            clock.advance(Duration::from_secs(1));
+            let mut events = cache.memory_evictions().subscribe();
+            cache
+                .set("key", second.clone())
+                .tags(["second-tag"])
+                .await
+                .unwrap();
+            match capture {
+                EvictionCapture::AtInsertion => assert!(matches!(
+                    events.try_recv(),
+                    Err(EvictionReceiveError::Empty)
+                )),
+                EvictionCapture::AtRetirement => {
+                    let old = events.try_recv().unwrap();
+                    assert!(Arc::ptr_eq(old.value(), &first));
+                    assert_eq!(old.reason(), MemoryEvictionReason::Replaced);
+                    assert_eq!(old.entry().meta().created(), created);
+                    assert_eq!(old.entry().meta().tags(), &[Tag::new("first-tag").unwrap()]);
+                }
+            }
+            cache.try_remove("key").await.unwrap().wait().await.unwrap();
+            let current = events.try_recv().unwrap();
+            assert!(Arc::ptr_eq(current.value(), &second));
+            assert_eq!(current.reason(), MemoryEvictionReason::Removed);
+            assert_eq!(
+                current.entry().meta().tags(),
+                &[Tag::new("second-tag").unwrap()]
+            );
+            cache.shutdown().await.unwrap();
+        }
+    }
+}

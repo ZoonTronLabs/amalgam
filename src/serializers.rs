@@ -3,8 +3,10 @@
 //! The default [`JsonSerializer`](crate::JsonSerializer) lives in
 //! [`crate::distributed`]; this module hosts alternative formats.
 
+mod value_copy;
 use crate::error::{CloneError, ConfigError, Result};
 use crate::options::EntryOptions;
+pub(crate) use value_copy::{DefaultValueCopy, ValueCopy};
 
 mod immutable {
     pub trait Sealed {}
