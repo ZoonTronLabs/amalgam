@@ -16,6 +16,15 @@ on [Keep a Changelog](https://keepachangelog.com/).
   of losing it in the legacy adapter; cached contents remain unchanged.
 
 ### Factory API and distributed execution
+- Unify factory and supplied-value retrieval under `get_or_set`. Remove separate
+  options, cancellation and commit overloads; configure the lazy request instead.
+  `source::factory` retains callback type inference without runtime ownership;
+  `source::value` preserves constant-source timeouts, events and eager behavior.
+  Native retrieval executes explicitly while keeping ordinary factories on the
+  caller thread. Optional fail-safe values use `Option<V>`.
+- Partition hybrid origin ownership after a confirmed L1/L2 miss. A successful
+  L2 lookup retains no factory timeout state; an actual origin keeps the same
+  coordination guard, cancellation, stable pinning and commit lifecycle.
 - Accept ordinary `Result<V, E>` factory output with any thread-safe error type.
   Preserve the concrete source error at the cache boundary. Conditional values,
   adaptive options and tags remain scoped to the originating factory request.

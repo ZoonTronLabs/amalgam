@@ -49,12 +49,15 @@ impl UserService {
     async fn display_name(&self, user_id: &str) -> String {
         let key = format!("user:{user_id}:name");
         self.cache
-            .get_or_set(key, {
-                let user_id = user_id.to_owned();
-                move |ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(format!("User #{user_id}")))
-                }
-            })
+            .get_or_set(
+                key,
+                amalgam::source::factory({
+                    let user_id = user_id.to_owned();
+                    move |ctx| async move {
+                        Ok::<_, amalgam::FactoryError>(ctx.value(format!("User #{user_id}")))
+                    }
+                }),
+            )
             .await
             .unwrap_or_else(|_| "<unavailable>".to_owned())
     }
@@ -167,9 +170,12 @@ async fn main() {
 
     // Same logical key in BOTH caches → independent values, proving isolation.
     let token = sessions
-        .get_or_set("session:abc", |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.value("session-token-for-abc".to_owned()))
-        })
+        .get_or_set(
+            "session:abc",
+            amalgam::source::factory(|ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value("session-token-for-abc".to_owned()))
+            }),
+        )
         .await
         .expect("factory is infallible");
     println!("sessions[\"session:abc\"] -> {token}");
@@ -190,9 +196,12 @@ async fn main() {
     // Store something in `config` under a `config:*` key; the options provider
     // hands it the long (1 h) freshness window for that prefix.
     let setting = config
-        .get_or_set("config:feature_x", |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.value("enabled".to_owned()))
-        })
+        .get_or_set(
+            "config:feature_x",
+            amalgam::source::factory(|ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value("enabled".to_owned()))
+            }),
+        )
         .await
         .expect("factory is infallible");
     println!("config[\"config:feature_x\"] -> {setting} (1 h freshness via options provider)");

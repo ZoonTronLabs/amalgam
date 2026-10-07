@@ -1,6 +1,6 @@
 use amalgam::{
-    Cache, Clock, EntryOptions, InMemoryDistributedCache, JsonSerializer, ManualClock, MaybeValue,
-    Tag, TagError,
+    Cache, Clock, EntryOptions, InMemoryDistributedCache, JsonSerializer, ManualClock, Tag,
+    TagError,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,9 +19,9 @@ async fn factory_exposes_raw_key_and_current_tags_without_decoding_the_prefix() 
         .try_build()
         .unwrap();
     cache
-        .get_or_set_full(
+        .get_or_set(
             "scope:raw",
-            |mut ctx| async move {
+            typed_factory(|mut ctx| async move {
                 assert_eq!(ctx.original_key(), "scope:raw");
                 assert_eq!(ctx.key(), "scope:scope:raw");
                 assert_eq!(ctx.tags().unwrap(), &*tags(&["call"]));
@@ -29,11 +29,9 @@ async fn factory_exposes_raw_key_and_current_tags_without_decoding_the_prefix() 
                 ctx.try_set_tags(["adapted"]).unwrap();
                 assert_eq!(ctx.tags().unwrap(), &*tags(&["adapted"]));
                 Ok::<_, amalgam::FactoryError>(ctx.value(7))
-            },
-            None,
-            tags(&["call"]),
-            MaybeValue::none(),
+            }),
         )
+        .tags(tags(&["call"]))
         .await
         .unwrap();
     cache.shutdown().await.unwrap();
@@ -60,32 +58,28 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
     };
     let first = build();
     first
-        .get_or_set_full(
+        .get_or_set(
             "raw",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
-            None,
-            tags(&["stored"]),
-            MaybeValue::none(),
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
         )
+        .tags(tags(&["stored"]))
         .await
         .unwrap();
     clock.advance(Duration::from_secs(2));
     let second = build();
     second
-        .get_or_set_full(
+        .get_or_set(
             "raw",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 assert_eq!(ctx.original_key(), "raw");
                 assert_eq!(ctx.key(), "scope:raw");
                 assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]));
                 assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]));
                 assert_eq!(ctx.stale_value(), Some(&7));
                 ctx.not_modified()
-            },
-            None,
-            tags(&["new-call"]),
-            MaybeValue::none(),
+            }),
         )
+        .tags(tags(&["new-call"]))
         .await
         .unwrap();
     // NotModified without an explicit adaptation retains the stale tags.
@@ -107,11 +101,14 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
 async fn invalid_legacy_tags_are_visible_as_a_typed_error_and_cannot_be_committed() {
     let cache = Cache::<u64>::new();
     let result = cache
-        .get_or_set("raw", |mut ctx| async move {
-            ctx.set_tags([" "]);
-            assert_eq!(ctx.tags(), Err(TagError::Blank));
-            Ok::<_, amalgam::FactoryError>(ctx.value(1))
-        })
+        .get_or_set(
+            "raw",
+            amalgam::source::factory(|mut ctx| async move {
+                ctx.set_tags([" "]);
+                assert_eq!(ctx.tags(), Err(TagError::Blank));
+                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+            }),
+        )
         .await;
     assert!(matches!(result, Err(amalgam::Error::Tag(TagError::Blank))));
     assert!(!cache.read("raw", None).await.unwrap().has_value());
@@ -132,33 +129,29 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
         .try_build()
         .unwrap();
     cache
-        .get_or_set_full(
+        .get_or_set(
             "scope:raw",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
-            None,
-            tags(&["stored"]),
-            MaybeValue::none(),
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
         )
+        .tags(tags(&["stored"]))
         .await
         .unwrap();
     clock.advance(Duration::from_secs(6));
     let (done, finished) = tokio::sync::oneshot::channel();
     assert_eq!(
         cache
-            .get_or_set_full(
+            .get_or_set(
                 "scope:raw",
-                |ctx| async move {
+                typed_factory(|ctx| async move {
                     assert_eq!(ctx.original_key(), "scope:raw");
                     assert_eq!(ctx.key(), "scope:scope:raw");
                     assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]));
                     assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]));
                     done.send(()).unwrap();
                     Ok::<_, amalgam::FactoryError>(ctx.value(8))
-                },
-                None,
-                tags(&["new-call"]),
-                MaybeValue::none()
+                })
             )
+            .tags(tags(&["new-call"]))
             .await
             .unwrap(),
         7
@@ -173,4 +166,12 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
         Some(&8)
     );
     cache.shutdown().await.unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

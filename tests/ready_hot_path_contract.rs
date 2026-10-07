@@ -29,11 +29,14 @@ async fn provider_runs_once_on_miss_and_hit_uses_raw_key_and_explicit_options_by
         let factories = factories.clone();
         assert_eq!(
             cache
-                .get_or_set("key", move |ctx| async move {
-                    factories.fetch_add(1, Ordering::SeqCst);
-                    assert_eq!(ctx.original_key(), "key");
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                })
+                .get_or_set(
+                    "key",
+                    amalgam::source::factory(move |ctx| async move {
+                        factories.fetch_add(1, Ordering::SeqCst);
+                        assert_eq!(ctx.original_key(), "key");
+                        Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                    })
+                )
                 .await
                 .unwrap(),
             7
@@ -71,11 +74,14 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
     let released = release.clone();
     let mut hit = Box::pin(
         cache
-            .get_or_set("key", move |ctx| async move {
-                began.notify_one();
-                released.notified().await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(8))
-            })
+            .get_or_set(
+                "key",
+                amalgam::source::factory(move |ctx| async move {
+                    began.notify_one();
+                    released.notified().await;
+                    Ok::<_, amalgam::FactoryError>(ctx.value(8))
+                }),
+            )
             .into_future(),
     );
     poll_fn(|cx| match hit.as_mut().poll(cx) {
@@ -89,7 +95,13 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
     tokio::time::timeout(Duration::from_secs(2), started.notified())
         .await
         .unwrap();
-    assert_eq!(cache.get_or_set_value("key", 99, None).await.unwrap(), 7);
+    assert_eq!(
+        cache
+            .get_or_set("key", amalgam::source::value(99))
+            .await
+            .unwrap(),
+        7
+    );
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), async {
         while cache.read("key", None).await.unwrap().into_value() != Some(8) {

@@ -66,9 +66,12 @@ mod demo {
             // get_or_set: miss on first touch of a key (counter: misses + sets),
             // hit afterwards (counter: hits).
             let _ = cache
-                .get_or_set(key.clone(), move |ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(format!("value-for-{key}")))
-                })
+                .get_or_set(
+                    key.clone(),
+                    amalgam::source::factory(move |ctx| async move {
+                        Ok::<_, amalgam::FactoryError>(ctx.value(format!("value-for-{key}")))
+                    }),
+                )
                 .await?;
 
             // An explicit set every few iterations (counter: sets).

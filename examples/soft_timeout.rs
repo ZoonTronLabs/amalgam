@@ -47,11 +47,13 @@ async fn main() {
 
     // 1. Prime with v1.
     cache
-        .get_or_set_with(
+        .get_or_set(
             "feed",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned())) },
-            opts.clone(),
+            typed_factory(|ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned()))
+            }),
         )
+        .options(|_| opts.clone())
         .await
         .expect("priming succeeds");
     println!("primed value => \"v1\"");
@@ -63,16 +65,16 @@ async fn main() {
     // 3. Slow factory (300ms) vs 50ms soft timeout: returns stale "v1" fast.
     let started = Instant::now();
     let served = cache
-        .get_or_set_with(
+        .get_or_set(
             "feed",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 println!("  [factory] started (will take 300ms)…");
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 println!("  [factory] finished in the background, producing \"v2\"");
                 Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
-            },
-            opts,
+            }),
         )
+        .options(|_| opts)
         .await
         .expect("soft timeout returns the stale value");
     let waited = started.elapsed();
@@ -99,4 +101,12 @@ async fn main() {
         "the background completion should have updated the cache"
     );
     println!("OK: fast stale response, then background refresh to \"v2\".");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

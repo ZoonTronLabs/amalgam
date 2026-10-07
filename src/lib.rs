@@ -50,6 +50,7 @@ pub mod options;
 pub mod plugins;
 mod retained_origin;
 mod single_flight;
+pub mod source;
 // Owner-approved private performance boundary. Cache logic keeps the unsafe ban.
 #[allow(unsafe_code)]
 mod reader_slots;

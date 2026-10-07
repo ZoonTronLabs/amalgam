@@ -452,9 +452,13 @@ fn factory_replacement_releases_origin_coordination_before_old_value_destructor(
                 .unwrap();
             clock.advance(Duration::from_secs(61));
             cache
-                .get_or_set("k", |ctx| {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(quiet()))
-                })
+                .get_or_set(
+                    "k",
+                    amalgam::source::factory(|ctx| {
+                        Ok::<_, amalgam::FactoryError>(ctx.value(quiet()))
+                    }),
+                )
+                .execute()
                 .unwrap();
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             cache.shutdown().unwrap();

@@ -136,10 +136,13 @@ async fn origin_fallback_policy_and_legacy_adapters_keep_their_existing_behavior
     let factory_calls = calls.clone();
     assert_eq!(
         cache
-            .get_or_set("k", move |context| async move {
-                factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(context.value(7))
-            })
+            .get_or_set(
+                "k",
+                amalgam::source::factory(move |context| async move {
+                    factory_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, amalgam::FactoryError>(context.value(7))
+                })
+            )
             .await
             .unwrap(),
         7

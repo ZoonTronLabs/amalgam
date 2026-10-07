@@ -290,9 +290,10 @@ async fn provider_reported_cancellation_cannot_be_suppressed_as_marker_failure()
     );
     let mut events = cache.events().subscribe();
     let error = cache
-        .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-            panic!("cancellation must not run origin")
-        })
+        .get_or_set::<_, _>(
+            "key",
+            typed_factory(|_| forbidden_factory("cancellation must not run origin")),
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -525,9 +526,10 @@ async fn marker_fault_flags_are_independent_and_rethrow_original_cause_even_in_g
         store.mode(mode);
         let cache = reader(clock, backend, store, options);
         let error = cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-                panic!("strict marker fault must not run origin")
-            })
+            .get_or_set::<_, _>(
+                "key",
+                typed_factory(|_| async { panic!("strict marker fault must not run origin") }),
+            )
             .await
             .unwrap_err();
         let source = match error {
@@ -806,7 +808,7 @@ async fn marker_reads_bypass_value_provider_and_value_operation_override() {
     );
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async { panic!("L2 hit") })
+            .get_or_set::<_, _>("key", typed_factory(|_| forbidden_factory("L2 hit")))
             .await
             .unwrap(),
         7
@@ -1496,9 +1498,10 @@ async fn eager_marker_read_is_owned_by_refresh_and_shutdown() {
     clock.advance(Duration::from_secs(6));
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-                panic!("parked L2 preflight must not run origin")
-            })
+            .get_or_set::<_, _>(
+                "key",
+                typed_factory(|_| async { panic!("parked L2 preflight must not run origin") })
+            )
             .await
             .unwrap(),
         7
@@ -1572,4 +1575,18 @@ async fn passive_marker_read_is_owned_by_refresh_and_shutdown() {
             .unwrap()
             .contains(&Some(FactoryCancellationReason::CacheShutdown))
     );
+}
+
+async fn forbidden_factory(
+    message: &'static str,
+) -> std::result::Result<u64, amalgam::FactoryError> {
+    panic!("{message}");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

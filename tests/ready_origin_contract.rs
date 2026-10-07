@@ -40,10 +40,13 @@ async fn a_ready_origin_hit_reaches_an_observer_attached_by_the_unused_factory_d
     };
     assert_eq!(
         cache
-            .get_or_set("hit", move |ctx| async move {
-                drop(capture);
-                Ok::<_, amalgam::FactoryError>(ctx.value(99))
-            })
+            .get_or_set(
+                "hit",
+                amalgam::source::factory(move |ctx| async move {
+                    drop(capture);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                })
+            )
             .await
             .unwrap(),
         7,
@@ -77,10 +80,13 @@ async fn closing_from_the_unused_factory_drop_rejects_the_ready_value_once() {
     };
     assert!(matches!(
         cache
-            .get_or_set("hit", move |ctx| async move {
-                drop(capture);
-                Ok::<_, amalgam::FactoryError>(ctx.value(99))
-            })
+            .get_or_set(
+                "hit",
+                amalgam::source::factory(move |ctx| async move {
+                    drop(capture);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                })
+            )
             .await,
         Err(Error::OperationCancelled {
             reason: FactoryCancellationReason::CacheShutdown
@@ -112,10 +118,15 @@ fn native_ready_origins_preserve_unused_capture_events_and_close() {
             receiver: receiver.clone(),
             next,
         };
-        let result = cache.get_or_set("hit", move |ctx| {
-            drop(capture);
-            Ok::<_, amalgam::FactoryError>(ctx.value(99))
-        });
+        let result = cache
+            .get_or_set(
+                "hit",
+                amalgam::source::factory(move |ctx| {
+                    drop(capture);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                }),
+            )
+            .execute();
         let mut receiver = receiver.lock().unwrap().take().unwrap();
         let (outcome, level) = if closes {
             assert!(matches!(
@@ -189,10 +200,13 @@ async fn shutdown_drains_ready_clone_and_the_unused_origin_capture() {
     let reader_cache = cache.clone();
     armed.store(true, Ordering::SeqCst);
     let reader = std::thread::spawn(move || {
-        let request = reader_cache.get_or_set("hit", move |ctx| async move {
-            drop(capture);
-            Err(ctx.fail("the hot factory must not run"))
-        });
+        let request = reader_cache.get_or_set(
+            "hit",
+            amalgam::source::factory(move |ctx| async move {
+                drop(capture);
+                Err(ctx.fail("the hot factory must not run"))
+            }),
+        );
         let mut future = std::pin::pin!(std::future::IntoFuture::into_future(request));
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         match std::future::Future::poll(future.as_mut(), &mut context) {
@@ -233,9 +247,12 @@ async fn the_first_inline_factory_miss_starts_physical_cleanup() {
     let weak = Arc::downgrade(&source);
     drop(
         cache
-            .get_or_set("expires", move |ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(source))
-            })
+            .get_or_set(
+                "expires",
+                amalgam::source::factory(move |ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(source))
+                }),
+            )
             .await
             .unwrap(),
     );
@@ -264,13 +281,22 @@ async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
         .await
         .unwrap();
     clock.advance(Duration::from_secs(31));
-    assert_eq!(cache.get_or_set_value("eager", 99, None).await.unwrap(), 1);
     assert_eq!(
         cache
-            .get_or_set("eager", |ctx| async move {
-                assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
-                Ok::<_, amalgam::FactoryError>(ctx.value(2))
-            })
+            .get_or_set("eager", amalgam::source::value(99))
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        cache
+            .get_or_set(
+                "eager",
+                amalgam::source::factory(|ctx| async move {
+                    assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                })
+            )
             .await
             .unwrap(),
         1

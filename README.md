@@ -65,7 +65,7 @@ error rethrows. Reports also expose skipped stages, suppressed failures and
 recovery admission according to the configured policy.
 
 Legacy invalidation adapters have been removed from the developing source.
-Remaining read/retrieval aliases are still being migrated. See
+The remaining read/write aliases are still being migrated. See
 [the 0.4 migration draft](docs/MIGRATION_0_4.md) for the current changes.
 
 ## Fluent requests (unreleased source)
@@ -91,10 +91,13 @@ let observed = cache
 observed.commit.wait().await?;
 ```
 
-Optional `.fail_safe_default(value)` and `.cancellation(token)` apply to the
-individual request. A manually polled request first calls `.into_future()`;
-this separates configuration from pinned execution. The remaining operation
-read and supplied-value source facades are still being migrated for 0.4.
+Optional `.fail_safe_default(Some(value))` and `.cancellation(token)` apply to
+the individual request. `None` removes the fallback; for nullable cached values,
+`Some(None)` means a present null fallback. A manually polled request first calls `.into_future()`;
+this separates configuration from pinned execution. Use `source::value(value)` as the second argument to `get_or_set` for a supplied
+value. It preserves constant-source behavior without factory timeouts or eager
+refresh. `source::factory(|ctx| ...)` supplies the inferred context type when
+the callback uses its methods. The read facade is still being migrated for 0.4.
 
 ## Synchronous use (unreleased source)
 
@@ -104,6 +107,21 @@ bounded callback pools. Mutation receipts expose actual completion.
 [Dispatch, resource bounds and lifecycle](docs/SYNC.md) describe the tested
 contracts and intentional differences. This addition is available in the
 source tree; the published package has not been updated by this work.
+
+```rust
+use amalgam::{BlockingCache, source};
+
+let cache = BlockingCache::<u64>::new()?;
+let value = cache.get_or_set("number", source::factory(|_| {
+    Ok::<_, std::convert::Infallible>(7)
+})).execute()?;
+cache.set("number", value + 1).execute()?;
+cache.remove("number").with_receipt().execute()?.wait()?;
+cache.shutdown()?;
+```
+
+Native retrieval and mutation requests are lazy until `.execute()`. Request
+options, tags, fallback and cancellation use the same fluent choices as async.
 
 ## Freshness, origin work and cancellation
 

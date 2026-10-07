@@ -21,11 +21,14 @@ async fn paused_origin(mutation: LaterMutation) {
     let worker = cache.clone();
     let origin = tokio::spawn(async move {
         worker
-            .get_or_set("key", |ctx| async move {
-                started.send(()).unwrap();
-                resume.await.unwrap();
-                Ok::<_, amalgam::FactoryError>(ctx.value(1))
-            })
+            .get_or_set(
+                "key",
+                amalgam::source::factory(|ctx| async move {
+                    started.send(()).unwrap();
+                    resume.await.unwrap();
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                }),
+            )
             .await
     });
     entered.await.unwrap();

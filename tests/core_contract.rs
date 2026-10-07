@@ -43,12 +43,15 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
     let mut events = cache.events().subscribe();
     let mut operation = Box::pin(
         cache
-            .get_or_set("parked", move |ctx| async move {
-                let _drop = DropSignal(origin_drop);
-                token_tx.send(ctx.cancellation().clone()).unwrap();
-                pending::<()>().await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(1))
-            })
+            .get_or_set(
+                "parked",
+                amalgam::source::factory(move |ctx| async move {
+                    let _drop = DropSignal(origin_drop);
+                    token_tx.send(ctx.cancellation().clone()).unwrap();
+                    pending::<()>().await;
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                }),
+            )
             .into_future(),
     );
     poll_fn(|cx| {
@@ -112,12 +115,15 @@ async fn soft_timeout_disposes_origin_with_precise_reason_and_retains_failsafe()
     let dropped = Arc::new(AtomicUsize::new(0));
     let origin_drop = dropped.clone();
     let result = cache
-        .get_or_set("k", move |ctx| async move {
-            let _drop = DropSignal(origin_drop);
-            token_tx.send(ctx.cancellation().clone()).unwrap();
-            pending::<()>().await;
-            Ok::<_, amalgam::FactoryError>(ctx.value(2))
-        })
+        .get_or_set(
+            "k",
+            amalgam::source::factory(move |ctx| async move {
+                let _drop = DropSignal(origin_drop);
+                token_tx.send(ctx.cancellation().clone()).unwrap();
+                pending::<()>().await;
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(result, 1);
@@ -150,15 +156,15 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
         let token = source.token();
         tokio::spawn(async move {
             cache
-                .get_or_set_cancellable(
+                .get_or_set(
                     "k",
-                    move |ctx| async move {
+                    typed_factory(move |ctx| async move {
                         entered_tx.send(()).unwrap();
                         pending::<()>().await;
                         Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                    },
-                    token,
+                    }),
                 )
+                .cancellation(token)
                 .await
         })
     };
@@ -170,7 +176,13 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
             reason: FactoryCancellationReason::CallerCancelled
         })
     ));
-    assert_eq!(cache.get_or_set_value("k", 3, None).await.unwrap(), 3);
+    assert_eq!(
+        cache
+            .get_or_set("k", amalgam::source::value(3))
+            .await
+            .unwrap(),
+        3
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -379,14 +391,14 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
     let origin_calls = calls.clone();
     assert!(matches!(
         cache
-            .get_or_set_with(
+            .get_or_set(
                 "k",
-                move |ctx| async move {
+                typed_factory(move |ctx| async move {
                     origin_calls.fetch_add(1, Ordering::SeqCst);
                     Ok::<_, amalgam::FactoryError>(ctx.value(1))
-                },
-                huge.clone()
+                })
             )
+            .options(|_| huge.clone())
             .await,
         Err(Error::Config(ConfigError::DeadlineOutOfRange))
     ));
@@ -403,20 +415,26 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
 async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products() {
     let cache = Cache::<i32>::new();
     let result = cache
-        .get_or_set("bad-size", |mut ctx| async move {
-            ctx.adapt(|opts| opts.with_size(-1));
-            Ok::<_, amalgam::FactoryError>(ctx.value(1))
-        })
+        .get_or_set(
+            "bad-size",
+            amalgam::source::factory(|mut ctx| async move {
+                ctx.adapt(|opts| opts.with_size(-1));
+                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+            }),
+        )
         .await;
     assert!(matches!(
         result,
         Err(Error::Config(ConfigError::NegativeEntryWeight { .. }))
     ));
     let result = cache
-        .get_or_set("bad-tag", |mut ctx| async move {
-            ctx.set_tags(["valid", " "]);
-            Ok::<_, amalgam::FactoryError>(ctx.value(1))
-        })
+        .get_or_set(
+            "bad-tag",
+            amalgam::source::factory(|mut ctx| async move {
+                ctx.set_tags(["valid", " "]);
+                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+            }),
+        )
         .await;
     assert!(matches!(result, Err(Error::Tag(TagError::Blank))));
     assert!(!cache.read("bad-size", None).await.unwrap().has_value());
@@ -475,10 +493,13 @@ async fn native_backend_fence_loss_does_not_commit_l1_l2_or_publish() {
         .unwrap();
     let (token_tx, token_rx) = oneshot::channel();
     let result = cache
-        .get_or_set("k", move |ctx| async move {
-            token_tx.send(ctx.cancellation().clone()).unwrap();
-            Ok::<_, amalgam::FactoryError>(ctx.value(1))
-        })
+        .get_or_set(
+            "k",
+            amalgam::source::factory(move |ctx| async move {
+                token_tx.send(ctx.cancellation().clone()).unwrap();
+                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+            }),
+        )
         .await;
     assert!(matches!(result, Err(Error::Lease(LeaseError::Lost))));
     assert_eq!(
@@ -806,7 +827,13 @@ async fn failed_origin_commit_recovery_reacquires_and_uses_native_fenced_write()
         .auto_recovery(recovery_config())
         .try_build()
         .unwrap();
-    assert_eq!(cache.get_or_set_value("k", 7, None).await.unwrap(), 7);
+    assert_eq!(
+        cache
+            .get_or_set("k", amalgam::source::value(7))
+            .await
+            .unwrap(),
+        7
+    );
     tokio::time::timeout(Duration::from_secs(2), backend.replay_entered.notified())
         .await
         .expect("recovery must enter the second fenced write");
@@ -963,15 +990,18 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
         let origin_finished = finished.clone();
         assert_eq!(
             cache
-                .get_or_set("k", move |ctx| async move {
-                    let _drop = TrackedOriginDrop {
-                        count: origin_drop,
-                        finished: origin_finished,
-                    };
-                    token_tx.send(ctx.cancellation().clone()).unwrap();
-                    pending::<()>().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                })
+                .get_or_set(
+                    "k",
+                    amalgam::source::factory(move |ctx| async move {
+                        let _drop = TrackedOriginDrop {
+                            count: origin_drop,
+                            finished: origin_finished,
+                        };
+                        token_tx.send(ctx.cancellation().clone()).unwrap();
+                        pending::<()>().await;
+                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    })
+                )
                 .await
                 .unwrap(),
             1
@@ -1035,14 +1065,18 @@ async fn cancelled_uncertain_acquisition_is_supervised_before_ownership_transfer
     let source = CancellationSource::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let origin_calls = calls.clone();
-    let mut caller = Box::pin(cache.get_or_set_cancellable(
-        "k",
-        move |ctx| async move {
-            origin_calls.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, amalgam::FactoryError>(ctx.value(2))
-        },
-        source.token(),
-    ));
+    let mut caller = Box::pin(
+        cache
+            .get_or_set(
+                "k",
+                typed_factory(move |ctx| async move {
+                    origin_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                }),
+            )
+            .cancellation(source.token())
+            .into_future(),
+    );
     poll_fn(|cx| {
         assert!(caller.as_mut().poll(cx).is_pending());
         Poll::Ready(())
@@ -1086,10 +1120,13 @@ async fn not_modified_validates_adaptive_raw_tags_before_retention() {
     clock.advance(Duration::from_secs(2));
     assert!(matches!(
         cache
-            .get_or_set("k", |mut ctx| async move {
-                ctx.set_tags([" "]);
-                ctx.not_modified()
-            })
+            .get_or_set(
+                "k",
+                amalgam::source::factory(|mut ctx| async move {
+                    ctx.set_tags([" "]);
+                    ctx.not_modified()
+                })
+            )
             .await,
         Err(Error::Tag(TagError::Blank))
     ));
@@ -1325,14 +1362,22 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
     let repaired = invalid.with_factory_timeouts(Timeout::Infinite, Timeout::Infinite, false);
     assert_eq!(
         cache
-            .get_or_set_with(
+            .get_or_set(
                 "factory",
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(9)) },
-                repaired
+                typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(9)) })
             )
+            .options(|_| repaired)
             .await
             .unwrap(),
         9
     );
     cache.shutdown().await.unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

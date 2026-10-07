@@ -89,7 +89,10 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
                     let _ = reader.try_get("k", None).await;
                 }
                 Lookup::Origin => {
-                    let _ = reader.get_or_set_value("k", 9, None).await.unwrap();
+                    let _ = reader
+                        .get_or_set("k", amalgam::source::value(9))
+                        .await
+                        .unwrap();
                 }
             }
         })
@@ -198,7 +201,10 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
                         reader.try_get("k", None).await;
                     }
                     Lookup::Origin => {
-                        reader.get_or_set_value("k", 9, None).await.unwrap();
+                        reader
+                            .get_or_set("k", amalgam::source::value(9))
+                            .await
+                            .unwrap();
                     }
                 }
             }

@@ -311,9 +311,10 @@ async fn blocked_ready_hit_plugin_is_cancelled_and_drained_once() {
     let reading = cache.clone();
     let operation = tokio::spawn(async move {
         reading
-            .get_or_set::<_, _, _, amalgam::FactoryError>("k", |_ctx| async move {
-                panic!("fresh value skips origin")
-            })
+            .get_or_set::<_, _>(
+                "k",
+                typed_factory(|_ctx| async move { panic!("fresh value skips origin") }),
+            )
             .await
     });
     close_while_blocked(&cache, &gate, operation).await;
@@ -336,12 +337,15 @@ async fn shutdown_waits_a_cancelled_parked_future_destructor_before_claiming_dra
     let origin_entered = entered.clone();
     let mut operation = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("pending", move |ctx| async move {
-                let _drop = UnusedFactory(origin_gate);
-                origin_entered.store(true, Ordering::SeqCst);
-                pending::<()>().await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(99))
-            })
+            .get_or_set::<_, _>(
+                "pending",
+                typed_factory(move |ctx| async move {
+                    let _drop = UnusedFactory(origin_gate);
+                    origin_entered.store(true, Ordering::SeqCst);
+                    pending::<()>().await;
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                }),
+            )
             .into_future(),
     );
     poll_fn(|cx| {
@@ -379,10 +383,13 @@ async fn unused_factory_destructor_remains_inside_ready_drainage() {
     let reading = cache.clone();
     let operation = tokio::spawn(async move {
         reading
-            .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
-                drop(unused);
-                Ok::<_, amalgam::FactoryError>(ctx.value(99))
-            })
+            .get_or_set::<_, _>(
+                "k",
+                typed_factory(move |ctx| async move {
+                    drop(unused);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                }),
+            )
             .await
     });
     close_while_blocked(&cache, &gate, operation).await;
@@ -416,11 +423,11 @@ async fn ready_hit_plugin_explicit_cancellation_has_one_precise_observer() {
     let mut events = cache.events().subscribe();
     cancelled(
         cache
-            .get_or_set_cancellable(
+            .get_or_set(
                 "k",
-                |_ctx| async move { panic!("origin must not run") },
-                source.token(),
+                typed_factory(|_ctx| async move { panic!("origin must not run") }),
             )
+            .cancellation(source.token())
             .await,
         FactoryCancellationReason::CallerCancelled,
     );
@@ -475,9 +482,10 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
     assert_eq!(cache.read("k", None).await.unwrap().value_or(0), 7);
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("k", |_ctx| async move {
-                panic!("origin must not run")
-            })
+            .get_or_set::<_, _>(
+                "k",
+                typed_factory(|_ctx| async move { panic!("origin must not run") })
+            )
             .await
             .unwrap(),
         7
@@ -490,9 +498,10 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
     assert!(!missing.has_value());
     assert_eq!(completions(&mut events), vec![OperationOutcome::Miss]);
     cache
-        .get_or_set::<_, _, _, amalgam::FactoryError>("failure", |ctx| async move {
-            Err(ctx.fail("origin failed"))
-        })
+        .get_or_set::<_, _>(
+            "failure",
+            typed_factory(|ctx| async move { Err(ctx.fail("origin failed")) }),
+        )
         .await
         .unwrap_err();
     assert_eq!(
@@ -535,9 +544,10 @@ async fn ready_clone_failure_preserves_error_source_without_factory_or_hit() {
     cloner.0.store(true, Ordering::SeqCst);
     let mut events = cache.events().subscribe();
     let error = cache
-        .get_or_set::<_, _, _, amalgam::FactoryError>("k", |_ctx| async move {
-            panic!("copy failure must not call origin")
-        })
+        .get_or_set::<_, _>(
+            "k",
+            typed_factory(|_ctx| async move { panic!("copy failure must not call origin") }),
+        )
         .await
         .unwrap_err();
     assert!(matches!(&error, Error::Clone(CloneError::Custom { .. })));
@@ -568,4 +578,12 @@ async fn already_cancelled_ready_read_skips_user_copy() {
     );
     assert_eq!(completions(&mut events), vec![OperationOutcome::Cancelled]);
     cache.shutdown().await.unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

@@ -1,6 +1,6 @@
 //! Multi-level orchestration with fallible boundaries and owned work.
 mod api;
-mod blocking;
+pub(crate) mod blocking;
 pub(crate) use blocking::MemoryAcquireRoute;
 use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
@@ -21,7 +21,7 @@ mod set_request;
 pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest};
 mod callback_free;
 mod observed_execution;
-mod origin;
+pub(crate) mod origin;
 mod plain_ready;
 mod plugin;
 mod read;
@@ -33,11 +33,12 @@ mod write;
 
 pub use blocking::{
     BlockingCache, BlockingCacheBuildError, BlockingCacheValue, BlockingCommitCompletion,
-    BlockingCommitReceipt, BlockingDispatchError, BlockingMutationReceipt, BlockingReceiptRequest,
-    BlockingRequest, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool,
+    BlockingCommitReceipt, BlockingDispatchError, BlockingGetOrSetRequest, BlockingMutationReceipt,
+    BlockingReceiptGetOrSetRequest, BlockingReceiptRequest, BlockingRequest, BlockingRuntime,
+    BlockingRuntimeError, BlockingThreadPool,
 };
 pub use builder::CacheBuilder;
-use origin::{CacheOrigin, ConstantOrigin, FactoryOrigin, OriginCompletion, OriginKind};
+use origin::{CacheOrigin, FactoryOrigin, OriginCompletion, OriginKind};
 pub use plugin::{CachePlugin, CachePluginContext, PluginCache};
 use plugin::{InitialPlugin, PluginAccess, WorkAdmission};
 

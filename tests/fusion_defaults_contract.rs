@@ -107,9 +107,12 @@ async fn default_l2_only_keeps_l1_until_expiration_instead_of_clearing_each_seco
         tokio::task::yield_now().await;
         assert_eq!(
             cache
-                .get_or_set("hot", |ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                })
+                .get_or_set(
+                    "hot",
+                    amalgam::source::factory(|ctx| async move {
+                        Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                    })
+                )
                 .await
                 .unwrap(),
             42
@@ -168,16 +171,14 @@ async fn a_fail_safe_default_without_a_stale_entry_does_not_enable_soft_timeout(
         .try_build()
         .unwrap();
     let value = cache
-        .get_or_set_full(
+        .get_or_set(
             "cold",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 Ok::<_, amalgam::FactoryError>(ctx.value(7))
-            },
-            None,
-            Box::from([]),
-            MaybeValue::from_value(99),
+            }),
         )
+        .fail_safe_default((MaybeValue::from_value(99)).into_value())
         .await
         .unwrap();
     assert_eq!(value, 7);
@@ -201,4 +202,12 @@ fn initial_subscription_wait_is_opt_in_or_selected_by_strict() {
     assert!(strict.wait_for_initial_backplane_subscribe());
     let _ = ordinary.close();
     let _ = strict.close();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

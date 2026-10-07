@@ -66,9 +66,12 @@ async fn expiration_options_overlay_preserves_default_fail_safe() {
         .unwrap();
     assert_eq!(
         cache
-            .get_or_set("key", |ctx| async move {
-                Err::<u64, _>(ctx.fail("origin unavailable"))
-            })
+            .get_or_set(
+                "key",
+                amalgam::source::factory(|ctx| async move {
+                    Err::<u64, _>(ctx.fail("origin unavailable"))
+                })
+            )
             .await
             .unwrap(),
         7

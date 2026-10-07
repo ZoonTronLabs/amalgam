@@ -43,13 +43,13 @@ async fn main() {
 
     // 1. Prime the cache with a good value.
     let primed = cache
-        .get_or_set_with(
+        .get_or_set(
             "report",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 Ok::<_, amalgam::FactoryError>(ctx.value("GOOD report data".to_owned()))
-            },
-            opts.clone(),
+            }),
         )
+        .options(|_| opts.clone())
         .await
         .expect("priming succeeds");
     println!("primed value          => {primed:?}");
@@ -62,14 +62,14 @@ async fn main() {
     //    Because fail-safe is enabled and a stale value exists, the cache serves
     //    the stale value instead of propagating the error.
     let served = cache
-        .get_or_set_with(
+        .get_or_set(
             "report",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 println!("  [factory] backend is down — returning an error");
                 Err(ctx.fail("backend timeout"))
-            },
-            opts,
+            }),
         )
+        .options(|_| opts)
         .await
         .expect("fail-safe serves stale instead of erroring");
     println!("served after failure  => {served:?}  (stale value reused)");
@@ -92,4 +92,12 @@ async fn main() {
         "a FailSafeActivate event should have been emitted"
     );
     println!("OK: stale value served and FailSafeActivate observed.");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

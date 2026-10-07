@@ -138,9 +138,11 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
     for _ in 0..1000 {
         assert_eq!(
             cache
-                .get_or_set::<_, amalgam::FactoryError>("key", |_| panic!(
-                    "warm value invoked factory"
-                ))
+                .get_or_set(
+                    "key",
+                    typed_blocking_factory(|_| panic!("warm value invoked factory"))
+                )
+                .execute()
                 .unwrap(),
             19
         );
@@ -149,9 +151,11 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
         for _ in 0..1000 {
             assert_eq!(
                 cache
-                    .get_or_set::<_, amalgam::FactoryError>("key", |_| panic!(
-                        "warm value invoked factory"
-                    ))
+                    .get_or_set(
+                        "key",
+                        typed_blocking_factory(|_| panic!("warm value invoked factory"))
+                    )
+                    .execute()
                     .unwrap(),
                 19
             );
@@ -162,4 +166,11 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
         allocations, 0,
         "native warm factories allocated {allocations} unused blocks"
     );
+}
+
+fn typed_blocking_factory<V, F>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+{
+    factory
 }

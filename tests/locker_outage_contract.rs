@@ -187,10 +187,13 @@ async fn fixture_with_reconciliation(
 }
 async fn origin(cache: &Cache<u64>, calls: Arc<AtomicUsize>) -> Result<u64> {
     cache
-        .get_or_set("key", move |ctx| async move {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, amalgam::FactoryError>(ctx.value(7))
-        })
+        .get_or_set(
+            "key",
+            amalgam::source::factory(move |ctx| async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+            }),
+        )
         .await
 }
 fn assert_lease_failure(result: Result<u64>) {
@@ -452,10 +455,13 @@ async fn best_effort_fail_safe_keeps_stale_but_never_physically_dead_values() {
     let counted = calls.clone();
     let stale = fixture
         .cache
-        .get_or_set("key", move |ctx| async move {
-            counted.fetch_add(1, Ordering::SeqCst);
-            Err(ctx.fail("origin unavailable"))
-        })
+        .get_or_set(
+            "key",
+            amalgam::source::factory(move |ctx| async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err(ctx.fail("origin unavailable"))
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(stale, 42);
@@ -484,11 +490,11 @@ async fn best_effort_does_not_serve_a_hot_value_to_an_explicitly_cancelled_calle
     source.cancel();
     let result = fixture
         .cache
-        .get_or_set_cancellable(
+        .get_or_set(
             "key",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
-            source.token(),
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
         )
+        .cancellation(source.token())
         .await;
     assert!(matches!(
         result,
@@ -694,13 +700,24 @@ async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outag
     assert_eq!(
         fixture
             .cache
-            .get_or_set("cold", |ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
-            })
+            .get_or_set(
+                "cold",
+                amalgam::source::factory(|ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                })
+            )
             .await
             .unwrap(),
         7
     );
     assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 1);
     fixture.cache.shutdown().await.unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

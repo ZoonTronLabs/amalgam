@@ -21,7 +21,7 @@ use amalgam::{
     Backplane, Cache, CacheEvent, CacheRegistry, CircuitComponent, Clock,
     DefaultEntryOptionsProvider, DistributedCache, DistributedLocker, DistributedSerializer,
     EntryOptions, InMemoryDistributedCache, InMemoryDistributedLocker, InProcessBackplane,
-    JsonSerializer, ManualClock, MaybeValue, Plugin, RecoveryConfig, Result, Tag,
+    JsonSerializer, ManualClock, Plugin, RecoveryConfig, Result, Tag,
 };
 
 // ---------------------------------------------------------------------------
@@ -73,9 +73,12 @@ async fn plugin_receives_set_and_hit_events() {
     // The key is now fresh in L1, so this resolves from the hot path and emits a
     // fresh `Hit` (the factory never runs).
     let v = cache
-        .get_or_set("k", |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.value(999))
-        })
+        .get_or_set(
+            "k",
+            amalgam::source::factory(|ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(999))
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(v, 1, "fresh L1 value short-circuits the factory");
@@ -140,12 +143,12 @@ async fn distributed_locker_enforces_cross_instance_single_flight() {
     let h1 = {
         let cache = cache1.clone();
         let f = slow_factory(calls.clone());
-        tokio::spawn(async move { cache.get_or_set("k", f).await })
+        tokio::spawn(async move { cache.get_or_set("k", amalgam::source::factory(f)).await })
     };
     let h2 = {
         let cache = cache2.clone();
         let f = slow_factory(calls.clone());
-        tokio::spawn(async move { cache.get_or_set("k", f).await })
+        tokio::spawn(async move { cache.get_or_set("k", amalgam::source::factory(f)).await })
     };
 
     let v1 = h1.await.unwrap().unwrap();
@@ -308,16 +311,15 @@ async fn remove_by_tag_propagates_across_nodes() {
     {
         let calls = calls.clone();
         node_a
-            .get_or_set_full(
+            .get_or_set(
                 "k",
-                move |ctx| async move {
+                typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned()))
-                },
-                Some(long()),
-                tagged(),
-                MaybeValue::none(),
+                }),
             )
+            .options(|_| long())
+            .tags(tagged())
             .await
             .unwrap();
     }
@@ -341,16 +343,15 @@ async fn remove_by_tag_propagates_across_nodes() {
     let v = {
         let calls = calls.clone();
         node_a
-            .get_or_set_full(
+            .get_or_set(
                 "k",
-                move |ctx| async move {
+                typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
-                },
-                Some(long()),
-                tagged(),
-                MaybeValue::none(),
+                }),
             )
+            .options(|_| long())
+            .tags(tagged())
             .await
             .unwrap()
     };
@@ -450,10 +451,13 @@ async fn default_options_provider_applies_per_key_duration() {
         let cache = cache.clone();
         async move {
             cache
-                .get_or_set(key, move |ctx| async move {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(val))
-                })
+                .get_or_set(
+                    key,
+                    amalgam::source::factory(move |ctx| async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, amalgam::FactoryError>(ctx.value(val))
+                    }),
+                )
                 .await
                 .unwrap()
         }
@@ -484,4 +488,12 @@ async fn default_options_provider_applies_per_key_duration() {
         1,
         "normal key used the cache default and is still fresh"
     );
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

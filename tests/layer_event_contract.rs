@@ -41,10 +41,13 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
     let runs = Arc::new(AtomicUsize::new(0));
     let counter = runs.clone();
     assert_eq!(
-        c.get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
-            counter.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, amalgam::FactoryError>(ctx.value(17))
-        })
+        c.get_or_set::<_, _>(
+            "k",
+            typed_factory(move |ctx| async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, amalgam::FactoryError>(ctx.value(17))
+            })
+        )
         .await
         .unwrap(),
         17
@@ -646,9 +649,10 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
     let mut ea = a.events().subscribe_layers();
     let mut eb = b.events().subscribe_layers();
     assert_eq!(
-        a.get_or_set::<_, _, _, amalgam::FactoryError>("k", |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.value(19))
-        })
+        a.get_or_set::<_, _>(
+            "k",
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(19)) })
+        )
         .await
         .unwrap(),
         19
@@ -656,9 +660,10 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
     assert!(drain(&mut ea).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Set { key }) if key.as_ref()==format!("{prefix}k"))));
     // Node B has not read before this point: incoming Set does not create a cold L1.
     assert_eq!(
-        b.get_or_set::<_, _, _, amalgam::FactoryError>("k", |_| async move {
-            panic!("cold peer must use actual L2")
-        })
+        b.get_or_set::<_, _>(
+            "k",
+            typed_factory(|_| forbidden_factory("cold peer must use actual L2"))
+        )
         .await
         .unwrap(),
         19
@@ -858,4 +863,18 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
         ]
     );
     reader.shutdown().await.unwrap();
+}
+
+async fn forbidden_factory(
+    message: &'static str,
+) -> std::result::Result<u64, amalgam::FactoryError> {
+    panic!("{message}");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

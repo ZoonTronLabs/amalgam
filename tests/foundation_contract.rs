@@ -1361,9 +1361,12 @@ async fn configured_jitter_is_invoked_and_validated_even_with_zero_maximum() {
             .unwrap();
         let set = cache.set("set", 1).await;
         let cold = cache
-            .get_or_set("cold", |ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(2))
-            })
+            .get_or_set(
+                "cold",
+                amalgam::source::factory(|ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                }),
+            )
             .await;
         if valid {
             set.unwrap();

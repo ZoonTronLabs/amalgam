@@ -1,10 +1,7 @@
 //! Lazy origin requests. Input choices are separate from pinned execution.
 use super::inline_cold::Start;
 use super::observed_execution::ObservedExecution;
-use super::{
-    Cache, CacheValue, EntryOptions, FactoryCancellation, FactoryContext, FactoryOrigin,
-    MaybeValue, Result, Tag,
-};
+use super::{Cache, CacheValue, EntryOptions, FactoryCancellation, MaybeValue, Result, Tag};
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -19,14 +16,14 @@ struct Input<K, F, V> {
     token: Option<FactoryCancellation>,
 }
 
-/// A lazy factory request returning its cached or computed value when awaited.
+/// A lazy origin request returning its cached or computed value when awaited.
 #[must_use = "a cache request only executes when awaited"]
 pub struct GetOrSetRequest<'a, K, F, V: Clone + Send + Sync + 'static> {
     cache: &'a Cache<V>,
     input: Input<K, F, V>,
 }
 
-/// A lazy factory request returning the value and its actual commit receipt.
+/// A lazy origin request returning the value and its actual commit receipt.
 #[must_use = "a cache request only executes when awaited"]
 pub struct ReceiptGetOrSetRequest<'a, K, F, V: Clone + Send + Sync + 'static> {
     cache: &'a Cache<V>,
@@ -83,8 +80,8 @@ macro_rules! settings {
             }
 
             /// Sets the optional fail-safe value for this caller.
-            pub fn fail_safe_default(mut self, value: V) -> Self {
-                self.input.fallback = MaybeValue::from_value(value);
+            pub fn fail_safe_default(mut self, value: Option<V>) -> Self {
+                self.input.fallback = value.map_or_else(MaybeValue::none, MaybeValue::from_value);
                 self
             }
 
@@ -105,7 +102,7 @@ enum State<K, F, V: Send + 'static> {
     Finished,
 }
 
-/// The pinned execution of a factory request, created by `IntoFuture`.
+/// The pinned execution of an origin request, created by `IntoFuture`.
 pub struct GetOrSetFuture<'a, K, F, V: Clone + Send + Sync + 'static, T = V> {
     cache: &'a Cache<V>,
     state: State<K, F, V>,
@@ -131,13 +128,11 @@ impl<V> Output<V> for CacheValue<V> {
 
 macro_rules! execution {
     ($request:ident, $output:ty) => {
-        impl<'a, K, F, Fut, V, E> IntoFuture for $request<'a, K, F, V>
+        impl<'a, K, F, V> IntoFuture for $request<'a, K, F, V>
         where
             K: AsRef<str>,
             V: Clone + Send + Sync + 'static,
-            F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-            Fut: Future<Output = std::result::Result<V, E>> + Send + 'static,
-            E: std::error::Error + Send + Sync + 'static,
+            F: crate::source::Source<V>,
         {
             type Output = Result<$output>;
             type IntoFuture = GetOrSetFuture<'a, K, F, V, $output>;
@@ -154,14 +149,12 @@ macro_rules! execution {
 execution!(GetOrSetRequest, V);
 execution!(ReceiptGetOrSetRequest, CacheValue<V>);
 
-impl<K, F, Fut, V, T, E> Future for GetOrSetFuture<'_, K, F, V, T>
+impl<K, F, V, T> Future for GetOrSetFuture<'_, K, F, V, T>
 where
     K: AsRef<str>,
     V: Clone + Send + Sync + 'static,
-    F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-    Fut: Future<Output = std::result::Result<V, E>> + Send + 'static,
+    F: crate::source::Source<V>,
     T: Output<V>,
-    E: std::error::Error + Send + Sync + 'static,
 {
     type Output = Result<T>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -172,7 +165,7 @@ where
             };
             match this.cache.begin_origin_request(
                 input.key.as_ref(),
-                FactoryOrigin::new(input.factory),
+                input.factory,
                 input.options,
                 input.tags,
                 input.fallback,

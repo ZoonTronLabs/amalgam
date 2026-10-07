@@ -341,21 +341,21 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
         .build();
     cache
-        .get_or_set_with(
+        .get_or_set(
             "failure",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(17)) },
-            opts.clone(),
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(17)) }),
         )
+        .options(|_| opts.clone())
         .await
         .unwrap();
     clock.advance(Duration::from_millis(201));
     assert_eq!(
         cache
-            .get_or_set_with(
+            .get_or_set(
                 "failure",
-                |ctx| async move { Err(ctx.fail("private factory error")) },
-                opts.clone()
+                typed_factory(|ctx| async move { Err(ctx.fail("private factory error")) })
             )
+            .options(|_| opts.clone())
             .await
             .unwrap(),
         17
@@ -366,11 +366,11 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
         true,
     );
     cache
-        .get_or_set_with(
+        .get_or_set(
             "soft",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(23)) },
-            soft.clone(),
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(23)) }),
         )
+        .options(|_| soft.clone())
         .await
         .unwrap();
     clock.advance(Duration::from_millis(201));
@@ -380,15 +380,15 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
     let signal = entered.clone();
     assert_eq!(
         cache
-            .get_or_set_with(
+            .get_or_set(
                 "soft",
-                move |ctx| async move {
+                typed_factory(move |ctx| async move {
                     signal.notify_one();
                     gate.acquire().await.unwrap().forget();
                     Ok::<_, amalgam::FactoryError>(ctx.value(29))
-                },
-                soft
+                })
             )
+            .options(|_| soft)
             .await
             .unwrap(),
         23
@@ -509,17 +509,18 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
         .build();
     cache
-        .get_or_set::<_, _, _, amalgam::FactoryError>("key", |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.value(17))
-        })
+        .get_or_set::<_, _>(
+            "key",
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(17)) }),
+        )
         .await
         .unwrap();
     clock.advance(Duration::from_millis(201));
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>(
+            .get_or_set::<_, _>(
                 "key",
-                |ctx| async move { ctx.not_modified() }
+                typed_factory(|ctx| async move { ctx.not_modified() })
             )
             .await
             .unwrap(),
@@ -528,9 +529,9 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
     clock.advance(Duration::from_millis(101));
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>(
+            .get_or_set::<_, _>(
                 "key",
-                |ctx| async move { ctx.not_modified() }
+                typed_factory(|ctx| async move { ctx.not_modified() })
             )
             .await
             .unwrap(),
@@ -585,9 +586,10 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
     clock.advance(Duration::from_secs(31));
     b.try_set("key", 23).await.unwrap().wait().await.unwrap();
     assert_eq!(
-        a.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-            panic!("newer L2 must bypass origin")
-        })
+        a.get_or_set::<_, _>(
+            "key",
+            typed_factory(|_| async { panic!("newer L2 must bypass origin") })
+        )
         .await
         .unwrap(),
         17
@@ -667,4 +669,12 @@ async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_d
     );
     cache.shutdown().await.unwrap();
     stop(provider).await;
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

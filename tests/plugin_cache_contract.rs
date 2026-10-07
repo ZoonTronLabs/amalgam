@@ -53,9 +53,14 @@ impl CachePlugin<i32> for Probe {
         assert_eq!(
             boundary(
                 PluginStage::Start,
-                cache.get_or_set("plugin-start", |ctx| Ok::<_, amalgam::FactoryError>(
-                    ctx.value(17)
-                ))
+                cache
+                    .get_or_set(
+                        "plugin-start",
+                        amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(
+                            ctx.value(17)
+                        ))
+                    )
+                    .execute()
             )?,
             17
         );
@@ -120,9 +125,12 @@ impl PluginSession for Session {
         let cache = self.context.cache()?.blocking(self.runtime.clone());
         let value = boundary(
             PluginStage::Stop,
-            cache.get_or_set("plugin-stop-factory", |ctx| {
-                Ok::<_, amalgam::FactoryError>(ctx.value(29))
-            }),
+            cache
+                .get_or_set(
+                    "plugin-stop-factory",
+                    amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(29))),
+                )
+                .execute(),
         )?;
         assert_eq!(value, 29);
         boundary(PluginStage::Stop, cache.try_set("plugin-stop", 30))?
@@ -329,11 +337,14 @@ async fn ordinary_plugin_factory_is_cancelled_by_owner_shutdown() {
     let entered = Arc::new(tokio::sync::Notify::new());
     let factory_entered = entered.clone();
     let work = tokio::spawn(async move {
-        view.get_or_set("parked", move |ctx| async move {
-            factory_entered.notify_one();
-            ctx.cancellation().cancelled().await;
-            Err(ctx.fail("cancelled"))
-        })
+        view.get_or_set(
+            "parked",
+            amalgam::source::factory(move |ctx| async move {
+                factory_entered.notify_one();
+                ctx.cancellation().cancelled().await;
+                Err(ctx.fail("cancelled"))
+            }),
+        )
         .await
     });
     tokio::time::timeout(Duration::from_secs(3), entered.notified())

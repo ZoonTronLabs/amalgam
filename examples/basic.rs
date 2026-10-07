@@ -28,12 +28,15 @@ async fn main() {
     let first = {
         let runs = factory_runs.clone();
         cache
-            .get_or_set("greeting", move |ctx| async move {
-                runs.fetch_add(1, Ordering::SeqCst);
-                println!("  [factory] running — computing the value the slow way…");
-                // Imagine an HTTP call or a DB query here.
-                Ok::<_, amalgam::FactoryError>(ctx.value("Hello from the factory".to_owned()))
-            })
+            .get_or_set(
+                "greeting",
+                amalgam::source::factory(move |ctx| async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    println!("  [factory] running — computing the value the slow way…");
+                    // Imagine an HTTP call or a DB query here.
+                    Ok::<_, amalgam::FactoryError>(ctx.value("Hello from the factory".to_owned()))
+                }),
+            )
             .await
             .expect("factory succeeded")
     };
@@ -43,11 +46,14 @@ async fn main() {
     let second = {
         let runs = factory_runs.clone();
         cache
-            .get_or_set("greeting", move |ctx| async move {
-                // This body should never execute — the value is already cached.
-                runs.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value("(this should not appear)".to_owned()))
-            })
+            .get_or_set(
+                "greeting",
+                amalgam::source::factory(move |ctx| async move {
+                    // This body should never execute — the value is already cached.
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, amalgam::FactoryError>(ctx.value("(this should not appear)".to_owned()))
+                }),
+            )
             .await
             .expect("served from cache")
     };
