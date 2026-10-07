@@ -513,7 +513,7 @@ async fn tag_invalidation_must_cover_a_factory_snapshot_started_before_its_marke
     };
     snapshot_rx.await.expect("origin snapshot captured");
     clock.advance(Duration::from_secs(1));
-    cache.remove_by_tag("group").await;
+    cache.remove_by_tag("group").await.unwrap();
     clock.advance(Duration::from_secs(1));
     let _ = release_tx.send(());
     first
@@ -611,7 +611,7 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
             .expect("fail safe stale"),
         1
     );
-    cache.remove("k").await;
+    cache.remove("k").await.unwrap();
     assert!(!cache.try_get("k", None).await.has_value());
     let _ = release_tx.send(());
     tokio::time::timeout(Duration::from_secs(1), async {

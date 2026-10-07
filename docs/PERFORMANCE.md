@@ -57,6 +57,28 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
+## Focused L2 key and marker diagnostic
+
+Three counterbalanced comparisons on the same M4 Pro and reference binaries
+used below. The candidate selects physical key encoding at construction and
+uses a stack batch for the two required clear markers on an untagged read.
+Provider I/O, JSON, both marker checks, deadlines and L1 hydration remain intact.
+All 48 warmup records settled. This is a focused diagnostic, not final-source
+qualification.
+
+| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
+|---|---:|---:|---:|---:|---:|---:|---|
+| L2 JSON read | 1224.9 | 1194.1 | 1173.4 | 1867.1 | **1.018** | 9 (was 11) | **Fail: <=1.00** |
+| L2 JSON get_or_set | 1596.7 | 1553.2 | 1280.7 | 2010.8 | **1.213** | 9 (was 11) | **Fail: <=1.00** |
+| L1 replacement | 91.1 | 91.5 | 108.7 | 143.4 | **0.842** | 0 | **Fail: <=0.75** |
+| Cold factory | 1090.9 | 1073.9 | 1774.9 | 1824.8 | 0.605 | 5.009 | <=0.75, <=6 allocations |
+
+L2 medians improve by 2.5% and 2.7% in this comparison; read ranges overlap.
+Two allocation removals are directly observed. Set differs by less than one
+percent; cold ranges overlap. These results do not establish a set or cold
+improvement. All L2 and set budgets remain open. See the
+[source identities, ranges and verdicts](benchmarks/2026-10-07-l2-key-encoding.json).
+
 ## Focused L2 execution diagnostic
 
 Three counterbalanced before/after comparisons on the same M4 Pro, Rust 1.88.0
@@ -138,11 +160,15 @@ get-or-set L2 ranges: Amalgam 1766.992-1852.467 ns; FC default 1310.891-1347.143
 
 ## Release gate
 
-The previous exact-source Linux CI completed all 14 functional jobs successfully
-but failed its performance job. Its TC=0 comparison is archived, not substituted
-for the corrected default-PGO gate. No main push/merge or 0.4.0 publication is
-allowed with a red mandatory gate. Final API, paired FR/RS contracts, packaged
-consumers, MSRV, live Redis/Valkey and the final source need qualification.
+The [default-PGO Linux run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37650344482)
+completed 17 functional, quality, platform, packaging/consumer and safety jobs.
+Actual ReaderSlots Loom and native TSan passed; Miri passed its documented subset.
+The mandatory scaling job and aggregate gate failed. Hosted Linux also missed
+the L2 and set budgets and reported unsettled cold warmups. These results concern
+the pushed ready-plan checkpoint, before the focused L2 changes above.
+No main push/merge or 0.4.0 publication is allowed with a red mandatory gate.
+Final API, paired FR/RS contracts, packaged consumers, MSRV, live Redis/Valkey
+and the final source still need qualification.
 
 ## Reproduce
 

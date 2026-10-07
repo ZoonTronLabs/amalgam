@@ -71,7 +71,7 @@ async fn main() {
     println!("   value = {produced}");
 
     println!("\n-- remove(\"answer\") --");
-    cache.remove("answer").await;
+    cache.remove("answer").await.unwrap();
 
     // The event stream is best-effort and fanned out synchronously, so by now the
     // plugin has already seen everything above.

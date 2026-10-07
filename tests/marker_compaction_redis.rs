@@ -160,7 +160,8 @@ async fn native_captured_clear_recovery_survives_lower_limit_compaction() {
         .await
         .unwrap();
     let report = cache
-        .try_clear(ClearMode::Remove)
+        .clear(ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

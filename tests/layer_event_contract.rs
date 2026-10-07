@@ -73,14 +73,26 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
             stale: false
         })]
     );
-    c.try_remove("absent").await.unwrap().wait().await.unwrap();
+    c.remove("absent")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(
         drain(&mut layer),
         vec![LayerEvent::Memory(MemoryEvent::Remove {
             key: key("absent")
         })]
     );
-    c.try_expire("absent").await.unwrap().wait().await.unwrap();
+    c.expire("absent")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(drain(&mut layer).is_empty());
     c.shutdown().await.unwrap();
 }
@@ -129,7 +141,8 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .unwrap();
     drain(&mut events);
     clock.advance(Duration::from_millis(1));
-    c.try_remove_by_tag(Tag::new("group").unwrap())
+    c.remove_by_tag(Tag::new("group").unwrap())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -147,7 +160,13 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
     );
     c.try_set("stale", 4).await.unwrap().wait().await.unwrap();
     drain(&mut events);
-    c.try_expire("stale").await.unwrap().wait().await.unwrap();
+    c.expire("stale")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(
         drain(&mut events),
         vec![LayerEvent::Memory(MemoryEvent::Expire {
@@ -220,7 +239,8 @@ async fn l2_hit_precedes_durable_tag_rejection_without_a_fabricated_miss() {
         .await
         .unwrap();
     clock.advance(Duration::from_millis(1));
-    a.try_remove_by_tag(Tag::new("g").unwrap())
+    a.remove_by_tag(Tag::new("g").unwrap())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -644,7 +664,13 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
         19
     );
     assert!(drain(&mut eb).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Hit { key, stale:false }) if key.as_ref()==format!("{prefix}k"))));
-    a.try_remove("k").await.unwrap().wait().await.unwrap();
+    a.remove("k")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let message = receive(&mut eb).await;
     // An older Set may still be queued in the diagnostic stream.
     let message = if message.action == BackplaneAction::Remove {

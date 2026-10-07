@@ -106,7 +106,14 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
             reader.try_set("k", 2).await.unwrap().wait().await.unwrap();
         }
         Mutation::Remove => {
-            reader.try_remove("k").await.unwrap().wait().await.unwrap();
+            reader
+                .remove("k")
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
         }
     }
     backend.release.add_permits(1);

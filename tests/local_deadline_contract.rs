@@ -13,7 +13,14 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
         .try_build()
         .unwrap();
     cache.set("k", 7_u64).await.unwrap();
-    cache.try_expire("k").await.unwrap().wait().await.unwrap();
+    cache
+        .expire("k")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let stale = cache
         .get_or_set("k", |ctx| async move {
             assert_eq!(ctx.stale_value(), Some(&7));
@@ -22,7 +29,14 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
         .await
         .unwrap();
     assert_eq!(stale, 7);
-    cache.try_remove("k").await.unwrap().wait().await.unwrap();
+    cache
+        .remove("k")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let value = cache
         .get_or_set("k", |ctx| async move {
             assert_eq!(ctx.stale_value(), None);
@@ -40,7 +54,8 @@ async fn zero_duration_and_full_range_duration_have_the_same_boundary_in_both_vi
     let asynchronous = cache.as_async();
     for duration in [Duration::MAX, Duration::ZERO, Duration::MAX] {
         asynchronous
-            .try_remove("k")
+            .remove("k")
+            .with_receipt()
             .await
             .unwrap()
             .wait()

@@ -40,7 +40,8 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
         .await
         .unwrap();
     cache
-        .try_remove("remove")
+        .remove("remove")
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -53,7 +53,14 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     assert_eq!(outcomes, vec![OperationOutcome::Panicked]);
     drop(receiver);
     assert!(cache.read("key", None).await.unwrap().has_value());
-    cache.try_remove("key").await.unwrap().wait().await.unwrap();
+    cache
+        .remove("key")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     cache.shutdown().await.unwrap();
 }
 

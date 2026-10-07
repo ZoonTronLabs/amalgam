@@ -5,6 +5,16 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fluent invalidation API
+- Make remove, expire, tag invalidation and clear lazy requests with typed unit
+  results. Commit receipts are an explicit choice; native mutation requests use
+  `execute()` and share the same engine. Remove the duplicate invalidation
+  overloads and legacy adapters that discarded errors.
+- Preserve separate entry and marker defaults when editing request options.
+  Reject a tag batch before any invalidation when one string is invalid.
+  Disabled tagging now exposes the existing unsupported-operation error instead
+  of losing it in the legacy adapter; cached contents remain unchanged.
+
 ### Factory API and distributed execution
 - Accept ordinary `Result<V, E>` factory output with any thread-safe error type.
   Preserve the concrete source error at the cache boundary. Conditional values,
@@ -16,6 +26,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
   Keep the same provider, decode, marker-validation and hydration work inside
   the read deadline. Asynchronous serializers retain their independent phase
   cancellation token and precise timeout reason.
+- Select distributed physical key encoding at construction. Preserve namespace
+  bytes while avoiding repeated formatting and borrowing unmodified keys.
+  Keep required clear-marker validation in a stack batch for untagged reads;
+  tagged entries retain the complete batch and existing read deadline.
 
 
 ### ReaderSlots safety and simplification

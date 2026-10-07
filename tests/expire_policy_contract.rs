@@ -28,7 +28,9 @@ async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() 
         first.try_set("key", 7).await.unwrap().wait().await.unwrap();
         clock.advance(Duration::from_millis(1));
         first
-            .try_expire_with_policy("key", None, policy)
+            .expire("key")
+            .distributed_policy(policy)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -69,12 +71,10 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
     source.cancel();
     assert!(matches!(
         cache
-            .try_expire_with_policy_cancellable(
-                "key",
-                None,
-                DistributedExpirePolicy::Remove,
-                source.token()
-            )
+            .expire("key")
+            .distributed_policy(DistributedExpirePolicy::Remove)
+            .cancellation(source.token())
+            .with_receipt()
             .await,
         Err(Error::OperationCancelled {
             reason: FactoryCancellationReason::CallerCancelled
@@ -82,11 +82,10 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
     ));
     assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
     let report = cache
-        .try_expire_with_policy(
-            "key",
-            Some(EntryOptions::default().with_skip_distributed(false, true)),
-            DistributedExpirePolicy::Remove,
-        )
+        .expire("key")
+        .options(|_| EntryOptions::default().with_skip_distributed(false, true))
+        .distributed_policy(DistributedExpirePolicy::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

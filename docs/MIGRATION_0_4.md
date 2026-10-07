@@ -64,9 +64,50 @@ let report = receipt.wait().await?;
 # }
 ```
 
+## Invalidation
+
+`remove`, `expire`, `remove_by_tag` and `clear` return lazy requests. Awaiting
+returns `Result<()>`; use `.with_receipt()` only when completion evidence is
+needed. There are no separate `try_remove*`, `try_expire*`, `try_clear*` or
+`remove_by_tags` overloads.
+
+```rust
+# async fn example(cache: &amalgam::Cache<String>) -> amalgam::Result<()> {
+cache.remove("name").await?;
+cache.expire("profile").await?;
+cache.remove_by_tag("profiles").and_tags(["settings"]).await?;
+cache.clear(amalgam::ClearMode::Remove).await?;
+# Ok(())
+# }
+```
+
+`ClearMode::Expire` keeps eligible stale values for fail-safe;
+`ClearMode::Remove` removes them. Ordinary `expire` expires L1 and removes L2.
+Explicit advanced `.distributed_policy(DistributedExpirePolicy::RetainStale)`
+selects L2 retention. A tag batch rejects invalid input before changing any tag.
+
+Entry invalidation options start from `entry_options`; tag and clear requests
+start from `tags_entry_options`. Per-key providers do not choose marker defaults.
+
+Native mutations use the same request choices and execute explicitly:
+
+```rust
+# fn example(cache: &amalgam::BlockingCache<String>) -> amalgam::Result<()> {
+cache.set("name", "Alice".to_owned()).execute()?;
+cache.remove("name").with_receipt().execute()?.wait()?;
+cache.clear(amalgam::ClearMode::Remove).execute()?;
+# Ok(())
+# }
+```
+
+A request that is dropped without awaiting or executing does nothing. Former
+unit adapters hid failures. For example, invalidation with tagging disabled now
+returns the existing `MarkerError::Unsupported`; it still leaves cached contents
+unchanged. Handle this error explicitly if that configuration is intentional.
+
 ## Remaining migration work
 
-The read and invalidation facades, removal of legacy adapters, provider and
+The read and retrieval facades, remaining legacy adapters, provider and
 advanced namespaces, and the complete examples are still being migrated.
 They must be complete before publishing 0.4.0. The 0.3 `MaybeValue` and
 error-swallowing adapters are not the target API.

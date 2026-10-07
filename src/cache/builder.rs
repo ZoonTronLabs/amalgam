@@ -766,8 +766,10 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             recovery: recovery.clone(),
             default_options_provider: self.default_options_provider,
             ignore_incoming_backplane: self.ignore_incoming_backplane,
-            distributed_wire_version: self.distributed_wire_version,
-            distributed_key_modifier_mode: self.distributed_key_modifier_mode,
+            distributed_key: super::distributed_key::DistributedKey::new(
+                &self.distributed_wire_version,
+                self.distributed_key_modifier_mode,
+            ),
             disable_tagging: self.disable_tagging,
             wait_for_initial_backplane_subscribe: self.wait_for_initial_backplane_subscribe,
             cloner,

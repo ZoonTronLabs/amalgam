@@ -1331,10 +1331,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         }
         if let MarkerAccess::Durable(store) = &self.inner.markers {
-            let mut kinds = Vec::with_capacity(tags.len() + 2);
-            kinds.push(MarkerKind::ClearRemove);
-            kinds.push(MarkerKind::ClearExpire);
-            kinds.extend(tags.iter().cloned().map(MarkerKind::Tag));
+            let clear = [MarkerKind::ClearRemove, MarkerKind::ClearExpire];
+            let kinds = if tags.is_empty() {
+                std::borrow::Cow::Borrowed(&clear[..])
+            } else {
+                let mut kinds = Vec::with_capacity(tags.len() + clear.len());
+                kinds.extend(clear);
+                kinds.extend(tags.iter().cloned().map(MarkerKind::Tag));
+                std::borrow::Cow::Owned(kinds)
+            };
             for marker in store.read_many(&self.inner.scope, &kinds).await? {
                 self.apply_marker(marker);
             }

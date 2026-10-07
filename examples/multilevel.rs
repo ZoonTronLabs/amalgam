@@ -97,7 +97,7 @@ async fn main() {
     // --- 3. node-1 removes the key. The backplane broadcasts a Remove, which
     //         evicts the entry from node-2's L1 as well.
     println!("\nnode-1 removes \"profile\" — backplane will invalidate node-2…");
-    node1.remove("profile").await;
+    node1.remove("profile").await.unwrap();
 
     // Give the in-process backplane a moment to deliver the message.
     tokio::time::sleep(Duration::from_millis(150)).await;

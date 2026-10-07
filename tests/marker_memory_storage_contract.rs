@@ -100,7 +100,8 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
     tagged(&b, 13).await;
     assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(13));
     clock.advance(Duration::from_millis(1));
-    a.try_remove_by_tag(tag())
+    a.remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -138,7 +139,13 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
         b.try_set("key", 19).await.unwrap().wait().await.unwrap();
         assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(19));
         clock.advance(Duration::from_millis(1));
-        a.try_clear(mode).await.unwrap().wait().await.unwrap();
+        a.clear(mode)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         assert!(!b.read("key", None).await.unwrap().has_value(), "{mode:?}");
         a.shutdown().await.unwrap();
         b.shutdown().await.unwrap();
@@ -162,7 +169,8 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
     let original = values.state.lock().unwrap().records["key"].clone();
     assert!(b.read("key", None).await.unwrap().has_value());
     clock.advance(Duration::from_millis(1));
-    a.try_remove_by_tag(tag())
+    a.remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -200,7 +208,8 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
     assert!(b.read("key", None).await.unwrap().has_value());
     assert!(durable.read("key", None).await.unwrap().has_value());
     clock.advance(Duration::from_millis(1));
-    a.try_remove_by_tag(tag())
+    a.remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -257,7 +266,8 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
     }
     clock.advance(Duration::from_millis(1));
     caches[0]
-        .try_remove_by_tag(tag())
+        .remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -572,7 +582,8 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
     let pending = tokio::spawn(async move { reader.read("key", None).await });
     gate.entered.wait();
     clock.advance(Duration::from_millis(1));
-    b.try_remove_by_tag(tag())
+    b.remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -900,7 +911,8 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
         )
         .marker_memory_storage(store.clone())
         .build();
-    c.try_remove_by_tag(tag())
+    c.remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -958,7 +970,8 @@ async fn ready_clear_invalidation_stops_before_a_later_provider_contract_fault()
     tagged(&b, 127).await;
     assert!(b.read("key", None).await.unwrap().has_value());
     clock.advance(Duration::from_millis(1));
-    a.try_clear(ClearMode::Remove)
+    a.clear(ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -1038,7 +1051,8 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         131
     );
     assert!(b.read("key", None).await.unwrap().has_value());
-    a.try_remove_by_tag(tag())
+    a.remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -1065,7 +1079,8 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
             .values()
             .all(|record| record.key().contains("/durable/"))
     );
-    a.try_clear(ClearMode::Remove)
+    a.clear(ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

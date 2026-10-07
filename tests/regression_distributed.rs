@@ -67,7 +67,7 @@ async fn audit_tag_marker_survives_a_fresh_node_without_backplane() {
         .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
         .await;
     clock.advance(Duration::from_secs(1));
-    writer.remove_by_tag("group").await;
+    writer.remove_by_tag("group").await.unwrap();
     let fresh_node = build(clock, l2);
     let actual = fresh_node.get_or_set_value("k", 2, None).await.unwrap();
     assert_eq!(
@@ -83,7 +83,7 @@ async fn audit_clear_marker_survives_a_fresh_node_without_backplane() {
     let writer = build(clock.clone(), l2.clone());
     writer.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
-    writer.clear(false).await;
+    writer.clear(amalgam::ClearMode::Remove).await.unwrap();
     let fresh_node = build(clock, l2);
     let actual = fresh_node.get_or_set_value("k", 2, None).await.unwrap();
     assert_eq!(
@@ -100,7 +100,7 @@ async fn audit_expire_from_cold_node_updates_l2() {
     writer.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
     let invalidator = build(clock.clone(), l2.clone());
-    invalidator.expire("k").await;
+    invalidator.expire("k").await.unwrap();
     let reader = build(clock, l2);
     let actual = reader.get_or_set_value("k", 2, None).await.unwrap();
     assert_eq!(
@@ -224,7 +224,7 @@ async fn audit_successful_set_supersedes_pending_recovery_remove() {
         .build();
     cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
-    cache.remove("k").await;
+    cache.remove("k").await.unwrap();
     clock.advance(Duration::from_secs(1));
     cache.set("k", 2).await.unwrap();
     l2.down.store(false, Ordering::SeqCst);
@@ -517,7 +517,7 @@ async fn audit_tag_marker_survives_node_joining_after_backplane_publication() {
         .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
         .await;
     clock.advance(Duration::from_secs(1));
-    writer.remove_by_tag("group").await;
+    writer.remove_by_tag("group").await.unwrap();
     let reader: Cache<i32> = Cache::builder()
         .clock(clock)
         .distributed(l2)
@@ -552,7 +552,8 @@ async fn audit_clear_respects_cache_key_prefix() {
     clock.advance(Duration::from_secs(1));
     let mut controls = bp.subscribe();
     alpha
-        .try_clear(amalgam::ClearMode::Remove)
+        .clear(amalgam::ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -647,7 +648,9 @@ async fn audit_failed_tag_marker_is_recovered_after_backplane_returns() {
         .await;
     clock.advance(Duration::from_secs(1));
     sender
-        .try_remove_by_tag_with(Tag::new("group").unwrap(), Some(opts()))
+        .remove_by_tag(Tag::new("group").unwrap())
+        .options(|_| opts())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -678,7 +681,7 @@ async fn shared_fc_tag_invalidation_rechecks_origin_despite_failsafe_throttle() 
         .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
         .await;
     clock.advance(Duration::from_secs(1));
-    cache.remove_by_tag("group").await;
+    cache.remove_by_tag("group").await.unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     for _ in 0..2 {
         let calls = calls.clone();
@@ -710,7 +713,7 @@ async fn audit_same_tick_tag_marker_invalidates_entry_like_fusioncache() {
     cache
         .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
         .await;
-    cache.remove_by_tag("group").await;
+    cache.remove_by_tag("group").await.unwrap();
     assert!(
         !cache.try_get("k", None).await.has_value(),
         "FusionCache v2.9.0 invalidates when created <= tag marker"

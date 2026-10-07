@@ -8,6 +8,8 @@ use crate::commit::TaskResult;
 use crate::factory::FactoryInvocation;
 use std::thread::{self, ThreadId};
 mod api;
+mod requests;
+pub use requests::{BlockingReceiptRequest, BlockingRequest};
 mod memory_locker;
 mod runtime;
 pub(super) use memory_locker::NativeMemoryView;

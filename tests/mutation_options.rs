@@ -111,8 +111,8 @@ async fn dynamic_remove_and_expire_use_raw_key_policy_and_preserve_skipped_layer
         let original = store.get("physical:tenant:item").await.unwrap().unwrap();
         clock.advance(Duration::from_millis(1));
         let receipt = match mutation {
-            Mutation::Remove => cache.try_remove("tenant:item").await,
-            Mutation::Expire => cache.try_expire("tenant:item").await,
+            Mutation::Remove => cache.remove("tenant:item").with_receipt().await,
+            Mutation::Expire => cache.expire("tenant:item").with_receipt().await,
         }
         .unwrap();
         let report = receipt.wait().await.unwrap();
@@ -153,14 +153,19 @@ async fn explicit_mutation_options_bypass_provider_and_apply_each_layer() {
         let before = codec.deserialize_snapshot(&original).unwrap();
         clock.advance(Duration::from_millis(1));
         let receipt = match mutation {
-            Mutation::Remove => cache.try_remove_with("tenant:item", Some(options())).await,
+            Mutation::Remove => {
+                cache
+                    .remove("tenant:item")
+                    .options(|_| options())
+                    .with_receipt()
+                    .await
+            }
             Mutation::Expire => {
                 cache
-                    .try_expire_with_policy(
-                        "tenant:item",
-                        Some(options()),
-                        amalgam::DistributedExpirePolicy::RetainStale,
-                    )
+                    .expire("tenant:item")
+                    .options(|_| options())
+                    .distributed_policy(amalgam::DistributedExpirePolicy::RetainStale)
+                    .with_receipt()
                     .await
             }
         }
@@ -203,8 +208,8 @@ async fn invalid_dynamic_mutation_options_reject_before_changing_either_layer() 
         let original = store.get("physical:tenant:item").await.unwrap().unwrap();
         clock.advance(Duration::from_millis(1));
         let result = match mutation {
-            Mutation::Remove => cache.try_remove("tenant:item").await,
-            Mutation::Expire => cache.try_expire("tenant:item").await,
+            Mutation::Remove => cache.remove("tenant:item").with_receipt().await,
+            Mutation::Expire => cache.expire("tenant:item").with_receipt().await,
         };
         assert!(matches!(
             result,

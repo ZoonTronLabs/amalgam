@@ -71,10 +71,22 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
             .unwrap(),
         None
     );
-    cache.try_remove_by_tag(tag).unwrap().wait().unwrap();
+    cache
+        .remove_by_tag(tag)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(cache.read("key", None).unwrap().into_value(), None);
     cache.try_set("clear", Some(7)).unwrap().wait().unwrap();
-    cache.try_clear(ClearMode::Remove).unwrap().wait().unwrap();
+    cache
+        .clear(ClearMode::Remove)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(cache.read("clear", None).unwrap().into_value(), None);
     cache.shutdown().unwrap();
 }
@@ -282,7 +294,10 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
     )
     .unwrap();
     assert_eq!(peer.read("shared", None).unwrap().into_value(), Some(123));
-    peer.try_expire_with_policy("shared", None, DistributedExpirePolicy::Remove)
+    peer.expire("shared")
+        .distributed_policy(DistributedExpirePolicy::Remove)
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();

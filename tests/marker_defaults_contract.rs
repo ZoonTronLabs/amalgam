@@ -35,7 +35,8 @@ async fn tag_defaults_are_independent_and_explicit_operation_options_take_preced
     assert!(cache.entry_options().skip_distributed_write());
     assert!(!cache.tags_entry_options().skip_distributed_write());
     let receipt = cache
-        .try_remove_by_tag(Tag::new("stored").unwrap())
+        .remove_by_tag(Tag::new("stored").unwrap())
+        .with_receipt()
         .await
         .unwrap();
     assert!(matches!(receipt, MutationReceipt::Completed(_)));
@@ -44,10 +45,9 @@ async fn tag_defaults_are_independent_and_explicit_operation_options_take_preced
         EffectOutcome::Applied
     ));
     let skipped = cache
-        .try_clear_with(
-            ClearMode::Expire,
-            Some(EntryOptions::default().with_skip_distributed(false, true)),
-        )
+        .clear(ClearMode::Expire)
+        .options(|_| EntryOptions::default().with_skip_distributed(false, true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -76,15 +76,18 @@ async fn configured_tag_policy_is_used_by_both_single_batch_and_clear_operations
         .unwrap();
     let receipts = [
         cache
-            .try_remove_by_tag(Tag::new("one").unwrap())
+            .remove_by_tag(Tag::new("one").unwrap())
+            .with_receipt()
             .await
             .unwrap(),
         cache
-            .try_remove_by_tags(vec![Tag::new("two").unwrap()])
+            .remove_by_tag(Tag::new("two").unwrap())
+            .and_tags::<_, &str>([])
+            .with_receipt()
             .await
             .unwrap(),
-        cache.try_clear(ClearMode::Expire).await.unwrap(),
-        cache.try_clear(ClearMode::Remove).await.unwrap(),
+        cache.clear(ClearMode::Expire).with_receipt().await.unwrap(),
+        cache.clear(ClearMode::Remove).with_receipt().await.unwrap(),
     ];
     for receipt in receipts {
         assert!(matches!(

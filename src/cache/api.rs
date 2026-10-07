@@ -5,14 +5,14 @@ use super::read_request::{ReadRequest, ReadStart};
 use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
-    DistributedCache, DistributedExpirePolicy, DistributedLocker, Entry, EntryOptions, Error,
-    Events, Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, Future,
-    InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LayerEvent, LookupKey, LookupMode,
-    LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MemoryEvent,
-    MutationReceipt, ObservationAdmission, Observed, OperationObservation, OperationOutcome,
-    Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyEager, ReadyHit, ReadyLookup,
-    ReadyObservation, ReadyRefresh, ReadyValue, ReplayTicket, Result, ShutdownReport, Storage, Tag,
-    TagVerdict, WorkAdmission, Worker,
+    DistributedCache, DistributedLocker, Entry, EntryOptions, Error, Events, Execution,
+    FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, Future, InlinePermit,
+    Instrument, KeyMutation, L2ReadPolicy, LayerEvent, LookupKey, LookupMode, LookupStart,
+    MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MemoryEvent, MutationReceipt,
+    ObservationAdmission, Observed, OperationObservation, OperationOutcome, Ordering, OriginKind,
+    Pin, Plugin, PublicLifetime, ReadyEager, ReadyHit, ReadyLookup, ReadyObservation, ReadyRefresh,
+    ReadyValue, ReplayTicket, Result, ShutdownReport, Storage, Tag, TagVerdict, WorkAdmission,
+    Worker,
 };
 use crate::marker_reads::MarkerReads;
 use crate::observability::QuietObservation;
@@ -1584,95 +1584,13 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             self.legacy_error(&error);
         }
     }
-    /// Canonical remove.
-    pub async fn try_remove(&self, key: impl AsRef<str>) -> Result<MutationReceipt> {
-        self.try_remove_with(key, None).await
-    }
-    /// Remove with per-key dynamic/explicit options.
-    pub async fn try_remove_with(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-    ) -> Result<MutationReceipt> {
-        self.key_mutation(key.as_ref(), options, KeyMutation::Remove, None)
-            .await
-    }
-    /// Cancellable remove.
-    pub async fn try_remove_with_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.key_mutation(key.as_ref(), options, KeyMutation::Remove, Some(token))
-            .await
-    }
-    /// Canonical logical expiration, including a cold L2 key.
-    pub async fn try_expire(&self, key: impl AsRef<str>) -> Result<MutationReceipt> {
-        self.try_expire_with(key, None).await
-    }
-    /// Expiration with per-key options.
-    pub async fn try_expire_with(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-    ) -> Result<MutationReceipt> {
-        self.key_mutation(
-            key.as_ref(),
-            options,
-            KeyMutation::Expire(DistributedExpirePolicy::default()),
-            None,
-        )
-        .await
-    }
-    /// Cancellable expiration.
-    pub async fn try_expire_with_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.key_mutation(
-            key.as_ref(),
-            options,
-            KeyMutation::Expire(DistributedExpirePolicy::default()),
-            Some(token),
-        )
-        .await
-    }
-    /// Expires L1 and selects the distributed retention/removal contract explicitly.
-    pub async fn try_expire_with_policy(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        policy: DistributedExpirePolicy,
-    ) -> Result<MutationReceipt> {
-        self.key_mutation(key.as_ref(), options, KeyMutation::Expire(policy), None)
-            .await
-    }
-    /// Explicit expiration policy with caller cancellation through ownership transfer.
-    pub async fn try_expire_with_policy_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        policy: DistributedExpirePolicy,
-        token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.key_mutation(
-            key.as_ref(),
-            options,
-            KeyMutation::Expire(policy),
-            Some(token),
-        )
-        .await
-    }
-    async fn key_mutation(
+    pub(super) fn begin_key_mutation(
         &self,
         key: &str,
         options: Option<EntryOptions>,
         mutation: KeyMutation,
         token: Option<FactoryCancellation>,
-    ) -> Result<MutationReceipt> {
+    ) -> ObservedExecution<MutationReceipt> {
         let worker = self.worker();
         let raw: Arc<str> = Arc::from(key);
         let full = worker.full_key(key);
@@ -1682,196 +1600,65 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         };
         let source = CancellationSource::for_cache(self.operation_scopes());
         let cancellation = source.token();
-        self.observed_using(
+        let observation = OperationObservation::new(
+            self.inner.events.clone(),
+            &self.inner.name,
+            &self.inner.instance_id,
             operation,
-            Some(full),
+            Some(&full),
+        );
+        self.execute_observed(
+            observation,
             token,
             source,
-            Box::pin(async move {
+            ObservationAdmission::New,
+            async move {
                 worker
                     .key_mutation(raw, options, mutation, &cancellation)
                     .await
-            }),
+            },
         )
-        .await
     }
-    /// Legacy unit remove adapter.
-    pub async fn remove(&self, key: impl AsRef<str>) {
-        if let Err(error) = self.try_remove(key).await {
-            self.legacy_error(&error);
-        }
+    /// Physically removes a key; awaiting preserves any typed failure.
+    pub fn remove<K: AsRef<str>>(&self, key: K) -> super::RemoveRequest<'_, K, V> {
+        super::RemoveRequest::new(self, key)
     }
-    /// Legacy unit expiration adapter.
-    pub async fn expire(&self, key: impl AsRef<str>) {
-        if let Err(error) = self.try_expire(key).await {
-            self.legacy_error(&error);
-        }
+    /// Expires L1 while removing L2 by default.
+    pub fn expire<K: AsRef<str>>(&self, key: K) -> super::ExpireRequest<'_, K, V> {
+        super::ExpireRequest::new(self, key)
     }
-    /// Canonical tag invalidation with invariant-preserving Tag.
-    pub async fn try_remove_by_tag(&self, tag: Tag) -> Result<MutationReceipt> {
-        self.try_remove_by_tag_with(tag, None).await
-    }
-    /// Tag invalidation with explicit options.
-    pub async fn try_remove_by_tag_with(
-        &self,
-        tag: Tag,
-        options: Option<EntryOptions>,
-    ) -> Result<MutationReceipt> {
-        self.markers_impl(
-            vec![MarkerKind::Tag(tag)],
-            options,
-            CacheOperation::RemoveByTag,
-            None,
-        )
-        .await
-    }
-    /// Cancellable tag invalidation.
-    pub async fn try_remove_by_tag_with_cancellable(
-        &self,
-        tag: Tag,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.markers_impl(
-            vec![MarkerKind::Tag(tag)],
-            options,
-            CacheOperation::RemoveByTag,
-            Some(token),
-        )
-        .await
-    }
-    /// Canonical batch tag invalidation.
-    pub async fn try_remove_by_tags(
-        &self,
-        tags: impl IntoIterator<Item = Tag>,
-    ) -> Result<MutationReceipt> {
-        self.try_remove_by_tags_with(tags, None).await
-    }
-    /// Batch invalidation with explicit options.
-    pub async fn try_remove_by_tags_with(
-        &self,
-        tags: impl IntoIterator<Item = Tag>,
-        options: Option<EntryOptions>,
-    ) -> Result<MutationReceipt> {
-        self.markers_impl(
-            tags.into_iter().map(MarkerKind::Tag).collect(),
-            options,
-            CacheOperation::RemoveByTags,
-            None,
-        )
-        .await
-    }
-    /// Cancellable batch invalidation.
-    pub async fn try_remove_by_tags_with_cancellable(
-        &self,
-        tags: impl IntoIterator<Item = Tag>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.markers_impl(
-            tags.into_iter().map(MarkerKind::Tag).collect(),
-            options,
-            CacheOperation::RemoveByTags,
-            Some(token),
-        )
-        .await
-    }
-    /// Canonical scoped clear.
-    pub async fn try_clear(&self, mode: ClearMode) -> Result<MutationReceipt> {
-        self.try_clear_with(mode, None).await
-    }
-    /// Clear with explicit options.
-    pub async fn try_clear_with(
-        &self,
-        mode: ClearMode,
-        options: Option<EntryOptions>,
-    ) -> Result<MutationReceipt> {
-        self.markers_impl(
-            vec![match mode {
-                ClearMode::Expire => MarkerKind::ClearExpire,
-                ClearMode::Remove => MarkerKind::ClearRemove,
-            }],
-            options,
-            CacheOperation::Clear,
-            None,
-        )
-        .await
-    }
-    /// Cancellable clear.
-    pub async fn try_clear_with_cancellable(
-        &self,
-        mode: ClearMode,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<MutationReceipt> {
-        self.markers_impl(
-            vec![match mode {
-                ClearMode::Expire => MarkerKind::ClearExpire,
-                ClearMode::Remove => MarkerKind::ClearRemove,
-            }],
-            options,
-            CacheOperation::Clear,
-            Some(token),
-        )
-        .await
-    }
-    async fn markers_impl(
+    pub(super) fn begin_markers(
         &self,
         kinds: Vec<MarkerKind>,
         options: Option<EntryOptions>,
         operation: CacheOperation,
         token: Option<FactoryCancellation>,
-    ) -> Result<MutationReceipt> {
+    ) -> ObservedExecution<MutationReceipt> {
         let worker = self.worker();
         let source = CancellationSource::for_cache(self.operation_scopes());
         let cancellation = source.token();
-        self.observed_using(
+        let observation = OperationObservation::new(
+            self.inner.events.clone(),
+            &self.inner.name,
+            &self.inner.instance_id,
             operation,
             None,
+        );
+        self.execute_observed(
+            observation,
             token,
             source,
-            Box::pin(async move { worker.mutate_markers(kinds, options, cancellation).await }),
+            ObservationAdmission::New,
+            async move { worker.mutate_markers(kinds, options, cancellation).await },
         )
-        .await
     }
-    /// Legacy raw-tag/unit adapter. Invalid requests are diagnosed.
-    pub async fn remove_by_tag(&self, tag: impl AsRef<str>) {
-        match Tag::new(tag) {
-            Ok(tag) => {
-                if let Err(error) = self.try_remove_by_tag(tag).await {
-                    self.legacy_error(&error);
-                }
-            }
-            Err(error) => self.legacy_error(&error.into()),
-        }
+    /// Invalidates a raw string tag; `and_tags` adds a batch atomically.
+    pub fn remove_by_tag(&self, tag: impl AsRef<str>) -> super::TagInvalidationRequest<'_, V> {
+        super::TagInvalidationRequest::new(self, tag)
     }
-    /// Legacy raw batch adapter; any invalid tag rejects the batch.
-    pub async fn remove_by_tags<I, S>(&self, tags: I)
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        match crate::tags::try_collect_tags(tags) {
-            Ok(tags) => {
-                if let Err(error) = self.try_remove_by_tags(Vec::from(tags)).await {
-                    self.legacy_error(&error);
-                }
-            }
-            Err(error) => self.legacy_error(&error.into()),
-        }
-    }
-    /// Legacy boolean/unit clear adapter.
-    pub async fn clear(&self, allow_fail_safe: bool) {
-        if let Err(error) = self
-            .try_clear(if allow_fail_safe {
-                ClearMode::Expire
-            } else {
-                ClearMode::Remove
-            })
-            .await
-        {
-            self.legacy_error(&error);
-        }
+    /// Invalidates this cache using an explicit expiration or removal mode.
+    pub fn clear(&self, mode: ClearMode) -> super::ClearRequest<'_, V> {
+        super::ClearRequest::new(self, mode)
     }
     fn legacy_error(&self, error: &Error) {
         tracing::warn!(cache=%self.inner.name,%error,"legacy cache adapter discarded a typed failure; use the canonical fallible API");

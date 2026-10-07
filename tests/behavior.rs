@@ -419,7 +419,7 @@ async fn remove_by_tag_invalidates_matching_entries() {
     }
 
     clock.advance(Duration::from_secs(1));
-    cache.remove_by_tag("group").await;
+    cache.remove_by_tag("group").await.unwrap();
     clock.advance(Duration::from_secs(1)); // so the new entry is created after the marker
 
     let v = {
@@ -443,7 +443,7 @@ async fn remove_by_tag_invalidates_matching_entries() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disable_tagging_ignores_remove_by_tag() {
+async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
     let clock = Arc::new(ManualClock::default());
     let dyn_clock: Arc<dyn Clock> = clock.clone();
     let cache: Cache<i32> = Cache::builder()
@@ -472,7 +472,10 @@ async fn disable_tagging_ignores_remove_by_tag() {
     }
 
     clock.advance(Duration::from_secs(1));
-    cache.remove_by_tag("group").await; // ignored: tagging is disabled
+    assert!(matches!(
+        cache.remove_by_tag("group").await,
+        Err(Error::Marker(amalgam::MarkerError::Unsupported))
+    )); // The typed API exposes the error previously swallowed by the adapter.
     clock.advance(Duration::from_secs(1));
 
     let v = {
@@ -515,7 +518,7 @@ async fn clear_removes_everything() {
     cache.set("b", 2).await.unwrap();
     assert_eq!(cache.try_get("a", None).await.value(), Some(&1));
 
-    cache.clear(false).await; // hard remove
+    cache.clear(amalgam::ClearMode::Remove).await.unwrap(); // hard remove
     cache.run_pending_tasks().await;
     assert!(!cache.try_get("a", None).await.has_value());
     assert!(!cache.try_get("b", None).await.has_value());

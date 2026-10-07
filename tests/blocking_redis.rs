@@ -107,7 +107,10 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
     receipt.wait().unwrap();
     assert_eq!(peer.read("null", None).unwrap().into_value(), Some(None));
     first
-        .try_remove_by_tag_with_cancellable(tag, None, CancellationSource::new().token())
+        .remove_by_tag(tag)
+        .cancellation(CancellationSource::new().token())
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();
@@ -117,15 +120,14 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         peer.read("remove-l2", None).unwrap().into_value(),
         Some(Some(7))
     );
-    peer.try_expire_with_policy_cancellable(
-        "remove-l2",
-        None,
-        DistributedExpirePolicy::Remove,
-        CancellationSource::new().token(),
-    )
-    .unwrap()
-    .wait()
-    .unwrap();
+    peer.expire("remove-l2")
+        .distributed_policy(DistributedExpirePolicy::Remove)
+        .cancellation(CancellationSource::new().token())
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     let cold = node(
         driver(),
         backend,
@@ -147,7 +149,10 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         Some(Some(9))
     );
     first
-        .try_clear_with_cancellable(ClearMode::Remove, None, CancellationSource::new().token())
+        .clear(ClearMode::Remove)
+        .cancellation(CancellationSource::new().token())
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();
