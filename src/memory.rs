@@ -303,26 +303,6 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     pub(crate) fn has_reader_slots(&self) -> bool {
         matches!(self.backend, Backend::Unbounded(_))
     }
-    /// Private unbounded local reads share storage and shutdown publication.
-    #[cfg(target_arch = "x86_64")]
-    pub(crate) fn with_admitted_local_ready<'a, R>(
-        &self,
-        key: &str,
-        reservation: crate::execution::DeferredInlinePermit<'a>,
-        token: Option<&crate::FactoryCancellation>,
-        read: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
-    ) -> (crate::execution::InlinePermit<'a>, crate::Result<Option<R>>) {
-        let Backend::Unbounded(store) = &self.backend else {
-            unreachable!("the build-selected LocalSlots plan requires reader slots");
-        };
-        let (permit, result) = store.with_admitted_local_ready(key, reservation, token, read);
-        // Optional observers run after the slot is released and within the
-        // published operation, including subscriptions attached during Clone.
-        if result.is_ok() {
-            self.component_read(crate::events::ComponentRead::Memory);
-        }
-        (permit, result)
-    }
     /// Internal primitive copies only: no observer executes before admission.
     pub(crate) fn with_callback_free_local_ready<R>(
         &self,
@@ -335,28 +315,11 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         };
         store.with_callback_free_local_ready(key, scopes, read)
     }
-    pub(crate) fn with_local_ready<R>(
-        &self,
-        key: &str,
-        clock: &crate::time::local::LocalClock,
-        read: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
-    ) -> Option<R> {
-        match &self.backend {
-            Backend::Unbounded(store) => {
-                self.component_read(crate::events::ComponentRead::Memory);
-                store.with_elapsed_ready(key, read)
-            }
-            Backend::Retained(_) => {
-                let now = clock.now();
-                self.with_ready(key, now, |entry| read(entry, entry.freshness(now)))
-            }
-        }
-    }
     pub(crate) fn with_ready<R>(
         &self,
         key: &str,
         now: Timestamp,
-        read: impl FnOnce(&Entry<V>) -> R,
+        read: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
     ) -> Option<R> {
         self.component_read(crate::events::ComponentRead::Memory);
         match &self.backend {
@@ -375,7 +338,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                     stored.access = access;
                     stored.entry.clone()
                 };
-                Some(read(&entry))
+                Some(read(&entry, entry.freshness(now)))
             }
         }
     }

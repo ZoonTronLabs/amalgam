@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="SteadyWarmup.cs" />
     <PackageReference Include="ZiggyCreatures.FusionCache" Version="[2.9.0]" />
     <PackageReference Include="ZiggyCreatures.FusionCache.Serialization.SystemTextJson" Version="[2.9.0]" />
   </ItemGroup>

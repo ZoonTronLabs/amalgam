@@ -407,14 +407,6 @@ impl Scopes {
             activity: InlineActivity::Thread(activity),
         }
     }
-    /// Reserve before storage admission. The storage fence must publish this
-    /// count before checking close or invoking any user code.
-    #[cfg(target_arch = "x86_64")]
-    pub(crate) fn defer_inline(&self) -> DeferredInlinePermit<'_> {
-        DeferredInlinePermit {
-            activity: self.reserve_activity(Ordering::Release),
-        }
-    }
     /// Transfers synchronous completion ownership through an internal result.
     /// It retains only the scope counter, never the public cache lifetime.
     pub(crate) fn inline_owned(self: &Arc<Self>) -> OwnedInlinePermit {
@@ -658,23 +650,6 @@ impl InlineActivity<'_> {
         match self {
             Self::Thread(activity) => activity.activity.registry(),
             Self::Owned(permit) => &permit.registry,
-        }
-    }
-}
-/// A reservation cannot be checked or used for callbacks until a storage
-/// reader guard, acquired AFTER this reservation, supplies its SeqCst fence.
-#[cfg(target_arch = "x86_64")]
-pub(crate) struct DeferredInlinePermit<'a> {
-    activity: ThreadActivity<'a>,
-}
-#[cfg(target_arch = "x86_64")]
-impl<'a> DeferredInlinePermit<'a> {
-    pub(crate) fn after_reader<T>(
-        self,
-        _guard: &crate::reader_slots::ReadGuard<'_, T>,
-    ) -> InlinePermit<'a> {
-        InlinePermit {
-            activity: InlineActivity::Thread(self.activity),
         }
     }
 }

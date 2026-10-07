@@ -180,17 +180,15 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 ## Development performance
 
 The developing 0.4 source has zero-allocation warm L1 reads and replacements.
-Seven local paired runs per API against FusionCache 2.9 pass L1, cold, write,
-L2 JSON and eight-core scaling budgets. Default first-poll work promotes to an
-owned scope only after suspension. Mutations now use shard-local waiter queues
-and ready scalar admission; unused shutdown watches have no tracking-lock cost.
-The latest completed Linux source, `928f1be`, passed all 14 functional checks
-and warm/cold/write budgets. Its L2 read was 1.9% above the reference with
-overlapping ranges, while factory retrieval was 24.5% slower and regressed 7.0%
-in same-runner before/after diagnostics despite fewer allocations. The subsequent
-queue/watch source still needs native qualification. Native L2, the final API
-and complete behavioral parity remain open. See [measured tables and method](docs/PERFORMANCE.md)
-and [release requirements](docs/ROADMAP.md) for source, runtime and machine boundaries.
+The performance harness is being corrected to compare against default .NET
+tiering/Dynamic PGO after sustained warmup; the earlier TC=0 PASS claims do not
+qualify release performance. Independent reproduction shows that L2 and set
+still miss their required budgets. Those are the next optimization targets.
+
+Both FC modes will be published, and mandatory gates use the default-PGO result.
+The final API, behavioral matrix and release qualification remain open. See
+[tables and measurement method](docs/PERFORMANCE.md) and
+[release requirements](docs/ROADMAP.md).
 
 ## Features
 

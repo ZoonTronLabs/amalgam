@@ -311,16 +311,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             PublicLifetime::NativeMemory(view) => view.source().inline(),
         }
     }
-    #[cfg(target_arch = "x86_64")]
-    pub(super) fn deferred_inline(&self) -> Option<crate::execution::DeferredInlinePermit<'_>> {
-        match &*self.lifetime {
-            PublicLifetime::External(_) | PublicLifetime::CacheOwned { .. } => {
-                Some(self.inner.scopes.defer_inline())
-            }
-            PublicLifetime::PluginAccess(_) => None,
-            PublicLifetime::NativeMemory(view) => view.source().deferred_inline(),
-        }
-    }
     pub(super) fn check_plugin_drain(&self, operation: crate::DrainOperation) -> crate::Result<()> {
         match &*self.lifetime {
             PublicLifetime::NativeMemory(view) => view.source().check_plugin_drain(operation),

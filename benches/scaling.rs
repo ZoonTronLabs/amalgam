@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 
 const OPERATIONS: usize = 300_000;
 const WARMUP: usize = 20_000;
+#[path = "scaling/warmup.rs"]
+mod warmup;
+use warmup::{BATCH, Warmup};
 const SET_OPERATIONS: usize = 1_000_000;
 const COLD_OPERATIONS: usize = 100_000;
 #[derive(Clone, Copy)]
@@ -120,8 +123,16 @@ fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same
                 let key = &keys[index];
                 scope.spawn(move || {
                     runtime().block_on(async {
-                        for _ in 0..WARMUP {
-                            assert_eq!(H::value(cache, key).await, index as u64 + 1);
+                        let label = if same { "same" } else { "distinct" };
+                        let mut warmup = Warmup::new(format!("{label}:{workers}:{worker}"));
+                        loop {
+                            let began = Instant::now();
+                            for _ in 0..BATCH {
+                                assert_eq!(H::value(cache, key).await, index as u64 + 1);
+                            }
+                            if warmup.record(began.elapsed(), BATCH) {
+                                break;
+                            }
                         }
                         gate.wait();
                         gate.wait();
@@ -160,8 +171,15 @@ fn synchronous_hit<H: WarmHit>() {
     )
     .unwrap();
     cache.try_set("sync", 1_u64).unwrap().wait().unwrap();
-    for _ in 0..WARMUP {
-        assert_eq!(H::native(&cache, "sync"), 1);
+    let mut warmup = Warmup::new("sync");
+    loop {
+        let began = Instant::now();
+        for _ in 0..BATCH {
+            assert_eq!(H::native(&cache, "sync"), 1);
+        }
+        if warmup.record(began.elapsed(), BATCH) {
+            break;
+        }
     }
     begin_counting();
     let began = Instant::now();
@@ -182,8 +200,15 @@ fn synchronous_hit<H: WarmHit>() {
 fn mutations(rt: &tokio::runtime::Runtime) {
     let writes = cache();
     rt.block_on(async {
-        for value in 0..WARMUP {
-            writes.set("replace", value as u64).await.unwrap();
+        let mut warmup = Warmup::new("set");
+        loop {
+            let began = Instant::now();
+            for value in 0..BATCH {
+                writes.set("replace", value as u64).await.unwrap();
+            }
+            if warmup.record(began.elapsed(), BATCH) {
+                break;
+            }
         }
         begin_counting();
         let began = Instant::now();
@@ -200,19 +225,28 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             writes.read("replace", None).await.unwrap().into_value(),
             Some(SET_OPERATIONS as u64)
         );
-        let warm = cache();
-        for id in 0..WARMUP {
-            assert_eq!(
-                warm.get_or_set(format!("warm-{id}"), |context| async move {
-                    Ok(context.value(7))
-                })
-                .await
-                .unwrap(),
-                7
-            );
+        // Reuse the key strings, never the entries. A fresh bounded-size cache
+        // per warmup batch preserves real misses without unbounded growth.
+        let warm_keys: Vec<_> = (0..BATCH).map(|id| format!("warm-{id}")).collect();
+        let mut warmup = Warmup::new("cold");
+        loop {
+            let warm = cache();
+            let began = Instant::now();
+            for key in &warm_keys {
+                assert_eq!(
+                    warm.get_or_set(key, |context| async move { Ok(context.value(7)) })
+                        .await
+                        .unwrap(),
+                    7
+                );
+            }
+            let elapsed = began.elapsed();
+            warm.shutdown().await.unwrap();
+            drop(warm);
+            if warmup.record(elapsed, BATCH) {
+                break;
+            }
         }
-        warm.shutdown().await.unwrap();
-        drop(warm);
         let keys: Vec<_> = (0..COLD_OPERATIONS)
             .map(|id| format!("cold-{id}"))
             .collect();
@@ -565,8 +599,15 @@ fn distributed<H: WarmHit>() {
             .wait()
             .await
             .unwrap();
-        for _ in 0..WARMUP {
-            assert_eq!(H::value(&cache, "l2-json").await, 7);
+        let mut warmup = Warmup::new("l2_json");
+        loop {
+            let began = Instant::now();
+            for _ in 0..BATCH {
+                assert_eq!(H::value(&cache, "l2-json").await, 7);
+            }
+            if warmup.record(began.elapsed(), BATCH) {
+                break;
+            }
         }
         begin_counting();
         let began = Instant::now();

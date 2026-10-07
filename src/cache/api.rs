@@ -382,8 +382,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             Miss,
         }
         let can_copy = ready.ready_slot_copy(opts);
-        let selected = self.inner.memory.with_ready(key, now, |entry| {
-            if ready.tags(entry) != TagVerdict::Valid || !entry.freshness(now).is_fresh() {
+        let selected = self.inner.memory.with_ready(key, now, |entry, freshness| {
+            if ready.tags(entry) != TagVerdict::Valid || !freshness.is_fresh() {
                 return Copy::Miss;
             }
             if can_copy
