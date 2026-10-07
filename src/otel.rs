@@ -14,9 +14,9 @@
 //! // Keep the guard alive for as long as you want spans exported.
 //! let _otel = amalgam::otel::init_otlp("my-service", "http://127.0.0.1:4317")?;
 //!
-//! let cache: amalgam::Cache<String> = amalgam::Cache::builder().build();
+//! let cache = amalgam::Cache::<String>::new();
 //! let _ = cache
-//!     .get_or_set("k", |ctx| async move { Ok::<_, crate::FactoryError>(ctx.value("v".to_owned())) })
+//!     .get_or_set("k", |_| async { Ok::<_, std::convert::Infallible>("v".to_owned()) })
 //!     .await?;
 //! // `_otel` is dropped here, flushing spans to the collector.
 //! # Ok(())

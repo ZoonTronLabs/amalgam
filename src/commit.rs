@@ -185,10 +185,11 @@ impl KeyLane {
             timestamp: Mutex::new(None),
         }
     }
-    pub(crate) fn snapshot(self: &Arc<Self>, epoch: &Arc<AtomicU64>) -> Fence {
+    pub(crate) fn snapshot(self: Arc<Self>, epoch: &Arc<AtomicU64>) -> Fence {
+        let generation = OperationGeneration::new(self.generation.load(Ordering::Acquire));
         Fence {
-            lane: Arc::clone(self),
-            generation: OperationGeneration::new(self.generation.load(Ordering::Acquire)),
+            lane: self,
+            generation,
             epoch: Arc::clone(epoch),
             captured_epoch: epoch.load(Ordering::Acquire),
         }
