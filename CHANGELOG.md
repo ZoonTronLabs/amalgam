@@ -7,6 +7,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Prepare logical and physical monotonic deadlines at insertion for the
+  built-in standalone L1. Plain reads compare both boundaries with one
+  elapsed sample under the reader slot, avoiding UTC projection per hit.
+  Replacement and logical expiration rebuild the deadlines; explicit clocks,
+  hybrid storage and public memory providers preserve their time model.
 - `get_or_set` is now a lazy fluent request: options overlay cache defaults,
   tags accept strings, and fallback, cancellation and commit receipts are
   explicit inputs. Only a pending operation stores its asynchronous driver.

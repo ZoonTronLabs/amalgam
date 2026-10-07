@@ -19,6 +19,7 @@ pub(super) struct Sharded<V> {
     generation: AtomicU64,
     maintenance: AtomicUsize,
     expiry: MemoryExpiry,
+    timing: super::deadlines::Timing,
 }
 struct Shard<V> {
     entries: HashMap<Arc<str>, Stored<V>, RandomState>,
@@ -28,7 +29,7 @@ struct Shard<V> {
 struct Stored<V> {
     entry: Entry<V>,
     generation: u64,
-    expiration: Option<Instant>,
+    deadlines: super::deadlines::Deadlines,
     capture: CaptureAdmission,
 }
 impl<V> Stored<V> {
@@ -45,10 +46,9 @@ impl<V> Stored<V> {
             Some(Reason::Continuity)
         } else if !self.entry.is_read_eligible() {
             Some(Reason::Eligibility)
-        } else if now.is_some_and(|at| self.entry.is_physically_expired(at))
-            || self
-                .expiration
-                .is_some_and(|at| elapsed.unwrap_or_else(Instant::now) >= at)
+        } else if self
+            .deadlines
+            .physically_expired(self.entry.meta(), now, elapsed)
         {
             Some(Reason::Expired)
         } else {
@@ -66,6 +66,15 @@ impl<V> Stored<V> {
 }
 impl<V> Sharded<V> {
     pub(super) fn new(expiry: MemoryExpiry) -> Self {
+        Self::for_timing(expiry, super::deadlines::Timing::Interoperable)
+    }
+    pub(super) fn with_local_clock(clock: Arc<crate::time::local::LocalClock>) -> Self {
+        Self::for_timing(
+            MemoryExpiry::RealTime,
+            super::deadlines::Timing::Local(clock),
+        )
+    }
+    fn for_timing(expiry: MemoryExpiry, timing: super::deadlines::Timing) -> Self {
         let hash = RandomState::new();
         let shards = (0..SHARDS)
             .map(|_| {
@@ -82,6 +91,7 @@ impl<V> Sharded<V> {
             generation: AtomicU64::new(1),
             maintenance: AtomicUsize::new(0),
             expiry,
+            timing,
         }
     }
     fn route(&self, key: &str) -> (u64, &RwLock<Shard<V>>) {
@@ -109,13 +119,11 @@ impl<V> Sharded<V> {
             .is_none()
             .then(|| read_entry(&stored.entry))
     }
-    /// A private local clock is sampled after admission, under the value slot.
-    /// Logical freshness and physical expiry share that one elapsed sample.
-    pub(super) fn with_local_ready<R>(
+    /// Local freshness and physical expiry use the same post-admission sample.
+    pub(super) fn with_elapsed_ready<R>(
         &self,
         key: &str,
-        clock: &crate::time::local::LocalClock,
-        read_entry: impl FnOnce(&Entry<V>, Timestamp) -> R,
+        read_entry: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
     ) -> Option<R> {
         let (hash, shard) = self.route(key);
         let state = read(shard);
@@ -123,24 +131,19 @@ impl<V> Sharded<V> {
             .entries
             .raw_entry()
             .from_hash(hash, |k| k.as_ref() == key)?;
-        let (now, elapsed) = clock.sample();
+        let elapsed = Instant::now();
         stored
-            .retirement_at(
-                Some(now),
-                self.generation.load(Ordering::Acquire),
-                Some(elapsed),
-            )
+            .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
             .is_none()
-            .then(|| read_entry(&stored.entry, now))
+            .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed)))
     }
     #[cfg(target_arch = "x86_64")]
     pub(super) fn with_admitted_local_ready<'a, R>(
         &self,
         key: &str,
-        clock: &crate::time::local::LocalClock,
         reservation: crate::execution::DeferredInlinePermit<'a>,
         token: Option<&crate::FactoryCancellation>,
-        read_entry: impl FnOnce(&Entry<V>, Timestamp) -> R,
+        read_entry: impl FnOnce(&Entry<V>, crate::entry::Freshness) -> R,
     ) -> (crate::execution::InlinePermit<'a>, crate::Result<Option<R>>) {
         let (hash, shard) = self.route(key);
         let state = read(shard);
@@ -157,15 +160,11 @@ impl<V> Sharded<V> {
             else {
                 return Ok(None);
             };
-            let (now, elapsed) = clock.sample();
+            let elapsed = Instant::now();
             Ok(stored
-                .retirement_at(
-                    Some(now),
-                    self.generation.load(Ordering::Acquire),
-                    Some(elapsed),
-                )
+                .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
                 .is_none()
-                .then(|| read_entry(&stored.entry, now)))
+                .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed))))
         })();
         drop(state);
         (permit, result)
@@ -280,16 +279,7 @@ impl<V> Sharded<V> {
         capture: CaptureAdmission,
         event: MemoryWriteEvent,
     ) -> super::RetentionCommit<V> {
-        let now = time.now();
-        let expiration = match self.expiry {
-            MemoryExpiry::ClockDriven => None,
-            MemoryExpiry::RealTime => time.physical_start().checked_add(
-                entry
-                    .meta()
-                    .physical_expiration()
-                    .saturating_duration_since(now),
-            ),
-        };
+        let deadlines = self.timing.prepare(entry.meta(), time, self.expiry);
         let (hash, shard) = self.route(key);
         let mut state = write(shard);
         let generation = self.generation.load(Ordering::Acquire);
@@ -338,7 +328,7 @@ impl<V> Sharded<V> {
                 if let Some(previous) = entry.try_reuse(&mut slot.get_mut().entry) {
                     let stored = slot.get_mut();
                     stored.generation = generation;
-                    stored.expiration = expiration;
+                    stored.deadlines = deadlines;
                     stored.capture = capture;
                     super::Retirements::Reused {
                         value: previous,
@@ -350,7 +340,7 @@ impl<V> Sharded<V> {
                     let old = slot.insert(Stored {
                         entry: entry.take_for_storage(),
                         generation,
-                        expiration,
+                        deadlines,
                         capture,
                     });
                     super::Retirements::One(old.retire(key, reason))
@@ -363,7 +353,7 @@ impl<V> Sharded<V> {
                     Stored {
                         entry: entry.take_for_storage(),
                         generation,
-                        expiration,
+                        deadlines,
                         capture,
                     },
                 );
@@ -504,18 +494,22 @@ mod tests {
         )
     }
     #[test]
-    fn local_sample_is_taken_after_waiting_for_the_value_slot() {
+    fn local_freshness_is_checked_after_waiting_for_the_value_slot() {
         use crate::time::local::CacheClock;
         let CacheClock::Local(clock) = CacheClock::local() else {
             unreachable!()
         };
-        let store = std::sync::Arc::new(Sharded::new(MemoryExpiry::RealTime));
+        let store = std::sync::Arc::new(Sharded::with_local_clock(Arc::clone(&clock)));
         let before = clock.sample().0;
         store.insert(
             Arc::from("k"),
             Entry::fresh(
                 1,
-                &EntryOptions::default(),
+                &EntryOptions::new(std::time::Duration::from_millis(10)).with_fail_safe(
+                    true,
+                    Some(std::time::Duration::from_secs(60)),
+                    None,
+                ),
                 before,
                 Box::new([]),
                 None,
@@ -532,13 +526,15 @@ mod tests {
         let reading = Arc::clone(&store);
         let sampled = std::thread::spawn(move || {
             started.send(()).unwrap();
-            reading.with_local_ready("k", &clock, |_, now| now).unwrap()
+            reading
+                .with_elapsed_ready("k", |_, freshness| freshness)
+                .unwrap()
         });
         started_rx.recv().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         drop(writer);
         let sampled = sampled.join().unwrap();
-        assert!(sampled.saturating_duration_since(before) >= std::time::Duration::from_millis(20));
+        assert_eq!(sampled, crate::entry::Freshness::Stale);
     }
     #[test]
     fn overlapping_clear_drains_preserve_all_newer_generations() {

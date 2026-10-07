@@ -85,3 +85,29 @@ impl Clock for LocalClock {
         ClockTiming::RealTime
     }
 }
+
+/// A deadline can be outside the platform's representable Instant range.
+#[derive(Clone, Copy)]
+pub(crate) enum MonotonicDeadline {
+    At(Instant),
+    BeyondRange,
+}
+impl MonotonicDeadline {
+    pub(crate) fn expired(self, now: Instant) -> bool {
+        match self {
+            Self::At(deadline) => now >= deadline,
+            Self::BeyondRange => false,
+        }
+    }
+}
+impl LocalClock {
+    pub(crate) fn deadline(&self, at: Timestamp) -> MonotonicDeadline {
+        match self
+            .origin
+            .checked_add(at.saturating_duration_since(self.epoch))
+        {
+            Some(deadline) => MonotonicDeadline::At(deadline),
+            None => MonotonicDeadline::BeyondRange,
+        }
+    }
+}

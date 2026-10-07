@@ -680,7 +680,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.memory_storage,
             MemoryLimits::new(self.max_capacity, self.max_weighted_capacity),
             events.clone(),
-            clock.shared(),
+            &clock,
             expiry,
             self.eviction_capture,
             self.key_prefix.as_deref(),

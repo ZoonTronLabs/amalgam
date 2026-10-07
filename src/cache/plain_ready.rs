@@ -85,8 +85,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             let CacheMemory::Builtin(memory) = &self.inner.memory else {
                 unreachable!("Plain plan requires built-in L1");
             };
-            let copy = |entry: &super::Entry<V>, now| {
-                (self.inner.tags(entry) == TagVerdict::Valid && entry.freshness(now).is_fresh())
+            let copy = |entry: &super::Entry<V>, freshness: crate::entry::Freshness| {
+                (self.inner.tags(entry) == TagVerdict::Valid && freshness.is_fresh())
                     .then(|| entry.value().clone())
             };
             let copied = match &self.inner.clock {
@@ -97,7 +97,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     // User clock code stays outside the slot and inside admission.
                     let now = clock.now();
                     permit.status(token)?;
-                    memory.with_ready(key, now, |entry| copy(entry, now))
+                    memory.with_ready(key, now, |entry| copy(entry, entry.freshness(now)))
                 }
             }
             .flatten();
@@ -134,7 +134,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let (
             ReadyPlan::LocalSlots,
             CacheMemory::Builtin(memory),
-            crate::time::local::CacheClock::Local(clock),
+            crate::time::local::CacheClock::Local(_),
         ) = (self.inner.ready_plan, &self.inner.memory, &self.inner.clock)
         else {
             return None;
@@ -142,8 +142,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let reservation = self.deferred_inline()?;
         let observation = QuietObservation::new(&self.inner.events, operation);
         let (permit, copied) =
-            memory.with_admitted_local_ready(key, clock, reservation, token, |entry, now| {
-                (self.inner.tags(entry) == TagVerdict::Valid && entry.freshness(now).is_fresh())
+            memory.with_admitted_local_ready(key, reservation, token, |entry, freshness| {
+                (self.inner.tags(entry) == TagVerdict::Valid && freshness.is_fresh())
                     .then(|| entry.value().clone())
             });
         let value = match copied.map(Option::flatten) {

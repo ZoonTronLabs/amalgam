@@ -14,8 +14,9 @@
 //!   can compare them.
 //!
 //! Standalone caches with built-in local storage use a UTC anchor plus elapsed
-//! monotonic time for duration lifetimes. One private sample under the reader
-//! slot supplies both freshness and physical expiry on the plain ready path.
+//! monotonic time for duration lifetimes. Deadlines are prepared at insertion; one
+//! elapsed sample under the reader slot checks both freshness and physical expiry
+//! on the plain ready path.
 //! Hybrid caches, supplied storage/markers, distributed lockers/backplanes and
 //! explicitly supplied clocks preserve their
 //! interoperable clock domain and elapsed backend deadlines. [`SystemClock`]

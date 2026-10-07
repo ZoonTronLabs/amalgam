@@ -33,20 +33,26 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
         provider: Option<Arc<dyn MemoryStorage<V>>>,
         limits: MemoryLimits,
         events: Events,
-        clock: Arc<dyn Clock>,
+        clock: &crate::time::local::CacheClock,
         expiry: MemoryExpiry,
         capture: EvictionCapture,
         prefix: Option<&str>,
     ) -> Result<Self> {
-        Self::new_for_namespace(
-            provider,
-            limits,
-            events,
-            clock,
-            expiry,
-            capture,
-            crate::MemoryNamespace::new(prefix),
-        )
+        match provider {
+            None => Ok(Self::Builtin(
+                MemoryStore::with_cache_clock(limits, events, clock, expiry)
+                    .with_eviction_capture(capture),
+            )),
+            Some(provider) => Self::new_for_namespace(
+                Some(provider),
+                limits,
+                events,
+                clock.shared(),
+                expiry,
+                capture,
+                crate::MemoryNamespace::new(prefix),
+            ),
+        }
     }
     pub(crate) fn new_for_namespace(
         provider: Option<Arc<dyn MemoryStorage<V>>>,
