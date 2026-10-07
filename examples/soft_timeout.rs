@@ -49,7 +49,7 @@ async fn main() {
     cache
         .get_or_set_with(
             "feed",
-            |ctx| async move { Ok(ctx.value("v1".to_owned())) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned())) },
             opts.clone(),
         )
         .await
@@ -69,7 +69,7 @@ async fn main() {
                 println!("  [factory] started (will take 300ms)…");
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 println!("  [factory] finished in the background, producing \"v2\"");
-                Ok(ctx.value("v2".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
             },
             opts,
         )

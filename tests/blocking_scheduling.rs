@@ -12,7 +12,7 @@ fn nested(cache: BlockingCache<u64>, remaining: u32, token: FactoryCancellation)
         format!("level/{remaining}"),
         move |ctx| {
             if remaining == 0 {
-                return Ok(ctx.value(1));
+                return Ok::<_, amalgam::FactoryError>(ctx.value(1));
             }
             nested(child, remaining - 1, next)
                 .map(|value| ctx.value(value + 1))

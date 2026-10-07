@@ -234,9 +234,11 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             let began = Instant::now();
             for key in &warm_keys {
                 assert_eq!(
-                    warm.get_or_set(key, |context| async move { Ok(context.value(7)) })
-                        .await
-                        .unwrap(),
+                    warm.get_or_set(key, |context| async move {
+                        Ok::<_, amalgam::FactoryError>(context.value(7))
+                    })
+                    .await
+                    .unwrap(),
                     7
                 );
             }
@@ -256,7 +258,9 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             assert_eq!(
                 black_box(
                     writes
-                        .get_or_set(key, |context| async move { Ok(context.value(7)) })
+                        .get_or_set(key, |context| async move {
+                            Ok::<_, amalgam::FactoryError>(context.value(7))
+                        })
                         .await
                         .unwrap()
                 ),

@@ -189,7 +189,7 @@ async fn origin(cache: &Cache<u64>, calls: Arc<AtomicUsize>) -> Result<u64> {
     cache
         .get_or_set("key", move |ctx| async move {
             calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(7))
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
         })
         .await
 }
@@ -484,7 +484,11 @@ async fn best_effort_does_not_serve_a_hot_value_to_an_explicitly_cancelled_calle
     source.cancel();
     let result = fixture
         .cache
-        .get_or_set_cancellable("key", |ctx| async move { Ok(ctx.value(7)) }, source.token())
+        .get_or_set_cancellable(
+            "key",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
+            source.token(),
+        )
         .await;
     assert!(matches!(
         result,
@@ -687,7 +691,9 @@ async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outag
     assert_eq!(
         fixture
             .cache
-            .get_or_set("cold", |ctx| async move { Ok(ctx.value(7)) })
+            .get_or_set("cold", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+            })
             .await
             .unwrap(),
         7

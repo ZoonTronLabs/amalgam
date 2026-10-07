@@ -5,6 +5,10 @@ use crate::options::EntryOptions;
 use crate::tags::{Tag, TagError, try_collect_tags};
 use crate::time::Timestamp;
 use std::sync::Arc;
+mod feedback;
+pub(crate) use feedback::{
+    FactoryAdaptation, FactoryCompletion, FactoryFeedback, ProducedMetadata,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct FactoryKeys {
@@ -12,7 +16,7 @@ pub(crate) struct FactoryKeys {
     pub(crate) full: Arc<str>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum TagRequest {
     Inherited,
     Valid(Box<[Tag]>),
@@ -46,18 +50,11 @@ enum FactoryOutput<V> {
 }
 /// A factory's modified or conditional result, constructed through its context.
 #[derive(Debug)]
-pub struct FactoryProduct<V> {
+pub(crate) struct FactoryProduct<V> {
     output: FactoryOutput<V>,
     options: EntryOptions,
 }
 impl<V> FactoryProduct<V> {
-    /// Borrows the produced value.
-    pub fn value(&self) -> &V {
-        match &self.output {
-            FactoryOutput::Modified { value, .. } | FactoryOutput::Constant { value, .. } => value,
-            FactoryOutput::NotModified { stale, .. } => &stale.value,
-        }
-    }
     pub(crate) fn into_payload(self) -> crate::Result<FactoryPayload<V>> {
         match self.output {
             FactoryOutput::Constant { value, tags } => Ok(FactoryPayload {
@@ -171,8 +168,8 @@ impl<V> FactoryContext<V> {
         self.stale.as_ref().map(|stale| stale.tags.as_ref())
     }
     /// Adapts produced-entry options; the cache validates them before effects.
-    pub fn options_mut(&mut self) -> &mut EntryOptions {
-        &mut self.options
+    pub fn options_mut(&mut self) -> FactoryOptionsMut<'_, V> {
+        FactoryOptionsMut { context: self }
     }
     /// Current options.
     pub fn options(&self) -> &EntryOptions {
@@ -181,6 +178,7 @@ impl<V> FactoryContext<V> {
     /// Applies a chainable option transformation.
     pub fn adapt(&mut self, adapt: impl FnOnce(EntryOptions) -> EntryOptions) {
         self.options = adapt(self.options.clone());
+        self.publish_adaptation();
     }
     /// Whether a stale snapshot exists.
     pub fn has_stale_value(&self) -> bool {
@@ -205,6 +203,7 @@ impl<V> FactoryContext<V> {
     /// Replaces adaptive tags using already validated values.
     pub fn set_validated_tags(&mut self, tags: Box<[Tag]>) {
         self.adaptive_tags = TagRequest::Valid(tags);
+        self.publish_adaptation();
     }
     /// Validates all raw tags, rejecting the entire boundary on invalid input.
     pub fn try_set_tags<I, S>(&mut self, tags: I) -> Result<(), TagError>
@@ -213,6 +212,7 @@ impl<V> FactoryContext<V> {
         S: AsRef<str>,
     {
         self.adaptive_tags = TagRequest::Valid(try_collect_tags(tags)?);
+        self.publish_adaptation();
         Ok(())
     }
     /// Legacy adapter. A rejected request is diagnosed and its product is rejected
@@ -229,6 +229,25 @@ impl<V> FactoryContext<V> {
                 TagRequest::Rejected(error)
             }
         };
+        self.publish_adaptation();
+    }
+    fn publish_adaptation(&self) {
+        self.cancellation
+            .publish_factory_adaptation(FactoryAdaptation {
+                options: self.options.clone(),
+                tags: self.adaptive_tags.clone().resolve(self.call_tags.clone()),
+                metadata: ProducedMetadata::Modified {
+                    etag: None,
+                    last_modified: None,
+                },
+            });
+    }
+    pub(crate) fn completion(&self) -> FactoryCompletion {
+        FactoryCompletion::new(
+            self.options.clone(),
+            self.call_tags.clone(),
+            self.cancellation.clone(),
+        )
     }
     pub(crate) fn constant(self, value: V) -> FactoryProduct<V> {
         FactoryProduct {
@@ -239,17 +258,9 @@ impl<V> FactoryContext<V> {
             options: self.options,
         }
     }
-    /// Produces a modified value using current options/tags.
-    pub fn value(self, value: V) -> FactoryProduct<V> {
-        FactoryProduct {
-            output: FactoryOutput::Modified {
-                value,
-                etag: None,
-                last_modified: None,
-                tags: self.adaptive_tags.resolve(self.call_tags),
-            },
-            options: self.options,
-        }
+    /// Returns a plain value; adapted options and tags remain in this execution.
+    pub fn value(self, value: V) -> V {
+        value
     }
     /// Begins a modified result with conditional metadata.
     pub fn modified(self, value: V) -> ModifiedBuilder<V> {
@@ -266,19 +277,23 @@ impl<V> FactoryContext<V> {
         FactoryError::new(message)
     }
     /// Reuses the complete isolated stale snapshot. Absence is typed rejection.
-    pub fn not_modified(self) -> Result<FactoryProduct<V>, FactoryError> {
-        match self.stale {
-            Some(mut stale) => {
-                let tags = self.adaptive_tags.resolve(std::mem::take(&mut stale.tags));
-                Ok(FactoryProduct {
-                    output: FactoryOutput::NotModified { stale, tags },
-                    options: self.options,
-                })
-            }
-            None => Err(FactoryError::new(
+    pub fn not_modified(self) -> Result<V, FactoryError> {
+        let Some(mut stale) = self.stale else {
+            return Err(FactoryError::new(
                 "not_modified() requires a stale snapshot",
-            )),
-        }
+            ));
+        };
+        let tags = self.adaptive_tags.resolve(std::mem::take(&mut stale.tags));
+        self.cancellation
+            .publish_factory_adaptation(FactoryAdaptation {
+                options: self.options,
+                tags,
+                metadata: ProducedMetadata::NotModified {
+                    etag: stale.etag,
+                    last_modified: stale.last_modified,
+                },
+            });
+        Ok(stale.value)
     }
     /// Starts an explicit conditional refresh. Tags default to the stale snapshot,
     /// matching FusionCache; validators can be retained, replaced or cleared.
@@ -293,6 +308,7 @@ impl<V> FactoryContext<V> {
             stale,
             options: self.options,
             tags,
+            cancellation: self.cancellation,
             etag: ValidatorUpdate::Retain,
             last_modified: ValidatorUpdate::Retain,
         })
@@ -340,6 +356,7 @@ pub struct NotModifiedBuilder<V> {
     stale: StaleInfo<V>,
     options: EntryOptions,
     tags: TagRequest,
+    cancellation: FactoryCancellation,
     etag: ValidatorUpdate<String>,
     last_modified: ValidatorUpdate<Timestamp>,
 }
@@ -360,17 +377,20 @@ impl<V> NotModifiedBuilder<V> {
         self
     }
     /// Returns the unchanged value with selected metadata and adapted options.
-    pub fn done(mut self) -> FactoryProduct<V> {
+    pub fn done(mut self) -> V {
         self.stale.etag = self.etag.apply(self.stale.etag);
         self.stale.last_modified = self.last_modified.apply(self.stale.last_modified);
         let tags = self.tags.resolve(std::mem::take(&mut self.stale.tags));
-        FactoryProduct {
-            output: FactoryOutput::NotModified {
-                stale: self.stale,
+        self.cancellation
+            .publish_factory_adaptation(FactoryAdaptation {
+                options: self.options,
                 tags,
-            },
-            options: self.options,
-        }
+                metadata: ProducedMetadata::NotModified {
+                    etag: self.stale.etag,
+                    last_modified: self.stale.last_modified,
+                },
+            });
+        self.stale.value
     }
 }
 #[derive(Debug)]
@@ -431,21 +451,45 @@ impl<V> ModifiedBuilder<V> {
         self
     }
     /// Produces the result with current adapted options.
-    pub fn done(self) -> FactoryProduct<V> {
+    pub fn done(self) -> V {
         let inherited = self.ctx.adaptive_tags.resolve(self.ctx.call_tags);
         let tags = match self.tags {
             TagRequest::Inherited => inherited,
             TagRequest::Valid(tags) => Ok(tags),
             TagRequest::Rejected(error) => Err(error),
         };
-        FactoryProduct {
-            output: FactoryOutput::Modified {
-                value: self.value,
-                etag: self.etag,
-                last_modified: self.last_modified,
+        self.ctx
+            .cancellation
+            .publish_factory_adaptation(FactoryAdaptation {
+                options: self.ctx.options,
                 tags,
-            },
-            options: self.ctx.options,
-        }
+                metadata: ProducedMetadata::Modified {
+                    etag: self.etag,
+                    last_modified: self.last_modified,
+                },
+            });
+        self.value
+    }
+}
+
+/// Publishes adaptive options when the temporary mutable view is released.
+#[derive(Debug)]
+pub struct FactoryOptionsMut<'a, V> {
+    context: &'a mut FactoryContext<V>,
+}
+impl<V> std::ops::Deref for FactoryOptionsMut<'_, V> {
+    type Target = EntryOptions;
+    fn deref(&self) -> &EntryOptions {
+        &self.context.options
+    }
+}
+impl<V> std::ops::DerefMut for FactoryOptionsMut<'_, V> {
+    fn deref_mut(&mut self) -> &mut EntryOptions {
+        &mut self.context.options
+    }
+}
+impl<V> Drop for FactoryOptionsMut<'_, V> {
+    fn drop(&mut self) {
+        self.context.publish_adaptation();
     }
 }

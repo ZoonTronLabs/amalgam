@@ -33,11 +33,12 @@ async fn conditional_builder_preserves_the_value_and_saved_tags_but_replaces_or_
             .get_or_set_full(
                 "key",
                 |ctx| async move {
-                    Ok(ctx
-                        .modified(7)
-                        .etag("old")
-                        .last_modified(Timestamp::from_ticks(1))
-                        .done())
+                    Ok::<_, amalgam::FactoryError>(
+                        ctx.modified(7)
+                            .etag("old")
+                            .last_modified(Timestamp::from_ticks(1))
+                            .done(),
+                    )
                 },
                 None,
                 tags("saved"),
@@ -88,7 +89,7 @@ async fn conditional_builder_preserves_the_value_and_saved_tags_but_replaces_or_
                         Some(Timestamp::from_ticks(2))
                     }
                 );
-                Ok(ctx.not_modified_builder()?.done())
+                Ok::<_, amalgam::FactoryError>(ctx.not_modified_builder()?.done())
             })
             .await
             .unwrap();
@@ -109,7 +110,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
     cache
         .get_or_set_full(
             "key",
-            |ctx| async move { Ok(ctx.value(7)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
             None,
             tags("old"),
             MaybeValue::none(),
@@ -119,10 +120,11 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
     clock.advance(Duration::from_secs(2));
     cache
         .get_or_set("key", |ctx| async move {
-            Ok(ctx
-                .not_modified_builder()?
-                .validated_tags(tags("new"))
-                .done())
+            Ok::<_, amalgam::FactoryError>(
+                ctx.not_modified_builder()?
+                    .validated_tags(tags("new"))
+                    .done(),
+            )
         })
         .await
         .unwrap();
@@ -158,7 +160,7 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
         .get_or_set("absent", |ctx| async move {
             let error = ctx.not_modified_builder().unwrap_err();
             assert_eq!(error, ConditionalRefreshError::NoStaleSnapshot);
-            Err(error.into())
+            Err::<_, amalgam::FactoryError>(error.into())
         })
         .await
         .unwrap_err();
@@ -167,14 +169,16 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
         "{no_source:?}"
     );
     cache
-        .get_or_set("key", |ctx| async move { Ok(ctx.value(7)) })
+        .get_or_set("key", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
+        })
         .await
         .unwrap();
     clock.advance(Duration::from_secs(2));
     let bad_tags = cache
         .get_or_set("key", |mut ctx| async move {
             ctx.set_tags([" "]);
-            Ok(ctx.not_modified_builder()?.done())
+            Ok::<_, amalgam::FactoryError>(ctx.not_modified_builder()?.done())
         })
         .await;
     assert!(matches!(bad_tags, Err(Error::Tag(TagError::Blank))));

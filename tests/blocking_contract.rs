@@ -53,7 +53,7 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
             move |ctx| {
                 assert_eq!(thread::current().id(), caller);
                 assert_eq!(ctx.invocation(), FactoryInvocation::Foreground);
-                Ok(ctx.value(None))
+                Ok::<_, amalgam::FactoryError>(ctx.value(None))
             },
             None,
             Box::from([tag.clone()]),
@@ -65,7 +65,9 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
     assert_eq!(cache.read("miss", None).unwrap().into_value(), None);
     assert_eq!(
         cache
-            .get_or_set("key", |_| panic!("warm value must not invoke origin"))
+            .get_or_set::<_, amalgam::FactoryError>("key", |_| panic!(
+                "warm value must not invoke origin"
+            ))
             .unwrap(),
         None
     );
@@ -93,7 +95,7 @@ fn same_key_native_callers_share_one_origin() {
                     .get_or_set("one", move |ctx| {
                         calls.fetch_add(1, Ordering::SeqCst);
                         thread::sleep(Duration::from_millis(15));
-                        Ok(ctx.value(42))
+                        Ok::<_, amalgam::FactoryError>(ctx.value(42))
                     })
                     .unwrap()
             })
@@ -120,7 +122,7 @@ fn hard_deadline_returns_before_callback_finishes_but_shutdown_owns_it() {
             move |ctx| {
                 started_tx.send(ctx.cancellation().clone()).unwrap();
                 blocked.wait();
-                Ok(ctx.value(99))
+                Ok::<_, amalgam::FactoryError>(ctx.value(99))
             },
             timed(),
         );
@@ -171,7 +173,7 @@ fn explicit_cancel_never_returns_failsafe_default_or_stores_late_product() {
             move |ctx| {
                 started_tx.send(ctx.cancellation().clone()).unwrap();
                 blocked.wait();
-                Ok(ctx.value(99))
+                Ok::<_, amalgam::FactoryError>(ctx.value(99))
             },
             Some(EntryOptions::new(Duration::from_secs(30)).with_fail_safe(true, None, None)),
             Box::from([]),
@@ -227,7 +229,7 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
                 assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
                 started_tx.send(()).unwrap();
                 blocked.wait();
-                Ok(ctx.value(2))
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
             })
             .unwrap(),
         1
@@ -338,7 +340,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
                 "timed",
                 |ctx| {
                     thread::sleep(Duration::from_millis(2));
-                    Ok(ctx.value(5))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(5))
                 },
                 timed()
             )

@@ -528,7 +528,11 @@ fn marker_observer_after_value_commit(fact: MarkerFact) {
     )
     .unwrap();
     assert_eq!(
-        cache.get_or_set("caller", |ctx| Ok(ctx.value(29))).unwrap(),
+        cache
+            .get_or_set("caller", |ctx| Ok::<_, amalgam::FactoryError>(
+                ctx.value(29)
+            ))
+            .unwrap(),
         29
     );
     cache.flush_pending().unwrap();

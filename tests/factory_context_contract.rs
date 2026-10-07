@@ -28,7 +28,7 @@ async fn factory_exposes_raw_key_and_current_tags_without_decoding_the_prefix() 
                 assert_eq!(ctx.stale_tags(), None);
                 ctx.try_set_tags(["adapted"]).unwrap();
                 assert_eq!(ctx.tags().unwrap(), &*tags(&["adapted"]));
-                Ok(ctx.value(7))
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
             },
             None,
             tags(&["call"]),
@@ -62,7 +62,7 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
     first
         .get_or_set_full(
             "raw",
-            |ctx| async move { Ok(ctx.value(7)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
             None,
             tags(&["stored"]),
             MaybeValue::none(),
@@ -109,7 +109,7 @@ async fn invalid_legacy_tags_are_visible_as_a_typed_error_and_cannot_be_committe
         .get_or_set("raw", |mut ctx| async move {
             ctx.set_tags([" "]);
             assert_eq!(ctx.tags(), Err(TagError::Blank));
-            Ok(ctx.value(1))
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
         })
         .await;
     assert!(matches!(result, Err(amalgam::Error::Tag(TagError::Blank))));
@@ -133,7 +133,7 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
     cache
         .get_or_set_full(
             "scope:raw",
-            |ctx| async move { Ok(ctx.value(7)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
             None,
             tags(&["stored"]),
             MaybeValue::none(),
@@ -152,7 +152,7 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
                     assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]));
                     assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]));
                     done.send(()).unwrap();
-                    Ok(ctx.value(8))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(8))
                 },
                 None,
                 tags(&["new-call"]),

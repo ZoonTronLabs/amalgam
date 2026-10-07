@@ -2,8 +2,8 @@
 use super::inline_cold::Start;
 use super::observed_execution::ObservedExecution;
 use super::{
-    Cache, CacheValue, EntryOptions, FactoryCancellation, FactoryContext, FactoryError,
-    FactoryOrigin, FactoryProduct, MaybeValue, Result, Tag,
+    Cache, CacheValue, EntryOptions, FactoryCancellation, FactoryContext, FactoryOrigin,
+    MaybeValue, Result, Tag,
 };
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
@@ -131,14 +131,13 @@ impl<V> Output<V> for CacheValue<V> {
 
 macro_rules! execution {
     ($request:ident, $output:ty) => {
-        impl<'a, K, F, Fut, V> IntoFuture for $request<'a, K, F, V>
+        impl<'a, K, F, Fut, V, E> IntoFuture for $request<'a, K, F, V>
         where
             K: AsRef<str>,
             V: Clone + Send + Sync + 'static,
             F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-            Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>>
-                + Send
-                + 'static,
+            Fut: Future<Output = std::result::Result<V, E>> + Send + 'static,
+            E: std::error::Error + Send + Sync + 'static,
         {
             type Output = Result<$output>;
             type IntoFuture = GetOrSetFuture<'a, K, F, V, $output>;
@@ -155,13 +154,14 @@ macro_rules! execution {
 execution!(GetOrSetRequest, V);
 execution!(ReceiptGetOrSetRequest, CacheValue<V>);
 
-impl<K, F, Fut, V, T> Future for GetOrSetFuture<'_, K, F, V, T>
+impl<K, F, Fut, V, T, E> Future for GetOrSetFuture<'_, K, F, V, T>
 where
     K: AsRef<str>,
     V: Clone + Send + Sync + 'static,
     F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-    Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    Fut: Future<Output = std::result::Result<V, E>> + Send + 'static,
     T: Output<V>,
+    E: std::error::Error + Send + Sync + 'static,
 {
     type Output = Result<T>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

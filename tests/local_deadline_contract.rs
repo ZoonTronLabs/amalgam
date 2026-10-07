@@ -26,7 +26,7 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
     let value = cache
         .get_or_set("k", |ctx| async move {
             assert_eq!(ctx.stale_value(), None);
-            Ok(ctx.value(9))
+            Ok::<_, amalgam::FactoryError>(ctx.value(9))
         })
         .await
         .unwrap();

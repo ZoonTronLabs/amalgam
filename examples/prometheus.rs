@@ -67,7 +67,7 @@ mod demo {
             // hit afterwards (counter: hits).
             let _ = cache
                 .get_or_set(key.clone(), move |ctx| async move {
-                    Ok(ctx.value(format!("value-for-{key}")))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(format!("value-for-{key}")))
                 })
                 .await?;
 

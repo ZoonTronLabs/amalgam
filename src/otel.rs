@@ -16,7 +16,7 @@
 //!
 //! let cache: amalgam::Cache<String> = amalgam::Cache::builder().build();
 //! let _ = cache
-//!     .get_or_set("k", |ctx| async move { Ok(ctx.value("v".to_owned())) })
+//!     .get_or_set("k", |ctx| async move { Ok::<_, crate::FactoryError>(ctx.value("v".to_owned())) })
 //!     .await?;
 //! // `_otel` is dropped here, flushing spans to the collector.
 //! # Ok(())

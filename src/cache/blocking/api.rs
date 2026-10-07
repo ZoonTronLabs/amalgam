@@ -124,13 +124,18 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             .run(self.cache.get_or_default(key, value, options))
     }
     /// Invokes a synchronous origin with the same cache/product rules.
-    pub fn get_or_set<F>(&self, key: impl AsRef<str>, factory: F) -> Result<V>
+    pub fn get_or_set<F, E>(&self, key: impl AsRef<str>, factory: F) -> Result<V>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, E> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
     {
-        self.get_or_set_full(key, factory, None, Box::from([]), MaybeValue::none())
+        self.get_or_set_full(
+            key,
+            move |context| factory(context).map_err(FactoryError::from_boundary),
+            None,
+            Box::from([]),
+            MaybeValue::none(),
+        )
     }
     /// Synchronous origin with explicit options.
     pub fn get_or_set_with<F>(
@@ -140,9 +145,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         options: EntryOptions,
     ) -> Result<V>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         self.get_or_set_full(
             key,
@@ -172,9 +175,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         fallback: MaybeValue<V>,
     ) -> Result<V>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         Ok(self
             .retrieve(key.as_ref(), factory, options, tags, fallback, None)?
@@ -190,9 +191,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         fallback: MaybeValue<V>,
     ) -> Result<BlockingCacheValue<V>>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         self.retrieve(key.as_ref(), factory, options, tags, fallback, None)
             .map(|value| self.wrap_value(value))
@@ -205,9 +204,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         token: FactoryCancellation,
     ) -> Result<V>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         self.get_or_set_full_cancellable(
             key,
@@ -229,9 +226,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         token: FactoryCancellation,
     ) -> Result<V>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         Ok(self
             .retrieve(key.as_ref(), factory, options, tags, fallback, Some(token))?
@@ -247,9 +242,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         token: Option<FactoryCancellation>,
     ) -> Result<CacheValue<V>>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         let cancellation = match token {
             Some(_) => CallerCancellation::Explicit,
@@ -686,9 +679,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         token: FactoryCancellation,
     ) -> Result<BlockingCacheValue<V>>
     where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-            + Send
-            + 'static,
+        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
         self.retrieve(key.as_ref(), factory, options, tags, fallback, Some(token))
             .map(|value| self.wrap_value(value))

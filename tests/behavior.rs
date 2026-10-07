@@ -41,7 +41,7 @@ async fn stampede_runs_factory_once() {
                 .get_or_set("hot", move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(30)).await;
-                    Ok(ctx.value(42))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
                 })
                 .await
         }));
@@ -64,7 +64,7 @@ async fn fail_safe_serves_stale_on_factory_error() {
     let primed = cache
         .get_or_set_with(
             "k",
-            |ctx| async move { Ok(ctx.value("fresh".to_owned())) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value("fresh".to_owned())) },
             opts.clone(),
         )
         .await
@@ -125,7 +125,7 @@ async fn soft_timeout_returns_stale_then_completes_in_background() {
     cache
         .get_or_set_with(
             "k",
-            |ctx| async move { Ok(ctx.value("v1".to_owned())) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned())) },
             opts.clone(),
         )
         .await
@@ -137,7 +137,7 @@ async fn soft_timeout_returns_stale_then_completes_in_background() {
             "k",
             |ctx| async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                Ok(ctx.value("v2".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
             },
             opts,
         )
@@ -168,7 +168,7 @@ async fn hard_timeout_without_fallback_errors() {
             "k",
             |ctx| async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                Ok(ctx.value("v".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("v".to_owned()))
             },
             opts,
         )
@@ -190,7 +190,7 @@ async fn eager_refresh_triggers_background_update() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 },
                 opts.clone(),
             )
@@ -207,7 +207,7 @@ async fn eager_refresh_triggers_background_update() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(2))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
                 },
                 opts,
             )
@@ -241,7 +241,7 @@ async fn expired_entry_without_fail_safe_reruns_factory() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 },
                 opts.clone(),
             )
@@ -257,7 +257,7 @@ async fn expired_entry_without_fail_safe_reruns_factory() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(2))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
                 },
                 opts,
             )
@@ -279,7 +279,7 @@ async fn adaptive_caching_overrides_duration() {
             "k",
             |mut ctx: FactoryContext<i32>| async move {
                 ctx.adapt(|o| o.with_duration(Duration::from_secs(2)));
-                Ok(ctx.value(42))
+                Ok::<_, amalgam::FactoryError>(ctx.value(42))
             },
             long(),
         )
@@ -288,14 +288,22 @@ async fn adaptive_caching_overrides_duration() {
 
     clock.advance(Duration::from_secs(1)); // within adapted 2s ⇒ cached
     let cached = cache
-        .get_or_set_with("k", |ctx| async move { Ok(ctx.value(999)) }, long())
+        .get_or_set_with(
+            "k",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(999)) },
+            long(),
+        )
         .await
         .unwrap();
     assert_eq!(cached, 42, "adapted duration still fresh");
 
     clock.advance(Duration::from_secs(2)); // now past adapted 2s ⇒ re-run
     let refreshed = cache
-        .get_or_set_with("k", |ctx| async move { Ok(ctx.value(7)) }, long())
+        .get_or_set_with(
+            "k",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
+            long(),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -312,7 +320,11 @@ async fn conditional_refresh_not_modified_reuses_stale_and_bumps_expiration() {
     cache
         .get_or_set_with(
             "k",
-            |ctx| async move { Ok(ctx.modified("data-v1".to_owned()).etag("abc").done()) },
+            |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(
+                    ctx.modified("data-v1".to_owned()).etag("abc").done(),
+                )
+            },
             opts.clone(),
         )
         .await
@@ -356,7 +368,11 @@ async fn conditional_refresh_modified_replaces_value() {
     cache
         .get_or_set_with(
             "k",
-            |ctx| async move { Ok(ctx.modified("data-v1".to_owned()).etag("abc").done()) },
+            |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(
+                    ctx.modified("data-v1".to_owned()).etag("abc").done(),
+                )
+            },
             opts.clone(),
         )
         .await
@@ -367,7 +383,9 @@ async fn conditional_refresh_modified_replaces_value() {
         .get_or_set_with(
             "k",
             |ctx: FactoryContext<String>| async move {
-                Ok(ctx.modified("data-v2".to_owned()).etag("def").done())
+                Ok::<_, amalgam::FactoryError>(
+                    ctx.modified("data-v2".to_owned()).etag("def").done(),
+                )
             },
             opts,
         )
@@ -390,7 +408,7 @@ async fn remove_by_tag_invalidates_matching_entries() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 },
                 Some(long()),
                 tagged(),
@@ -411,7 +429,7 @@ async fn remove_by_tag_invalidates_matching_entries() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(2))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
                 },
                 Some(long()),
                 tagged(),
@@ -443,7 +461,7 @@ async fn disable_tagging_ignores_remove_by_tag() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 },
                 Some(long()),
                 tagged(),
@@ -464,7 +482,7 @@ async fn disable_tagging_ignores_remove_by_tag() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(2))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
                 },
                 Some(long()),
                 tagged(),
@@ -519,7 +537,11 @@ async fn allow_stale_on_read_only_serves_stale() {
     let (cache, clock) = build::<i32>();
     let opts = fail_safe_opts();
     cache
-        .get_or_set_with("k", |ctx| async move { Ok(ctx.value(9)) }, opts)
+        .get_or_set_with(
+            "k",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(9)) },
+            opts,
+        )
         .await
         .unwrap();
     clock.advance(Duration::from_secs(20)); // stale
@@ -538,7 +560,9 @@ async fn events_are_emitted() {
 
     cache.set("k", 1).await.unwrap();
     let _ = cache
-        .get_or_set("k", |ctx| async move { Ok(ctx.value(1)) })
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
+        })
         .await
         .unwrap();
 

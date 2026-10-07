@@ -10,7 +10,7 @@ pub(super) enum OriginCompletion<V> {
     Constant(CacheValue<V>),
     Distributed(CacheValue<V>),
 }
-use std::future::{Future, Ready, ready};
+use std::future::{Future, ready};
 
 #[derive(Clone, Copy)]
 pub(super) enum OriginKind {
@@ -18,9 +18,11 @@ pub(super) enum OriginKind {
     Constant,
 }
 pub(super) trait CacheOrigin<V>: Send + 'static {
-    type Output: Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static;
     const KIND: OriginKind;
-    fn invoke(self, context: FactoryContext<V>) -> Self::Output;
+    fn invoke(
+        self,
+        context: FactoryContext<V>,
+    ) -> impl Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static;
 }
 pub(super) struct FactoryOrigin<F>(F);
 impl<F> FactoryOrigin<F> {
@@ -28,16 +30,25 @@ impl<F> FactoryOrigin<F> {
         Self(factory)
     }
 }
-impl<V, F, Fut> CacheOrigin<V> for FactoryOrigin<F>
+impl<V, F, Fut, E> CacheOrigin<V> for FactoryOrigin<F>
 where
     V: Clone + Send + Sync + 'static,
     F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+    Fut: Future<Output = Result<V, E>> + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
-    type Output = Fut;
     const KIND: OriginKind = OriginKind::Factory;
-    fn invoke(self, context: FactoryContext<V>) -> Fut {
-        (self.0)(context)
+    fn invoke(
+        self,
+        context: FactoryContext<V>,
+    ) -> impl Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static {
+        let completion = context.completion();
+        let work = (self.0)(context);
+        async move {
+            work.await
+                .map(|value| completion.complete(value))
+                .map_err(FactoryError::from_boundary)
+        }
     }
 }
 pub(super) struct ConstantOrigin<V>(V);
@@ -47,9 +58,11 @@ impl<V> ConstantOrigin<V> {
     }
 }
 impl<V: Clone + Send + Sync + 'static> CacheOrigin<V> for ConstantOrigin<V> {
-    type Output = Ready<Result<FactoryProduct<V>, FactoryError>>;
     const KIND: OriginKind = OriginKind::Constant;
-    fn invoke(self, context: FactoryContext<V>) -> Self::Output {
+    fn invoke(
+        self,
+        context: FactoryContext<V>,
+    ) -> impl Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static {
         ready(Ok(context.constant(self.0)))
     }
 }

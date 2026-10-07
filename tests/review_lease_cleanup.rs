@@ -89,7 +89,7 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
     let acquisition = cache
         .get_or_set("key", move |ctx| async move {
             calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(7))
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
         })
         .await;
     assert!(

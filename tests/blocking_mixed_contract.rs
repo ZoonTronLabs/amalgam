@@ -40,7 +40,7 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
     let value = asynchronous
         .get_or_set("after", |ctx| async move {
             tokio::time::sleep(Duration::from_millis(2)).await;
-            Ok(ctx.value(9))
+            Ok::<_, amalgam::FactoryError>(ctx.value(9))
         })
         .await
         .unwrap();
@@ -60,7 +60,7 @@ fn native_operations_progress_from_their_own_single_io_worker() {
             "own-worker",
             |ctx| {
                 std::thread::sleep(Duration::from_millis(2));
-                Ok(ctx.value(42))
+                Ok::<_, amalgam::FactoryError>(ctx.value(42))
             },
             CancellationSource::new().token(),
         );
@@ -92,7 +92,7 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
                 first_calls.fetch_add(1, Ordering::SeqCst);
                 started_tx.send(()).unwrap();
                 release_rx.await.unwrap();
-                Ok(ctx.value(17))
+                Ok::<_, amalgam::FactoryError>(ctx.value(17))
             })
             .await
     });
@@ -105,7 +105,7 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
         entered_tx.send(()).unwrap();
         request.get_or_set("shared-flight", move |ctx| {
             second_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(99))
+            Ok::<_, amalgam::FactoryError>(ctx.value(99))
         })
     });
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -150,7 +150,7 @@ fn callbacks_cannot_drain_their_own_cache() {
             assert!(matches!(rejection,
                 Err(Error::ReentrantDrain { operation }) if operation == expected
             ));
-            Ok(ctx.value(7))
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
         };
         let answer = if case.starts_with("inline") {
             cache.get_or_set("self-drain", factory)

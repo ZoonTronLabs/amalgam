@@ -41,9 +41,11 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
     );
     assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(7));
     assert_eq!(
-        c.get_or_set("key", |_| async { panic!("L1 hit ran factory") })
-            .await
-            .unwrap(),
+        c.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
+            panic!("L1 hit ran factory")
+        })
+        .await
+        .unwrap(),
         7
     );
     c.try_expire("key").await.unwrap().wait().await.unwrap();
@@ -74,9 +76,11 @@ async fn disabled_store_returns_computed_value_with_rejected_admission() {
         LocalEffect::Stored(MemoryAdmission::Rejected(CapacityRejection::Oversized))
     ));
     assert_eq!(
-        c.get_or_set("key", |ctx| async move { Ok(ctx.value(12)) })
-            .await
-            .unwrap(),
+        c.get_or_set("key", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(12))
+        })
+        .await
+        .unwrap(),
         12
     );
     assert!(c.read("key", None).await.unwrap().into_value().is_none());
@@ -181,7 +185,7 @@ async fn supplied_memory_preserves_same_key_single_flight() {
             c.get_or_set("stampede", move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(20)).await;
-                Ok(ctx.value(19))
+                Ok::<_, amalgam::FactoryError>(ctx.value(19))
             })
             .await
             .unwrap()
@@ -204,7 +208,7 @@ async fn unrelated_factories_enter_before_either_completes() {
         async move {
             c.get_or_set(key, move |ctx| async move {
                 barrier.wait().await;
-                Ok(ctx.value(23))
+                Ok::<_, amalgam::FactoryError>(ctx.value(23))
             })
             .await
             .unwrap()
@@ -266,9 +270,11 @@ async fn fail_safe_keeps_the_supplied_representation() {
         .memory_storage(store.clone())
         .default_options(options.clone())
         .build();
-    c.get_or_set("stale", |ctx| async move { Ok(ctx.value(37)) })
-        .await
-        .unwrap();
+    c.get_or_set("stale", |ctx| async move {
+        Ok::<_, amalgam::FactoryError>(ctx.value(37))
+    })
+    .await
+    .unwrap();
     clock.advance(Duration::from_millis(250));
     assert_eq!(
         c.get_or_set("stale", |ctx| async move { Err(ctx.fail("origin down")) })
@@ -296,9 +302,11 @@ async fn eager_refresh_updates_the_supplied_store_in_the_background() {
     c.try_set("eager", 41).await.unwrap().wait().await.unwrap();
     clock.advance(Duration::from_secs(6));
     assert_eq!(
-        c.get_or_set("eager", |ctx| async move { Ok(ctx.value(43)) })
-            .await
-            .unwrap(),
+        c.get_or_set("eager", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(43))
+        })
+        .await
+        .unwrap(),
         41
     );
     c.flush_pending().await.unwrap();
@@ -316,7 +324,9 @@ async fn lookup_failure_preserves_cause_and_does_not_run_origin_or_emit_miss() {
     *store.fault.lock().unwrap() = Some(Fault::Get);
     let mut events = c.events().subscribe();
     let error = c
-        .get_or_set("broken", |_| async { panic!("storage failure ran origin") })
+        .get_or_set::<_, _, _, amalgam::FactoryError>("broken", |_| async {
+            panic!("storage failure ran origin")
+        })
         .await
         .unwrap_err();
     assert_eq!(cause(&error), Fault::Get);
@@ -383,9 +393,11 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
     let b = cache(&store);
     a.try_set("shared", 61).await.unwrap().wait().await.unwrap();
     assert_eq!(
-        b.get_or_set("shared", |_| async { panic!("shared L1 missed") })
-            .await
-            .unwrap(),
+        b.get_or_set::<_, _, _, amalgam::FactoryError>("shared", |_| async {
+            panic!("shared L1 missed")
+        })
+        .await
+        .unwrap(),
         61
     );
     a.shutdown().await.unwrap();
@@ -468,7 +480,9 @@ fn native_and_async_views_use_the_same_supplied_store_and_typed_failure() {
     native.try_set("native", 89).unwrap().wait().unwrap();
     assert_eq!(
         native
-            .get_or_set("native", |_| panic!("native hot hit ran origin"))
+            .get_or_set::<_, amalgam::FactoryError>("native", |_| panic!(
+                "native hot hit ran origin"
+            ))
             .unwrap(),
         89
     );
@@ -497,7 +511,7 @@ async fn skipped_memory_options_do_not_touch_the_provider() {
     assert_eq!(
         c.get_or_set_with(
             "skip",
-            |ctx| async move { Ok(ctx.value(97)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(97)) },
             skipped.clone()
         )
         .await
@@ -707,7 +721,7 @@ async fn soft_timeout_retains_background_completion_in_supplied_storage() {
         c.get_or_set("key", move |ctx| async move {
             started.notify_one();
             waiting.acquire().await.unwrap().forget();
-            Ok(ctx.value(131))
+            Ok::<_, amalgam::FactoryError>(ctx.value(131))
         })
         .await
         .unwrap(),
@@ -733,7 +747,7 @@ async fn hard_timeout_does_not_admit_a_late_value_in_supplied_storage() {
     let error = c
         .get_or_set("key", |ctx| async move {
             tokio::time::sleep(Duration::from_millis(80)).await;
-            Ok(ctx.value(137))
+            Ok::<_, amalgam::FactoryError>(ctx.value(137))
         })
         .await
         .unwrap_err();
@@ -800,7 +814,9 @@ async fn original_value_destruction_follows_provider_and_factory_guards() {
         drops: drops.clone(),
     });
     let value = c
-        .get_or_set("key", move |ctx| async move { Ok(ctx.value(next)) })
+        .get_or_set("key", move |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(next))
+        })
         .await
         .unwrap();
     drop(value);
@@ -887,17 +903,18 @@ async fn conditional_refresh_preserves_replaced_validators_in_supplied_records()
         )
         .build();
     c.get_or_set("conditional", |ctx| async move {
-        Ok(ctx.modified(151).etag("v1").done())
+        Ok::<_, amalgam::FactoryError>(ctx.modified(151).etag("v1").done())
     })
     .await
     .unwrap();
     clock.advance(Duration::from_millis(250));
     assert_eq!(
         c.get_or_set("conditional", |ctx| async move {
-            Ok(ctx
-                .not_modified_builder()?
-                .etag(ValidatorUpdate::Replace("v2".into()))
-                .done())
+            Ok::<_, amalgam::FactoryError>(
+                ctx.not_modified_builder()?
+                    .etag(ValidatorUpdate::Replace("v2".into()))
+                    .done(),
+            )
         })
         .await
         .unwrap(),

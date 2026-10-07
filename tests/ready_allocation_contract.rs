@@ -138,7 +138,9 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
     for _ in 0..1000 {
         assert_eq!(
             cache
-                .get_or_set("key", |_| panic!("warm value invoked factory"))
+                .get_or_set::<_, amalgam::FactoryError>("key", |_| panic!(
+                    "warm value invoked factory"
+                ))
                 .unwrap(),
             19
         );
@@ -147,7 +149,9 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
         for _ in 0..1000 {
             assert_eq!(
                 cache
-                    .get_or_set("key", |_| panic!("warm value invoked factory"))
+                    .get_or_set::<_, amalgam::FactoryError>("key", |_| panic!(
+                        "warm value invoked factory"
+                    ))
                     .unwrap(),
                 19
             );

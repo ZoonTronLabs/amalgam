@@ -78,9 +78,11 @@ async fn actual_records_include_local_authority_independent_metadata_and_ready_r
     let gets = store.lookups.load(Ordering::SeqCst);
     let ready = store.ready.load(Ordering::SeqCst);
     assert_eq!(
-        c.get_or_set("key", |_| async { panic!("hot value ran origin") })
-            .await
-            .unwrap(),
+        c.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
+            panic!("hot value ran origin")
+        })
+        .await
+        .unwrap(),
         7
     );
     assert_eq!(store.lookups.load(Ordering::SeqCst), gets);
@@ -111,7 +113,7 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
             "key",
             move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value(17))
+                Ok::<_, amalgam::FactoryError>(ctx.value(17))
             },
             None,
             Box::from([tag()]),
@@ -282,9 +284,9 @@ async fn marker_lookup_and_admission_failures_keep_causes_and_do_not_run_origin(
         let called = Arc::new(AtomicUsize::new(0));
         let runs = called.clone();
         let error = c
-            .get_or_set("key", move |ctx| async move {
+            .get_or_set::<_, _, _, amalgam::FactoryError>("key", move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value(43))
+                Ok::<_, amalgam::FactoryError>(ctx.value(43))
             })
             .await
             .unwrap_err();
@@ -1028,7 +1030,7 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
     let b = &nodes[1];
     tagged(a, 131).await;
     assert_eq!(
-        b.get_or_set("key", |_| async {
+        b.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
             panic!("cold L1 must reuse Redis value")
         })
         .await
@@ -1046,7 +1048,7 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
     tokio::time::sleep(Duration::from_millis(100)).await;
     tagged(a, 137).await;
     assert_eq!(
-        b.get_or_set("key", |_| async {
+        b.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
             panic!("newer Redis value must survive the retained marker")
         })
         .await

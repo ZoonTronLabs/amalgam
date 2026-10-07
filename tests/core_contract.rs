@@ -47,7 +47,7 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
                 let _drop = DropSignal(origin_drop);
                 token_tx.send(ctx.cancellation().clone()).unwrap();
                 pending::<()>().await;
-                Ok(ctx.value(1))
+                Ok::<_, amalgam::FactoryError>(ctx.value(1))
             })
             .into_future(),
     );
@@ -116,7 +116,7 @@ async fn soft_timeout_disposes_origin_with_precise_reason_and_retains_failsafe()
             let _drop = DropSignal(origin_drop);
             token_tx.send(ctx.cancellation().clone()).unwrap();
             pending::<()>().await;
-            Ok(ctx.value(2))
+            Ok::<_, amalgam::FactoryError>(ctx.value(2))
         })
         .await
         .unwrap();
@@ -155,7 +155,7 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
                     move |ctx| async move {
                         entered_tx.send(()).unwrap();
                         pending::<()>().await;
-                        Ok(ctx.value(2))
+                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
                     },
                     token,
                 )
@@ -381,7 +381,7 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
                 "k",
                 move |ctx| async move {
                     origin_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 },
                 huge.clone()
             )
@@ -403,7 +403,7 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
     let result = cache
         .get_or_set("bad-size", |mut ctx| async move {
             ctx.adapt(|opts| opts.with_size(-1));
-            Ok(ctx.value(1))
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
         })
         .await;
     assert!(matches!(
@@ -413,7 +413,7 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
     let result = cache
         .get_or_set("bad-tag", |mut ctx| async move {
             ctx.set_tags(["valid", " "]);
-            Ok(ctx.value(1))
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
         })
         .await;
     assert!(matches!(result, Err(Error::Tag(TagError::Blank))));
@@ -475,7 +475,7 @@ async fn native_backend_fence_loss_does_not_commit_l1_l2_or_publish() {
     let result = cache
         .get_or_set("k", move |ctx| async move {
             token_tx.send(ctx.cancellation().clone()).unwrap();
-            Ok(ctx.value(1))
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
         })
         .await;
     assert!(matches!(result, Err(Error::Lease(LeaseError::Lost))));
@@ -961,7 +961,7 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
                     };
                     token_tx.send(ctx.cancellation().clone()).unwrap();
                     pending::<()>().await;
-                    Ok(ctx.value(2))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
                 })
                 .await
                 .unwrap(),
@@ -1030,7 +1030,7 @@ async fn cancelled_uncertain_acquisition_is_supervised_before_ownership_transfer
         "k",
         move |ctx| async move {
             origin_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(2))
+            Ok::<_, amalgam::FactoryError>(ctx.value(2))
         },
         source.token(),
     ));
@@ -1314,7 +1314,11 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
     let repaired = invalid.with_factory_timeouts(Timeout::Infinite, Timeout::Infinite, false);
     assert_eq!(
         cache
-            .get_or_set_with("factory", |ctx| async move { Ok(ctx.value(9)) }, repaired)
+            .get_or_set_with(
+                "factory",
+                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(9)) },
+                repaired
+            )
             .await
             .unwrap(),
         9

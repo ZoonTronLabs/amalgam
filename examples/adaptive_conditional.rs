@@ -52,7 +52,7 @@ async fn adaptive_caching() {
                     ctx.adapt(|o| o.with_duration(Duration::from_millis(100)));
                     println!("  [factory] empty result → adapting duration down to 100ms");
                 }
-                Ok(ctx.value(result))
+                Ok::<_, amalgam::FactoryError>(ctx.value(result))
             },
             base.clone(),
         )
@@ -66,7 +66,7 @@ async fn adaptive_caching() {
             "search:zzz",
             |ctx| async move {
                 println!("  [factory] (should NOT run yet)");
-                Ok(ctx.value("late".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("late".to_owned()))
             },
             base.clone(),
         )
@@ -81,7 +81,7 @@ async fn adaptive_caching() {
             "search:zzz",
             |ctx| async move {
                 println!("  [factory] adapted window elapsed → re-running");
-                Ok(ctx.value("RESULTS NOW".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("RESULTS NOW".to_owned()))
             },
             base,
         )

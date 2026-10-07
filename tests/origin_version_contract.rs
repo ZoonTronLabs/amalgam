@@ -24,7 +24,7 @@ async fn paused_origin(mutation: LaterMutation) {
             .get_or_set("key", |ctx| async move {
                 started.send(()).unwrap();
                 resume.await.unwrap();
-                Ok(ctx.value(1))
+                Ok::<_, amalgam::FactoryError>(ctx.value(1))
             })
             .await
     });
