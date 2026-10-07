@@ -13,7 +13,11 @@ hits; `--api get-or-set` measures factory retrieval hits and the matching native
 operation in both libraries. Each mode applies the same allocation and ratio
 budgets, and its name is retained in the report. They also measure a native
 synchronous hit, replacement `set`, and a new-key immediately ready factory.
-Setup, keys, thread startup and warmup are outside timed loops. Both cold
+Setup, keys, thread startup and warmup are outside timed loops.
+Warm reads and mutations run in separate fresh processes in both runtimes.
+The mutation process is identical for both selected read APIs: one million
+replacement writes and one hundred thousand new-key factories. Raw CSVs identify
+each process; scenario sets, operation counts and returned values are checked. Both cold
 fixtures keep their preallocated input key collections alive during measurement;
 input-key destruction is outside the loop in both runtimes. Parallel times
 are aggregate elapsed time divided by all completed operations, rather than

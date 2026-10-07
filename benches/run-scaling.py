@@ -38,7 +38,12 @@ def sources(root):
     return {str(path.relative_to(root)): digest(path) for path in sorted(set(paths))}
 
 
-def measurements(output, allocation_column):
+HOT_SCENARIOS = {(kind, count) for kind in ["same", "distinct"] for count in [1, 2, 4, 8]}
+HOT_SCENARIOS.add(("sync", 1))
+MUTATION_SCENARIOS = {("set", 1), ("cold", 1)}
+
+
+def measurements(output, allocation_column, expected):
     rows = {}
     for row in csv.DictReader(io.StringIO(output)):
         key = (row["scenario"], int(row["threads"]))
@@ -51,8 +56,6 @@ def measurements(output, allocation_column):
         }
         if rows[key]["ns"] <= 0 or rows[key]["operations"] <= 0:
             raise SystemExit(f"Invalid measurement: {row}")
-    expected = {(kind, count) for kind in ["same", "distinct"] for count in [1, 2, 4, 8]}
-    expected.update({("sync", 1), ("set", 1), ("cold", 1)})
     if rows.keys() != expected:
         raise SystemExit(f"Measurement scenarios differ: {rows.keys() ^ expected}")
     return rows
@@ -120,22 +123,34 @@ def main():
     reference = output / "dotnet-bin/FusionBench.dll"
     frozen = sources(root)
     records = {"rust": [], "fusion": []}
-    commands = {"rust": [str(binary), "--api", args.api], "fusion": ["dotnet", str(reference), "--api", args.api]}
+    commands = {
+        "rust": [str(binary)], "fusion": ["dotnet", str(reference)],
+    }
+    fixtures = [
+        ("warm", ["--api", args.api], HOT_SCENARIOS),
+        ("mutations", ["--mutations"], MUTATION_SCENARIOS),
+    ]
     identity = None
     for pair in range(args.pairs):
         order = ["rust", "fusion"] if pair % 2 == 0 else ["fusion", "rust"]
         for label in order:
-            print(f"Pair {pair + 1}/{args.pairs}: {label}", file=sys.stderr, flush=True)
-            result = execute(commands[label], root, env, output / f"pair-{pair + 1}-{label}.csv")
-            records[label].append(measurements(result.stdout, "allocations" if label == "rust" else "allocated_bytes"))
-            if label == "fusion":
-                lines = result.stderr.strip().splitlines()
-                if len(lines) < 3 or not lines[0].startswith("2.9.0+"):
-                    raise SystemExit("The reference is not the released FusionCache 2.9.0 package")
-                current = lines[:3]
-                if identity is not None and current != identity:
-                    raise SystemExit("The reference package or runtime changed during measurement")
-                identity = current
+            trial = {}
+            for fixture, arguments, expected in fixtures:
+                print(f"Pair {pair + 1}/{args.pairs}: {label}/{fixture}", file=sys.stderr, flush=True)
+                result = execute(commands[label] + arguments, root, env, output / f"pair-{pair + 1}-{label}-{fixture}.csv")
+                rows = measurements(result.stdout, "allocations" if label == "rust" else "allocated_bytes", expected)
+                if not trial.keys().isdisjoint(rows):
+                    raise SystemExit("Fixture scenarios overlap")
+                trial.update(rows)
+                if label == "fusion":
+                    lines = result.stderr.strip().splitlines()
+                    if len(lines) < 3 or not lines[0].startswith("2.9.0+"):
+                        raise SystemExit("The reference is not the released FusionCache 2.9.0 package")
+                    current = lines[:3]
+                    if identity is not None and current != identity:
+                        raise SystemExit("The reference package or runtime changed during measurement")
+                    identity = current
+            records[label].append(trial)
         if sources(root) != frozen:
             raise SystemExit("Sources changed during the paired measurement")
     rows = []
@@ -182,7 +197,7 @@ def main():
     if args.gate != "report" and scaling_limit is not None and scaling < scaling_limit:
         failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {physical} available physical cores")
     report = {
-        "api": args.api, "gate": args.gate, "pairs": args.pairs, "environment": {
+        "api": args.api, "fixture_processes": ["warm", "mutations"], "gate": args.gate, "pairs": args.pairs, "environment": {
             "platform": platform.platform(), "available_cpus": cpu_count, "cpu_topology": topology,
             "rust": execute(["rustc", "--version", "--verbose"], root, env).stdout.strip(),
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),

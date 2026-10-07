@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 const OPERATIONS: usize = 300_000;
 const WARMUP: usize = 20_000;
+const SET_OPERATIONS: usize = 1_000_000;
+const COLD_OPERATIONS: usize = 100_000;
 #[derive(Clone, Copy)]
 enum Measurement {
     Inactive,
@@ -185,18 +187,18 @@ fn mutations(rt: &tokio::runtime::Runtime) {
         }
         begin_counting();
         let began = Instant::now();
-        for value in 1..=WARMUP {
+        for value in 1..=SET_OPERATIONS {
             writes.set("replace", value as u64).await.unwrap();
         }
         let elapsed = began.elapsed();
         let allocations = end_counting();
         println!(
-            "set,1,{WARMUP},{:.3},{allocations}",
-            elapsed.as_nanos() as f64 / WARMUP as f64
+            "set,1,{SET_OPERATIONS},{:.3},{allocations}",
+            elapsed.as_nanos() as f64 / SET_OPERATIONS as f64
         );
         assert_eq!(
             writes.read("replace", None).await.unwrap().into_value(),
-            Some(WARMUP as u64)
+            Some(SET_OPERATIONS as u64)
         );
         let warm = cache();
         for id in 0..WARMUP {
@@ -210,7 +212,10 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             );
         }
         warm.shutdown().await.unwrap();
-        let keys: Vec<_> = (0..WARMUP).map(|id| format!("cold-{id}")).collect();
+        drop(warm);
+        let keys: Vec<_> = (0..COLD_OPERATIONS)
+            .map(|id| format!("cold-{id}"))
+            .collect();
         begin_counting();
         let began = Instant::now();
         for key in &keys {
@@ -227,8 +232,8 @@ fn mutations(rt: &tokio::runtime::Runtime) {
         let elapsed = began.elapsed();
         let allocations = end_counting();
         println!(
-            "cold,1,{WARMUP},{:.3},{allocations}",
-            elapsed.as_nanos() as f64 / WARMUP as f64
+            "cold,1,{COLD_OPERATIONS},{:.3},{allocations}",
+            elapsed.as_nanos() as f64 / COLD_OPERATIONS as f64
         );
         writes.shutdown().await.unwrap();
     });
@@ -239,10 +244,14 @@ fn main() {
         return;
     }
     match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [flag] if flag == "--mutations" => {
+            println!("scenario,threads,operations,ns_per_op,allocations");
+            mutations(&runtime());
+        }
         [] => run::<ReadHit>(),
         [flag, value] if flag == "--api" && value == "read" => run::<ReadHit>(),
         [flag, value] if flag == "--api" && value == "get-or-set" => run::<OriginHit>(),
-        args => panic!("expected --api read|get-or-set, got {args:?}"),
+        args => panic!("expected --api read|get-or-set or --mutations, got {args:?}"),
     }
 }
 fn run<H: WarmHit>() {
@@ -268,7 +277,6 @@ fn run<H: WarmHit>() {
     }
     rt.block_on(cache.shutdown()).unwrap();
     synchronous_hit::<H>();
-    mutations(&rt);
 }
 
 fn cost(label: &str, mut operation: impl FnMut() -> u64) {

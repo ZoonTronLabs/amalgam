@@ -7,6 +7,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Compare identical mutation workloads in fresh processes, independently of
+  the selected warm-read API. Replacement and cold samples now contain one
+  million and one hundred thousand operations respectively in both runtimes;
+  reports retain every raw CSV and check counts and values.
 - Inline factories borrow their version's storage and key from the already
   retained cache frame. Version comparison and commit remain atomic; snapshot
   release still follows key coordination, including clear and late completion.

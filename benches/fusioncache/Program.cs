@@ -7,6 +7,8 @@ internal static class Program
 {
     private const int Operations = 300_000;
     private const int Warmup = 20_000;
+    private const int SetOperations = 1_000_000;
+    private const int ColdOperations = 100_000;
     private static FusionCache New() => new(new FusionCacheOptions
     {
         DefaultEntryOptions = new(TimeSpan.FromHours(1)),
@@ -81,16 +83,14 @@ internal static class Program
     }
     public static Task Main(string[] args) => args switch
     {
+        ["--mutations"] => RunMutations(),
         [] or ["--api", "read"] => Run<ReadHit>(),
         ["--api", "get-or-set"] => Run<OriginHit>(),
-        _ => throw new ArgumentException("Expected --api read|get-or-set"),
+        _ => throw new ArgumentException("Expected --api read|get-or-set or --mutations"),
     };
     private static async Task Run<H>() where H : struct, IWarmHit
     {
-        Assembly library = typeof(FusionCache).Assembly;
-        Console.Error.WriteLine(library.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
-        Console.Error.WriteLine(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(library.Location))).ToLowerInvariant());
-        Console.Error.WriteLine(System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
+        Identity();
         using FusionCache cache = New();
         string[] keys = Enumerable.Range(0, 8).Select(id => $"key-{id}").ToArray();
         for (int id = 0; id < keys.Length; id++) await cache.SetAsync(keys[id], (long)id + 1);
@@ -98,25 +98,41 @@ internal static class Program
         foreach (int workers in new[] { 1, 2, 4, 8 })
             foreach (bool same in new[] { true, false }) Scaling<H>(cache, keys, workers, same);
         SynchronousHit<H>();
+    }
+    private static void Identity()
+    {
+        Assembly library = typeof(FusionCache).Assembly;
+        Console.Error.WriteLine(library.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
+        Console.Error.WriteLine(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(library.Location))).ToLowerInvariant());
+        Console.Error.WriteLine(System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
+    }
+    private static async Task RunMutations()
+    {
+        Identity();
+        Console.WriteLine("scenario,threads,operations,ns_per_op,allocated_bytes");
+        await Mutations();
+    }
+    private static async Task Mutations()
+    {
         using FusionCache writes = New();
         for (int id = 0; id < Warmup; id++) await writes.SetAsync("replace", (long)id);
         long before = GC.GetAllocatedBytesForCurrentThread();
         long began = Stopwatch.GetTimestamp();
-        for (int id = 1; id <= Warmup; id++) await writes.SetAsync("replace", (long)id);
+        for (int id = 1; id <= SetOperations; id++) await writes.SetAsync("replace", (long)id);
         double elapsed = Stopwatch.GetElapsedTime(began).TotalNanoseconds;
-        Console.WriteLine(FormattableString.Invariant($"set,1,{Warmup},{elapsed / Warmup:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
-        if ((await writes.TryGetAsync<long>("replace")).Value != Warmup) throw new InvalidOperationException("Replacement mismatch");
+        Console.WriteLine(FormattableString.Invariant($"set,1,{SetOperations},{elapsed / SetOperations:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
+        if ((await writes.TryGetAsync<long>("replace")).Value != SetOperations) throw new InvalidOperationException("Replacement mismatch");
         using (FusionCache warm = New())
             for (int id = 0; id < Warmup; id++)
                 if (await warm.GetOrSetAsync<long>($"warm-{id}", static (_, _) => Task.FromResult(7L)) != 7)
                     throw new InvalidOperationException("Factory warmup mismatch");
-        string[] cold = Enumerable.Range(0, Warmup).Select(id => $"cold-{id}").ToArray();
+        string[] cold = Enumerable.Range(0, ColdOperations).Select(id => $"cold-{id}").ToArray();
         before = GC.GetAllocatedBytesForCurrentThread();
         began = Stopwatch.GetTimestamp();
         foreach (string key in cold)
             if (await writes.GetOrSetAsync<long>(key, static (_, _) => Task.FromResult(7L)) != 7)
                 throw new InvalidOperationException("Cold value mismatch");
         elapsed = Stopwatch.GetElapsedTime(began).TotalNanoseconds;
-        Console.WriteLine(FormattableString.Invariant($"cold,1,{Warmup},{elapsed / Warmup:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
+        Console.WriteLine(FormattableString.Invariant($"cold,1,{ColdOperations},{elapsed / ColdOperations:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
     }
 }
