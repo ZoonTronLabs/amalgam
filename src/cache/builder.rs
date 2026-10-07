@@ -717,12 +717,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         } else {
             crate::entry::DefaultFreshPlan::General
         };
-        #[cfg(target_arch = "x86_64")]
-        let write_plan = if self.jitter.is_none() {
-            write_plan.with_shared_slots(ready_plan, &default_fresh_plan, &self.default_options)
-        } else {
-            write_plan
-        };
         let default_copy = crate::serializers::DefaultValueCopy::validated(
             &self.default_options,
             cloner.as_ref(),

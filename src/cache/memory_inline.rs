@@ -35,8 +35,6 @@ impl<T: Unpin> std::future::Future for MutationStart<'_, T> {
 #[derive(Clone, Copy)]
 pub(super) enum WritePlan {
     InlineMemory,
-    #[cfg(target_arch = "x86_64")]
-    SharedSlots,
     General,
 }
 impl WritePlan {
@@ -57,30 +55,7 @@ impl WritePlan {
         }
     }
     pub(super) fn is_inline(self) -> bool {
-        match self {
-            Self::InlineMemory => true,
-            #[cfg(target_arch = "x86_64")]
-            Self::SharedSlots => true,
-            Self::General => false,
-        }
-    }
-    #[cfg(target_arch = "x86_64")]
-    pub(super) fn with_shared_slots(
-        self,
-        ready: super::plain_ready::ReadyPlan,
-        fresh: &crate::entry::DefaultFreshPlan,
-        options: &EntryOptions,
-    ) -> Self {
-        if self.is_inline()
-            && matches!(ready, super::plain_ready::ReadyPlan::CallbackFree)
-            && matches!(fresh, crate::entry::DefaultFreshPlan::Plain(_))
-            && !options.skip_memory_write()
-            && !options.resolved_memory_duration().is_zero()
-        {
-            Self::SharedSlots
-        } else {
-            self
-        }
+        matches!(self, Self::InlineMemory)
     }
 }
 
@@ -101,10 +76,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         tags: std::result::Result<Box<[Tag]>, crate::TagError>,
         token: Option<&FactoryCancellation>,
     ) -> Result<LocalEffect> {
-        #[cfg(target_arch = "x86_64")]
-        if let Some(result) = self.shared_slots_set(raw, &value, &options, &tags, token) {
-            return result;
-        }
         let permit = self.inline();
         let key = match &self.inner.key_prefix {
             Some(prefix) => std::borrow::Cow::Owned(format!("{prefix}{raw}")),
@@ -215,7 +186,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
 }
 
-pub(super) fn set_outcome<T>(result: &Result<T>) -> OperationOutcome {
+fn set_outcome<T>(result: &Result<T>) -> OperationOutcome {
     match result {
         Ok(_) => OperationOutcome::Stored,
         Err(error) => OperationOutcome::from_error(error),

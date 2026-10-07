@@ -7,10 +7,6 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- Publish ordinary primitive L1 writes through the existing x86 storage writer
-  fence. The build-selected plan retains shutdown accounting through admission,
-  retirement and completion; configured callbacks, explicit options and
-  operation observers keep their ordinary counted path.
 - Add counterbalanced same-runner Rust diagnostics with frozen workloads,
   raw allocation samples and source identities. Manual CI runs can compare a
   local baseline commit without changing the comparative FusionCache gates.

@@ -615,22 +615,13 @@ impl InlineActivity<'_> {
     }
 }
 /// A reservation cannot be checked or used for callbacks until a storage
-/// guard, acquired AFTER this reservation, supplies its SeqCst fence.
+/// reader guard, acquired AFTER this reservation, supplies its SeqCst fence.
 #[cfg(target_arch = "x86_64")]
 pub(crate) struct DeferredInlinePermit<'a> {
     activity: ThreadActivity<'a>,
 }
 #[cfg(target_arch = "x86_64")]
 impl<'a> DeferredInlinePermit<'a> {
-    /// The guard must have been acquired AFTER this reservation.
-    pub(crate) fn after_writer<T>(
-        self,
-        _guard: &crate::reader_slots::WriteGuard<'_, T>,
-    ) -> InlinePermit<'a> {
-        InlinePermit {
-            activity: InlineActivity::Thread(self.activity),
-        }
-    }
     pub(crate) fn after_reader<T>(
         self,
         _guard: &crate::reader_slots::ReadGuard<'_, T>,
