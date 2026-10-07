@@ -2,7 +2,7 @@ use amalgam::{
     Cache, Error, FactoryCancellation, FactoryCancellationReason, FactoryContext, FactoryError,
     FactoryProduct, MutationReceipt,
 };
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,8 +12,8 @@ use std::time::Duration;
 fn once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
     future.poll(&mut Context::from_waker(Waker::noop()))
 }
-fn ready<F: Future>(future: F) -> F::Output {
-    let mut future = std::pin::pin!(future);
+fn ready<F: IntoFuture>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future.into_future());
     match once(future.as_mut()) {
         Poll::Ready(value) => value,
         Poll::Pending => panic!("ready factory must not require a runtime"),
@@ -101,16 +101,20 @@ fn dropping_a_caller_keeps_the_pinned_factory_for_a_new_driver() {
     let release = ready.clone();
     let seen = address.clone();
     let destroyed = dropped.clone();
-    let mut caller = Box::pin(cache.get_or_set("pinned", move |context| {
-        runs.fetch_add(1, Ordering::SeqCst);
-        PinnedFactory {
-            context: std::cell::RefCell::new(Some(context)),
-            ready: release,
-            address: seen,
-            dropped: destroyed,
-            _pin: std::marker::PhantomPinned,
-        }
-    }));
+    let mut caller = Box::pin(
+        cache
+            .get_or_set("pinned", move |context| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                PinnedFactory {
+                    context: std::cell::RefCell::new(Some(context)),
+                    ready: release,
+                    address: seen,
+                    dropped: destroyed,
+                    _pin: std::marker::PhantomPinned,
+                }
+            })
+            .into_future(),
+    );
     assert!(once(caller.as_mut()).is_pending());
     drop(caller);
     assert!(!dropped.load(Ordering::SeqCst));
@@ -133,20 +137,28 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
     let runs = Arc::new(AtomicUsize::new(0));
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let count = runs.clone();
-    let mut leader = Box::pin(cache.get_or_set("failed", move |_| async move {
-        count.fetch_add(1, Ordering::SeqCst);
-        released.await.unwrap();
-        Err(FactoryError::from_source(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "source refused",
-        )))
-    }));
+    let mut leader = Box::pin(
+        cache
+            .get_or_set("failed", move |_| async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                released.await.unwrap();
+                Err(FactoryError::from_source(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "source refused",
+                )))
+            })
+            .into_future(),
+    );
     assert!(once(leader.as_mut()).is_pending());
     let mut followers = Vec::with_capacity(20);
     for _ in 0..20 {
-        let mut follower = Box::pin(cache.get_or_set("failed", |_| async {
-            panic!("must not start another factory")
-        }));
+        let mut follower = Box::pin(
+            cache
+                .get_or_set("failed", |_| async {
+                    panic!("must not start another factory")
+                })
+                .into_future(),
+        );
         assert!(once(follower.as_mut()).is_pending());
         followers.push(follower);
     }
@@ -183,12 +195,20 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
 async fn leader_gets_original_panic_and_followers_get_a_typed_outcome() {
     let cache = Cache::<u64>::new();
     let (release, released) = tokio::sync::oneshot::channel::<()>();
-    let mut leader = Box::pin(cache.get_or_set("panic", |_| async move {
-        released.await.unwrap();
-        std::panic::panic_any(91_u64)
-    }));
+    let mut leader = Box::pin(
+        cache
+            .get_or_set("panic", |_| async move {
+                released.await.unwrap();
+                std::panic::panic_any(91_u64)
+            })
+            .into_future(),
+    );
     assert!(once(leader.as_mut()).is_pending());
-    let mut follower = Box::pin(cache.get_or_set("panic", |_| async { panic!("second factory") }));
+    let mut follower = Box::pin(
+        cache
+            .get_or_set("panic", |_| async { panic!("second factory") })
+            .into_future(),
+    );
     assert!(once(follower.as_mut()).is_pending());
     release.send(()).unwrap();
     let result = tokio::time::timeout(

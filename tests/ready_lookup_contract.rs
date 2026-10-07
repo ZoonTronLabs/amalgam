@@ -1,7 +1,7 @@
 //! Ready L1 work retains cancellation, observation and synchronous drainage.
 use amalgam::*;
 use std::error::Error as _;
-use std::future::{Future, pending, poll_fn};
+use std::future::{Future, IntoFuture, pending, poll_fn};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::Poll;
@@ -335,12 +335,16 @@ async fn shutdown_waits_a_cancelled_parked_future_destructor_before_claiming_dra
     let origin_gate = gate.clone();
     let entered = Arc::new(AtomicBool::new(false));
     let origin_entered = entered.clone();
-    let mut operation = Box::pin(cache.get_or_set("pending", move |ctx| async move {
-        let _drop = UnusedFactory(origin_gate);
-        origin_entered.store(true, Ordering::SeqCst);
-        pending::<()>().await;
-        Ok(ctx.value(99))
-    }));
+    let mut operation = Box::pin(
+        cache
+            .get_or_set("pending", move |ctx| async move {
+                let _drop = UnusedFactory(origin_gate);
+                origin_entered.store(true, Ordering::SeqCst);
+                pending::<()>().await;
+                Ok(ctx.value(99))
+            })
+            .into_future(),
+    );
     poll_fn(|cx| {
         assert!(operation.as_mut().poll(cx).is_pending());
         if entered.load(Ordering::SeqCst) {

@@ -9,7 +9,6 @@
   <a href="https://docs.rs/amalgam-cache"><img src="https://img.shields.io/docsrs/amalgam-cache" alt="docs.rs"></a>
   <a href="https://github.com/ZoonTronLabs/amalgam/actions/workflows/ci.yml"><img src="https://github.com/ZoonTronLabs/amalgam/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT">
-  <img src="https://img.shields.io/badge/unsafe-forbidden-success.svg" alt="forbid unsafe">
 </p>
 
 A Rust hybrid cache with async operations, inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
@@ -63,8 +62,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Use fallible APIs for new callers. `read` distinguishes a successful miss from a storage, copy or configuration failure. A mutation returns a `MutationReceipt`: `Completed` contains its stage report; `Scheduled` contains awaitable cache-owned completion. `wait()` observes actual completion, including a requested error rethrow. A completed report can also record skipped stages, suppressed failures and work admitted to recovery, according to the configured policy.
 
-Legacy `build`, `set`, `try_get`, `remove`, `expire` and `clear(bool)` signatures remain compatibility adapters. Their original signatures cannot return every newly modeled failure; diagnostics retain observed failures. Prefer `try_build`, fallible reads/mutations and explicit shutdown when handling those failures matters.
+Legacy `build`, `try_get`, `remove`, `expire` and `clear(bool)` signatures remain compatibility adapters in this developing source API. Their original signatures cannot return every newly modeled failure; diagnostics retain observed failures. Prefer `try_build`, fallible reads/mutations and explicit shutdown when handling those failures matters.
 
+
+## Fluent requests (unreleased source)
+
+`set` and `get_or_set` execute when awaited. An option transformation starts
+from a copy of the cache defaults, so changing duration retains fail-safe and
+other settings. String tags are validated before storage or factory work.
+
+```rust
+use std::time::Duration;
+
+let value = cache
+    .get_or_set("profile", |ctx| async move { Ok(ctx.value("Alice".to_owned())) })
+    .options(|options| options.with_duration(Duration::from_secs(30)))
+    .tags(["users"])
+    .await?;
+
+cache.set("profile", value).tags(["users"]).await?;
+let observed = cache
+    .get_or_set("profile", |_| async { panic!("already cached") })
+    .with_receipt()
+    .await?;
+observed.commit.wait().await?;
+```
+
+Optional `.fail_safe_default(value)` and `.cancellation(token)` apply to the
+individual request. A manually polled request first calls `.into_future()`;
+this separates configuration from pinned execution. The remaining operation
+names and factory-value API are still being migrated for 0.4.
 
 ## Synchronous use (unreleased source)
 
@@ -138,7 +165,7 @@ Entry count and entry weight are separate limits. Under pressure the priority po
 
 ## Recovery, events and diagnostics
 
-Recovery defaults to enabled for a configured distributed provider, with a 2-second delay and **1024 queued items**. Explicit `max_items: None` permits an unlimited queue. The bound is a deliberate difference from the FusionCache/0.2 default. Queue-full rejection and exhausted retry budgets are observable. Markers are compacted conservatively rather than silently forgotten.
+Recovery defaults to enabled for a configured distributed provider, with a 5-second delay and **1024 queued items** in the developing 0.4 source. Explicit `max_items: None` permits an unlimited queue. The bound is a deliberate difference from the FusionCache/0.2 default. Queue-full rejection and exhausted retry budgets are observable. Markers are compacted conservatively rather than silently forgotten.
 
 Transport failures trip the corresponding circuit breaker; codec or value-copy failures do not declare every key's transport unhealthy. Default breaker duration is zero, meaning disabled. Read I/O budgets and provider lifecycle budgets are distinct from the intentionally unbounded default cache write/remove contract.
 
@@ -168,4 +195,4 @@ See [migration and tested FusionCache contract](docs/PARITY.md), [validation and
 
 ## Acknowledgements
 
-[FusionCache](https://github.com/ZiggyCreatures/FusionCache) by ZiggyCreatures provides the resiliency model and comparison reference. Amalgam uses Tokio, independently locked L1 storage and the open Rust integration ecosystem. Distributed providers and copying strategies remain extensible; internal finite outcomes use typed enums. The crate forbids unsafe code.
+[FusionCache](https://github.com/ZiggyCreatures/FusionCache) by ZiggyCreatures provides the resiliency model and comparison reference. Amalgam uses Tokio, independently locked L1 storage and the open Rust integration ecosystem. Distributed providers and copying strategies remain extensible; internal finite outcomes use typed enums. Cache logic uses safe Rust; the private reader-slot synchronization boundary contains documented unsafe operations.

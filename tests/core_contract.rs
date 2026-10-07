@@ -1,7 +1,7 @@
 //! Canonical pipeline, lifecycle and boundary acceptance.
 use amalgam::*;
 use async_trait::async_trait;
-use std::future::{Future, pending, poll_fn};
+use std::future::{Future, IntoFuture, pending, poll_fn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
@@ -41,12 +41,16 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
     let origin_drop = dropped.clone();
     let (token_tx, mut token_rx) = oneshot::channel();
     let mut events = cache.events().subscribe();
-    let mut operation = Box::pin(cache.get_or_set("parked", move |ctx| async move {
-        let _drop = DropSignal(origin_drop);
-        token_tx.send(ctx.cancellation().clone()).unwrap();
-        pending::<()>().await;
-        Ok(ctx.value(1))
-    }));
+    let mut operation = Box::pin(
+        cache
+            .get_or_set("parked", move |ctx| async move {
+                let _drop = DropSignal(origin_drop);
+                token_tx.send(ctx.cancellation().clone()).unwrap();
+                pending::<()>().await;
+                Ok(ctx.value(1))
+            })
+            .into_future(),
+    );
     poll_fn(|cx| {
         assert!(operation.as_mut().poll(cx).is_pending());
         if token_rx.try_recv().is_ok() {

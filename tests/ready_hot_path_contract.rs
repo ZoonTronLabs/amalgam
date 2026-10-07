@@ -1,6 +1,6 @@
 //! Ready hits preserve raw-key options, eager ownership and local-only startup.
 use amalgam::{Cache, DefaultEntryOptionsProvider, EagerThreshold, EntryOptions, ManualClock};
-use std::future::{Future, poll_fn};
+use std::future::{Future, IntoFuture, poll_fn};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
@@ -69,11 +69,15 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
     let release = Arc::new(Notify::new());
     let began = started.clone();
     let released = release.clone();
-    let mut hit = Box::pin(cache.get_or_set("key", move |ctx| async move {
-        began.notify_one();
-        released.notified().await;
-        Ok(ctx.value(8))
-    }));
+    let mut hit = Box::pin(
+        cache
+            .get_or_set("key", move |ctx| async move {
+                began.notify_one();
+                released.notified().await;
+                Ok(ctx.value(8))
+            })
+            .into_future(),
+    );
     poll_fn(|cx| match hit.as_mut().poll(cx) {
         Poll::Ready(value) => {
             assert_eq!(value.unwrap(), 7);

@@ -424,15 +424,16 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         Ok(Some(ReadyHit { value, refresh }))
     }
 
-    /// Returns a value or produces it. Background write policy is observable;
-    /// use get_or_set_full_with_commit when its actual completion is required.
-    pub async fn get_or_set<F, Fut>(&self, key: impl AsRef<str>, factory: F) -> Result<V>
+    /// Lazily retrieves or computes a value. Options edit a copy of defaults;
+    /// string tags, a fail-safe default and cancellation are optional inputs.
+    /// Use `with_receipt()` to inspect the actual origin commit.
+    pub fn get_or_set<K, F, Fut>(&self, key: K, factory: F) -> super::GetOrSetRequest<'_, K, F, V>
     where
+        K: AsRef<str>,
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
         Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
     {
-        self.get_or_set_full(key, factory, None, Box::from([]), MaybeValue::none())
-            .await
+        super::GetOrSetRequest::new(self, key, factory)
     }
     /// Retrieval with explicit options.
     pub async fn get_or_set_with<F, Fut>(
@@ -700,6 +701,48 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             super::inline_cold::Start::Pending(work) => work.await,
         }
     }
+    pub(super) fn begin_origin_request<O: CacheOrigin<V>>(
+        &self,
+        key: &str,
+        origin: O,
+        options: Option<Box<EntryOptions>>,
+        tags: std::result::Result<Box<[Tag]>, crate::TagError>,
+        fallback: MaybeValue<V>,
+        token: Option<FactoryCancellation>,
+    ) -> super::inline_cold::Start<V> {
+        match tags {
+            Ok(tags) => self.begin_origin(
+                key,
+                origin,
+                options.map(|options| *options),
+                tags,
+                fallback,
+                token,
+            ),
+            Err(error) => {
+                let permit = self.inline();
+                let observation = ReadyObservation::new(
+                    &self.inner.events,
+                    &self.inner.name,
+                    &self.inner.instance_id,
+                    CacheOperation::GetOrSet,
+                    Some(key),
+                );
+                let error = match permit.admit().and_then(|()| permit.status(token.as_ref())) {
+                    Ok(()) => error.into(),
+                    Err(error) => error,
+                };
+                drop((origin, options, fallback));
+                let error = match permit.status(token.as_ref()) {
+                    Ok(()) => error,
+                    Err(error) => error,
+                };
+                observation.finish(OperationOutcome::from_error(&error));
+                super::inline_cold::Start::Ready(Err(error))
+            }
+        }
+    }
+
     fn begin_origin<O: CacheOrigin<V>>(
         &self,
         key: &str,

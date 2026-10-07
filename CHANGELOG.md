@@ -7,6 +7,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- `get_or_set` is now a lazy fluent request: options overlay cache defaults,
+  tags accept strings, and fallback, cancellation and commit receipts are
+  explicit inputs. Only a pending operation stores its asynchronous driver.
+  Manually polled requests use `IntoFuture`; `BlockingRuntime::run` accepts it.
 - Ordinary builders now follow FusionCache outage availability: cooperative
   distributed ownership, retained L1 across notification gaps, no periodic L1
   clearing for L2-only caches, and no initial subscription wait. `strict()`

@@ -1,7 +1,7 @@
 //! Driven I/O and bounded lineage-separated blocking callback pools.
 use crate::execution::{Scopes, lock};
 use std::cell::{Cell, RefCell};
-use std::future::Future;
+use std::future::{Future, IntoFuture};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
@@ -267,7 +267,7 @@ impl BlockingRuntime {
     /// Drives a future on its caller while I/O and timers remain driven.
     /// It works outside Tokio and on foreign workers without nested block_on.
     /// The synchronous caller remains occupied until its operation completes.
-    pub fn run<F: Future>(&self, future: F) -> F::Output {
+    pub fn run<F: IntoFuture>(&self, future: F) -> F::Output {
         match Handle::try_current() {
             Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
                 tokio::task::block_in_place(|| self.run_entered(future))
@@ -275,9 +275,9 @@ impl BlockingRuntime {
             Ok(_) | Err(_) => self.run_entered(future),
         }
     }
-    fn run_entered<F: Future>(&self, future: F) -> F::Output {
+    fn run_entered<F: IntoFuture>(&self, future: F) -> F::Output {
         let _entered = self.driver.handle.enter();
-        let mut future = std::pin::pin!(future);
+        let mut future = std::pin::pin!(future.into_future());
         CALLER_WAKER.with(|waker| {
             let mut context = Context::from_waker(waker);
             loop {
