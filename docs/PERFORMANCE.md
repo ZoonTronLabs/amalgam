@@ -57,6 +57,33 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
+## L2 hydration copy contract and focused measurement
+
+The latest candidate prepares validated local lifetime facts and copies the
+decoded value directly into its hydrated L1 entry. It avoids an ordinary
+`V::clone()` whose result was immediately replaced by the configured copy.
+The public entry-hydration helper retains its existing clone and lifetime
+contract. A public auto-clone regression verifies that only the supplied cloner
+copies the L1 and caller values; hydration deadlines and fencing are unchanged.
+
+Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
+FC 2.9.0/.NET 10.0.8 settled all 48 warmup records. The baseline is the constructor
+and coordination checkpoint. These are focused diagnostics; hot reads are frozen.
+
+| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
+|---|---:|---:|---:|---:|---:|---:|---|
+| L2 JSON read | 1157.1 | 1151.7 | 1158.3 | 1840.9 | 0.994 | 9 | <=1.00 |
+| L2 JSON get_or_set | 1436.7 | 1448.2 | 1283.1 | 1977.7 | **1.129** | 9 | **Fail: <=1.00** |
+| L1 replacement | 93.1 | 90.0 | 108.7 | 140.9 | **0.828** | 0 | **Fail: <=0.75** |
+| Cold factory | 1080.0 | 1098.1 | 1578.2 | 1884.8 | 0.696 | 5.009 | <=1668 ns, <=6 allocations |
+
+Both L2 timing changes are below one percent, and the integer fixture still has
+nine allocations. This change is retained for the selected-copy contract and
+simpler hydration; it does not establish an L2 speedup. Set is unchanged by the
+hydration change, and cold ranges overlap. L2 get_or_set and set remain outside
+their budgets. This is not full scaling or release qualification. See the
+[source identities, ranges and warmup windows](benchmarks/2026-10-08-l2-hydration-prepared.json).
+
 ## Focused L2 coordination ownership diagnostic
 
 Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released

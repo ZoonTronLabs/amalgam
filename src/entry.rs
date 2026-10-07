@@ -248,6 +248,23 @@ impl<V> FreshValue<V> {
     }
 }
 
+/// Validated local lifetime facts, prepared before copying a decoded value.
+pub(crate) struct MemoryHydration(Metadata);
+impl MemoryHydration {
+    fn with_value<V>(self, value: V, eligibility: Eligibility) -> Entry<V> {
+        Entry {
+            inner: Arc::new(EntryInner {
+                value,
+                meta: self.0,
+                eligibility,
+            }),
+        }
+    }
+    pub(crate) fn with_hydrated_value<V>(self, value: V, stamp: ContinuityStamp) -> Entry<V> {
+        self.with_value(value, Eligibility::Hydrated(stamp))
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Eligibility {
     Local,
@@ -787,6 +804,19 @@ impl<V> Entry<V> {
     where
         V: Clone,
     {
+        self.prepare_memory_hydration(options, now).map(|prepared| {
+            prepared.map(|metadata| {
+                metadata.with_value(self.value().clone(), self.inner.eligibility.clone())
+            })
+        })
+    }
+
+    /// Prepares lifetime facts without a temporary value copy or shared owner.
+    pub(crate) fn prepare_memory_hydration(
+        &self,
+        options: &EntryOptions,
+        now: Timestamp,
+    ) -> Result<Option<MemoryHydration>> {
         let requested_size = options.size()?;
         if !self.is_read_eligible() || self.is_physically_expired(now) {
             return Ok(None);
@@ -826,13 +856,7 @@ impl<V> Entry<V> {
                     }),
             },
         };
-        Ok(Some(Self {
-            inner: Arc::new(EntryInner {
-                value: self.value().clone(),
-                meta,
-                eligibility: self.inner.eligibility.clone(),
-            }),
-        }))
+        Ok(Some(MemoryHydration(meta)))
     }
 
     /// Builds a fail-safe entry from a default value (the `fail_safe_default`),
