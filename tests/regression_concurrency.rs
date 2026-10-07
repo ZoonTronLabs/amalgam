@@ -141,7 +141,7 @@ async fn unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn distinct_cold_keys_keep_independent_factory_progress() {
-    let cache: Cache<i32> = Cache::builder().build();
+    let cache: Cache<i32> = Cache::builder().try_build().unwrap();
     let mut tasks = Vec::with_capacity(128);
     for index in 0..128 {
         let cache = cache.clone();
@@ -219,7 +219,8 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
     let cache: Cache<i32> = Cache::builder()
         .clock(clock.clone())
         .default_options(eager_options())
-        .build();
+        .try_build()
+        .unwrap();
     cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(6));
     let mut events = cache.events().subscribe();
@@ -329,7 +330,8 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
     let cache: Cache<i32> = Cache::builder()
         .clock(clock.clone())
         .default_options(options)
-        .build();
+        .try_build()
+        .unwrap();
     cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(20));
     let (release_tx, release_rx) = oneshot::channel();
@@ -375,7 +377,8 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
             .clock(dyn_clock.clone())
             .distributed_locker(locker.clone())
             .default_options(options.clone())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let a = build();
     let b = build();
@@ -452,7 +455,8 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
             .distributed(l2.clone())
             .serializer(Arc::new(JsonSerializer))
             .default_options(options.clone())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let a = build();
     let b = build();
@@ -524,7 +528,8 @@ async fn tag_invalidation_must_cover_a_factory_snapshot_started_before_its_marke
     let cache: Cache<i32> = Cache::builder()
         .clock(clock.clone())
         .remove_by_tag_behavior(RemoveByTagBehavior::Remove)
-        .build();
+        .try_build()
+        .unwrap();
     let (snapshot_tx, snapshot_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let first = {
@@ -632,7 +637,8 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
     let cache: Cache<i32> = Cache::builder()
         .clock(clock.clone())
         .default_options(options)
-        .build();
+        .try_build()
+        .unwrap();
     cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(20));
     let mut events = cache.events().subscribe();

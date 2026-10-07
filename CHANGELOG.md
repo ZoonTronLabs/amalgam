@@ -5,6 +5,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Configured construction
+- Remove the public panicking `CacheBuilder::build` alias. Configured construction
+  uses `try_build` and preserves typed configuration, provider, plugin and runtime
+  errors. Keep `Cache::new` for fixed valid memory-only defaults; update examples
+  and migration guidance.
+
 ### Public namespaces
 - Keep ordinary cache operations, options and typed errors in the root. Move
   provider interfaces, implementations and capabilities to `provider`; move
@@ -32,6 +38,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
   of losing it in the legacy adapter; cached contents remain unchanged.
 
 ### Factory API and distributed execution
+- Move upgraded L2 coordination owners directly into their consumers. Reusing a
+  live identity does not sweep the idle queue; bounded cleanup runs on identity
+  creation and explicit maintenance. Retain holder/waiter identity and generation
+  fencing while limiting reuse to scalar metadata.
 - Unify factory and supplied-value retrieval under `get_or_set`. Remove separate
   options, cancellation and commit overloads; configure the lazy request instead.
   `source::factory` retains callback type inference without runtime ownership;

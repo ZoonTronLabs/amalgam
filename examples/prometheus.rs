@@ -49,7 +49,7 @@ mod demo {
         // amalgam_hits_stale_total, …) via the `metrics` facade we just wired up.
         let cache: Cache<String> = Cache::builder()
             .plugin(Arc::new(MetricsPlugin::new()))
-            .build();
+            .try_build()?;
 
         // Bounded so the example terminates on its own; press Ctrl-C to stop
         // earlier. Each iteration produces a mix of misses, hits, sets and

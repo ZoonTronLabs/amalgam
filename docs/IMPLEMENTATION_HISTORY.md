@@ -440,3 +440,31 @@ After the example repair, all-feature Rust 1.88 tests passed: 804 checks, includ
 nine doctests. Strict all-target/all-feature clippy and all-feature rustdoc with
 warnings denied passed on the same working source. Live Redis qualification
 remains a separate mandatory CI job.
+
+
+## 2026-10-07 — one fallible configured constructor
+
+Removed the public CacheBuilder::build panicking adapter. Existing try_build
+remains the sole ordinary configured constructor and retains its original typed
+errors. This was selected over changing build to Result and retaining a second
+alias: callers already use try_build, and RS-6 names that validation boundary.
+Cache::new still builds fixed, valid memory-only defaults without a runtime;
+its impossible construction rejection is an internal invariant tripwire.
+
+Compiler diagnostics identified exactly the removed CacheBuilder calls, avoiding
+Tokio and other provider builders. Migrated 129 test/fixture/example calls without
+changing contract assertions. Examples propagate configuration failure or use
+Cache::new for the unconfigured defaults. Builder/rustdoc and migration examples
+are updated. This does not change retrieval failure policy or not_modified tags,
+whose owner decision remains pending.
+
+
+The constructor migration passed all 804 all-feature checks on Rust 1.88,
+all-target/all-feature strict clippy, formatting and rustdoc with warnings denied.
+The completed prior CI run 37671995620 was preserved in PERFORMANCE.md and two
+raw repository reports. It is not qualified: default-PGO L2/set ratios fail and
+several cold warmups are unsettled. The hot/native failures are recorded without
+reopening frozen hot-read optimization. Safety, individual features, dependency
+advisories and both package consumers passed; Windows and Linux logs confirm the
+platform/runtime jobs fail at the repaired OpenTelemetry doctest. No gate was
+waived and no main merge or publication was attempted.

@@ -27,7 +27,8 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
             .distributed(l2.clone())
             .serializer(Arc::new(JsonSerializer))
             .auto_recovery(no_recovery())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let a = make();
     let b = make();
@@ -80,7 +81,10 @@ async fn registry_concurrent_get_or_create_returns_one_shared_cache() {
 
 #[tokio::test]
 async fn oversized_weighted_entry_is_rejected() {
-    let cache = Cache::<i32>::builder().max_weighted_capacity(1).build();
+    let cache = Cache::<i32>::builder()
+        .max_weighted_capacity(1)
+        .try_build()
+        .unwrap();
     cache
         .set("oversized", 1)
         .options(|_| EntryOptions::default().with_size(1_000_000))
@@ -92,7 +96,7 @@ async fn oversized_weighted_entry_is_rejected() {
 
 #[tokio::test]
 async fn first_admitted_never_remove_entry_survives_capacity_pressure() {
-    let cache = Cache::<i32>::builder().max_capacity(1).build();
+    let cache = Cache::<i32>::builder().max_capacity(1).try_build().unwrap();
     let pinned = EntryOptions::default().with_priority(Priority::NeverRemove);
     for i in 0..20 {
         cache
@@ -130,7 +134,8 @@ async fn auto_clone_isolates_mutable_arc_at_public_boundaries() {
     let cache = Cache::<Arc<AtomicI32>>::builder()
         .default_options(options)
         .value_cloner(Arc::new(AtomicCloner))
-        .build();
+        .try_build()
+        .unwrap();
     cache
         .set("shared-mutable", Arc::new(AtomicI32::new(1)))
         .await
@@ -175,7 +180,10 @@ impl Plugin for Observer {
 #[tokio::test]
 async fn cold_get_or_set_emits_one_logical_miss() {
     let observer = Arc::new(Observer::default());
-    let cache = Cache::<i32>::builder().plugin(observer.clone()).build();
+    let cache = Cache::<i32>::builder()
+        .plugin(observer.clone())
+        .try_build()
+        .unwrap();
     cache
         .get_or_set("cold", amalgam::source::value(1))
         .await
@@ -195,7 +203,8 @@ async fn eviction_events_reach_plugins_exactly_once() {
     let cache = Cache::<i32>::builder()
         .max_capacity(1)
         .plugin(observer.clone())
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = cache.events().subscribe();
     for i in 0..20 {
         cache.set(format!("key-{i}"), i).await.unwrap();
@@ -248,7 +257,7 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
             .serializer(Arc::new(JsonSerializer))
             .auto_recovery(no_recovery())
     };
-    let writer = build().build();
+    let writer = build().try_build().unwrap();
     writer.set("healthy-key", 42).await.unwrap();
     l2.set(
         "v2:corrupt-key",
@@ -260,7 +269,8 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
     let reader = build()
         .distributed_circuit_breaker(Duration::from_secs(3600))
         .default_options(EntryOptions::default().with_rethrow_serialization_exceptions(false))
-        .build();
+        .try_build()
+        .unwrap();
     assert_eq!(
         reader
             .get_or_set("corrupt-key", amalgam::source::value(1))
@@ -278,7 +288,8 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
     );
     assert_eq!(
         build()
-            .build()
+            .try_build()
+            .unwrap()
             .get_or_set("healthy-key", amalgam::source::value(-1))
             .await
             .unwrap(),
@@ -306,7 +317,10 @@ async fn missing_serializer_is_a_typed_build_rejection() {
 
 #[tokio::test]
 async fn resilient_observer_survives_transient_lag() {
-    let cache = Cache::<i32>::builder().events_capacity(1).build();
+    let cache = Cache::<i32>::builder()
+        .events_capacity(1)
+        .try_build()
+        .unwrap();
     let mut events = cache.events().subscribe_resilient();
     for i in 0..10 {
         cache
@@ -354,11 +368,13 @@ async fn metrics_include_factory_misses_and_distinct_cache_labels() {
     let a = Cache::<i32>::builder()
         .name("alpha")
         .plugin(Arc::new(amalgam::MetricsPlugin::new()))
-        .build();
+        .try_build()
+        .unwrap();
     let b = Cache::<i32>::builder()
         .name("beta")
         .plugin(Arc::new(amalgam::MetricsPlugin::new()))
-        .build();
+        .try_build()
+        .unwrap();
     for cache in [a, b] {
         cache
             .get_or_set("k", amalgam::source::value(1))

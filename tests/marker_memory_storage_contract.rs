@@ -27,7 +27,8 @@ fn node(
         .default_options(options())
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_memory_storage(store.clone())
-        .build()
+        .try_build()
+        .unwrap()
 }
 async fn tagged(c: &Cache<u64>, value: u64) {
     c.set("key", value)
@@ -57,7 +58,8 @@ async fn actual_records_include_local_authority_independent_metadata_and_ready_r
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_memory_storage(store.clone())
         .tags_default_options(options().with_size(11).with_priority(Priority::High))
-        .build();
+        .try_build()
+        .unwrap();
     let provider: Arc<dyn MemoryStorage<MarkerObservation>> = store.clone();
     assert!(Arc::ptr_eq(c.marker_memory_storage().unwrap(), &provider));
     tagged(&c, 7).await;
@@ -174,7 +176,8 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .default_options(options())
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     tagged(&b, 23).await;
     let original = values.state.lock().unwrap().records["key"].clone();
     assert!(b.read("key", None).await.unwrap().has_value());
@@ -212,7 +215,8 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_memory_storage(store.clone())
         .invalidation_store(Arc::new(InMemoryInvalidationStore::default()))
-        .build();
+        .try_build()
+        .unwrap();
     tagged(&b, 29).await;
     tagged(&durable, 31).await;
     assert!(b.read("key", None).await.unwrap().has_value());
@@ -267,7 +271,8 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
                 .invalidation_store(journal.clone())
                 .marker_read_policy(MarkerReadPolicy::OptionsControlled)
                 .marker_memory_storage(store.clone())
-                .build(),
+                .try_build()
+                .unwrap(),
         );
     }
     for c in &caches {
@@ -473,7 +478,8 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .tags_default_options(EntryOptions::new(Duration::from_secs(1)))
         .marker_memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     c.set("key", 67)
         .with_receipt()
         .await
@@ -500,7 +506,8 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .tags_default_options(options().with_skip_memory(true, true))
         .marker_memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     c.set("key", 71)
         .with_receipt()
         .await
@@ -523,7 +530,8 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
             false,
         ))
         .marker_memory_storage(store)
-        .build();
+        .try_build()
+        .unwrap();
     c.set("key", 73)
         .with_receipt()
         .await
@@ -590,7 +598,8 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
             EntryOptions::new(Duration::from_secs(10)).with_eager_refresh(EagerThreshold::new(0.5)),
         )
         .marker_memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     c.set("key", 89)
         .with_receipt()
         .await
@@ -795,7 +804,8 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .memory_storage(values.clone())
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_memory_storage(markers.clone())
-        .build();
+        .try_build()
+        .unwrap();
     a.set("key", 103)
         .with_receipt()
         .await
@@ -1001,7 +1011,8 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
                 .with_distributed_duration(Duration::from_secs(30)),
         )
         .marker_memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     c.remove_by_tag(tag())
         .with_receipt()
         .await

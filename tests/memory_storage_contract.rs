@@ -19,7 +19,8 @@ fn cache<V: Clone + Send + Sync + 'static>(storage: &Arc<MapStorage<V>>) -> Cach
     Cache::builder()
         .memory_storage(storage.clone())
         .default_options(opts())
-        .build()
+        .try_build()
+        .unwrap()
 }
 fn cause(error: &Error) -> Fault {
     let Error::MemoryStorage(MemoryStorageError::Provider { source }) = error else {
@@ -288,7 +289,8 @@ async fn controlled_clock_keeps_values_until_the_actual_physical_deadline() {
         .memory_storage(store.clone())
         .memory_eviction_capture(EvictionCapture::AtRetirement)
         .default_options(EntryOptions::new(Duration::from_millis(20)))
-        .build();
+        .try_build()
+        .unwrap();
     c.set("clock", 29)
         .with_receipt()
         .await
@@ -312,7 +314,8 @@ async fn system_clock_retires_physically_expired_records() {
     let c = Cache::builder()
         .memory_storage(store.clone())
         .default_options(EntryOptions::new(Duration::from_millis(20)))
-        .build();
+        .try_build()
+        .unwrap();
     c.set("clock", 31)
         .with_receipt()
         .await
@@ -338,7 +341,8 @@ async fn fail_safe_keeps_the_supplied_representation() {
         .clock(clock.clone())
         .memory_storage(store.clone())
         .default_options(options.clone())
-        .build();
+        .try_build()
+        .unwrap();
     c.get_or_set(
         "stale",
         amalgam::source::factory(
@@ -373,7 +377,8 @@ async fn eager_refresh_updates_the_supplied_store_in_the_background() {
         .default_options(
             EntryOptions::new(Duration::from_secs(10)).with_eager_refresh(EagerThreshold::new(0.5)),
         )
-        .build();
+        .try_build()
+        .unwrap();
     c.set("eager", 41)
         .with_receipt()
         .await
@@ -528,11 +533,13 @@ async fn shared_provider_clear_is_isolated_by_the_actual_key_prefix() {
     let a = Cache::builder()
         .key_prefix("a:")
         .memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     let b = Cache::builder()
         .key_prefix("b:")
         .memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     a.set("key", 71)
         .with_receipt()
         .await
@@ -751,7 +758,8 @@ async fn retired_values_are_reported_to_the_inserting_cache_of_a_shared_store() 
     let a = Cache::builder()
         .memory_storage(store.clone())
         .memory_eviction_capture(EvictionCapture::AtRetirement)
-        .build();
+        .try_build()
+        .unwrap();
     let b = cache(&store);
     let mut original = a.memory_evictions().subscribe();
     let mut replacing = b.memory_evictions().subscribe();
@@ -814,7 +822,8 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
         .clock(clock.clone())
         .distributed(backend.clone())
         .serializer(Arc::new(JsonSerializer))
-        .build();
+        .try_build()
+        .unwrap();
     source
         .set("value", 109_u64)
         .with_receipt()
@@ -834,11 +843,13 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
         .memory_storage(store.clone())
         .distributed(pause.clone())
         .serializer(Arc::new(JsonSerializer))
-        .build();
+        .try_build()
+        .unwrap();
     let b = Cache::builder()
         .clock(clock.clone())
         .memory_storage(store.clone())
-        .build();
+        .try_build()
+        .unwrap();
     let reading = a.clone();
     let work = tokio::spawn(async move { reading.read("value", None).await });
     pause.entered.notified().await;
@@ -875,7 +886,8 @@ async fn soft_timeout_retains_background_completion_in_supplied_storage() {
         .memory_storage(store.clone())
         .clock(clock.clone())
         .default_options(options)
-        .build();
+        .try_build()
+        .unwrap();
     c.set("key", 127)
         .with_receipt()
         .await
@@ -917,7 +929,8 @@ async fn hard_timeout_does_not_admit_a_late_value_in_supplied_storage() {
             Timeout::After(Duration::from_millis(20)),
             false,
         ))
-        .build();
+        .try_build()
+        .unwrap();
     let error = c
         .get_or_set(
             "key",
@@ -970,7 +983,8 @@ async fn original_value_destruction_follows_provider_and_factory_guards() {
         .memory_storage(store.clone())
         .memory_locker(locker.clone())
         .default_options(options)
-        .build();
+        .try_build()
+        .unwrap();
     c.set(
         "key",
         Arc::new(ReentrantDrop {
@@ -1095,7 +1109,8 @@ async fn conditional_refresh_preserves_replaced_validators_in_supplied_records()
                 None,
             ),
         )
-        .build();
+        .try_build()
+        .unwrap();
     c.get_or_set(
         "conditional",
         amalgam::source::factory(|ctx| async move {
@@ -1133,7 +1148,10 @@ async fn conditional_refresh_preserves_replaced_validators_in_supplied_records()
 #[tokio::test]
 async fn non_copy_values_use_the_same_public_storage_contract() {
     let store = MapStorage::<String>::new();
-    let c = Cache::builder().memory_storage(store.clone()).build();
+    let c = Cache::builder()
+        .memory_storage(store.clone())
+        .try_build()
+        .unwrap();
     c.set("key", "first".to_owned())
         .with_receipt()
         .await

@@ -71,7 +71,8 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
         let cache = Cache::<u64>::builder()
             .events_capacity(1)
             .plugin(observer(counts.clone(), observations))
-            .build();
+            .try_build()
+            .unwrap();
         let mut stream = cache.events().subscribe_layers();
         cache
             .set("key", 17)
@@ -105,7 +106,7 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
 
 #[tokio::test]
 async fn late_layer_attachment_counts_retirement_of_preexisting_values() {
-    let cache = Cache::<u64>::builder().build();
+    let cache = Cache::<u64>::builder().try_build().unwrap();
     cache
         .set("key", 17)
         .with_receipt()
@@ -243,7 +244,8 @@ async fn detach_waits_for_captured_layer_callbacks_and_cancellation_does_not_los
         let cache = Cache::<u64>::builder()
             .distributed(backend.clone())
             .serializer(Arc::new(JsonSerializer))
-            .build();
+            .try_build()
+            .unwrap();
         let counts = Arc::new(Counts::default());
         let registration = cache
             .register_plugin(observer(counts.clone(), PluginObservations::All))
@@ -400,7 +402,7 @@ impl Plugin for BadInterest {
 }
 #[test]
 fn rejected_interest_introspection_stops_the_already_created_session() {
-    let cache = Cache::<u64>::builder().build();
+    let cache = Cache::<u64>::builder().try_build().unwrap();
     let stops = Arc::new(AtomicUsize::new(0));
     assert!(matches!(
         cache.register_plugin(Arc::new(BadInterest {

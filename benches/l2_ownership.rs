@@ -104,7 +104,8 @@ async fn fixture() -> Cache<u64> {
             SystemClock,
         ))))
         .serializer(Arc::new(JsonSerializer))
-        .build();
+        .try_build()
+        .unwrap();
     cache
         .set("l2-json", 7)
         .with_receipt()

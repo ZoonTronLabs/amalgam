@@ -16,7 +16,10 @@ use amalgam::{
 fn build<V: Clone + Send + Sync + 'static>() -> (Cache<V>, Arc<ManualClock>) {
     let clock = Arc::new(ManualClock::default());
     let dyn_clock: Arc<dyn Clock> = clock.clone();
-    (Cache::builder().clock(dyn_clock).build(), clock)
+    (
+        Cache::builder().clock(dyn_clock).try_build().unwrap(),
+        clock,
+    )
 }
 
 fn fail_safe_opts() -> EntryOptions {
@@ -460,7 +463,8 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
     let cache: Cache<i32> = Cache::builder()
         .clock(dyn_clock)
         .disable_tagging(true)
-        .build();
+        .try_build()
+        .unwrap();
     let long = || EntryOptions::new(Duration::from_secs(100));
     let calls = Arc::new(AtomicUsize::new(0));
     let tagged = || -> Box<[Tag]> { Box::from([Tag::new("group").unwrap()]) };
@@ -512,11 +516,12 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
 
 #[test]
 fn strict_initial_subscription_wait_is_configurable() {
-    let on: Cache<i32> = Cache::builder().strict().build();
+    let on: Cache<i32> = Cache::builder().strict().try_build().unwrap();
     assert!(on.wait_for_initial_backplane_subscribe());
     let off: Cache<i32> = Cache::builder()
         .wait_for_initial_backplane_subscribe(false)
-        .build();
+        .try_build()
+        .unwrap();
     assert!(!off.wait_for_initial_backplane_subscribe());
 }
 

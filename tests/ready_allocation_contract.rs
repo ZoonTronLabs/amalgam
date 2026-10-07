@@ -95,7 +95,8 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
         .unwrap();
     let cache = Cache::<u64>::builder()
         .default_options(EntryOptions::new(Duration::from_secs(3600)))
-        .build();
+        .try_build()
+        .unwrap();
     runtime.block_on(async {
         cache
             .set("key", 17)

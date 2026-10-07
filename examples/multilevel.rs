@@ -28,7 +28,7 @@ use amalgam::{
 };
 
 #[tokio::main]
-async fn main() {
+async fn main() -> amalgam::Result<()> {
     // One shared clock, one shared L2, one shared backplane — all three are the
     // pieces every node points at. (We use the real SystemClock here.)
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -38,7 +38,7 @@ async fn main() {
     let opts = EntryOptions::new(Duration::from_secs(60));
 
     // A small helper so both "nodes" are built identically apart from their id.
-    let build = |id: &str| -> Cache<String> {
+    let build = |id: &str| -> amalgam::Result<Cache<String>> {
         Cache::builder()
             .clock(clock.clone())
             .distributed(l2.clone())
@@ -46,10 +46,10 @@ async fn main() {
             .backplane(backplane.clone())
             .default_options(opts.clone())
             .instance_id(id)
-            .build()
+            .try_build()
     };
-    let node1 = build("node-1");
-    let node2 = build("node-2");
+    let node1 = build("node-1")?;
+    let node2 = build("node-2")?;
 
     // Counts factory runs across BOTH nodes; should only ever reach 1.
     let factory_runs = Arc::new(AtomicUsize::new(0));
@@ -119,4 +119,5 @@ async fn main() {
         "node-2's L1 copy must be evicted after node-1's remove propagates"
     );
     println!("OK: L2 read-through worked and the backplane invalidated the peer.");
+    Ok(())
 }

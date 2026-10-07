@@ -28,7 +28,7 @@ mod demo {
         // Keep the guard alive until the end of `run`; dropping it flushes spans.
         let _otel = amalgam::otel::init_otlp("amalgam-example", &endpoint)?;
 
-        let cache: Cache<String> = Cache::builder().build();
+        let cache: Cache<String> = Cache::new();
 
         // Each of these cache operations emits `tracing` spans that are bridged
         // to OpenTelemetry and exported to the collector.

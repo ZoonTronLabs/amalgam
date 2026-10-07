@@ -15,7 +15,8 @@ async fn paused_origin(mutation: LaterMutation) {
     let cache = Cache::<u64>::builder()
         .clock(Arc::new(ManualClock::new(Timestamp::from_ticks(10_000))))
         .default_options(EntryOptions::new(Duration::from_secs(60)))
-        .build();
+        .try_build()
+        .unwrap();
     let (started, entered) = oneshot::channel();
     let (release, resume) = oneshot::channel();
     let worker = cache.clone();

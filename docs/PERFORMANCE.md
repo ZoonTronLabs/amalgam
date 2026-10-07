@@ -226,6 +226,34 @@ read L2 ranges: Amalgam 1391.016-1434.773 ns; FC default 1217.290-1270.044; FC T
 
 get-or-set L2 ranges: Amalgam 1766.992-1852.467 ns; FC default 1310.891-1347.143; FC TC=0 2130.958-2173.934.
 
+## Source API checkpoint on hosted Linux
+
+[CI 37671995620](https://github.com/ZoonTronLabs/amalgam/actions/runs/37671995620)
+measured `0664bea`, before the coordination ownership change and documentation
+repairs above. AMD EPYC 7763, two available physical cores/four logical CPUs,
+Rust 1.88.0, .NET 10.0.12, released FC 2.9.0; seven alternating pairs per API.
+These are separate-machine results and cannot serve as a before/after comparison
+with the M4 Pro. Several FC cold warmups did not settle, so the whole run fails
+qualification even where a measured median meets a ratio.
+
+| Fixture | Operation | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op |
+|---|---|---:|---:|---:|---:|---:|
+| read | L2 JSON | 3785.8 | 1624.8 | 2699.9 | **2.330** | 9 |
+| get_or_set | L2 JSON | 3278.3 | 1935.3 | 3053.3 | **1.694** | 9 |
+| read | L1 replacement | 254.0 | 285.2 | 357.5 | **0.891** | 0 |
+| get_or_set | L1 replacement | 254.4 | 281.1 | 355.1 | **0.905** | 0 |
+| read | Cold factory | 2757.2 | 3862.7 | 4153.1 | 0.714 | 5.009 |
+| get_or_set | Cold factory | 2731.5 | 3728.0 | 4137.4 | 0.733 | 5.009 |
+
+L2 and set miss their unchanged budgets. Single-worker warm read/get_or_set and
+native reads also miss the <=0.50 ratio. Warm hits still allocate zero. Distinct
+1-to-8-worker ratios are 3.016 and 2.657; this host cannot verify eight-core
+scaling. Hot-read optimization remains frozen by the owner's instruction;
+the failures are retained and prevent release rather than changing the gate.
+All source identities, ranges, warmup records and verdicts are preserved in the
+[read report](benchmarks/2026-10-07-source-api-linux-read.json) and
+[get_or_set report](benchmarks/2026-10-07-source-api-linux-get-or-set.json).
+
 ## Release gate
 
 The [default-PGO Linux run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37650344482)
@@ -234,6 +262,13 @@ Actual ReaderSlots Loom and native TSan passed; Miri passed its documented subse
 The mandatory scaling job and aggregate gate failed. Hosted Linux also missed
 the L2 and set budgets and reported unsettled cold warmups. These results concern
 the pushed ready-plan checkpoint, before the focused L2 changes above.
+The subsequent Source API CI run above also remains red. Safety, individual
+features, dependency advisories and packaged consumers passed; platform and live
+Redis jobs reached a stale OpenTelemetry doctest, and quality found a removed
+builder documentation link. Both references have been fixed locally and the
+full all-feature tests, strict lints and rustdoc pass. These local repairs still
+require CI verification; they do not close the independent performance failure.
+
 No main push/merge or 0.4.0 publication is allowed with a red mandatory gate.
 Final API, paired FR/RS contracts, packaged consumers, MSRV, live Redis/Valkey
 and the final source still need qualification.

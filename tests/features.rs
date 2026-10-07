@@ -65,7 +65,11 @@ async fn plugin_receives_set_and_hit_events() {
 
     let clock = Arc::new(ManualClock::default());
     let dyn_clock: Arc<dyn Clock> = clock.clone();
-    let cache: Cache<i32> = Cache::builder().clock(dyn_clock).plugin(plugin).build();
+    let cache: Cache<i32> = Cache::builder()
+        .clock(dyn_clock)
+        .plugin(plugin)
+        .try_build()
+        .unwrap();
 
     // `set` emits a `Set`. Plugins are notified *synchronously* on the emit
     // path, so the counters are up to date the moment `.await` returns — no
@@ -118,7 +122,8 @@ async fn distributed_locker_enforces_cross_instance_single_flight() {
             .serializer(serializer.clone())
             .distributed_locker(locker.clone())
             .default_options(opts.clone())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let cache1 = build();
     let cache2 = build();
@@ -223,7 +228,8 @@ async fn circuit_breaker_opens_then_auto_recovery_replays_write() {
             max_items: None,
             max_retries: None,
         })
-        .build();
+        .try_build()
+        .unwrap();
 
     let mut events = cache.events().subscribe();
 
@@ -302,7 +308,8 @@ async fn remove_by_tag_propagates_across_nodes() {
             .clock(dyn_clock.clone())
             .backplane(backplane.clone())
             .instance_id(id)
-            .build()
+            .try_build()
+            .unwrap()
     };
     let node_a = build("node-a");
     let node_b = build("node-b");
@@ -378,7 +385,12 @@ async fn registry_resolves_named_caches_independently() {
     let dyn_clock: Arc<dyn Clock> = clock.clone();
 
     let registry: CacheRegistry<i32> = CacheRegistry::new();
-    let make = || -> Cache<i32> { Cache::builder().clock(dyn_clock.clone()).build() };
+    let make = || -> Cache<i32> {
+        Cache::builder()
+            .clock(dyn_clock.clone())
+            .try_build()
+            .unwrap()
+    };
     registry.register("alpha", make());
     registry.register("beta", make());
     assert_eq!(registry.len(), 2);
@@ -444,7 +456,8 @@ async fn default_options_provider_applies_per_key_duration() {
         .clock(dyn_clock)
         .default_options(EntryOptions::new(Duration::from_secs(100))) // static default
         .default_options_provider(Arc::new(ShortPrefixProvider))
-        .build();
+        .try_build()
+        .unwrap();
 
     let short_calls = Arc::new(AtomicUsize::new(0));
     let normal_calls = Arc::new(AtomicUsize::new(0));
