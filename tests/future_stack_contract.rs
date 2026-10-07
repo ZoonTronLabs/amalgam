@@ -10,10 +10,13 @@ fn ordinary_mutation_futures_fit_within_a_small_stack_budget() {
     const MAX_FUTURE_BYTES: usize = 16 * 1024;
     let sizes = [
         ("set", size_of_val(&cache.set("x", 42).into_future())),
-        ("try_set", size_of_val(&cache.try_set("x", 42))),
+        (
+            "set with receipt",
+            size_of_val(&cache.set("x", 42).with_receipt().into_future()),
+        ),
         ("remove", size_of_val(&cache.remove("x").into_future())),
         (
-            "try_remove",
+            "remove with receipt",
             size_of_val(&std::future::IntoFuture::into_future(
                 cache.remove("x").with_receipt(),
             )),
@@ -54,7 +57,7 @@ fn ordinary_lookup_futures_fit_within_a_small_stack_budget() {
             ),
         ),
         (
-            "get_or_set_value",
+            "get_or_set supplied value",
             size_of_val(
                 &cache
                     .get_or_set("x", amalgam::source::value(42))

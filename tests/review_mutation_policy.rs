@@ -50,13 +50,13 @@ async fn skipped_write_does_not_extend_distributed_circuit_cooldown() {
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.try_set("first", 1).await,
+        cache.set("first", 1).with_receipt().await,
         Err(Error::Distributed(_))
     ));
     clock.advance(Duration::from_secs(9));
     backend.failed.store(false, Ordering::SeqCst);
     assert!(matches!(
-        cache.try_set("skipped", 2).await,
+        cache.set("skipped", 2).with_receipt().await,
         Err(Error::CircuitOpen {
             component: CircuitComponent::Distributed
         })
@@ -64,7 +64,8 @@ async fn skipped_write_does_not_extend_distributed_circuit_cooldown() {
     assert_eq!(backend.attempts.load(Ordering::SeqCst), 1);
     clock.advance(Duration::from_secs(2));
     let receipt = cache
-        .try_set("after-cooldown", 3)
+        .set("after-cooldown", 3)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -101,7 +102,9 @@ async fn skipped_marker_write(mutation: MarkerMutation) {
     let first = Tag::new("first").unwrap();
     let second = Tag::new("second").unwrap();
     cache
-        .try_set_full("key", 7, None, Box::from([first.clone(), second.clone()]))
+        .set("key", 7)
+        .tags([first.clone(), second.clone()])
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -242,13 +245,13 @@ async fn skipped_publish_does_not_extend_backplane_circuit_cooldown() {
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.try_set("first", 1).await,
+        cache.set("first", 1).with_receipt().await,
         Err(Error::Backplane(_))
     ));
     clock.advance(Duration::from_secs(9));
     backplane.failed.store(false, Ordering::SeqCst);
     assert!(matches!(
-        cache.try_set("skipped", 2).await,
+        cache.set("skipped", 2).with_receipt().await,
         Err(Error::CircuitOpen {
             component: CircuitComponent::Backplane
         })
@@ -256,7 +259,8 @@ async fn skipped_publish_does_not_extend_backplane_circuit_cooldown() {
     assert_eq!(backplane.attempts.load(Ordering::SeqCst), 1);
     clock.advance(Duration::from_secs(2));
     let receipt = cache
-        .try_set("after-cooldown", 3)
+        .set("after-cooldown", 3)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

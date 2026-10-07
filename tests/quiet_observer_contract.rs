@@ -29,7 +29,8 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     let cache = Cache::new();
     *state.events.lock().unwrap() = Some(cache.events().clone());
     cache
-        .try_set("key", Value(state.clone()))
+        .set("key", Value(state.clone()))
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -84,13 +85,14 @@ async fn observer_admitted_by_unused_default_drop_receives_the_hit_completion() 
     let cache = Cache::new();
     *state.events.lock().unwrap() = Some(cache.events().clone());
     cache
-        .try_set(
+        .set(
             "key",
             CompletionValue {
                 number: 7,
                 subscribe_on_drop: None,
             },
         )
+        .with_receipt()
         .await
         .unwrap()
         .wait()

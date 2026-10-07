@@ -1,6 +1,7 @@
 //! Inline L1 writes still own close attribution and deterministic reclamation.
 use amalgam::{Cache, EntryOptions, MutationReceipt};
 use std::future::Future;
+use std::future::IntoFuture;
 use std::pin::pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -30,7 +31,7 @@ impl Drop for Probe {
                 action: None,
             });
             assert!(matches!(
-                ready(owner.try_set("same", nested)).unwrap(),
+                ready(owner.set("same", nested).with_receipt().into_future()).unwrap(),
                 MutationReceipt::Completed(_)
             ));
         }
@@ -50,7 +51,7 @@ fn replacement_is_inline_and_reclaims_the_unpinned_value_before_return() {
     });
     let old_weak = Arc::downgrade(&old);
     assert!(matches!(
-        ready(cache.try_set("same", old)).unwrap(),
+        ready(cache.set("same", old).with_receipt().into_future()).unwrap(),
         MutationReceipt::Completed(_)
     ));
     let current = Arc::new(Probe {
@@ -58,7 +59,7 @@ fn replacement_is_inline_and_reclaims_the_unpinned_value_before_return() {
         action: None,
     });
     assert!(matches!(
-        ready(cache.try_set("same", current)).unwrap(),
+        ready(cache.set("same", current).with_receipt().into_future()).unwrap(),
         MutationReceipt::Completed(_)
     ));
     assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -81,14 +82,19 @@ fn retired_value_drop_can_reenter_the_same_key_after_the_commit() {
             drops: drops.clone(),
             action: Some(Arc::new(Mutex::new(Arc::downgrade(&cache)))),
         });
-        ready(cache.try_set("same", old)).unwrap();
-        ready(cache.try_set(
-            "same",
-            Arc::new(Probe {
-                drops: drops.clone(),
-                action: None,
-            }),
-        ))
+        ready(cache.set("same", old).with_receipt().into_future()).unwrap();
+        ready(
+            cache
+                .set(
+                    "same",
+                    Arc::new(Probe {
+                        drops: drops.clone(),
+                        action: None,
+                    }),
+                )
+                .with_receipt()
+                .into_future(),
+        )
         .unwrap();
         assert_eq!(
             drops.load(Ordering::SeqCst),
@@ -108,7 +114,7 @@ fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
     let cache = amalgam::Cache::<std::sync::Arc<u64>>::new();
     let incoming = std::sync::Arc::new(17);
     let weak = std::sync::Arc::downgrade(&incoming);
-    let pending = cache.try_set("lazy", incoming);
+    let pending = cache.set("lazy", incoming).with_receipt().into_future();
     assert!(weak.upgrade().is_some());
     let mut read = std::pin::pin!(cache.read("lazy", None));
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());

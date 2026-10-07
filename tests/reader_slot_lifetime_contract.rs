@@ -13,14 +13,16 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
     let original = Arc::new(Value(1));
     let old = Arc::downgrade(&original);
     cache
-        .try_set("replace", original)
+        .set("replace", original)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
     cache
-        .try_set("replace", Arc::new(Value(2)))
+        .set("replace", Arc::new(Value(2)))
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -33,7 +35,8 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
     let removed = Arc::new(Value(3));
     let old = Arc::downgrade(&removed);
     cache
-        .try_set("remove", removed)
+        .set("remove", removed)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -86,7 +89,8 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
     let original = Arc::new(Value(1));
     let old = Arc::downgrade(&original);
     cache
-        .try_set("key", original)
+        .set("key", original)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -115,7 +119,8 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
         .await
         .unwrap();
     cache
-        .try_set("key", Arc::new(Value(2)))
+        .set("key", Arc::new(Value(2)))
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -29,7 +29,14 @@ async fn selected_stale_source(source: NewerSource) {
             .unwrap()
     };
     let cache = build();
-    cache.try_set("key", 1).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     if !matches!(source, NewerSource::EqualStampMemory) {
         clock.advance(Duration::from_secs(1));
     }
@@ -37,12 +44,9 @@ async fn selected_stale_source(source: NewerSource) {
     match source {
         NewerSource::Memory | NewerSource::EqualStampMemory => {
             cache
-                .try_set_full(
-                    "key",
-                    2,
-                    Some(opts.clone().with_skip_distributed(false, true)),
-                    Box::from([]),
-                )
+                .set("key", 2)
+                .options(|_| opts.clone().with_skip_distributed(false, true))
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()
@@ -51,7 +55,8 @@ async fn selected_stale_source(source: NewerSource) {
         }
         NewerSource::Distributed => {
             writer
-                .try_set("key", 2)
+                .set("key", 2)
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()

@@ -103,19 +103,17 @@ async fn fixture() -> Cache<u64> {
         .serializer(Arc::new(JsonSerializer))
         .build();
     cache
-        .try_set("l2-json", 7)
+        .set("l2-json", 7)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
     cache
-        .try_set_full(
-            "l2-json",
-            11,
-            Some(options.with_skip_distributed(false, true)),
-            Box::new([]),
-        )
+        .set("l2-json", 11)
+        .options(|_| options.with_skip_distributed(false, true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -97,7 +97,14 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         .auto_recovery(recovery())
         .default_options(options())
         .build();
-    writer.try_set("k", 1).await.unwrap().wait().await.unwrap();
+    writer
+        .set("k", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let backplane = Arc::new(InProcessBackplane::default());
     let boundary = Arc::new(CopyBoundary::default());
     let builder = Cache::<i32>::builder()
@@ -115,12 +122,9 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         builder.build()
     };
     reader
-        .try_set_full(
-            "proof",
-            3,
-            Some(options().with_skip_distributed(false, true)),
-            Box::from([]),
-        )
+        .set("proof", 3)
+        .options(|_| options().with_skip_distributed(false, true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -136,12 +140,9 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         }
         Hydration::Passive => {
             reader
-                .try_set_full(
-                    "k",
-                    0,
-                    Some(options().with_skip_distributed(false, true)),
-                    Box::from([]),
-                )
+                .set("k", 0)
+                .options(|_| options().with_skip_distributed(false, true))
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()
@@ -251,13 +252,14 @@ async fn gap_during_storage_insertion(bounded: bool) {
         .default_options(options())
         .build();
     writer
-        .try_set(
+        .set(
             "k",
             Payload {
                 number: 1,
                 insertion_copy: None,
             },
         )
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -285,15 +287,15 @@ async fn gap_during_storage_insertion(bounded: bool) {
         builder.build()
     };
     reader
-        .try_set_full(
+        .set(
             "proof",
             Payload {
                 number: 3,
                 insertion_copy: None,
             },
-            Some(options().with_skip_distributed(false, true)),
-            Box::from([]),
         )
+        .options(|_| options().with_skip_distributed(false, true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()

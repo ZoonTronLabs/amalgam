@@ -25,7 +25,14 @@ async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() 
                 .unwrap()
         };
         let first = build();
-        first.try_set("key", 7).await.unwrap().wait().await.unwrap();
+        first
+            .set("key", 7)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         clock.advance(Duration::from_millis(1));
         first
             .expire("key")
@@ -66,7 +73,14 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    cache.try_set("key", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let source = CancellationSource::new();
     source.cancel();
     assert!(matches!(

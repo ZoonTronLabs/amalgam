@@ -64,8 +64,10 @@ async fn audit_tag_marker_survives_a_fresh_node_without_backplane() {
     let l2 = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let writer = build(clock.clone(), l2.clone());
     writer
-        .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
-        .await;
+        .set("k", 1)
+        .tags([Tag::new("group").unwrap()])
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(1));
     writer.remove_by_tag("group").await.unwrap();
     let fresh_node = build(clock, l2);
@@ -126,8 +128,10 @@ async fn audit_l2_uses_its_own_logical_duration() {
         .with_distributed_duration(Duration::from_secs(10));
     let writer = build(clock.clone(), l2.clone());
     writer
-        .set_full("k", 1, Some(custom.clone()), Box::from([]))
-        .await;
+        .set("k", 1)
+        .options(|_| custom.clone())
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let reader = build(clock, l2);
     let actual = reader
@@ -530,8 +534,10 @@ async fn audit_tag_marker_survives_node_joining_after_backplane_publication() {
         .auto_recovery(no_recovery())
         .build();
     writer
-        .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
-        .await;
+        .set("k", 1)
+        .tags([Tag::new("group").unwrap()])
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(1));
     writer.remove_by_tag("group").await.unwrap();
     let reader: Cache<i32> = Cache::builder()
@@ -607,13 +613,10 @@ async fn audit_ordinary_cache_key_is_not_interpreted_as_a_clear_command() {
     };
     let writer = make();
     let peer = make();
-    peer.set_full(
-        "k",
-        7,
-        Some(opts().with_skip_backplane_notifications(true)),
-        Box::from([]),
-    )
-    .await;
+    peer.set("k", 7)
+        .options(|_| opts().with_skip_backplane_notifications(true))
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(1));
     let mut events = peer.events().subscribe();
     writer.set("__amalgam:clear:remove", 1).await.unwrap();
@@ -663,8 +666,10 @@ async fn audit_failed_tag_marker_is_recovered_after_backplane_returns() {
     };
     let sender = make();
     let peer = make();
-    peer.set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
-        .await;
+    peer.set("k", 1)
+        .tags([Tag::new("group").unwrap()])
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(1));
     sender
         .remove_by_tag(Tag::new("group").unwrap())
@@ -697,8 +702,10 @@ async fn shared_fc_tag_invalidation_rechecks_origin_despite_failsafe_throttle() 
         .auto_recovery(no_recovery())
         .build();
     cache
-        .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
-        .await;
+        .set("k", 1)
+        .tags([Tag::new("group").unwrap()])
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(1));
     cache.remove_by_tag("group").await.unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -733,8 +740,10 @@ async fn audit_same_tick_tag_marker_invalidates_entry_like_fusioncache() {
         .default_options(opts())
         .build();
     cache
-        .set_full("k", 1, None, Box::from([Tag::new("group").unwrap()]))
-        .await;
+        .set("k", 1)
+        .tags([Tag::new("group").unwrap()])
+        .await
+        .unwrap();
     cache.remove_by_tag("group").await.unwrap();
     assert!(
         !cache.try_get("k", None).await.has_value(),
@@ -808,12 +817,9 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
     l2.pause_next.store(true, Ordering::SeqCst);
     clock.advance(Duration::from_secs(1));
     let commit = writer
-        .try_set_full(
-            "k",
-            2,
-            Some(opts().with_allow_background_distributed_operations(true)),
-            Box::from([]),
-        )
+        .set("k", 2)
+        .options(|_| opts().with_allow_background_distributed_operations(true))
+        .with_receipt()
         .await
         .unwrap();
     assert!(matches!(commit, amalgam::MutationReceipt::Scheduled(_)));

@@ -1221,35 +1221,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
         }
     }
-    /// Canonical set using resolved per-key options, started on first poll.
-    pub fn try_set<K: AsRef<str>>(
-        &self,
-        key: K,
-        value: V,
-    ) -> impl Future<Output = Result<MutationReceipt>> {
-        super::mutation_request::MutationRequest::new(self, key, value, None, Box::from([]), None)
-    }
-    /// Canonical set with tags/options, started on first poll.
-    pub fn try_set_full<K: AsRef<str>>(
-        &self,
-        key: K,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-    ) -> impl Future<Output = Result<MutationReceipt>> {
-        super::mutation_request::MutationRequest::new(self, key, value, options, tags, None)
-    }
-    /// Canonical set with explicit cancellation until scheduled ownership transfer.
-    pub fn try_set_full_cancellable<K: AsRef<str>>(
-        &self,
-        key: K,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        token: FactoryCancellation,
-    ) -> impl Future<Output = Result<MutationReceipt>> {
-        super::mutation_request::MutationRequest::new(self, key, value, options, tags, Some(token))
-    }
     pub(super) fn set_impl<T: super::mutation_request::MutationOutput>(
         &self,
         key: &str,
@@ -1298,18 +1269,6 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Use `with_receipt()` to inspect the actual distributed commit stages.
     pub fn set<K: AsRef<str>>(&self, key: K, value: V) -> super::SetRequest<'_, K, V> {
         super::SetRequest::new(self, key, value)
-    }
-    /// Legacy unit adapter with options and tags.
-    pub async fn set_full(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-    ) {
-        if let Err(error) = self.try_set_full(key, value, options, tags).await {
-            self.legacy_error(&error);
-        }
     }
     pub(super) fn begin_key_mutation(
         &self,
@@ -1400,14 +1359,8 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::Shutdown)?;
         self.inner.shutdown().await
     }
-    /// Runs explicit memory maintenance; does not claim background commit completion.
-    pub async fn run_pending_tasks(&self) {
-        if let Err(error) = self.try_run_pending_tasks().await {
-            self.legacy_error(&error);
-        }
-    }
     /// Runs maintenance, preserving an external L1 provider's typed failure.
-    pub async fn try_run_pending_tasks(&self) -> Result<()> {
+    pub async fn run_pending_tasks(&self) -> Result<()> {
         self.inner.memory.run_pending_tasks().await?;
         if let MarkerReads::OptionsControlled(observations) = &self.inner.marker_reads {
             observations.memory.run_pending_tasks().await?;

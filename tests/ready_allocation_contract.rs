@@ -98,7 +98,8 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
         .build();
     runtime.block_on(async {
         cache
-            .try_set("key", 17)
+            .set("key", 17)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -134,7 +135,13 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
         Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
     )
     .unwrap();
-    cache.try_set("key", 19).unwrap().wait().unwrap();
+    cache
+        .set("key", 19)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     for _ in 0..1000 {
         assert_eq!(
             cache

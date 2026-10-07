@@ -177,12 +177,10 @@ async fn fixture_with_options(url: &str, test: &str, options: EntryOptions) -> F
         .try_build()
         .unwrap();
     writer
-        .try_set_full(
-            "key",
-            7_u64,
-            Some(EntryOptions::new(Duration::from_secs(3600))),
-            vec![Tag::new("snapshot-group").unwrap()].into_boxed_slice(),
-        )
+        .set("key", 7_u64)
+        .options(|_| EntryOptions::new(Duration::from_secs(3600)))
+        .tags(vec![Tag::new("snapshot-group").unwrap()].into_boxed_slice())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -50,7 +50,6 @@ pub struct CacheBuilder<V> {
     lease_policy: LeasePolicy,
     lease_ttl: Duration,
     reconciliation: Option<ReconciliationPolicy>,
-    lock_shards: usize,
     memory_locker: Option<Arc<dyn crate::MemoryLocker>>,
     memory_storage: Option<Arc<dyn crate::MemoryStorage<V>>>,
     remove_by_tag_behavior: RemoveByTagBehavior,
@@ -97,7 +96,6 @@ impl<V> CacheBuilder<V> {
             lease_policy: LeasePolicy::Cooperative,
             lease_ttl: Duration::from_secs(30),
             reconciliation: None,
-            lock_shards: 1024,
             memory_locker: None,
             memory_storage: None,
             remove_by_tag_behavior: RemoveByTagBehavior::default(),
@@ -334,15 +332,6 @@ impl<V> CacheBuilder<V> {
     /// This does not relax the independent [`LeasePolicy`] on a cold miss.
     pub fn reconciliation_policy(mut self, policy: ReconciliationPolicy) -> Self {
         self.reconciliation = Some(policy);
-        self
-    }
-
-    /// Retains the legacy shard setting for source compatibility.
-    ///
-    /// Flights are now per-key; this setting does not serialize distinct keys
-    /// or select the internal lookup map's sharding.
-    pub fn lock_shards(mut self, shards: usize) -> Self {
-        self.lock_shards = shards;
         self
     }
 
@@ -649,7 +638,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.memory_locker,
             Arc::clone(&name),
             Arc::clone(&instance_id),
-            self.lock_shards,
             coordination,
         );
         let marker_reads = match self.marker_read_policy {

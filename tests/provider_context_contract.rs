@@ -37,9 +37,9 @@ async fn provider_gets_each_caches_defaults_and_raw_key_without_capturing_a_stal
     let provider = Arc::new(ContextProvider::default());
     let first = node(clock.clone(), provider.clone(), Duration::from_secs(10));
     let second = node(clock.clone(), provider.clone(), Duration::from_secs(30));
-    first.try_set("ordinary", 1).await.unwrap();
-    first.try_set("short", 2).await.unwrap();
-    second.try_set("ordinary", 3).await.unwrap();
+    first.set("ordinary", 1).with_receipt().await.unwrap();
+    first.set("short", 2).with_receipt().await.unwrap();
+    second.set("ordinary", 3).with_receipt().await.unwrap();
     clock.advance(Duration::from_secs(2));
     assert!(!first.read("short", None).await.unwrap().has_value());
     clock.advance(Duration::from_secs(9));
@@ -78,7 +78,9 @@ async fn explicit_options_bypass_both_provider_hooks_and_legacy_providers_still_
         .try_build()
         .unwrap();
     cache
-        .try_set_full("key", 7, Some(EntryOptions::default()), Box::from([]))
+        .set("key", 7)
+        .options(|_| EntryOptions::default())
+        .with_receipt()
         .await
         .unwrap();
     assert_eq!(
@@ -101,7 +103,7 @@ async fn explicit_options_bypass_both_provider_hooks_and_legacy_providers_still_
         .default_options_provider(Arc::new(LegacyProvider))
         .try_build()
         .unwrap();
-    cache.try_set("key", 7).await.unwrap();
+    cache.set("key", 7).with_receipt().await.unwrap();
     assert!(!cache.read("key", None).await.unwrap().has_value());
     cache.shutdown().await.unwrap();
 }

@@ -177,7 +177,13 @@ fn synchronous_hit<H: WarmHit>() {
         Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
     )
     .unwrap();
-    cache.try_set("sync", 1_u64).unwrap().wait().unwrap();
+    cache
+        .set("sync", 1_u64)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     let mut warmup = Warmup::new("sync");
     loop {
         let began = Instant::now();
@@ -322,7 +328,8 @@ fn run<H: WarmHit>() {
     rt.block_on(async {
         for (id, key) in keys.iter().enumerate() {
             cache
-                .try_set(key, id as u64 + 1)
+                .set(key, id as u64 + 1)
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()
@@ -425,7 +432,8 @@ fn ready_costs() {
         let cache = builder().build();
         rt.block_on(async {
             cache
-                .try_set("cost", 7_u64)
+                .set("cost", 7_u64)
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()
@@ -444,7 +452,13 @@ fn ready_costs() {
         });
         rt.block_on(cache.shutdown()).unwrap();
         let native = BlockingCache::from_builder(builder()).unwrap();
-        native.try_set("cost", 7_u64).unwrap().wait().unwrap();
+        native
+            .set("cost", 7_u64)
+            .with_receipt()
+            .execute()
+            .unwrap()
+            .wait()
+            .unwrap();
         cost(&format!("{label}_native"), || {
             native.read("cost", None).unwrap().into_value().unwrap()
         });
@@ -598,19 +612,17 @@ fn distributed<H: WarmHit>() {
             .serializer(Arc::new(amalgam::JsonSerializer))
             .build();
         cache
-            .try_set("l2-json", 7_u64)
+            .set("l2-json", 7_u64)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
             .await
             .unwrap();
         cache
-            .try_set_full(
-                "l2-json",
-                11,
-                Some(options.with_skip_distributed(false, true)),
-                Box::new([]),
-            )
+            .set("l2-json", 11)
+            .options(|_| options.with_skip_distributed(false, true))
+            .with_receipt()
             .await
             .unwrap()
             .wait()

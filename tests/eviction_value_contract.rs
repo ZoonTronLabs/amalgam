@@ -29,14 +29,16 @@ async fn replacement_and_removal_carry_exact_stored_payload_in_both_backends() {
         let first = Arc::new("first".to_owned());
         let second = Arc::new("second".to_owned());
         cache
-            .try_set("key", first.clone())
+            .set("key", first.clone())
+            .with_receipt()
             .await
             .unwrap()
             .wait()
             .await
             .unwrap();
         cache
-            .try_set("key", second.clone())
+            .set("key", second.clone())
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -95,13 +97,14 @@ async fn observation_and_multiple_receivers_never_clone_the_user_value() {
         let mut b = cache.memory_evictions().subscribe();
         let clones = Arc::new(AtomicUsize::new(0));
         cache
-            .try_set(
+            .set(
                 "k",
                 Counted {
                     value: 7,
                     clones: clones.clone(),
                 },
             )
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -135,7 +138,14 @@ async fn insertion_capture_and_retirement_capture_have_explicit_late_subscriptio
                 .memory_eviction_capture(capture)
                 .try_build()
                 .unwrap();
-            cache.try_set("old", 9).await.unwrap().wait().await.unwrap();
+            cache
+                .set("old", 9)
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             let mut events = cache.memory_evictions().subscribe();
             cache
                 .remove("old")
@@ -172,7 +182,8 @@ async fn logical_expire_is_metadata_only_and_preserves_original_capture_admissio
             let original = Arc::new("original".to_owned());
             let mut early = subscribed_before.then(|| cache.memory_evictions().subscribe());
             cache
-                .try_set("k", original.clone())
+                .set("k", original.clone())
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()
@@ -220,7 +231,8 @@ async fn physical_expiry_and_capacity_report_the_actual_cause_and_value() {
         let cache = builder::<u64>(limit, clock.clone()).try_build().unwrap();
         let mut events = cache.memory_evictions().subscribe();
         cache
-            .try_set("expiry", 8)
+            .set("expiry", 8)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -236,14 +248,16 @@ async fn physical_expiry_and_capacity_report_the_actual_cause_and_value() {
     let cache = builder::<u64>(Some(1), clock()).try_build().unwrap();
     let mut events = cache.memory_evictions().subscribe();
     cache
-        .try_set("victim", 11)
+        .set("victim", 11)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
     cache
-        .try_set("next", 22)
+        .set("next", 22)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -262,7 +276,14 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
         let cache = builder::<u64>(limit, clock()).try_build().unwrap();
         let mut events = cache.memory_evictions().subscribe();
         for (k, v) in [("a", 1), ("b", 2)] {
-            cache.try_set(k, v).await.unwrap().wait().await.unwrap();
+            cache
+                .set(k, v)
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
         }
         cache
             .clear(ClearMode::Remove)
@@ -274,7 +295,7 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
             .unwrap();
         // Clear visibility is immediate; unbounded physical extraction is lazy.
         assert!(!cache.read("a", None).await.unwrap().has_value());
-        cache.run_pending_tasks().await;
+        cache.run_pending_tasks().await.unwrap();
         let mut values = Vec::new();
         for _ in 0..2 {
             let event = events.try_recv().unwrap();
@@ -288,7 +309,8 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
     let cache = builder::<u64>(Some(0), clock()).try_build().unwrap();
     let mut events = cache.memory_evictions().subscribe();
     cache
-        .try_set("rejected", 99)
+        .set("rejected", 99)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -311,7 +333,8 @@ async fn lag_is_bounded_independent_and_remaining_records_drain_after_producer_c
     let mut fast = cache.memory_evictions().subscribe();
     for value in 1..=4 {
         cache
-            .try_set("k", value)
+            .set("k", value)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -372,7 +395,7 @@ fn ordinary_remove_and_replace_destructors_reenter_the_same_public_native_key() 
                 let runs = Arc::new(AtomicUsize::new(0));
                 let calls = runs.clone();
                 cache
-                    .try_set(
+                    .set(
                         "k",
                         Arc::new(Probe {
                             on_drop: Some(Box::new(move || {
@@ -388,11 +411,19 @@ fn ordinary_remove_and_replace_destructors_reenter_the_same_public_native_key() 
                             })),
                         }),
                     )
+                    .with_receipt()
+                    .execute()
                     .unwrap()
                     .wait()
                     .unwrap();
                 if replace {
-                    cache.try_set("k", quiet()).unwrap().wait().unwrap();
+                    cache
+                        .set("k", quiet())
+                        .with_receipt()
+                        .execute()
+                        .unwrap()
+                        .wait()
+                        .unwrap();
                 } else {
                     cache
                         .remove("k")
@@ -430,7 +461,7 @@ fn factory_replacement_releases_origin_coordination_before_old_value_destructor(
             let calls = Arc::new(AtomicUsize::new(0));
             let runs = calls.clone();
             cache
-                .try_set(
+                .set(
                     "k",
                     Arc::new(Probe {
                         on_drop: Some(Box::new(move || {
@@ -447,6 +478,8 @@ fn factory_replacement_releases_origin_coordination_before_old_value_destructor(
                         })),
                     }),
                 )
+                .with_receipt()
+                .execute()
                 .unwrap()
                 .wait()
                 .unwrap();
@@ -481,7 +514,7 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
             let calls = Arc::new(AtomicUsize::new(0));
             let runs = calls.clone();
             cache
-                .try_set(
+                .set(
                     "k",
                     Arc::new(Probe {
                         on_drop: Some(Box::new(move || {
@@ -498,6 +531,8 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
                         })),
                     }),
                 )
+                .with_receipt()
+                .execute()
                 .unwrap()
                 .wait()
                 .unwrap();
@@ -509,7 +544,13 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
                 .wait()
                 .unwrap();
             assert_eq!(calls.load(Ordering::SeqCst), 0);
-            cache.try_set("k", quiet()).unwrap().wait().unwrap();
+            cache
+                .set("k", quiet())
+                .with_receipt()
+                .execute()
+                .unwrap()
+                .wait()
+                .unwrap();
             cache
                 .remove("k")
                 .with_receipt()
@@ -538,7 +579,7 @@ fn last_receiver_releases_retained_values_after_queue_unlock() {
         let calls = Arc::new(AtomicUsize::new(0));
         let runs = calls.clone();
         cache
-            .try_set(
+            .set(
                 "k",
                 Arc::new(Probe {
                     on_drop: Some(Box::new(move || {
@@ -555,6 +596,8 @@ fn last_receiver_releases_retained_values_after_queue_unlock() {
                     })),
                 }),
             )
+            .with_receipt()
+            .execute()
             .unwrap()
             .wait()
             .unwrap();
@@ -656,7 +699,7 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
             let owner = Arc::downgrade(&cache);
             let (dropped, wait) = mpsc::channel();
             cache
-                .try_set(
+                .set(
                     "k",
                     Arc::new(Probe {
                         on_drop: Some(Box::new(move || {
@@ -673,6 +716,8 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
                         })),
                     }),
                 )
+                .with_receipt()
+                .execute()
                 .unwrap()
                 .wait()
                 .unwrap();
@@ -687,7 +732,9 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
                 let token = source.token();
                 let write = tokio::spawn(async move {
                     caller
-                        .try_set_full_cancellable("k", quiet(), None, Box::new([]), token)
+                        .set("k", quiet())
+                        .cancellation(token)
+                        .with_receipt()
                         .await
                 });
                 tokio::time::timeout(Duration::from_secs(2), backend.entered.notified())

@@ -24,7 +24,13 @@ fn runtime() -> BlockingRuntime {
 #[tokio::test(flavor = "current_thread")]
 async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
     let native = BlockingCache::<u64>::new().unwrap();
-    native.try_set("before", 7).unwrap().wait().unwrap();
+    native
+        .set("before", 7)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     let asynchronous = native.as_async().clone();
     let identity = native.instance_id().to_owned();
     drop(native);

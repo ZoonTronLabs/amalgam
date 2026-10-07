@@ -71,7 +71,8 @@ async fn ready_hit_reaches_a_plugin_attached_by_its_clone_callback() {
     );
     *cloner.cache.lock().unwrap() = Arc::downgrade(&cache);
     cache
-        .try_set("key", 42)
+        .set("key", 42)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -88,7 +89,8 @@ async fn ready_hit_reaches_a_plugin_attached_by_its_clone_callback() {
 async fn observers_added_after_an_unobserved_hit_receive_the_next_hit() {
     let cache = Cache::builder().key_prefix("tenant:").try_build().unwrap();
     cache
-        .try_set("key", 42)
+        .set("key", 42)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -150,7 +152,8 @@ async fn ready_hit_reaches_broadcast_observers_created_by_its_clone_callback() {
     );
     *cloner.cache.lock().unwrap() = Arc::downgrade(&cache);
     cache
-        .try_set("key", 42)
+        .set("key", 42)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -177,7 +180,8 @@ async fn ready_hit_reaches_broadcast_observers_created_by_its_clone_callback() {
 async fn raw_broadcast_resubscription_after_other_receivers_drop_keeps_emission() {
     let cache = Cache::new();
     cache
-        .try_set("key", 42)
+        .set("key", 42)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

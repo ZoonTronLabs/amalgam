@@ -105,7 +105,8 @@ async fn rejected_and_skipped_memory_admission_never_claim_a_set() {
     let c = Cache::<u64>::builder().max_capacity(0).build();
     let mut events = c.events().subscribe_layers();
     let receipt = c
-        .try_set("rejected", 1)
+        .set("rejected", 1)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -117,7 +118,9 @@ async fn rejected_and_skipped_memory_admission_never_claim_a_set() {
     ));
     assert!(drain(&mut events).is_empty());
     let skipped = options().with_skip_memory(false, true);
-    c.try_set_full("skipped", 2, Some(skipped), Box::from([]))
+    c.set("skipped", 2)
+        .options(|_| skipped)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -136,7 +139,9 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .default_options(opts)
         .build();
     let mut events = c.events().subscribe_layers();
-    c.try_set_full("tagged", 3, None, Box::from([Tag::new("group").unwrap()]))
+    c.set("tagged", 3)
+        .tags([Tag::new("group").unwrap()])
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -161,7 +166,13 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
             stale: false
         }))
     );
-    c.try_set("stale", 4).await.unwrap().wait().await.unwrap();
+    c.set("stale", 4)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     drain(&mut events);
     c.expire("stale")
         .with_receipt()
@@ -206,7 +217,13 @@ async fn decoded_l2_hit_and_memory_promotion_are_distinct_actual_facts() {
     let b = hybrid(clock.clone(), store.clone());
     let mut wa = a.events().subscribe_layers();
     let mut rb = b.events().subscribe_layers();
-    a.try_set("k", 5).await.unwrap().wait().await.unwrap();
+    a.set("k", 5)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(
         drain(&mut wa),
         vec![
@@ -235,7 +252,9 @@ async fn l2_hit_precedes_durable_tag_rejection_without_a_fabricated_miss() {
     let clock = Arc::new(ManualClock::default());
     let store = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let a = hybrid(clock.clone(), store.clone());
-    a.try_set_full("k", 5, None, Box::from([Tag::new("g").unwrap()]))
+    a.set("k", 5)
+        .tags([Tag::new("g").unwrap()])
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -460,7 +479,14 @@ async fn codec_failures_keep_causes_and_do_not_claim_transport_success_or_open_a
         .auto_recovery(no_recovery())
         .build();
     let mut events = c.events().subscribe_layers();
-    let result = c.try_set("encode", 10).await.unwrap().wait().await.unwrap();
+    let result = c
+        .set("encode", 10)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(matches!(
         result.distributed,
         EffectOutcome::FailedSuppressed {
@@ -523,7 +549,13 @@ async fn rich_backplane_frames_preserve_source_revision_action_key_and_rejected_
         .reconciliation_policy(ReconciliationPolicy::BackplaneBestEffort)
         .build();
     let mut events = c.events().subscribe_layers();
-    c.try_set("k", 12).await.unwrap().wait().await.unwrap();
+    c.set("k", 12)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let facts = drain(&mut events);
     assert!(facts.iter().any(|e| matches!(e, LayerEvent::Backplane(BackplaneEvent::MessagePublished { command: BackplaneCommand::Data(m) }) if m.source_id.as_ref()=="local" && m.key.as_ref()=="v2:k" && m.action==BackplaneAction::Set && m.timestamp==clock.now())));
     assert!(!facts.iter().any(|e| matches!(
@@ -567,7 +599,9 @@ async fn explicit_layer_skips_and_ignore_incoming_emit_no_false_component_calls(
         .with_skip_memory(true, true)
         .with_skip_distributed(true, true)
         .with_skip_backplane_notifications(true);
-    c.try_set_full("skip", 13, Some(skip.clone()), Box::from([]))
+    c.set("skip", 13)
+        .options(|_| skip.clone())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -761,7 +795,14 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
         .auto_recovery(no_recovery())
         .build();
     let mut events = c.events().subscribe_layers();
-    let receipt = c.try_set("warm", 23).await.unwrap().wait().await.unwrap();
+    let receipt = c
+        .set("warm", 23)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(matches!(
         receipt.backplane,
         EffectOutcome::FailedSuppressed { .. }
@@ -832,7 +873,8 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
     let store = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let writer = hybrid(clock.clone(), store.clone());
     writer
-        .try_set("key", 28)
+        .set("key", 28)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

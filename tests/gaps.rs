@@ -33,11 +33,13 @@ async fn size_eviction_emits_eviction_event() {
     let long = EntryOptions::new(Duration::from_secs(3600));
     for i in 0..20 {
         cache
-            .set_full(format!("k{i}"), i, Some(long.clone()), Box::from([]))
-            .await;
+            .set(format!("k{i}"), i)
+            .options(|_| long.clone())
+            .await
+            .unwrap();
     }
     // Force moka to run its eviction maintenance deterministically.
-    cache.run_pending_tasks().await;
+    cache.run_pending_tasks().await.unwrap();
 
     let mut saw_eviction = false;
     for _ in 0..64 {

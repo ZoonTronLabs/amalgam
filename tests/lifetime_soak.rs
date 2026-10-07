@@ -45,7 +45,8 @@ async fn repeated_last_handle_drop_releases_workers_even_with_live_event_observe
                 .try_build()
                 .expect("valid cache");
             cache
-                .try_set("value", 42)
+                .set("value", 42)
+                .with_receipt()
                 .await
                 .expect("set")
                 .wait()

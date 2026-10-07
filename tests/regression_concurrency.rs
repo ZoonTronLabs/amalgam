@@ -139,8 +139,8 @@ async fn unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn distinct_cold_keys_are_not_serialized_by_the_legacy_shard_hint() {
-    let cache: Cache<i32> = Cache::builder().lock_shards(1).build();
+async fn distinct_cold_keys_keep_independent_factory_progress() {
+    let cache: Cache<i32> = Cache::builder().build();
     let mut tasks = Vec::with_capacity(128);
     for index in 0..128 {
         let cache = cache.clone();
@@ -457,7 +457,8 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
     let b = build();
     a.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(6));
-    b.try_set("k", 2)
+    b.set("k", 2)
+        .with_receipt()
         .await
         .expect("newer write accepted")
         .wait()
@@ -568,8 +569,10 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
         )
         .with_memory_lock_timeout(Timeout::After(Duration::from_millis(90)));
     cache
-        .set_full("k", 1, Some(options.clone()), Box::from([]))
-        .await;
+        .set("k", 1)
+        .options(|_| options.clone())
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(5)).await;
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();

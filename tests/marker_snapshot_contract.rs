@@ -194,12 +194,10 @@ async fn seeded(clock: Arc<ManualClock>) -> Arc<InMemoryDistributedCache> {
         .try_build()
         .unwrap();
     writer
-        .try_set_full(
-            "key",
-            7,
-            Some(EntryOptions::new(Duration::from_secs(3600))),
-            vec![Tag::new("group").unwrap()].into_boxed_slice(),
-        )
+        .set("key", 7)
+        .options(|_| EntryOptions::new(Duration::from_secs(3600)))
+        .tags(vec![Tag::new("group").unwrap()].into_boxed_slice())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

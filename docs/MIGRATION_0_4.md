@@ -111,6 +111,11 @@ cache
 # }
 ```
 
+The `try_set`, `try_set_full`, `try_set_full_cancellable` and `set_full` aliases
+are removed. Use the ordinary `set` request with `.options(...)`, `.tags(...)`,
+`.cancellation(...)` and optional `.with_receipt()`. A manual future consumer
+first calls `.into_future()`; native callers use `.execute()`.
+
 An options edit starts from this cache's defaults, preserving settings that the
 closure does not change. Requests validate string tags and return a typed error
 for invalid input. A write needing distributed completion evidence explicitly
@@ -166,9 +171,24 @@ unit adapters hid failures. For example, invalidation with tagging disabled now
 returns the existing `MarkerError::Unsupported`; it still leaves cached contents
 unchanged. Handle this error explicitly if that configuration is intentional.
 
+## Explicit maintenance
+
+`run_pending_tasks` now returns `Result<()>` and preserves an external memory
+provider's error. The separate `try_run_pending_tasks` method is removed. Await
+or execute the existing maintenance operation and handle its result; this
+operation performs maintenance and does not replace `flush_pending` for actual
+background commit completion.
+
+## Removed ineffective lock hints
+
+`CacheBuilder::lock_shards` and the shard argument to `KeyedLock::new` are
+removed. They did not select lookup sharding or serialize independent keys.
+Use `KeyedLock::new()` or its default. Lookup sharding remains an implementation
+detail; per-key ownership and timeout behavior are unchanged.
+
 ## Remaining migration work
 
-The read facade, remaining write/maintenance aliases, provider and advanced
-namespaces, and the complete examples are still being migrated.
+The read facade, provider and advanced namespaces, and the complete examples
+are still being migrated.
 They must be complete before publishing 0.4.0. The 0.3 `MaybeValue` and
 error-swallowing adapters are not the target API.

@@ -72,7 +72,8 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
             .build();
         let mut stream = cache.events().subscribe_layers();
         cache
-            .try_set("key", 17)
+            .set("key", 17)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -104,7 +105,8 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
 async fn late_layer_attachment_counts_retirement_of_preexisting_values() {
     let cache = Cache::<u64>::builder().build();
     cache
-        .try_set("key", 17)
+        .set("key", 17)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -196,7 +198,13 @@ fn cache_aware_layer_hook_can_read_and_mutate_the_same_key_after_lane_release() 
                 calls: calls.clone(),
             }))
             .unwrap();
-        cache.try_set("caller", 23).unwrap().wait().unwrap();
+        cache
+            .set("caller", 23)
+            .with_receipt()
+            .execute()
+            .unwrap()
+            .wait()
+            .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(!cache.read("caller", None).unwrap().has_value());
         registration.stop().unwrap();
@@ -241,7 +249,8 @@ async fn detach_waits_for_captured_layer_callbacks_and_cancellation_does_not_los
         let owned = cache.clone();
         let writer = tokio::spawn(async move {
             owned
-                .try_set("key", 17)
+                .set("key", 17)
+                .with_receipt()
                 .await
                 .unwrap()
                 .wait()
@@ -507,15 +516,13 @@ fn marker_observer_after_value_commit(fact: MarkerFact) {
             .default_options(opts.clone()),
     )
     .unwrap();
-    seed.try_set_full(
-        "caller",
-        17,
-        None,
-        Box::from([Tag::new("watched").unwrap()]),
-    )
-    .unwrap()
-    .wait()
-    .unwrap();
+    seed.set("caller", 17)
+        .tags([Tag::new("watched").unwrap()])
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     clock.advance(Duration::from_millis(201));
     let succeeded = Arc::new(AtomicUsize::new(0));
     let seen = Arc::new(AtomicUsize::new(0));

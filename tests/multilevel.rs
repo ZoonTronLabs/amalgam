@@ -337,7 +337,7 @@ async fn backplane_clear_remove_propagates_to_peer() {
 
     cache1.clear(amalgam::ClearMode::Remove).await.unwrap(); // remove-all → CLEAR_REMOVE marker over the backplane
     tokio::time::sleep(Duration::from_millis(120)).await;
-    cache2.run_pending_tasks().await;
+    cache2.run_pending_tasks().await.unwrap();
 
     assert!(
         !cache2.try_get("k", None).await.has_value(),

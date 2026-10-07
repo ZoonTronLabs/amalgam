@@ -556,7 +556,13 @@ fn ignored_acquisition_deadline_serves_stale_and_flush_waits_for_late_release() 
         driver(),
     )
     .unwrap();
-    cache.try_set("stale", 7).unwrap().wait().unwrap();
+    cache
+        .set("stale", 7)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let c = cache.clone();
     let (send, receive) = mpsc::channel();
@@ -592,7 +598,13 @@ fn caller_cancellation_is_prompt_while_an_opaque_callback_is_still_owned() {
     *state.behavior.lock().unwrap() = Behavior::IgnoreCancellation(gate.clone());
     let entered = state.watch();
     let cache = native(&state);
-    cache.try_set("hot", 8).unwrap().wait().unwrap();
+    cache
+        .set("hot", 8)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     let source = CancellationSource::new();
     let c = cache.clone();
     let token = source.token();
@@ -900,7 +912,13 @@ fn soft_timeout_background_keeps_the_blocking_acquired_guard_until_commit() {
         driver(),
     )
     .unwrap();
-    cache.try_set("soft", 1).unwrap().wait().unwrap();
+    cache
+        .set("soft", 1)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let gate = Gate::new();
     let blocked = gate.clone();

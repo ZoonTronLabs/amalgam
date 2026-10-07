@@ -80,7 +80,13 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .wait()
         .unwrap();
     assert_eq!(cache.read("key", None).unwrap().into_value(), None);
-    cache.try_set("clear", Some(7)).unwrap().wait().unwrap();
+    cache
+        .set("clear", Some(7))
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     cache
         .clear(ClearMode::Remove)
         .with_receipt()
@@ -237,7 +243,10 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
     let options =
         EntryOptions::new(Duration::from_secs(60)).with_eager_refresh(EagerThreshold::new(0.5));
     cache
-        .try_set_full("eager", 1, Some(options), Box::from([]))
+        .set("eager", 1)
+        .options(|_| options)
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();
@@ -288,15 +297,13 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
     )
     .unwrap();
     let receipt = cache
-        .try_set_full(
-            "shared",
-            123,
-            Some(
-                EntryOptions::new(Duration::from_secs(30))
-                    .with_allow_background_distributed_operations(true),
-            ),
-            Box::from([]),
-        )
+        .set("shared", 123)
+        .options(|_| {
+            EntryOptions::new(Duration::from_secs(30))
+                .with_allow_background_distributed_operations(true)
+        })
+        .with_receipt()
+        .execute()
         .unwrap();
     assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
     receipt.wait().unwrap();
@@ -366,7 +373,13 @@ fn timed_callback_panic_retains_original_join_in_shutdown_report() {
 #[tokio::test(flavor = "current_thread")]
 async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
     let cache = BlockingCache::<u64>::new().unwrap();
-    cache.try_set("native", 4).unwrap().wait().unwrap();
+    cache
+        .set("native", 4)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(cache.read("native", None).unwrap().into_value(), Some(4));
     assert_eq!(
         cache
@@ -385,7 +398,13 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
     cache.shutdown().unwrap();
     drop(cache);
     let active = BlockingCache::<u64>::new().unwrap();
-    active.try_set("drop", 7).unwrap().wait().unwrap();
+    active
+        .set("drop", 7)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     drop(active);
     tokio::task::yield_now().await;
 }

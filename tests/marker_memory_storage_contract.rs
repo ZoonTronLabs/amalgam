@@ -1,5 +1,6 @@
 //! Marker storage uses an independent, externally owned public-protocol provider.
 use amalgam::*;
+use std::future::IntoFuture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
@@ -27,7 +28,9 @@ fn node(
         .build()
 }
 async fn tagged(c: &Cache<u64>, value: u64) {
-    c.try_set_full("key", value, None, Box::from([tag()]))
+    c.set("key", value)
+        .tags([tag()])
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -135,7 +138,13 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
         let clock = Arc::new(ManualClock::default());
         let a = node(&store, &clock, "same:");
         let b = node(&store, &clock, "same:");
-        b.try_set("key", 19).await.unwrap().wait().await.unwrap();
+        b.set("key", 19)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(19));
         clock.advance(Duration::from_millis(1));
         a.clear(mode)
@@ -288,7 +297,13 @@ async fn marker_lookup_and_admission_failures_keep_causes_and_do_not_run_origin(
         let store = MapStorage::new();
         let clock = Arc::new(ManualClock::default());
         let c = node(&store, &clock, "");
-        c.try_set("key", 41).await.unwrap().wait().await.unwrap();
+        c.set("key", 41)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         *store.fault.lock().unwrap() = Some(fault);
         let called = Arc::new(AtomicUsize::new(0));
         let runs = called.clone();
@@ -314,11 +329,17 @@ async fn marker_maintenance_and_usage_keep_their_original_channels() {
     let store = MapStorage::new();
     let clock = Arc::new(ManualClock::default());
     let c = node(&store, &clock, "");
-    c.try_set("key", 47).await.unwrap().wait().await.unwrap();
+    c.set("key", 47)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     *store.fault.lock().unwrap() = Some(Fault::Maintain);
     assert_eq!(
-        cause(&c.try_run_pending_tasks().await.unwrap_err()),
+        cause(&c.run_pending_tasks().await.unwrap_err()),
         Fault::Maintain
     );
     *store.fault.lock().unwrap() = Some(Fault::Usage);
@@ -343,9 +364,16 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
                 "same:"
             },
         );
-        c.try_set("key", 53).await.unwrap().wait().await.unwrap();
+        c.set("key", 53)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         foreign
-            .try_set("key", 59)
+            .set("key", 59)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -423,7 +451,13 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
     let store = MapStorage::limited(Limit::Disabled);
     let clock = Arc::new(ManualClock::default());
     let c = node(&store, &clock, "");
-    c.try_set("key", 61).await.unwrap().wait().await.unwrap();
+    c.set("key", 61)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 0);
     let writes = store.writes.load(Ordering::SeqCst);
@@ -438,10 +472,16 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .tags_default_options(EntryOptions::new(Duration::from_secs(1)))
         .marker_memory_storage(store.clone())
         .build();
-    c.try_set("key", 67).await.unwrap().wait().await.unwrap();
+    c.set("key", 67)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     clock.advance(Duration::from_secs(2));
-    c.try_run_pending_tasks().await.unwrap();
+    c.run_pending_tasks().await.unwrap();
     assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 0);
     assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(67));
     assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 2);
@@ -459,7 +499,13 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .tags_default_options(options().with_skip_memory(true, true))
         .marker_memory_storage(store.clone())
         .build();
-    c.try_set("key", 71).await.unwrap().wait().await.unwrap();
+    c.set("key", 71)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     assert_eq!(store.lookups.load(Ordering::SeqCst), 0);
     assert_eq!(store.ready.load(Ordering::SeqCst), 0);
@@ -476,7 +522,13 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         ))
         .marker_memory_storage(store)
         .build();
-    c.try_set("key", 73).await.unwrap().wait().await.unwrap();
+    c.set("key", 73)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(
         matches!(c.read("key", None).await.unwrap_err(), Error::FactoryTimeout { elapsed } if elapsed.is_zero())
     );
@@ -495,7 +547,12 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
             .marker_memory_storage(store.clone()),
     )
     .unwrap();
-    c.try_set("key", 79).unwrap().wait().unwrap();
+    c.set("key", 79)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(c.read("key", None).unwrap().into_value(), Some(79));
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -510,7 +567,8 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
     assert_eq!(store.state.lock().unwrap().records.len(), 2);
     c.shutdown().unwrap();
     let other = node(&store, &clock, "");
-    rt.block_on(other.try_set("key", 83)).unwrap();
+    rt.block_on(other.set("key", 83).with_receipt().into_future())
+        .unwrap();
     assert_eq!(
         rt.block_on(other.read("key", None)).unwrap().into_value(),
         Some(83)
@@ -531,7 +589,13 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
         )
         .marker_memory_storage(store.clone())
         .build();
-    c.try_set("key", 89).await.unwrap().wait().await.unwrap();
+    c.set("key", 89)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     let created = clock.now();
     clock.advance(Duration::from_secs(6));
@@ -667,7 +731,13 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
         let clock = Arc::new(ManualClock::default());
         let bp = SnapshotBackplane::new();
         let c = full_node(&values, &markers, &clock, &bp).await;
-        c.try_set("key", 101).await.unwrap().wait().await.unwrap();
+        c.set("key", 101)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         assert!(c.read("key", None).await.unwrap().has_value());
         let old = values.state.lock().unwrap().records["key"].clone();
         let old_markers: Vec<_> = markers
@@ -724,7 +794,13 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .marker_memory_storage(markers.clone())
         .build();
-    a.try_set("key", 103).await.unwrap().wait().await.unwrap();
+    a.set("key", 103)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(a.read("key", None).await.unwrap().has_value());
     let old: Vec<_> = markers
         .state
@@ -745,7 +821,13 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
     gate.entered.wait();
     assert!(old.iter().all(|record| !record.is_live_at(clock.now())));
     clock.advance(Duration::from_millis(1));
-    b.try_set("key", 107).await.unwrap().wait().await.unwrap();
+    b.set("key", 107)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(107));
     let new: Vec<_> = markers
         .state
@@ -877,7 +959,12 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
             .marker_memory_storage(markers.clone()),
     )
     .unwrap();
-    c.try_set("key", 109).unwrap().wait().unwrap();
+    c.set("key", 109)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert!(c.read("key", None).unwrap().has_value());
     assert_eq!(locker.native.load(Ordering::SeqCst), 2);
     assert_eq!(locker.asynchronous.load(Ordering::SeqCst), 0);
@@ -941,7 +1028,7 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
         MarkerPresence::Absent => panic!("tag fact missing"),
     };
     clock.advance(Duration::from_secs(3));
-    c.try_run_pending_tasks().await.unwrap();
+    c.run_pending_tasks().await.unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     assert_eq!(
         store.state.lock().unwrap().records[&key]
@@ -951,7 +1038,7 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
         MarkerPresence::Present(version)
     );
     clock.advance(Duration::from_secs(31));
-    c.try_run_pending_tasks().await.unwrap();
+    c.run_pending_tasks().await.unwrap();
     assert!(c.read("key", None).await.unwrap().has_value());
     assert_eq!(
         store.state.lock().unwrap().records[&key]
@@ -1075,7 +1162,7 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         .unwrap(),
         137
     );
-    b.try_run_pending_tasks().await.unwrap();
+    b.run_pending_tasks().await.unwrap();
     assert!(
         markers
             .state

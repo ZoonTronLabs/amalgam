@@ -71,7 +71,9 @@ fn fixture(provider_options: EntryOptions) -> Fixture {
 
 async fn seed(cache: &Cache<i32>) {
     cache
-        .try_set_full("tenant:item", 42, Some(options()), Box::new([]))
+        .set("tenant:item", 42)
+        .options(|_| options())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
