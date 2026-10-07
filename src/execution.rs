@@ -76,7 +76,7 @@ impl FactoryCancellation {
             CancellationState::Cancelled(reason) => Some(reason),
         };
         if let Some(reason) = reason
-            && (mode == LinkMode::Explicit || reason != Reason::ScopeFinished)
+            && mode.accepts(reason)
         {
             erased.cancel(reason);
         }
@@ -171,7 +171,7 @@ impl Request {
                 })
                 .collect();
             for (target, mode) in listeners {
-                if mode == LinkMode::Explicit || reason != Reason::ScopeFinished {
+                if mode.accepts(reason) {
                     target.cancel(reason);
                 }
             }
@@ -193,6 +193,16 @@ impl Request {
 pub(crate) enum LinkMode {
     Explicit,
     CallerScope,
+    OriginCaller,
+}
+impl LinkMode {
+    fn accepts(self, reason: Reason) -> bool {
+        match self {
+            Self::Explicit => true,
+            Self::CallerScope => reason != Reason::ScopeFinished,
+            Self::OriginCaller => !matches!(reason, Reason::ScopeFinished | Reason::CallerDropped),
+        }
+    }
 }
 struct Listener {
     target: Weak<dyn CancelWork>,

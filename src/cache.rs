@@ -302,6 +302,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     write_plan: memory_inline::WritePlan,
     default_fresh_plan: Option<crate::entry::FreshPlan>,
     flights: Option<Arc<crate::single_flight::Flights<inline_cold::Value<V>>>>,
+    origin_work: std::sync::OnceLock<crate::retained_origin::RetainedOrigins<OriginCompletion<V>>>,
     tags_default_options: EntryOptions,
     marker_reads: MarkerReads,
     key_prefix: Option<Arc<str>>,

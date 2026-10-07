@@ -827,6 +827,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let key = self.lookup_key(key, full);
         let source = CancellationSource::new();
         let caller = source.token();
+        let explicit = cancellation.clone();
         super::inline_cold::Start::Pending(Box::pin(self.execute_observed(
             observation,
             cancellation,
@@ -840,7 +841,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                         resolved.map(|options| *options).or(options),
                         tags,
                         fallback,
-                        caller,
+                        super::origin::OriginCaller {
+                            operation: caller,
+                            explicit,
+                        },
                     )
                     .await
             },

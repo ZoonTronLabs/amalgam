@@ -216,6 +216,11 @@ async fn fixture_with_options(url: &str, test: &str, options: EntryOptions) -> F
         .distributed_locker(locker.clone())
         .lease_policy(LeasePolicy::Fenced)
         .lease_ttl(Duration::from_secs(30))
+        // Repair assertions advance the injected clock by two seconds.
+        .auto_recovery(RecoveryConfig {
+            delay: Duration::from_secs(1),
+            ..RecoveryConfig::default()
+        })
         .reconciliation_policy(ReconciliationPolicy::Periodic(Duration::from_secs(3600)))
         .try_build()
         .unwrap();

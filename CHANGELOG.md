@@ -28,6 +28,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- General and hybrid factories now retain their commit and key ownership
+  after a calling future is dropped. Other callers help or await that same
+  work, including callers with different entry options. Explicit cancellation,
+  shutdown and lease loss still stop it; explicit cancellation remains usable
+  after caller destruction. Panics reach the leader unchanged and waiters as
+  typed failures, while background supervision retains the original cause.
 - Native synchronous L1 reads now share the source cache’s x86 reader-slot
   admission publication. Shutdown waits for a started value copy and closed
   reads reject before invoking `Clone`.

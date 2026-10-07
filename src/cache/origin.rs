@@ -53,3 +53,9 @@ impl<V: Clone + Send + Sync + 'static> CacheOrigin<V> for ConstantOrigin<V> {
         ready(Ok(context.constant(self.0)))
     }
 }
+
+/// The observer scope and an optional explicit signal have distinct lifetimes.
+pub(super) struct OriginCaller {
+    pub(super) operation: crate::FactoryCancellation,
+    pub(super) explicit: Option<crate::FactoryCancellation>,
+}

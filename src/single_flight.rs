@@ -16,15 +16,31 @@ use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
-type Panic = Box<dyn Any + Send + 'static>;
-type FlightShard<T> = Mutex<HashMap<Arc<str>, Arc<Flight<T>>, RandomState>>;
+pub(crate) type Panic = Box<dyn Any + Send + 'static>;
+type FlightShard<T, K> = Mutex<HashMap<K, Arc<Flight<T, K>>, RandomState>>;
 const SHARDS: usize = 64;
 
-pub(crate) struct Flights<T: Send + Sync + 'static> {
-    hash: RandomState,
-    shards: Box<[FlightShard<T>]>,
+/// All identities hash their full logical key. Equality may also distinguish
+/// independent work permitted by an explicit finite lock timeout.
+pub(crate) trait FlightIdentity:
+    std::hash::Hash + Eq + Clone + Send + Sync + 'static
+{
+    fn key(&self) -> &Arc<str>;
+    fn panicked(&self, panic: Panic) -> Option<Panic> {
+        Some(panic)
+    }
 }
-impl<T: Send + Sync + 'static> Flights<T> {
+impl FlightIdentity for Arc<str> {
+    fn key(&self) -> &Arc<str> {
+        self
+    }
+}
+
+pub(crate) struct Flights<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>> {
+    hash: RandomState,
+    shards: Box<[FlightShard<T, K>]>,
+}
+impl<T: Send + Sync + 'static, K: FlightIdentity> Flights<T, K> {
     pub(crate) fn new() -> Arc<Self> {
         let hash = RandomState::new();
         Arc::new(Self {
@@ -34,10 +50,20 @@ impl<T: Send + Sync + 'static> Flights<T> {
             hash,
         })
     }
-    pub(crate) fn acquire(self: &Arc<Self>, key: Arc<str>, scopes: Arc<Scopes>) -> Claim<T> {
-        let shard = self.hash.hash_one(key.as_ref()) as usize & (SHARDS - 1);
+    /// Progress assistance observes work without consuming its value/receipt.
+    pub(crate) fn active(&self, key: &str) -> Option<Arc<Flight<T, K>>> {
+        let hash = self.hash.hash_one(key);
+        let shard = hash as usize & (SHARDS - 1);
+        let entries = self.shards[shard].lock();
+        entries
+            .raw_entry()
+            .from_hash(hash, |identity| identity.key().as_ref() == key)
+            .map(|(_, flight)| Arc::clone(flight))
+    }
+    pub(crate) fn acquire(self: &Arc<Self>, key: K, scopes: Arc<Scopes>) -> Claim<T, K> {
+        let shard = self.hash.hash_one(key.key().as_ref()) as usize & (SHARDS - 1);
         let mut entries = self.shards[shard].lock();
-        let (flight, leader) = match entries.get(key.as_ref()) {
+        let (flight, leader) = match entries.get(&key) {
             Some(flight) => {
                 flight.cell.lock().subscribers += 1;
                 (Arc::clone(flight), false)
@@ -45,7 +71,7 @@ impl<T: Send + Sync + 'static> Flights<T> {
             None => {
                 let flight = Arc::new(Flight {
                     owner: Arc::downgrade(self),
-                    key: Arc::clone(&key),
+                    key: key.clone(),
                     shard,
                     scopes,
                     request: Request::new(),
@@ -55,6 +81,7 @@ impl<T: Send + Sync + 'static> Flights<T> {
                         state: State::Starting,
                     }),
                     runnable: AtomicBool::new(true),
+                    panicked: AtomicBool::new(false),
                     wakers: Mutex::new(Vec::new()),
                     tracking: Mutex::new(None),
                 });
@@ -74,12 +101,12 @@ impl<T: Send + Sync + 'static> Flights<T> {
     }
 }
 
-pub(crate) struct Claim<T: Send + Sync + 'static> {
-    pub(crate) subscription: Subscription<T>,
+pub(crate) struct Claim<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>> {
+    pub(crate) subscription: Subscription<T, K>,
     pub(crate) leader: bool,
 }
-pub(crate) struct Subscription<T: Send + Sync + 'static> {
-    pub(crate) flight: Arc<Flight<T>>,
+pub(crate) struct Subscription<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>> {
+    pub(crate) flight: Arc<Flight<T, K>>,
     leader: bool,
     consumed: bool,
     polled: bool,
@@ -107,26 +134,27 @@ struct Cell<T> {
     subscribers: usize,
     state: State<T>,
 }
-pub(crate) struct Flight<T: Send + Sync + 'static> {
-    owner: Weak<Flights<T>>,
-    key: Arc<str>,
+pub(crate) struct Flight<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>> {
+    owner: Weak<Flights<T, K>>,
+    key: K,
     shard: usize,
     scopes: Arc<Scopes>,
     request: Request,
     revision: AtomicU64,
     cell: Mutex<Cell<T>>,
     runnable: AtomicBool,
+    panicked: AtomicBool,
     wakers: Mutex<Vec<Waker>>,
     tracking: Mutex<Option<TrackedCancellation>>,
 }
-impl<T: Send + Sync + 'static> std::fmt::Debug for Flight<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> std::fmt::Debug for Flight<T, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Flight")
-            .field("key", &self.key)
+            .field("key", self.key.key())
             .finish_non_exhaustive()
     }
 }
-impl<T: Send + Sync + 'static> crate::memory::RevisionSource for Flight<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> crate::memory::RevisionSource for Flight<T, K> {
     fn current(&self) -> u64 {
         self.revision.load(Ordering::Acquire)
     }
@@ -135,14 +163,17 @@ impl<T: Send + Sync + 'static> crate::memory::RevisionSource for Flight<T> {
             .store(self.current().saturating_add(1), Ordering::Release);
     }
 }
-impl<T: Send + Sync + 'static> RequestOwner for Flight<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> RequestOwner for Flight<T, K> {
     fn request(&self) -> &Request {
         &self.request
     }
 }
-impl<T: Send + Sync + 'static> Flight<T> {
-    pub(crate) fn key(&self) -> &Arc<str> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
+    pub(crate) fn identity(&self) -> &K {
         &self.key
+    }
+    pub(crate) fn key(&self) -> &Arc<str> {
+        self.key.key()
     }
     pub(crate) fn source(self: &Arc<Self>) -> CancellationSource {
         CancellationSource::from_owner(self.clone())
@@ -204,7 +235,11 @@ impl<T: Send + Sync + 'static> Flight<T> {
                     }
                 }
             }
-            Err(panic) => self.complete(Terminal::Panicked(Some(panic))),
+            Err(panic) => {
+                self.panicked.store(true, Ordering::Release);
+                let panic = self.key.panicked(panic);
+                self.complete(Terminal::Panicked(panic));
+            }
             Ok((None, None) | (Some(_), Some(_))) => unreachable!("poll has one ownership outcome"),
         }
     }
@@ -215,22 +250,28 @@ impl<T: Send + Sync + 'static> Flight<T> {
         let retired = self.owner.upgrade().and_then(|owner| {
             let mut entries = owner.shards[self.shard].lock();
             if entries
-                .get(self.key.as_ref())
+                .get(&self.key)
                 .is_some_and(|flight| Arc::ptr_eq(flight, self))
             {
-                entries.remove(self.key.as_ref())
+                entries.remove(&self.key)
             } else {
                 None
             }
         });
         drop(retired);
         let reason = source.token().reason();
-        let terminal = match reason {
-            Some(reason) => {
+        let terminal = match (reason, terminal) {
+            // Backend fencing reports the original typed lease error while its
+            // factory token still records the precise loss of ownership.
+            (
+                Some(Reason::LeaseLost),
+                Terminal::Owned(Err(error @ Error::Lease(crate::LeaseError::Lost))),
+            ) => Terminal::Owned(Err(error)),
+            (Some(reason), terminal) => {
                 drop(terminal);
                 Terminal::Cancelled(reason)
             }
-            None => terminal,
+            (None, terminal) => terminal,
         };
         let discarded = {
             let mut cell = self.cell.lock();
@@ -264,7 +305,7 @@ impl<T: Send + Sync + 'static> Flight<T> {
             let mut cell = self.cell.lock();
             if cell.subscribers == 0 && matches!(cell.state, State::Starting) {
                 cell.state = State::Finished;
-                entries.remove(self.key.as_ref())
+                entries.remove(&self.key)
             } else {
                 None
             }
@@ -296,19 +337,59 @@ impl<T: Send + Sync + 'static> Flight<T> {
             waker.wake();
         }
     }
-    pub(crate) fn driver(self: Arc<Self>) -> impl Future<Output = Result<()>> + Send {
-        std::future::poll_fn(move |cx| {
-            self.register_waker(cx.waker());
-            self.poll_work();
-            if self.is_finished() {
-                Poll::Ready(Ok(()))
-            } else {
-                Poll::Pending
-            }
+    pub(crate) fn progress(self: Arc<Self>) -> Progress<T, K> {
+        Progress {
+            driver: self.driver(),
+        }
+    }
+    pub(crate) fn driver(self: Arc<Self>) -> Driver<T, K> {
+        Driver {
+            flight: self,
+            polled: false,
+        }
+    }
+}
+pub(crate) struct Progress<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>> {
+    driver: Driver<T, K>,
+}
+impl<T: Send + Sync + 'static, K: FlightIdentity> Future for Progress<T, K> {
+    type Output = Result<()>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        Pin::new(&mut this.driver).poll(cx).map(|result| {
+            result.and_then(|()| {
+                if this.driver.flight.panicked.load(Ordering::Acquire) {
+                    Err(Error::FactoryPanicked)
+                } else {
+                    Ok(())
+                }
+            })
         })
     }
 }
-impl<T: Send + Sync + 'static> Wake for Flight<T> {
+pub(crate) struct Driver<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>> {
+    flight: Arc<Flight<T, K>>,
+    polled: bool,
+}
+impl<T: Send + Sync + 'static, K: FlightIdentity> Future for Driver<T, K> {
+    type Output = Result<()>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        this.flight.register_waker(cx.waker());
+        if !this.polled {
+            this.polled = true;
+            this.flight.runnable.store(true, Ordering::Release);
+        }
+        this.flight.poll_work();
+        if this.flight.is_finished() {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+impl<T: Send + Sync + 'static, K: FlightIdentity> Wake for Flight<T, K> {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
@@ -317,7 +398,7 @@ impl<T: Send + Sync + 'static> Wake for Flight<T> {
         self.notify();
     }
 }
-impl<T: Send + Sync + 'static> CancelWork for Flight<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> CancelWork for Flight<T, K> {
     fn cancel(&self, reason: Reason) {
         let _activity = self.scopes.inline();
         // Use the request itself: cancellation must not require an Arc upgrade.
@@ -345,10 +426,10 @@ impl<T: Send + Sync + 'static> CancelWork for Flight<T> {
         let retired = self.owner.upgrade().and_then(|owner| {
             let mut entries = owner.shards[self.shard].lock();
             if entries
-                .get(self.key.as_ref())
+                .get(&self.key)
                 .is_some_and(|flight| std::ptr::eq(flight.as_ref(), self))
             {
-                entries.remove(self.key.as_ref())
+                entries.remove(&self.key)
             } else {
                 None
             }
@@ -360,7 +441,7 @@ impl<T: Send + Sync + 'static> CancelWork for Flight<T> {
         self.is_finished()
     }
 }
-impl<T: Send + Sync + 'static> Subscription<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> Subscription<T, K> {
     pub(crate) fn try_complete(&mut self) -> Option<Completion<T>> {
         let mut cell = self.flight.cell.lock();
         let result = match &mut cell.state {
@@ -390,7 +471,7 @@ impl<T: Send + Sync + 'static> Subscription<T> {
         Some(result)
     }
 }
-impl<T: Send + Sync + 'static> Future for Subscription<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> Future for Subscription<T, K> {
     type Output = Completion<T>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -404,7 +485,7 @@ impl<T: Send + Sync + 'static> Future for Subscription<T> {
         this.try_complete().map_or(Poll::Pending, Poll::Ready)
     }
 }
-impl<T: Send + Sync + 'static> Drop for Subscription<T> {
+impl<T: Send + Sync + 'static, K: FlightIdentity> Drop for Subscription<T, K> {
     fn drop(&mut self) {
         let _activity = self.flight.scopes.inline();
         let (retired, abandoned) = {

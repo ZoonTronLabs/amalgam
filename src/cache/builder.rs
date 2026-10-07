@@ -738,6 +738,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             write_plan,
             default_fresh_plan,
             flights,
+            origin_work: std::sync::OnceLock::new(),
             tags_default_options: self.tags_default_options,
             marker_reads,
             key_prefix: self.key_prefix,

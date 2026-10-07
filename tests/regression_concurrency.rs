@@ -44,27 +44,34 @@ async fn cancelling_finite_factory_must_not_detach_it_and_release_singleflight()
         Timeout::After(Duration::from_secs(10)),
         false,
     );
+    let cancellation = amalgam::CancellationSource::new();
+    let token = cancellation.token();
     let first = {
         let cache = cache.clone();
         let active = active.clone();
         tokio::spawn(async move {
             cache
-                .get_or_set_with(
-                    "k",
-                    move |ctx| async move {
-                        let _running = Running::start(active);
-                        let _ = started_tx.send(());
-                        let _ = release_rx.await;
-                        Ok(ctx.value(1))
-                    },
-                    finite,
-                )
+                .get_or_set("k", move |ctx| async move {
+                    let _running = Running::start(active);
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    Ok(ctx.value(1))
+                })
+                .options(move |_| finite)
+                .cancellation(token)
                 .await
         })
     };
     started_rx.await.expect("first factory started");
-    first.abort();
-    assert!(first.await.expect_err("caller cancelled").is_cancelled());
+    // RS-3 retains a started factory on caller Drop. Explicit cancellation
+    // retains the original disposal assertion of this regression instead.
+    cancellation.cancel();
+    assert!(matches!(
+        first.await.expect("caller completed"),
+        Err(amalgam::Error::OperationCancelled {
+            reason: amalgam::FactoryCancellationReason::CallerCancelled
+        })
+    ));
     tokio::task::yield_now().await;
     let still_active = active.load(Ordering::SeqCst);
     let observed_active = {

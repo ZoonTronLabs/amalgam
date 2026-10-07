@@ -175,13 +175,15 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         // Reuse the same coordination as explicit options, native calls and
         // eager refresh during incremental migration of those policy paths.
         let local = self
-            .locks
-            .acquire(
+            .assist_origin(
                 &keys.full,
-                crate::MemoryLockKind::Entry,
-                Timeout::Infinite,
-                &token,
-                super::MemoryAcquireRoute::Asynchronous,
+                self.locks.acquire(
+                    &keys.full,
+                    crate::MemoryLockKind::Entry,
+                    Timeout::Infinite,
+                    &token,
+                    super::MemoryAcquireRoute::Asynchronous,
+                ),
             )
             .await?;
         let version = memory.capture_origin_from(Arc::clone(&keys.full), Some(revision))?;

@@ -421,18 +421,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         } else {
             opts.memory_lock_timeout()
         };
-        let local = match self
-            .inner
-            .locks
-            .acquire(
-                key,
-                crate::MemoryLockKind::Entry,
-                timeout,
-                cancellation,
-                self.memory_acquire_route(),
-            )
-            .await?
-        {
+        let acquiring = self.inner.locks.acquire(
+            key,
+            crate::MemoryLockKind::Entry,
+            timeout,
+            cancellation,
+            self.memory_acquire_route(),
+        );
+        let local = match self.inner.assist_any_origin(key, acquiring).await? {
             Some(local) => LocalParticipation::Held(self.memory.guard(local)),
             None => {
                 if opts.is_fail_safe_enabled()
@@ -511,8 +507,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         options: Option<EntryOptions>,
         tags: Box<[Tag]>,
         default: MaybeValue<V>,
-        caller: FactoryCancellation,
+        caller: super::origin::OriginCaller,
     ) -> Result<Observed<CacheValue<V>>> {
+        let super::origin::OriginCaller {
+            operation: caller,
+            explicit,
+        } = caller;
         let opts = self.resolve_options(&key.raw, options)?;
         let raw_key = key.raw;
         let key = key.full;
@@ -612,7 +612,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .timeout_fallback(&key, &opts, stale.as_ref(), &default, timeout)
                 .await;
         }
-        let source = CancellationSource::new();
+        let mut execution = self
+            .inner
+            .origin_work
+            .get_or_init(crate::retained_origin::RetainedOrigins::new)
+            .start(Arc::clone(&key), Arc::clone(self.scopes()));
+        execution.link(&caller);
+        if let Some(explicit) = &explicit {
+            execution.link_explicit(explicit);
+        }
+        let source = execution.source();
         let origin_cancellation = source.token();
         let ctx = FactoryContext::with_cancellation(
             LookupKey {
@@ -636,20 +645,67 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let worker = self.clone();
         let flight_key = Arc::clone(&key);
         let cancelled = source.clone();
-        let mut execution=self.scopes().execution(async move {
-            let origin=origin.invoke(ctx);
-            let product=if let Some(mut state)=lease_state {tokio::select! {biased; ()=lease_lost(&mut state)=>{cancelled.cancel_with(Reason::LeaseLost);return Err(Error::FactoryCancelled {reason:Reason::LeaseLost});},product=origin=>product}}else{origin.await};
-            let product=product.map_err(Error::from)?;
-            let result=worker.store_product(flight_key,product,started,guard,&origin_cancellation).await;
-            if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
-        }.instrument(component_span(&self.inner.name,CacheLevel::Origin,operation,Some(&key))),source);
-        execution.link(&caller, LinkMode::CallerScope);
+        let reporter = execution.reporter();
+        execution.begin(
+            async move {
+                let result = async {
+                    origin_cancellation.check()?;
+                    let origin = origin.invoke(ctx);
+                    let product = if let Some(mut state) = lease_state {
+                        tokio::select! {
+                            biased;
+                            () = lease_lost(&mut state) => {
+                                cancelled.cancel_with(Reason::LeaseLost);
+                                return Err(Error::FactoryCancelled { reason: Reason::LeaseLost });
+                            },
+                            product = origin => product,
+                        }
+                    } else {
+                        origin.await
+                    };
+                    let product = product.map_err(Error::from)?;
+                    let result = worker
+                        .store_product(
+                            Arc::clone(&flight_key),
+                            product,
+                            started,
+                            guard,
+                            &origin_cancellation,
+                        )
+                        .await;
+                    if matches!(&result, Err(Error::Lease(LeaseError::Lost))) {
+                        cancelled.cancel_with(Reason::LeaseLost);
+                    } else {
+                        origin_cancellation.check()?;
+                    }
+                    result
+                }
+                .await;
+                let audience = reporter.complete(&result);
+                worker.report_origin_result(flight_key, &result, audience);
+                result
+            }
+            .instrument(component_span(
+                &self.inner.name,
+                CacheLevel::Origin,
+                operation,
+                Some(&key),
+            )),
+        );
+        if execution.is_pending() && self.inner.tasks.can_execute() {
+            let _completion = self.inner.tasks.spawn(
+                ShutdownTask::Factory,
+                Arc::clone(&key),
+                self.inner.events.clone(),
+                execution.driver(),
+            );
+        }
         let result = match timeout {
             Timeout::Infinite => Some(execution.await),
             Timeout::After(duration) => {
                 tokio::select! {biased;result=&mut execution=>Some(result),()=tokio::time::sleep(duration)=>{
                     self.emit(CacheEvent::FactorySyntheticTimeout {key:Arc::clone(&key)});
-                    if opts.allow_timed_out_factory_background_completion(){self.background_origin(Arc::clone(&key),execution);}else{execution.cancel(if soft {Reason::SoftTimeout}else{Reason::HardTimeout});}
+                    if !opts.allow_timed_out_factory_background_completion(){execution.cancel(if soft {Reason::SoftTimeout}else{Reason::HardTimeout});}
                     None
                 }}
             }
@@ -657,12 +713,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         match result {
             Some(Ok(completion)) => {
                 let (value, level) = match completion {
-                    OriginCompletion::Factory(value) => {
-                        self.emit(CacheEvent::FactorySuccess {
-                            key: Arc::clone(&key),
-                        });
-                        (value, Some(CacheLevel::Origin))
-                    }
+                    OriginCompletion::Factory(value) => (value, Some(CacheLevel::Origin)),
                     OriginCompletion::Constant(value) => (value, None),
                     OriginCompletion::Distributed(value) => (value, Some(CacheLevel::Distributed)),
                 };
@@ -674,10 +725,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     Error::Factory { .. } | Error::FactoryWithSource { .. }
                 ) =>
             {
-                self.emit(CacheEvent::FactoryError {
-                    key: Arc::clone(&key),
-                    message: error.to_string(),
-                });
                 if let Some(value) = self.fallback(&key, &opts, stale.as_ref(), &default).await? {
                     Ok(Observed::new(
                         CacheValue {
@@ -696,6 +743,33 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 self.timeout_fallback(&key, &opts, stale.as_ref(), &default, timeout)
                     .await
             }
+        }
+    }
+    fn report_origin_result(
+        &self,
+        key: Arc<str>,
+        result: &Result<OriginCompletion<V>>,
+        audience: crate::retained_origin::Audience,
+    ) {
+        match result {
+            Ok(OriginCompletion::Factory(_)) => self.emit(match audience {
+                crate::retained_origin::Audience::Foreground => CacheEvent::FactorySuccess { key },
+                crate::retained_origin::Audience::Background => {
+                    CacheEvent::BackgroundFactorySuccess { key }
+                }
+            }),
+            Err(error)
+                if matches!(
+                    error,
+                    Error::Factory { .. } | Error::FactoryWithSource { .. }
+                ) =>
+            {
+                self.emit(CacheEvent::FactoryError {
+                    key,
+                    message: error.to_string(),
+                });
+            }
+            Ok(OriginCompletion::Constant(_) | OriginCompletion::Distributed(_)) | Err(_) => {}
         }
     }
     async fn timeout_fallback(
@@ -829,5 +903,118 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
         },source);
         self.background_origin(background_key, execution);
+    }
+}
+
+enum OriginProgress<V: Clone + Send + Sync + 'static> {
+    General(crate::retained_origin::OriginProgress<OriginCompletion<V>>),
+    Plain(crate::single_flight::Progress<super::inline_cold::Value<V>>),
+}
+impl<V: Clone + Send + Sync + 'static> std::future::Future for OriginProgress<V> {
+    type Output = Result<()>;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self.get_mut() {
+            Self::General(progress) => std::pin::Pin::new(progress).poll(cx),
+            Self::Plain(progress) => std::pin::Pin::new(progress).poll(cx),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum Assistance {
+    GeneralOnly,
+    Any,
+}
+impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
+    pub(super) async fn assist_origin<T>(
+        &self,
+        key: &str,
+        acquiring: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        // A plain flight cannot drive itself while holding its poll ownership.
+        self.assist_acquisition(key, acquiring, Assistance::GeneralOnly)
+            .await
+    }
+    pub(super) async fn assist_any_origin<T>(
+        &self,
+        key: &str,
+        acquiring: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T> {
+        self.assist_acquisition(key, acquiring, Assistance::Any)
+            .await
+    }
+    fn origin_progress(&self, key: &str, mode: Assistance) -> Option<OriginProgress<V>> {
+        self.origin_work
+            .get()
+            .and_then(|work| work.help(key))
+            .map(OriginProgress::General)
+            .or_else(|| match mode {
+                Assistance::GeneralOnly => None,
+                Assistance::Any => self
+                    .flights
+                    .as_ref()?
+                    .active(key)
+                    .map(|flight| OriginProgress::Plain(flight.progress())),
+            })
+    }
+    async fn assist_acquisition<T>(
+        &self,
+        key: &str,
+        acquiring: impl std::future::Future<Output = Result<T>>,
+        mode: Assistance,
+    ) -> Result<T> {
+        let mut helper = self.origin_progress(key, mode);
+        let mut changed = None;
+        let mut acquiring = std::pin::pin!(acquiring);
+        std::future::poll_fn(|cx| {
+            loop {
+                if let Some(progress) = &mut helper {
+                    match std::pin::Pin::new(progress).poll(cx) {
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error));
+                        }
+                        std::task::Poll::Ready(Ok(())) => helper = None,
+                        std::task::Poll::Pending => {}
+                    }
+                }
+                if let ready @ std::task::Poll::Ready(_) = acquiring.as_mut().poll(cx) {
+                    return ready;
+                }
+                if changed.is_none() {
+                    // Only a genuinely suspended acquisition allocates notification
+                    // ownership. Subscribe before rechecking the active table so a
+                    // factory installed after lock acquisition cannot be missed.
+                    let registry = self
+                        .origin_work
+                        .get_or_init(crate::retained_origin::RetainedOrigins::new);
+                    let mut notification = Box::pin(registry.changed());
+                    notification.as_mut().enable();
+                    changed = Some(notification);
+                    if helper.is_none() {
+                        helper = self.origin_progress(key, mode);
+                        if helper.is_some() {
+                            continue;
+                        }
+                    }
+                }
+                match changed
+                    .as_mut()
+                    .expect("notification was installed")
+                    .as_mut()
+                    .poll(cx)
+                {
+                    std::task::Poll::Ready(()) => {
+                        changed = None;
+                        if helper.is_none() {
+                            helper = self.origin_progress(key, mode);
+                        }
+                    }
+                    std::task::Poll::Pending => return std::task::Poll::Pending,
+                }
+            }
+        })
+        .await
     }
 }
