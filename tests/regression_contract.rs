@@ -81,14 +81,11 @@ async fn registry_concurrent_get_or_create_returns_one_shared_cache() {
 async fn oversized_weighted_entry_is_rejected() {
     let cache = Cache::<i32>::builder().max_weighted_capacity(1).build();
     cache
-        .set_full(
-            "oversized",
-            1,
-            Some(EntryOptions::default().with_size(1_000_000)),
-            Box::from([]),
-        )
-        .await;
-    cache.run_pending_tasks().await;
+        .set("oversized", 1)
+        .options(|_| EntryOptions::default().with_size(1_000_000))
+        .await
+        .unwrap();
+    cache.run_pending_tasks().await.unwrap();
     assert!(!cache.read("oversized", None).await.unwrap().has_value());
 }
 
@@ -98,15 +95,12 @@ async fn first_admitted_never_remove_entry_survives_capacity_pressure() {
     let pinned = EntryOptions::default().with_priority(Priority::NeverRemove);
     for i in 0..20 {
         cache
-            .set_full(
-                format!("pinned-{i}"),
-                i,
-                Some(pinned.clone()),
-                Box::from([]),
-            )
-            .await;
+            .set(format!("pinned-{i}"), i)
+            .options(|_| pinned.clone())
+            .await
+            .unwrap();
     }
-    cache.run_pending_tasks().await;
+    cache.run_pending_tasks().await.unwrap();
     let mut retained = 0;
     for i in 0..20 {
         if cache.try_get(format!("pinned-{i}"), None).await.has_value() {
@@ -205,7 +199,7 @@ async fn eviction_events_reach_plugins_exactly_once() {
     for i in 0..20 {
         cache.set(format!("key-{i}"), i).await.unwrap();
     }
-    cache.run_pending_tasks().await;
+    cache.run_pending_tasks().await.unwrap();
     let mut hub_evictions = 0;
     while let Ok(event) = events.try_recv() {
         if matches!(event, CacheEvent::Eviction { .. }) {
@@ -315,7 +309,8 @@ async fn resilient_observer_survives_transient_lag() {
     let mut events = cache.events().subscribe_resilient();
     for i in 0..10 {
         cache
-            .try_set(format!("k-{i}"), i)
+            .set(format!("k-{i}"), i)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -328,7 +323,8 @@ async fn resilient_observer_survives_transient_lag() {
         .unwrap();
     assert!(events.lost_events() > 0);
     cache
-        .try_set("after-lag", 11)
+        .set("after-lag", 11)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

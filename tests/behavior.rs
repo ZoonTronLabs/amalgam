@@ -528,7 +528,7 @@ async fn clear_removes_everything() {
     assert_eq!(cache.try_get("a", None).await.value(), Some(&1));
 
     cache.clear(amalgam::ClearMode::Remove).await.unwrap(); // hard remove
-    cache.run_pending_tasks().await;
+    cache.run_pending_tasks().await.unwrap();
     assert!(!cache.try_get("a", None).await.has_value());
     assert!(!cache.try_get("b", None).await.has_value());
 }

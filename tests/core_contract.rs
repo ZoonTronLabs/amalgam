@@ -109,7 +109,14 @@ async fn soft_timeout_disposes_origin_with_precise_reason_and_retains_failsafe()
         .default_options(options)
         .try_build()
         .unwrap();
-    cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let (token_tx, token_rx) = oneshot::channel();
     let dropped = Arc::new(AtomicUsize::new(0));
@@ -147,7 +154,14 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
         ))
         .try_build()
         .unwrap();
-    cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let source = CancellationSource::new();
     let (entered_tx, entered_rx) = oneshot::channel();
@@ -222,7 +236,14 @@ async fn canonical_reads_preserve_error_and_default_only_on_successful_miss() {
 #[tokio::test]
 async fn mutation_receipts_preserve_suppressed_and_rethrown_failures() {
     let cache = failing_cache(opts());
-    let report = cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
+    let report = cache
+        .set("k", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(
         matches!(report.distributed,EffectOutcome::FailedSuppressed {cause:Error::Distributed(message)} if message=="actual write cause")
     );
@@ -281,7 +302,9 @@ async fn scheduled_receipt_has_owned_completion_and_flush_ignores_listener_servi
         .unwrap();
     let source = CancellationSource::new();
     let receipt = cache
-        .try_set_full_cancellable("k", 7, None, Box::from([]), source.token())
+        .set("k", 7)
+        .cancellation(source.token())
+        .with_receipt()
         .await
         .unwrap();
     assert!(matches!(receipt, MutationReceipt::Scheduled(_)));
@@ -314,7 +337,7 @@ async fn shutdown_cancels_scheduled_commit_and_retains_typed_completion() {
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    let receipt = cache.try_set("k", 7).await.unwrap();
+    let receipt = cache.set("k", 7).with_receipt().await.unwrap();
     l2.started.notified().await;
     cache.shutdown().await.unwrap();
     assert!(matches!(
@@ -352,7 +375,7 @@ async fn dynamic_registration_stops_once_and_is_owned_by_cache_shutdown() {
     let plugin = Arc::new(CountPlugin::default());
     let registration = cache.register_plugin(plugin.clone()).unwrap();
     assert_eq!(plugin.start.load(Ordering::SeqCst), 1);
-    cache.try_set("k", 1).await.unwrap();
+    cache.set("k", 1).with_receipt().await.unwrap();
     assert!(plugin.events.load(Ordering::SeqCst) > 0);
     registration.stop().unwrap();
     registration.wait_stopped().await.unwrap();
@@ -372,7 +395,7 @@ async fn plain_memory_expiry_uses_controlled_clock_and_never_periodic_invalidati
         .default_options(EntryOptions::new(Duration::from_millis(20)))
         .try_build()
         .unwrap();
-    cache.try_set("k", 1).await.unwrap();
+    cache.set("k", 1).with_receipt().await.unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(cache.read("k", None).await.unwrap().value(), Some(&1));
     clock.advance(Duration::from_millis(21));
@@ -403,7 +426,7 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
         Err(Error::Config(ConfigError::DeadlineOutOfRange))
     ));
     assert!(matches!(
-        cache.try_set_full("k", 1, Some(huge), Box::from([])).await,
+        cache.set("k", 1).options(|_| huge).with_receipt().await,
         Err(Error::Config(ConfigError::DeadlineOutOfRange))
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -625,7 +648,14 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
                 builder = builder.backplane(bp.clone());
             }
             let cache = builder.try_build().unwrap();
-            cache.try_set("k", 0).await.unwrap().wait().await.unwrap();
+            cache
+                .set("k", 0)
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             while messages.try_recv().is_ok() {}
             clock.advance(Duration::from_secs(1));
             backend.down.store(true, Ordering::SeqCst);
@@ -639,7 +669,14 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
                     .await
                     .unwrap();
             } else {
-                cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
+                cache
+                    .set("k", 1)
+                    .with_receipt()
+                    .await
+                    .unwrap()
+                    .wait()
+                    .await
+                    .unwrap();
             }
             let ticket = cache.recovery_ticket("k").unwrap();
             backend.gate_next.store(true, Ordering::SeqCst);
@@ -650,9 +687,16 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
             clock.advance(Duration::from_secs(1));
             let newer = {
                 let cache = cache.clone();
-                tokio::spawn(
-                    async move { cache.try_set("k", 2).await.unwrap().wait().await.unwrap() },
-                )
+                tokio::spawn(async move {
+                    cache
+                        .set("k", 2)
+                        .with_receipt()
+                        .await
+                        .unwrap()
+                        .wait()
+                        .await
+                        .unwrap()
+                })
             };
             tokio::time::sleep(Duration::from_millis(10)).await;
             assert!(
@@ -726,7 +770,14 @@ async fn coalesced_gap_retains_exact_ticket_until_successful_l2_and_marker_recon
         .auto_recovery(recovery_config())
         .try_build()
         .unwrap();
-    cache.try_set("k", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let ticket = cache.recovery_ticket("k").unwrap();
     let next = ContinuityEpoch::INITIAL.next().unwrap();
     bp.state
@@ -871,7 +922,7 @@ async fn initial_native_ack_gates_operations_and_close_releases_parked_admission
         .unwrap();
     let caller = {
         let cache = cache.clone();
-        tokio::spawn(async move { cache.try_set("k", 1).await })
+        tokio::spawn(async move { cache.set("k", 1).with_receipt().await })
     };
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(!caller.is_finished());
@@ -981,7 +1032,14 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
             .auto_recovery(no_recovery())
             .try_build()
             .unwrap();
-        cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
+        cache
+            .set("k", 1)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         clock.advance(Duration::from_secs(2));
         let (token_tx, token_rx) = oneshot::channel();
         let dropped = Arc::new(AtomicUsize::new(0));
@@ -1116,7 +1174,14 @@ async fn not_modified_validates_adaptive_raw_tags_before_retention() {
         ))
         .try_build()
         .unwrap();
-    cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     assert!(matches!(
         cache
@@ -1145,7 +1210,13 @@ fn runtime_dependent_options_are_rejected_before_effects_on_std_thread() {
             Timeout::After(Duration::from_millis(1)),
             false,
         );
-        let mut operation = Box::pin(cache.try_set_full("k", 1, Some(options), Box::from([])));
+        let mut operation = Box::pin(
+            cache
+                .set("k", 1)
+                .options(|_| options)
+                .with_receipt()
+                .into_future(),
+        );
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(matches!(
             operation.as_mut().poll(&mut context),
@@ -1170,7 +1241,14 @@ async fn cold_expire_read_failure_retains_intent_and_original_physical_deadline(
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    writer.try_set("k", 7).await.unwrap().wait().await.unwrap();
+    writer
+        .set("k", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let original: DistributedSnapshot<i32> = JsonSerializer
         .deserialize_snapshot(&backend.get("v2:k").await.unwrap().unwrap())
         .unwrap();
@@ -1258,7 +1336,14 @@ async fn recovered_storage_then_failed_notification_never_rewrites_storage_on_re
         .auto_recovery(recovery_config())
         .try_build()
         .unwrap();
-    cache.try_set("k", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     backend.down.store(false, Ordering::SeqCst);
     until(|| {
         cache.recovery_ticket("k").is_some_and(|ticket| {
@@ -1311,7 +1396,14 @@ async fn delayed_clear_marker_does_not_evict_a_newer_snapshot() {
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    cache.try_set("k", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let scope = CacheScope::new("", "v2", KeyModifierMode::Prefix).unwrap();
     let command = MarkerCommand::new(
         "other",
@@ -1337,13 +1429,17 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
     let memory_repaired = invalid.clone().with_memory_lock_timeout(Timeout::Infinite);
     assert!(matches!(
         cache
-            .try_set_full("invalid", 1, Some(memory_repaired.clone()), Box::from([]))
+            .set("invalid", 1)
+            .options(|_| memory_repaired.clone())
+            .with_receipt()
             .await,
         Err(Error::Config(ConfigError::DeadlineOutOfRange))
     ));
     let repaired = memory_repaired.with_distributed_lock_timeout(Timeout::Infinite);
     cache
-        .try_set_full("repaired", 7, Some(repaired), Box::from([]))
+        .set("repaired", 7)
+        .options(|_| repaired)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -188,7 +188,9 @@ async fn seeded_with_tags(
         .try_build()
         .unwrap();
     writer
-        .try_set_full("key", 7, None, tags)
+        .set("key", 7)
+        .tags(tags)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -1199,16 +1201,13 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
         .try_build()
         .unwrap();
     cache
-        .try_set_full(
-            "proof",
-            1,
-            Some(
-                value_options()
-                    .with_skip_distributed(false, true)
-                    .with_skip_backplane_notifications(true),
-            ),
-            Box::from([]),
-        )
+        .set("proof", 1)
+        .options(|_| {
+            value_options()
+                .with_skip_distributed(false, true)
+                .with_skip_backplane_notifications(true)
+        })
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -1546,7 +1545,9 @@ async fn passive_marker_read_is_owned_by_refresh_and_shutdown() {
         .try_build()
         .unwrap();
     writer
-        .try_set_full("key", 9, None, vec![tag()].into_boxed_slice())
+        .set("key", 9)
+        .tags(vec![tag()].into_boxed_slice())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -5,6 +5,16 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Canonical writes and maintenance
+- Remove the ineffective `lock_shards` builder setting and legacy shard
+  argument to `KeyedLock::new`; per-key coordination keeps its existing behavior.
+- Remove the duplicate set overloads and the remaining set adapter that
+  discarded errors. The lazy `set` request provides options, string tags,
+  explicit cancellation and optional actual commit receipts on both facades.
+- Return typed provider failures from `run_pending_tasks` and remove its
+  separate try-prefixed alias. Maintenance remains distinct from waiting
+  for scheduled commit completion.
+
 ### Fluent invalidation API
 - Make remove, expire, tag invalidation and clear lazy requests with typed unit
   results. Commit receipts are an explicit choice; native mutation requests use

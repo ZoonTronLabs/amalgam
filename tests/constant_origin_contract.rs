@@ -86,7 +86,9 @@ async fn async_warm_constant_never_eagerly_replaces_the_existing_value() {
         .try_build()
         .unwrap();
     cache
-        .try_set_full("warm", 1, Some(eager()), Box::from([]))
+        .set("warm", 1)
+        .options(|_| eager())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -117,7 +119,10 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
     )
     .unwrap();
     cache
-        .try_set_full("warm", 1, Some(eager()), Box::from([]))
+        .set("warm", 1)
+        .options(|_| eager())
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();

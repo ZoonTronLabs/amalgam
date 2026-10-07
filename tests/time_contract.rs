@@ -124,7 +124,8 @@ async fn explicit_real_time_clock_keeps_elapsed_expiry_when_its_timestamp_stops(
         }
         let cache = builder.build();
         cache
-            .try_set("k", 7_u64)
+            .set("k", 7_u64)
+            .with_receipt()
             .await
             .unwrap()
             .wait()

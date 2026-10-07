@@ -24,7 +24,11 @@ async fn compiler_proven_owned_values_bypass_codec_copy_and_remain_isolated() {
         .try_build()
         .unwrap();
     let mut original = vec!["before".to_owned()];
-    cache.try_set("value", original.clone()).await.unwrap();
+    cache
+        .set("value", original.clone())
+        .with_receipt()
+        .await
+        .unwrap();
     original[0].push_str(" input mutation");
     let mut read = cache
         .read("value", None)
@@ -49,7 +53,8 @@ async fn immutable_shared_allocation_retains_identity_and_null_is_a_present_valu
         .unwrap();
     let original: Arc<str> = Arc::from("immutable");
     cache
-        .try_set("shared", Some(original.clone()))
+        .set("shared", Some(original.clone()))
+        .with_receipt()
         .await
         .unwrap();
     let read = cache.read("shared", None).await.unwrap();
@@ -57,7 +62,7 @@ async fn immutable_shared_allocation_retains_identity_and_null_is_a_present_valu
         &original,
         read.value().unwrap().as_ref().unwrap()
     ));
-    cache.try_set("null", None).await.unwrap();
+    cache.set("null", None).with_receipt().await.unwrap();
     assert_eq!(cache.read("null", None).await.unwrap().value(), Some(&None));
     assert!(!cache.read("absent", None).await.unwrap().has_value());
     cache.shutdown().await.unwrap();
@@ -73,7 +78,7 @@ async fn explicit_later_copy_strategy_keeps_its_failure_instead_of_silently_bypa
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.try_set("value", vec![]).await,
+        cache.set("value", vec![]).with_receipt().await,
         Err(Error::Clone(_))
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);

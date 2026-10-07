@@ -66,7 +66,14 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
         )
         .try_build()
         .unwrap();
-    cache.try_set("key", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(6));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
@@ -134,13 +141,15 @@ fn native_and_async_ready_reads_copy_on_the_caller_without_entering_a_runtime() 
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cache = amalgam::BlockingCache::new().unwrap();
     cache
-        .try_set(
+        .set(
             "key",
             RuntimeCheckedValue {
                 value: 42,
                 armed: armed.clone(),
             },
         )
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();

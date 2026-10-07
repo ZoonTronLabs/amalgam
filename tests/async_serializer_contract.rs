@@ -1,5 +1,6 @@
 use amalgam::*;
 use async_trait::async_trait;
+use std::future::IntoFuture;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -87,7 +88,8 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
         // selection. Async preference must not query the sync hook during I/O.
         counts.sync_queries.store(0, Ordering::SeqCst);
         cache
-            .try_set("value", 7)
+            .set("value", 7)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -185,8 +187,13 @@ async fn cancelling_a_parked_async_codec_releases_it_without_committing_either_l
         .try_build()
         .unwrap();
     let source = CancellationSource::new();
-    let mut operation =
-        Box::pin(cache.try_set_full_cancellable("value", 7, None, Box::from([]), source.token()));
+    let mut operation = Box::pin(
+        cache
+            .set("value", 7)
+            .cancellation(source.token())
+            .with_receipt()
+            .into_future(),
+    );
     std::future::poll_fn(|cx| {
         assert!(operation.as_mut().poll(cx).is_pending());
         std::task::Poll::Ready(())
@@ -248,7 +255,8 @@ async fn legacy_snapshot_overrides_keep_their_contract_even_with_async_preferenc
         .try_build()
         .unwrap();
     cache
-        .try_set("value", 7)
+        .set("value", 7)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

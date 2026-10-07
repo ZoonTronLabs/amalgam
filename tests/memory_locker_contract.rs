@@ -308,7 +308,13 @@ async fn unavailable_guard_and_lock_timeout_preserve_existing_fallback_rules() {
             .default_options(opts)
             .try_build()
             .unwrap();
-        c.try_set("stale", 17).await.unwrap().wait().await.unwrap();
+        c.set("stale", 17)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         clock.advance(Duration::from_secs(2));
         assert_eq!(
             c.get_or_set::<_, _>(
@@ -447,7 +453,8 @@ async fn soft_completion_keeps_the_custom_guard_until_background_factory_finishe
         .default_options(opts)
         .try_build()
         .unwrap();
-    c.try_set("background", 31)
+    c.set("background", 31)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

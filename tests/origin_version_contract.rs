@@ -33,7 +33,14 @@ async fn paused_origin(mutation: LaterMutation) {
     });
     entered.await.unwrap();
     match mutation {
-        LaterMutation::Set => cache.try_set("key", 2).await.unwrap().wait().await.unwrap(),
+        LaterMutation::Set => cache
+            .set("key", 2)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap(),
         LaterMutation::Remove => cache
             .remove("key")
             .with_receipt()

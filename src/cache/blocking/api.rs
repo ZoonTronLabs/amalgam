@@ -193,40 +193,6 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             },
         }
     }
-    /// Set with resolved per-key options.
-    pub fn try_set(&self, key: impl AsRef<str>, value: V) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_set(key, value))
-            .map(|r| self.wrap_receipt(r))
-    }
-    /// Set with tags and explicit options.
-    pub fn try_set_full(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_set_full(key, value, options, tags))
-            .map(|r| self.wrap_receipt(r))
-    }
-    /// Cancellable set; scheduled commits retain their independent ownership.
-    pub fn try_set_full_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(
-                self.cache
-                    .try_set_full_cancellable(key, value, options, tags, token),
-            )
-            .map(|r| self.wrap_receipt(r))
-    }
     /// Stores a value lazily; execute the configured request explicitly.
     pub fn set<K: AsRef<str>>(
         &self,
@@ -287,13 +253,9 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     pub fn flush_pending(&self) -> Result<()> {
         self.runtime.run(self.cache.flush_pending())
     }
-    /// Performs explicit physical memory/idle-lock maintenance.
-    pub fn run_pending_tasks(&self) {
-        self.runtime.run(self.cache.run_pending_tasks());
-    }
     /// Performs maintenance while preserving a supplied L1 provider failure.
-    pub fn try_run_pending_tasks(&self) -> Result<()> {
-        self.runtime.run(self.cache.try_run_pending_tasks())
+    pub fn run_pending_tasks(&self) -> Result<()> {
+        self.runtime.run(self.cache.run_pending_tasks())
     }
     /// The explicitly configured shared L1 provider.
     pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {

@@ -125,7 +125,14 @@ async fn seed(backend: Arc<InMemoryDistributedCache>, clock: Arc<dyn Clock>, opt
         .default_options(opts)
         .try_build()
         .unwrap();
-    cache.try_set("key", 1).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     cache.shutdown().await.unwrap();
 }
 fn assert_cancelled(token: &FactoryCancellation, expected: FactoryCancellationReason) {
@@ -159,7 +166,9 @@ async fn caller_cancellation_reaches_both_codec_directions_before_repoll() {
         let mut operation = Box::pin(async {
             match direction {
                 Direction::Encode => cache
-                    .try_set_full_cancellable("key", 2, None, Box::from([]), source.token())
+                    .set("key", 2)
+                    .cancellation(source.token())
+                    .with_receipt()
                     .await
                     .map(|_| ()),
                 Direction::Decode => cache
@@ -210,7 +219,7 @@ async fn dropped_caller_ends_the_codec_scope_without_another_poll() {
         ))
         .try_build()
         .unwrap();
-    let mut operation = Box::pin(cache.try_set("key", 2));
+    let mut operation = Box::pin(cache.set("key", 2).with_receipt().into_future());
     poll_pending(&mut operation).await;
     gate.entered().await;
     let token = recorder.token(Direction::Encode);
@@ -238,7 +247,7 @@ async fn codec_cancellation_is_never_suppressed_as_a_miss_or_local_only_write() 
             .try_build()
             .unwrap();
         let result = match direction {
-            Direction::Encode => cache.try_set("key", 2).await.map(|_| ()),
+            Direction::Encode => cache.set("key", 2).with_receipt().await.map(|_| ()),
             Direction::Decode => cache
                 .get_or_set(
                     "key",
@@ -552,7 +561,14 @@ async fn replay_codec_has_an_independent_scope_and_is_cancelled_by_shutdown() {
         })
         .try_build()
         .unwrap();
-    let report = cache.try_set("key", 2).await.unwrap().wait().await.unwrap();
+    let report = cache
+        .set("key", 2)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(matches!(
         report.distributed,
         EffectOutcome::RecoveryQueued { .. }
@@ -590,12 +606,9 @@ async fn passive_refresh_codec_is_owned_and_cancelled_by_shutdown() {
         .try_build()
         .unwrap();
     target
-        .try_set_full(
-            "key",
-            1,
-            Some(EntryOptions::default().with_skip_distributed(false, true)),
-            Box::from([]),
-        )
+        .set("key", 1)
+        .options(|_| EntryOptions::default().with_skip_distributed(false, true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -610,7 +623,8 @@ async fn passive_refresh_codec_is_owned_and_cancelled_by_shutdown() {
         .unwrap();
     clock.advance(Duration::from_secs(1));
     producer
-        .try_set("key", 2)
+        .set("key", 2)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -702,7 +716,9 @@ async fn cancellation_inside_synchronous_codec_callbacks_cannot_commit_or_return
             .unwrap();
         let result = match direction {
             Direction::Encode => cache
-                .try_set_full_cancellable("key", 2, None, Box::from([]), source.token())
+                .set("key", 2)
+                .cancellation(source.token())
+                .with_receipt()
                 .await
                 .map(|_| ()),
             Direction::Decode => cache

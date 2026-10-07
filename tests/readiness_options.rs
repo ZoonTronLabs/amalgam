@@ -6,6 +6,7 @@ use amalgam::{
     InProcessBackplane, LocalEffect, MemoryAdmission, RecoveryConfig, Result, SkipReason,
 };
 use async_trait::async_trait;
+use std::future::IntoFuture;
 use std::future::{Future, poll_fn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -72,10 +73,13 @@ async fn default_initial_wait_allows_local_mutation_but_explicit_ready_still_nee
         })
         .try_build()
         .unwrap();
-    let receipt = tokio::time::timeout(Duration::from_secs(1), cache.try_set("k", 42))
-        .await
-        .expect("disabled initial wait blocked local work")
-        .unwrap();
+    let receipt = tokio::time::timeout(
+        Duration::from_secs(1),
+        cache.set("k", 42).with_receipt().into_future(),
+    )
+    .await
+    .expect("disabled initial wait blocked local work")
+    .unwrap();
     let report = receipt.wait().await.unwrap();
     assert!(matches!(
         report.local,
@@ -115,7 +119,7 @@ async fn close_cancels_initial_ack_admission_before_local_or_notification_effect
         .try_build()
         .unwrap();
     let mut events = cache.events().subscribe();
-    let mut mutation = Box::pin(cache.try_set("k", 42));
+    let mut mutation = Box::pin(cache.set("k", 42).with_receipt().into_future());
     poll_fn(|context| {
         assert!(mutation.as_mut().poll(context).is_pending());
         Poll::Ready(())

@@ -103,7 +103,7 @@ async fn native_shared_slot_publication_drains_a_started_clone_and_rejects_its_r
     let (entered, entry) = mpsc::channel();
     let (release, released) = mpsc::channel();
     cache
-        .try_set(
+        .set(
             "hit",
             Value {
                 block: block.clone(),
@@ -111,6 +111,8 @@ async fn native_shared_slot_publication_drains_a_started_clone_and_rejects_its_r
                 release: Arc::new(Mutex::new(released)),
             },
         )
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();
@@ -145,7 +147,7 @@ fn a_closed_native_read_does_not_invoke_value_clone() {
     let (entered, entry) = mpsc::channel();
     let (_, released) = mpsc::channel();
     cache
-        .try_set(
+        .set(
             "hit",
             Value {
                 block: block.clone(),
@@ -153,6 +155,8 @@ fn a_closed_native_read_does_not_invoke_value_clone() {
                 release: Arc::new(Mutex::new(released)),
             },
         )
+        .with_receipt()
+        .execute()
         .unwrap()
         .wait()
         .unwrap();

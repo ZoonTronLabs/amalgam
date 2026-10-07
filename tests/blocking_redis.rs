@@ -114,7 +114,13 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .wait()
         .unwrap();
     miss_after_notification(&peer, "null");
-    first.try_set("remove-l2", Some(7)).unwrap().wait().unwrap();
+    first
+        .set("remove-l2", Some(7))
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(
         peer.read("remove-l2", None).unwrap().into_value(),
         Some(Some(7))
@@ -142,7 +148,13 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
     );
     cold.ready().unwrap();
     assert!(!cold.read("remove-l2", None).unwrap().has_value());
-    first.try_set("clear", Some(9)).unwrap().wait().unwrap();
+    first
+        .set("clear", Some(9))
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(
         peer.read("clear", None).unwrap().into_value(),
         Some(Some(9))

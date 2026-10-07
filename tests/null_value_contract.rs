@@ -22,7 +22,8 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
     };
     let first = build();
     first
-        .try_set("null", None)
+        .set("null", None)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

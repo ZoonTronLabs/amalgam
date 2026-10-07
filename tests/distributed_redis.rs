@@ -761,14 +761,16 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .await
         .unwrap();
     cache
-        .try_set("local", 42)
+        .set("local", 42)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
     writer
-        .try_set("hydrated", 41)
+        .set("hydrated", 41)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

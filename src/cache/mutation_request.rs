@@ -24,27 +24,7 @@ pub(super) struct MutationRequest<'a, K, V: Clone + Send + Sync + 'static, T = M
 // Inputs are never structurally pinned or exposed as Pin. Asynchronous work
 // owns its separate stable pinned pointer, including when K/V themselves are !Unpin.
 impl<K, V: Clone + Send + Sync + 'static, T> Unpin for MutationRequest<'_, K, V, T> {}
-impl<'a, K, V: Clone + Send + Sync + 'static> MutationRequest<'a, K, V> {
-    pub(super) fn new(
-        cache: &'a Cache<V>,
-        key: K,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        token: Option<FactoryCancellation>,
-    ) -> Self {
-        Self {
-            cache,
-            state: State::Start(Input {
-                key,
-                value,
-                options: options.map(Box::new),
-                tags: Ok(tags),
-                token,
-            }),
-        }
-    }
-}
+
 impl<K: AsRef<str>, V: Clone + Send + Sync + 'static, T: MutationOutput> Future
     for MutationRequest<'_, K, V, T>
 {

@@ -52,7 +52,14 @@ fn completions(events: &mut broadcast::Receiver<CacheEvent>) -> Vec<OperationOut
 }
 
 async fn populated(cache: &Cache<i32>) {
-    cache.try_set("k", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(cache.read("k", None).await.unwrap().value_or(0), 7);
 }
 fn cancelled(result: std::result::Result<i32, Error>, reason: FactoryCancellationReason) {
@@ -111,13 +118,14 @@ async fn unused_canonical_default_is_dropped_inside_counted_completion() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
     cache
-        .try_set(
+        .set(
             "k",
             DefaultDrop {
                 number: 7,
                 gate: None,
             },
         )
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -149,13 +157,14 @@ async fn unused_legacy_default_hit_is_dropped_under_transferred_count() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
     cache
-        .try_set(
+        .set(
             "k",
             DefaultDrop {
                 number: 7,
                 gate: None,
             },
         )
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -210,13 +219,14 @@ async fn ordinary_value_clone_is_counted_as_user_work() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
     cache
-        .try_set(
+        .set(
             "k",
             CloneGate {
                 number: 7,
                 gate: gate.clone(),
             },
         )
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -143,7 +143,8 @@ async fn native_sdk_counts_all_warm_reads_even_when_broadcast_loses_events() {
         .build();
     let mut stream = cache.events().subscribe_layers();
     cache
-        .try_set("secret-key", 17)
+        .set("secret-key", 17)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -211,7 +212,8 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
     };
     let a = build("secret-a");
     let b = build("secret-b");
-    a.try_set("secret-key", 23)
+    a.set("secret-key", 23)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -263,7 +265,9 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             .build();
         let tag = Tag::new("private-tag").unwrap();
         cache
-            .try_set_full("key", 17, None, Box::from([tag.clone()]))
+            .set("key", 17)
+            .tags([tag.clone()])
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -309,7 +313,8 @@ async fn cache_name_budget_is_historical_shared_and_does_not_mix_named_series() 
             .plugin(plugin.clone())
             .build();
         cache
-            .try_set("private-key", 17)
+            .set("private-key", 17)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -448,7 +453,13 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
     };
     let a = build("a");
     let b = build("b");
-    a.try_set("key", 17).await.unwrap().wait().await.unwrap();
+    a.set("key", 17)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let started = std::time::Instant::now();
     loop {
         flush(&provider).await;
@@ -582,9 +593,21 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
         .serializer(Arc::new(JsonSerializer))
         .default_options(options())
         .build();
-    a.try_set("key", 17).await.unwrap().wait().await.unwrap();
+    a.set("key", 17)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(31));
-    b.try_set("key", 23).await.unwrap().wait().await.unwrap();
+    b.set("key", 23)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(
         a.get_or_set::<_, _>(
             "key",

@@ -229,13 +229,12 @@ pub struct KeyedLock {
 pub type KeyGuard = OwnedMutexGuard<()>;
 
 impl KeyedLock {
-    /// Creates per-key locks. The legacy `shards` argument is retained for source
-    /// compatibility; lookup sharding is selected by the map implementation.
+    /// Creates independent per-key locks with implementation-selected lookup sharding.
     #[must_use]
-    pub fn new(shards: usize) -> Self {
-        Self::with_plan(shards, CoordinationPlan::Transient)
+    pub fn new() -> Self {
+        Self::with_plan(CoordinationPlan::Transient)
     }
-    pub(crate) fn with_plan(_shards: usize, plan: CoordinationPlan) -> Self {
+    pub(crate) fn with_plan(plan: CoordinationPlan) -> Self {
         Self {
             locks: plan.slots(),
         }
@@ -280,7 +279,7 @@ impl KeyedLock {
 
 impl Default for KeyedLock {
     fn default() -> Self {
-        Self::new(1024)
+        Self::new()
     }
 }
 
@@ -293,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn free_key_acquisitions_never_suspend_for_an_exhausted_cooperative_budget() {
-        let locks = KeyedLock::new(64);
+        let locks = KeyedLock::new();
         for _ in 0..512 {
             let mut work = std::pin::pin!(locks.lock("ready-key"));
             let initial =
@@ -308,7 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn ready_acquisition_does_not_bypass_an_already_queued_waiter() {
-        let locks = KeyedLock::new(64);
+        let locks = KeyedLock::new();
         let first = locks.lock("ordered-key").await;
         let mut queued = std::pin::pin!(locks.lock("ordered-key"));
         let initial =
@@ -324,7 +323,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn same_key_serializes() {
-        let lock = Arc::new(KeyedLock::new(64));
+        let lock = Arc::new(KeyedLock::new());
         let counter = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));
 
@@ -393,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_eviction_and_maintenance_preserve_holder_and_queued_waiter_identity() {
-        let locks = KeyedLock::with_plan(64, CoordinationPlan::Reuse);
+        let locks = KeyedLock::with_plan(CoordinationPlan::Reuse);
         let first = locks.lock("held").await;
         let identity = Arc::downgrade(&locks.mutex_for("held"));
         let mut queued = std::pin::pin!(locks.lock("held"));

@@ -110,7 +110,13 @@ async fn closing_from_the_unused_factory_drop_rejects_the_ready_value_once() {
 fn native_ready_origins_preserve_unused_capture_events_and_close() {
     for next in [AfterSubscription::Continue, AfterSubscription::Close] {
         let cache = BlockingCache::new().unwrap();
-        cache.try_set("hit", 7).unwrap().wait().unwrap();
+        cache
+            .set("hit", 7)
+            .with_receipt()
+            .execute()
+            .unwrap()
+            .wait()
+            .unwrap();
         let receiver = Arc::new(Mutex::new(None));
         let closes = matches!(next, AfterSubscription::Close);
         let capture = SubscribeOnDrop {
@@ -332,7 +338,9 @@ async fn a_value_without_drop_can_still_have_a_user_clone() {
     for native in [false, true] {
         let cache = BlockingCache::new().unwrap();
         cache
-            .try_set("hit", NoDropClone(7))
+            .set("hit", NoDropClone(7))
+            .with_receipt()
+            .execute()
             .unwrap()
             .wait()
             .unwrap();

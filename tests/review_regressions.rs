@@ -75,7 +75,14 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
             .unwrap()
     };
     let writer = build();
-    writer.try_set("k", 1).await.unwrap().wait().await.unwrap();
+    writer
+        .set("k", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     let reader = build();
     backend.pause_next.store(true, Ordering::SeqCst);
     let flight = {
@@ -106,7 +113,14 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
     }
     match mutation {
         Mutation::Set => {
-            reader.try_set("k", 2).await.unwrap().wait().await.unwrap();
+            reader
+                .set("k", 2)
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
         }
         Mutation::Remove => {
             reader
@@ -187,7 +201,14 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             }
         };
         let writer = build();
-        writer.try_set("k", 1).await.unwrap().wait().await.unwrap();
+        writer
+            .set("k", 1)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         let reader = build();
         backend.pause_next.store(true, Ordering::SeqCst);
         let older = tokio::spawn({
@@ -213,7 +234,14 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             .await
             .unwrap();
         clock.advance(advance);
-        writer.try_set("k", 2).await.unwrap().wait().await.unwrap();
+        writer
+            .set("k", 2)
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         assert_eq!(reader.read("k", None).await.unwrap().value(), Some(&2));
         backend.release.add_permits(1);
         older.await.unwrap();
@@ -373,18 +401,22 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
         .try_build()
         .unwrap();
     cache
-        .try_set_full(
-            "continuity-proof",
-            3,
-            Some(opts().with_skip_distributed(false, true)),
-            Box::from([]),
-        )
+        .set("continuity-proof", 3)
+        .options(|_| opts().with_skip_distributed(false, true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    cache.try_set("k", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("k", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(cache.pending_recovery(), 1);
     bp.publish(BackplaneMessage {
         source_id: Arc::from("\u{1f}amalgam-control-v2:zz"),

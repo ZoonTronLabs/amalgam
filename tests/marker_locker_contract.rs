@@ -329,12 +329,10 @@ async fn fixture(options: EntryOptions, policy: LeasePolicy, prefix: &str) -> Fi
         .try_build()
         .unwrap();
     writer
-        .try_set_full(
-            "key",
-            7_u64,
-            Some(EntryOptions::new(Duration::from_secs(3600))),
-            vec![Tag::new("group").unwrap()].into_boxed_slice(),
-        )
+        .set("key", 7_u64)
+        .options(|_| EntryOptions::new(Duration::from_secs(3600)))
+        .tags(vec![Tag::new("group").unwrap()].into_boxed_slice())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

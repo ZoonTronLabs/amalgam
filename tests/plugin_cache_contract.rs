@@ -66,12 +66,11 @@ impl CachePlugin<i32> for Probe {
         );
         boundary(
             PluginStage::Start,
-            cache.try_set_full(
-                "plugin-tagged",
-                18,
-                None,
-                Box::from([Tag::new("plugin-tag").unwrap()]),
-            ),
+            cache
+                .set("plugin-tagged", 18)
+                .tags([Tag::new("plugin-tag").unwrap()])
+                .with_receipt()
+                .execute(),
         )?
         .wait()
         .map_err(|e| PluginError::from_source(self.name(), PluginStage::Start, e))?;
@@ -112,11 +111,12 @@ impl PluginSession for Session {
                 boundary(PluginStage::Event, cache.read("caller", None))?.value(),
                 Some(&23)
             );
-            boundary(PluginStage::Event, cache.try_set("plugin-event", 24))?
-                .wait()
-                .map_err(|e| {
-                    PluginError::from_source("operational-probe", PluginStage::Event, e)
-                })?;
+            boundary(
+                PluginStage::Event,
+                cache.set("plugin-event", 24).with_receipt().execute(),
+            )?
+            .wait()
+            .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Event, e))?;
             self.record.events.fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
@@ -133,9 +133,12 @@ impl PluginSession for Session {
                 .execute(),
         )?;
         assert_eq!(value, 29);
-        boundary(PluginStage::Stop, cache.try_set("plugin-stop", 30))?
-            .wait()
-            .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;
+        boundary(
+            PluginStage::Stop,
+            cache.set("plugin-stop", 30).with_receipt().execute(),
+        )?
+        .wait()
+        .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;
         boundary(
             PluginStage::Stop,
             cache
@@ -177,7 +180,13 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
         BlockingCache::from_builder(Cache::<i32>::builder().name("same").key_prefix("p:")).unwrap();
     let registration = cache.register_cache_plugin(plugin(record.clone())).unwrap();
     assert_eq!(cache.read("plugin-start", None).unwrap().value(), Some(&17));
-    cache.try_set("caller", 23).unwrap().wait().unwrap();
+    cache
+        .set("caller", 23)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(record.events.load(Ordering::SeqCst), 1);
     assert_eq!(cache.read("plugin-event", None).unwrap().value(), Some(&24));
     let retained = record.contexts.lock().unwrap()[0].cache().unwrap();
@@ -456,7 +465,9 @@ impl CachePlugin<i32> for TypedOrder {
             _ => panic!("fixture uses first/third positions"),
         }
         cache
-            .try_set("ordered", self.position)
+            .set("ordered", self.position)
+            .with_receipt()
+            .execute()
             .unwrap()
             .wait()
             .unwrap();
@@ -516,7 +527,12 @@ fn one_plugin_definition_gets_independent_operational_sessions_per_cache() {
             .cache_plugin(probe),
     )
     .unwrap();
-    a.try_set("caller", 23).unwrap().wait().unwrap();
+    a.set("caller", 23)
+        .with_receipt()
+        .execute()
+        .unwrap()
+        .wait()
+        .unwrap();
     assert_eq!(a.read("plugin-event", None).unwrap().value(), Some(&24));
     assert!(!b.read("plugin-event", None).unwrap().has_value());
     assert_eq!(record.contexts.lock().unwrap()[0].instance_id(), "a-owner");
@@ -589,12 +605,10 @@ impl PluginSession for BackgroundSession {
     fn stop(&self) -> std::result::Result<(), PluginError> {
         let cache = self.context.cache()?.blocking(self.runtime.clone());
         let receipt = cache
-            .try_set_full(
-                "plugin-bg",
-                1,
-                Some(EntryOptions::default().with_allow_background_distributed_operations(true)),
-                Box::from([]),
-            )
+            .set("plugin-bg", 1)
+            .options(|_| EntryOptions::default().with_allow_background_distributed_operations(true))
+            .with_receipt()
+            .execute()
             .unwrap();
         assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
         self.runtime.run(async {
@@ -674,7 +688,8 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         view.distributed_locker().unwrap()
     ));
     cache
-        .try_set("caller", 23)
+        .set("caller", 23)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

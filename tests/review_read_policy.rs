@@ -38,7 +38,8 @@ async fn distributed_hard_read_budget_includes_required_marker_read() {
         .try_build()
         .unwrap();
     writer
-        .try_set("key", 7)
+        .set("key", 7)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -112,7 +113,14 @@ async fn captured_stale(contract: ReadContract) {
         .default_options(options)
         .try_build()
         .unwrap();
-    cache.try_set("key", 1).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 1)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_millis(1500));
     backend.armed.store(true, Ordering::SeqCst);
     let read = tokio::spawn({
@@ -168,7 +176,14 @@ async fn stale_distributed_only_read_is_attributed_to_distributed_layer() {
         .default_options(options.clone())
         .try_build()
         .unwrap();
-    cache.try_set("key", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let mut events = cache.events().subscribe();
     let observed = cache
@@ -214,7 +229,14 @@ async fn required_marker_read_respects_soft_budget_and_preserves_origin_fallback
         .default_options(options)
         .try_build()
         .unwrap();
-    cache.try_set("key", 7).await.unwrap().wait().await.unwrap();
+    cache
+        .set("key", 7)
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_secs(2));
     let result = tokio::time::timeout(
         Duration::from_secs(1),
@@ -286,7 +308,8 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
     };
     let writer = build();
     writer
-        .try_set("key", 1)
+        .set("key", 1)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -305,7 +328,15 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
     backend.pause_write.store(true, Ordering::SeqCst);
     let write = tokio::spawn({
         let cache = cache.clone();
-        async move { cache.try_set("key", 2).await.unwrap().wait().await }
+        async move {
+            cache
+                .set("key", 2)
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+        }
     });
     tokio::time::timeout(Duration::from_secs(1), backend.write_entered.notified())
         .await

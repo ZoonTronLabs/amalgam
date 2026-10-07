@@ -65,7 +65,7 @@ error rethrows. Reports also expose skipped stages, suppressed failures and
 recovery admission according to the configured policy.
 
 Legacy invalidation adapters have been removed from the developing source.
-The remaining read/write aliases are still being migrated. See
+The remaining read aliases are still being migrated. See
 [the 0.4 migration draft](docs/MIGRATION_0_4.md) for the current changes.
 
 ## Fluent requests (unreleased source)
