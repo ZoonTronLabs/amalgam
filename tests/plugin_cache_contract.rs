@@ -130,7 +130,10 @@ impl PluginSession for Session {
             .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;
         boundary(
             PluginStage::Stop,
-            cache.try_remove_by_tag(Tag::new("plugin-tag").unwrap()),
+            cache
+                .remove_by_tag(Tag::new("plugin-tag").unwrap())
+                .with_receipt()
+                .execute(),
         )?
         .wait()
         .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;

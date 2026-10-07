@@ -25,7 +25,7 @@ The published package is `amalgam-cache`; the Rust library is imported as `amalg
 Unreleased additions and the still-open full functionality inventory are tracked
 in [FULL_CONTRACT.md](docs/FULL_CONTRACT.md) and the [changelog](CHANGELOG.md).
 
-## Basic use
+## Basic use (developing 0.4 source)
 
 ```rust
 use amalgam::Cache;
@@ -34,17 +34,13 @@ use amalgam::Cache;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache: Cache<String> = Cache::builder().try_build()?;
     let greeting = cache
-        .get_or_set("greeting", |ctx| async move {
-            Ok(ctx.value("hello, world".to_owned()))
+        .get_or_set("greeting", |_| async move {
+            Ok::<_, std::convert::Infallible>("hello, world".to_owned())
         })
         .await?;
     assert_eq!(greeting, "hello, world");
 
-    cache
-        .try_set("greeting", "hello again".to_owned())
-        .await?
-        .wait()
-        .await?;
+    cache.set("greeting", "hello again".to_owned()).await?;
     assert_eq!(
         cache
             .read("greeting", None)
@@ -53,21 +49,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(String::as_str),
         Some("hello again")
     );
-    cache.try_remove("greeting").await?.wait().await?;
+    cache.remove("greeting").await?;
     assert!(!cache.read("greeting", None).await?.has_value());
     cache.shutdown().await?;
     Ok(())
 }
 ```
 
-Use fallible APIs for new callers. `read` distinguishes a successful miss from a storage, copy or configuration failure. A mutation returns a `MutationReceipt`: `Completed` contains its stage report; `Scheduled` contains awaitable cache-owned completion. `wait()` observes actual completion, including a requested error rethrow. A completed report can also record skipped stages, suppressed failures and work admitted to recovery, according to the configured policy.
+Use fallible APIs for new callers. `read` currently distinguishes a successful
+miss from a storage, copy or configuration failure while the read facade is being
+migrated. Mutations return `Result<()>`; `.with_receipt()` explicitly requests a
+`MutationReceipt`. `Completed` contains its stage report; `Scheduled` contains
+awaitable cache-owned completion. `wait()` observes completion and requested
+error rethrows. Reports also expose skipped stages, suppressed failures and
+recovery admission according to the configured policy.
 
-Legacy `build`, `try_get`, `remove`, `expire` and `clear(bool)` signatures remain compatibility adapters in this developing source API. Their original signatures cannot return every newly modeled failure; diagnostics retain observed failures. Prefer `try_build`, fallible reads/mutations and explicit shutdown when handling those failures matters.
-
+Legacy invalidation adapters have been removed from the developing source.
+Remaining read/retrieval aliases are still being migrated. See
+[the 0.4 migration draft](docs/MIGRATION_0_4.md) for the current changes.
 
 ## Fluent requests (unreleased source)
 
-`set` and `get_or_set` execute when awaited. An option transformation starts
+`set`, `get_or_set`, remove, expire, tag invalidation and clear execute when awaited. An option transformation starts
 from a copy of the cache defaults, so changing duration retains fail-safe and
 other settings. String tags are validated before storage or factory work.
 
@@ -75,14 +78,14 @@ other settings. String tags are validated before storage or factory work.
 use std::time::Duration;
 
 let value = cache
-    .get_or_set("profile", |ctx| async move { Ok(ctx.value("Alice".to_owned())) })
+    .get_or_set("profile", |_| async move { Ok::<_, std::convert::Infallible>("Alice".to_owned()) })
     .options(|options| options.with_duration(Duration::from_secs(30)))
     .tags(["users"])
     .await?;
 
 cache.set("profile", value).tags(["users"]).await?;
 let observed = cache
-    .get_or_set("profile", |_| async { panic!("already cached") })
+    .get_or_set("profile", |_| async { Ok::<_, std::convert::Infallible>("Alice".to_owned()) })
     .with_receipt()
     .await?;
 observed.commit.wait().await?;
@@ -91,7 +94,7 @@ observed.commit.wait().await?;
 Optional `.fail_safe_default(value)` and `.cancellation(token)` apply to the
 individual request. A manually polled request first calls `.into_future()`;
 this separates configuration from pinned execution. The remaining operation
-names and factory-value API are still being migrated for 0.4.
+read and supplied-value source facades are still being migrated for 0.4.
 
 ## Synchronous use (unreleased source)
 
@@ -180,12 +183,11 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 ## Development performance
 
 The developing 0.4 source has zero-allocation warm L1 reads and replacements.
-The performance harness is being corrected to compare against default .NET
-tiering/Dynamic PGO after sustained warmup; the earlier TC=0 PASS claims do not
-qualify release performance. Independent reproduction shows that L2 and set
-still miss their required budgets. Those are the next optimization targets.
-
-Both FC modes will be published, and mandatory gates use the default-PGO result.
+The performance harness compares against default .NET tiering/Dynamic PGO
+after sustained warmup and publishes TC=0 separately. Mandatory gates use the
+default-PGO result; earlier TC=0 PASS claims do not qualify release performance.
+Focused L2 work removed five allocations from each read path. L2 and set still
+miss their required budgets and remain the performance targets.
 The final API, behavioral matrix and release qualification remain open. See
 [tables and measurement method](docs/PERFORMANCE.md) and
 [release requirements](docs/ROADMAP.md).

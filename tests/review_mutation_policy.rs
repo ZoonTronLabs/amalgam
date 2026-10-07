@@ -108,16 +108,37 @@ async fn skipped_marker_write(mutation: MarkerMutation) {
         .await
         .unwrap();
     clock.advance(Duration::from_millis(1));
-    let options = Some(EntryOptions::default().with_skip_distributed(false, true));
+    let options = EntryOptions::default().with_skip_distributed(false, true);
     let report = match mutation {
-        MarkerMutation::Tag => cache.try_remove_by_tag_with(first.clone(), options).await,
-        MarkerMutation::Tags => {
+        MarkerMutation::Tag => {
             cache
-                .try_remove_by_tags_with(vec![first.clone(), second.clone()], options)
+                .remove_by_tag(first.clone())
+                .options(|_| options)
+                .with_receipt()
                 .await
         }
-        MarkerMutation::ClearExpire => cache.try_clear_with(ClearMode::Expire, options).await,
-        MarkerMutation::ClearRemove => cache.try_clear_with(ClearMode::Remove, options).await,
+        MarkerMutation::Tags => {
+            cache
+                .remove_by_tag(first.clone())
+                .and_tags([second.clone()])
+                .options(|_| options)
+                .with_receipt()
+                .await
+        }
+        MarkerMutation::ClearExpire => {
+            cache
+                .clear(ClearMode::Expire)
+                .options(|_| options)
+                .with_receipt()
+                .await
+        }
+        MarkerMutation::ClearRemove => {
+            cache
+                .clear(ClearMode::Remove)
+                .options(|_| options)
+                .with_receipt()
+                .await
+        }
     }
     .unwrap()
     .wait()

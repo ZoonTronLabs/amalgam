@@ -212,9 +212,27 @@ async fn mutate(
     options: Option<EntryOptions>,
 ) -> Result<CommitReport> {
     let receipt = match kind {
-        MarkerKind::Tag(tag) => cache.try_remove_by_tag_with(tag.clone(), options).await?,
-        MarkerKind::ClearExpire => cache.try_clear_with(ClearMode::Expire, options).await?,
-        MarkerKind::ClearRemove => cache.try_clear_with(ClearMode::Remove, options).await?,
+        MarkerKind::Tag(tag) => {
+            cache
+                .remove_by_tag(tag.clone())
+                .options(|defaults| (options).unwrap_or(defaults))
+                .with_receipt()
+                .await?
+        }
+        MarkerKind::ClearExpire => {
+            cache
+                .clear(ClearMode::Expire)
+                .options(|defaults| (options).unwrap_or(defaults))
+                .with_receipt()
+                .await?
+        }
+        MarkerKind::ClearRemove => {
+            cache
+                .clear(ClearMode::Remove)
+                .options(|defaults| (options).unwrap_or(defaults))
+                .with_receipt()
+                .await?
+        }
     };
     receipt.wait().await
 }

@@ -114,7 +114,14 @@ async fn late_layer_attachment_counts_retirement_of_preexisting_values() {
     let registration = cache
         .register_plugin(observer(counts.clone(), PluginObservations::All))
         .unwrap();
-    cache.try_remove("key").await.unwrap().wait().await.unwrap();
+    cache
+        .remove("key")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(counts.evictions.load(Ordering::SeqCst), 1);
     registration.stop().unwrap();
     cache.shutdown().await.unwrap();
@@ -160,7 +167,9 @@ impl PluginSession for ReentrantSession {
                 |error| PluginError::from_source("reentrant-layer", PluginStage::Event, error);
             assert_eq!(cache.read("caller", None).map_err(map)?.value(), Some(&23));
             cache
-                .try_remove("caller")
+                .remove("caller")
+                .with_receipt()
+                .execute()
                 .map_err(map)?
                 .wait()
                 .map_err(map)?;

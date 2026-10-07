@@ -328,7 +328,7 @@ async fn remove_by_tag_propagates_across_nodes() {
     clock.advance(Duration::from_secs(1)); // now T1
 
     // Node B invalidates the tag; the marker rides the backplane to node A.
-    node_b.remove_by_tag("group").await;
+    node_b.remove_by_tag("group").await.unwrap();
     tokio::time::sleep(Duration::from_millis(80)).await; // let the marker propagate
 
     // Advance again so A's *next* entry is created strictly after the marker (T2),

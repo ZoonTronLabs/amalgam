@@ -1,6 +1,7 @@
 use amalgam::*;
 use async_trait::async_trait;
 use std::future::Future;
+use std::future::IntoFuture;
 use std::pin::Pin;
 use std::sync::{
     Arc, Mutex,
@@ -437,12 +438,14 @@ async fn expiry_decode_and_encode_receive_the_mutation_scope() {
             .try_build()
             .unwrap();
         let source = CancellationSource::new();
-        let mut operation = Box::pin(cache.try_expire_with_policy_cancellable(
-            "key",
-            None,
-            DistributedExpirePolicy::RetainStale,
-            source.token(),
-        ));
+        let mut operation = Box::pin(
+            cache
+                .expire("key")
+                .distributed_policy(DistributedExpirePolicy::RetainStale)
+                .cancellation(source.token())
+                .with_receipt()
+                .into_future(),
+        );
         poll_pending(&mut operation).await;
         gate.entered().await;
         source.cancel();

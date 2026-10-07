@@ -5,12 +5,18 @@ pub(crate) use blocking::MemoryAcquireRoute;
 use blocking::{NativeMemoryView, NativeMemoryWork};
 mod builder;
 mod clock;
+mod distributed_key;
 mod get_request;
 mod inline_cold;
 pub use get_request::{GetOrSetFuture, GetOrSetRequest, ReceiptGetOrSetRequest};
+mod invalidation_request;
 mod markers;
 mod memory_inline;
 mod mutation_request;
+pub use invalidation_request::{
+    ClearRequest, ExpireRequest, InvalidationFuture, ReceiptInvalidationFuture,
+    ReceiptInvalidationRequest, RemoveRequest, TagInvalidationRequest,
+};
 mod set_request;
 pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest};
 mod callback_free;
@@ -27,8 +33,8 @@ mod write;
 
 pub use blocking::{
     BlockingCache, BlockingCacheBuildError, BlockingCacheValue, BlockingCommitCompletion,
-    BlockingCommitReceipt, BlockingDispatchError, BlockingMutationReceipt, BlockingRuntime,
-    BlockingRuntimeError, BlockingThreadPool,
+    BlockingCommitReceipt, BlockingDispatchError, BlockingMutationReceipt, BlockingReceiptRequest,
+    BlockingRequest, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool,
 };
 pub use builder::CacheBuilder;
 use origin::{CacheOrigin, ConstantOrigin, FactoryOrigin, OriginCompletion, OriginKind};
@@ -323,8 +329,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     recovery: Option<Arc<AutoRecoveryService>>,
     default_options_provider: Option<Arc<dyn DefaultEntryOptionsProvider>>,
     ignore_incoming_backplane: bool,
-    distributed_wire_version: Arc<str>,
-    distributed_key_modifier_mode: KeyModifierMode,
+    distributed_key: distributed_key::DistributedKey,
     disable_tagging: bool,
     wait_for_initial_backplane_subscribe: bool,
     cloner: Option<Arc<dyn ValueCloner<V>>>,
@@ -1011,23 +1016,11 @@ fn newer_of<V: Clone>(existing: Option<Entry<V>>, candidate: Entry<V>) -> Entry<
 }
 
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
-    fn l2_key(&self, key: &str) -> String {
-        match self.distributed_key_modifier_mode {
-            KeyModifierMode::Prefix => format!("{}:{key}", self.distributed_wire_version),
-            KeyModifierMode::Suffix => format!("{key}:{}", self.distributed_wire_version),
-            KeyModifierMode::None => key.to_owned(),
-        }
+    fn l2_key<'a>(&self, key: &'a str) -> Cow<'a, str> {
+        self.distributed_key.physical(key)
     }
     fn logical_key(&self, physical: &str) -> Option<Arc<str>> {
-        let key = match self.distributed_key_modifier_mode {
-            KeyModifierMode::Prefix => {
-                physical.strip_prefix(&format!("{}:", self.distributed_wire_version))?
-            }
-            KeyModifierMode::Suffix => {
-                physical.strip_suffix(&format!(":{}", self.distributed_wire_version))?
-            }
-            KeyModifierMode::None => physical,
-        };
+        let key = self.distributed_key.logical(physical)?;
         if self
             .key_prefix
             .as_ref()

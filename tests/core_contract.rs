@@ -216,7 +216,9 @@ async fn mutation_receipts_preserve_suppressed_and_rethrown_failures() {
     );
     assert_eq!(cache.read("k", None).await.unwrap().value(), Some(&1));
     let error = cache
-        .try_remove_with("k", Some(opts().with_rethrow_distributed_exceptions(true)))
+        .remove("k")
+        .options(|_| opts().with_rethrow_distributed_exceptions(true))
+        .with_receipt()
         .await
         .unwrap_err();
     assert!(matches!(error,Error::Distributed(message) if message=="actual remove cause"));
@@ -607,7 +609,14 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
             clock.advance(Duration::from_secs(1));
             backend.down.store(true, Ordering::SeqCst);
             if old_remove {
-                cache.try_remove("k").await.unwrap().wait().await.unwrap();
+                cache
+                    .remove("k")
+                    .with_receipt()
+                    .await
+                    .unwrap()
+                    .wait()
+                    .await
+                    .unwrap();
             } else {
                 cache.try_set("k", 1).await.unwrap().wait().await.unwrap();
             }
@@ -1139,7 +1148,9 @@ async fn cold_expire_read_failure_retains_intent_and_original_physical_deadline(
         .unwrap();
     backend.read_down.store(true, Ordering::SeqCst);
     let report = cache
-        .try_expire_with_policy("k", None, DistributedExpirePolicy::RetainStale)
+        .expire("k")
+        .distributed_policy(DistributedExpirePolicy::RetainStale)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

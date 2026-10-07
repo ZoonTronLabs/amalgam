@@ -81,7 +81,7 @@ mod demo {
 
             // A remove every few iterations so the keys churn and re-miss later.
             if i % 8 == 0 {
-                cache.remove(format!("item-{}", i % 4)).await;
+                cache.remove(format!("item-{}", i % 4)).await.unwrap();
             }
 
             if i % 20 == 0 {

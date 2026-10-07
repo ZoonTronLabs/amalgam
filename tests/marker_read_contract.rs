@@ -1370,7 +1370,8 @@ async fn retained_tag_expiry_never_bypasses_a_later_hard_clear_remove() {
     let cache = reader(clock.clone(), backend, store.clone(), control_options());
     cache.read("key", None).await.unwrap();
     cache
-        .try_remove_by_tag(tag())
+        .remove_by_tag(tag())
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -1435,7 +1436,9 @@ async fn marker_copy_does_not_require_the_ordinary_value_cloner() {
         .unwrap();
     assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
     cache
-        .try_remove_by_tag_with(tag(), Some(control_options().with_enable_auto_clone(true)))
+        .remove_by_tag(tag())
+        .options(|_| control_options().with_enable_auto_clone(true))
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -11,10 +11,20 @@ fn ordinary_mutation_futures_fit_within_a_small_stack_budget() {
     let sizes = [
         ("set", size_of_val(&cache.set("x", 42).into_future())),
         ("try_set", size_of_val(&cache.try_set("x", 42))),
-        ("remove", size_of_val(&cache.remove("x"))),
-        ("try_remove", size_of_val(&cache.try_remove("x"))),
-        ("expire", size_of_val(&cache.expire("x"))),
-        ("clear", size_of_val(&cache.try_clear(ClearMode::Remove))),
+        ("remove", size_of_val(&cache.remove("x").into_future())),
+        (
+            "try_remove",
+            size_of_val(&std::future::IntoFuture::into_future(
+                cache.remove("x").with_receipt(),
+            )),
+        ),
+        ("expire", size_of_val(&cache.expire("x").into_future())),
+        (
+            "clear",
+            size_of_val(&std::future::IntoFuture::into_future(
+                cache.clear(ClearMode::Remove).with_receipt(),
+            )),
+        ),
     ];
     for (operation, size) in sizes {
         assert!(
@@ -81,7 +91,7 @@ fn traced_read_and_refresh_compose_on_a_two_mebibyte_thread_stack() {
                     let cache: Cache<u64> = Cache::builder().try_build().unwrap();
                     assert_eq!(read_then_refresh(&cache, 1).await, 1);
                     assert_eq!(read_then_refresh(&cache, 2).await, 2);
-                    cache.remove("x").await;
+                    cache.remove("x").await.unwrap();
                     cache.shutdown().await.unwrap();
                 });
         })

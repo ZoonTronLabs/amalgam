@@ -533,7 +533,8 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
     fixture.clock.advance(Duration::from_millis(1));
     fixture
         .cache
-        .try_remove("removed")
+        .remove("removed")
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -541,7 +542,8 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
         .unwrap();
     fixture
         .cache
-        .try_remove_by_tag(tag)
+        .remove_by_tag(tag)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -552,7 +554,8 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
     assert_eq!(local_value(&fixture.cache, "cleared").await, Some(3));
     fixture
         .cache
-        .try_clear(ClearMode::Remove)
+        .clear(ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()

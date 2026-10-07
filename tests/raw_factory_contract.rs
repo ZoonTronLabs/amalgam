@@ -99,7 +99,8 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
         Some(&9)
     );
     cache
-        .try_remove_by_tag(Tag::new("adapted").unwrap())
+        .remove_by_tag(Tag::new("adapted").unwrap())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

@@ -104,7 +104,7 @@ async fn backplane_remove_invalidates_peer() {
         .unwrap();
     assert_eq!(served, "v1", "peer pulled the value from shared L2");
 
-    cache1.remove("k").await;
+    cache1.remove("k").await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await; // let the Remove propagate
 
     assert!(
@@ -256,7 +256,7 @@ async fn backplane_expire_marks_peer_stale_keeping_physical() {
         .await
         .unwrap();
 
-    cache1.expire("k").await; // logical expire → backplane Expire
+    cache1.expire("k").await.unwrap(); // logical expire → backplane Expire
     tokio::time::sleep(Duration::from_millis(120)).await;
     clock.advance(Duration::from_secs(1)); // move past the logical-expire instant
 
@@ -311,7 +311,7 @@ async fn backplane_clear_remove_propagates_to_peer() {
         "peer holds the value before the clear"
     );
 
-    cache1.clear(false).await; // remove-all → CLEAR_REMOVE marker over the backplane
+    cache1.clear(amalgam::ClearMode::Remove).await.unwrap(); // remove-all → CLEAR_REMOVE marker over the backplane
     tokio::time::sleep(Duration::from_millis(120)).await;
     cache2.run_pending_tasks().await;
 

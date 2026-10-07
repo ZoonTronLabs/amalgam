@@ -162,7 +162,14 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
     };
     boundary.wait().await;
     lose_continuity(&reader, &backplane, &clock).await;
-    writer.try_remove("k").await.unwrap().wait().await.unwrap();
+    writer
+        .remove("k")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     boundary.unblock();
     if let Some(read) = read {
         read.await.unwrap().unwrap();
@@ -299,7 +306,14 @@ async fn gap_during_storage_insertion(bounded: bool) {
     });
     boundary.wait().await;
     lose_continuity(&reader, &backplane, &clock).await;
-    writer.try_remove("k").await.unwrap().wait().await.unwrap();
+    writer
+        .remove("k")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     boundary.unblock();
     read.await.unwrap().unwrap();
     let after = reader.read("k", None).await.unwrap();

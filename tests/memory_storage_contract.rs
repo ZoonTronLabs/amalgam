@@ -48,13 +48,26 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .unwrap(),
         7
     );
-    c.try_expire("key").await.unwrap().wait().await.unwrap();
+    c.expire("key")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(c.read("key", None).await.unwrap().into_value().is_none());
     c.try_set("key", 8).await.unwrap().wait().await.unwrap();
-    c.try_remove("key").await.unwrap().wait().await.unwrap();
+    c.remove("key")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert!(!store.state.lock().unwrap().records.contains_key("key"));
     c.try_set("other", 9).await.unwrap().wait().await.unwrap();
-    c.try_clear(ClearMode::Remove)
+    c.clear(ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -110,7 +123,13 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
         ))
     ));
     assert_eq!(c.read("pinned", None).await.unwrap().into_value(), Some(13));
-    c.try_remove("pinned").await.unwrap().wait().await.unwrap();
+    c.remove("pinned")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     c.try_set("low", 15).await.unwrap().wait().await.unwrap();
     let mut evictions = c.memory_evictions().subscribe();
     c.try_set_full(
@@ -358,7 +377,10 @@ async fn write_remove_maintenance_and_usage_errors_remain_typed() {
     *store.fault.lock().unwrap() = None;
     c.try_set("k", 53).await.unwrap().wait().await.unwrap();
     *store.fault.lock().unwrap() = Some(Fault::Remove);
-    assert_eq!(cause(&c.try_remove("k").await.unwrap_err()), Fault::Remove);
+    assert_eq!(
+        cause(&c.remove("k").with_receipt().await.unwrap_err()),
+        Fault::Remove
+    );
     *store.fault.lock().unwrap() = Some(Fault::Maintain);
     assert_eq!(
         cause(&c.try_run_pending_tasks().await.unwrap_err()),
@@ -377,7 +399,7 @@ async fn failed_physical_clear_still_prevents_old_records_from_becoming_visible(
     c.try_set("k", 59).await.unwrap().wait().await.unwrap();
     *store.fault.lock().unwrap() = Some(Fault::Clear);
     assert_eq!(
-        cause(&c.try_clear(ClearMode::Remove).await.unwrap_err()),
+        cause(&c.clear(ClearMode::Remove).with_receipt().await.unwrap_err()),
         Fault::Clear
     );
     assert!(store.state.lock().unwrap().records.contains_key("k"));
@@ -419,7 +441,8 @@ async fn shared_provider_clear_is_isolated_by_the_actual_key_prefix() {
         .build();
     a.try_set("key", 71).await.unwrap().wait().await.unwrap();
     b.try_set("key", 73).await.unwrap().wait().await.unwrap();
-    a.try_clear(ClearMode::Remove)
+    a.clear(ClearMode::Remove)
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -457,7 +480,9 @@ fn overlapping_clear_preserves_a_write_admitted_after_its_barrier() {
     let clearing = a.clone();
     let work = std::thread::spawn(move || {
         clearing
-            .try_clear(ClearMode::Remove)
+            .clear(ClearMode::Remove)
+            .with_receipt()
+            .execute()
             .unwrap()
             .wait()
             .unwrap()
@@ -956,7 +981,13 @@ async fn non_copy_values_use_the_same_public_storage_contract() {
         c.read("key", None).await.unwrap().into_value().as_deref(),
         Some("first")
     );
-    c.try_remove("key").await.unwrap().wait().await.unwrap();
+    c.remove("key")
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     assert_eq!(c.memory_usage().unwrap().entries, 0);
     c.shutdown().await.unwrap();
 }

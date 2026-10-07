@@ -91,7 +91,8 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
     // NotModified without an explicit adaptation retains the stale tags.
     clock.advance(Duration::from_millis(1));
     second
-        .try_remove_by_tag(Tag::new("stored").unwrap())
+        .remove_by_tag(Tag::new("stored").unwrap())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

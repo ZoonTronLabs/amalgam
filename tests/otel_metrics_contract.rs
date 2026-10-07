@@ -229,7 +229,8 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
     assert_eq!(capture.counter("amalgam.distributed.get", "l2"), 1);
     assert_eq!(capture.counter("amalgam.distributed.hit", "l2"), 1);
     assert_eq!(capture.counter("amalgam.cache.hit", "l2"), 1);
-    a.try_remove("secret-key")
+    a.remove("secret-key")
+        .with_receipt()
         .await
         .unwrap()
         .wait()
@@ -269,7 +270,8 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             .await
             .unwrap();
         cache
-            .try_remove_by_tag(tag)
+            .remove_by_tag(tag)
+            .with_receipt()
             .await
             .unwrap()
             .wait()

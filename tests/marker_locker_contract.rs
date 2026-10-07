@@ -751,7 +751,8 @@ async fn until(mut condition: impl FnMut() -> bool) {
 async fn seed_known_without_remote_read(f: &Fixture) {
     f.clock.set(time(1));
     f.cache
-        .try_remove_by_tag(Tag::new("group").unwrap())
+        .remove_by_tag(Tag::new("group").unwrap())
+        .with_receipt()
         .await
         .unwrap()
         .wait()

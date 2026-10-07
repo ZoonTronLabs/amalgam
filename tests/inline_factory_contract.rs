@@ -268,7 +268,7 @@ fn a_retained_factory_token_does_not_pin_a_completed_value() {
     .unwrap();
     let weak = Arc::downgrade(&value);
     drop(value);
-    ready(cache.try_remove("drop")).unwrap();
+    ready(cache.remove("drop").with_receipt()).unwrap();
     assert!(weak.upgrade().is_none());
     assert_eq!(count.load(Ordering::SeqCst), 1);
     assert!(token.lock().unwrap().as_ref().unwrap().is_cancelled());

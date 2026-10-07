@@ -327,86 +327,53 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             )
             .map(|r| self.wrap_receipt(r))
     }
-    /// Remove with resolved per-key options.
-    pub fn try_remove(&self, key: impl AsRef<str>) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove(key))
-            .map(|r| self.wrap_receipt(r))
-    }
-    /// Remove with explicit options and cancellation.
-    pub fn try_remove_with_cancellable(
+    /// Stores a value lazily; execute the configured request explicitly.
+    pub fn set<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove_with_cancellable(key, options, token))
-            .map(|r| self.wrap_receipt(r))
+        key: K,
+        value: V,
+    ) -> BlockingRequest<'_, super::super::SetRequest<'_, K, V>> {
+        BlockingRequest {
+            runtime: &self.runtime,
+            request: self.cache.set(key, value),
+        }
     }
-    /// Expire L1 while selecting the explicit L2 contract.
-    pub fn try_expire_with_policy(
+    /// Physically removes a key with a typed result.
+    pub fn remove<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        policy: DistributedExpirePolicy,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_expire_with_policy(key, options, policy))
-            .map(|r| self.wrap_receipt(r))
+        key: K,
+    ) -> BlockingRequest<'_, super::super::RemoveRequest<'_, K, V>> {
+        BlockingRequest {
+            runtime: &self.runtime,
+            request: self.cache.remove(key),
+        }
     }
-    /// Expire using the retained-stale legacy L2 contract.
-    pub fn try_expire(&self, key: impl AsRef<str>) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_expire(key))
-            .map(|r| self.wrap_receipt(r))
-    }
-    /// Invalidate one validated tag using marker defaults.
-    pub fn try_remove_by_tag(&self, tag: Tag) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove_by_tag(tag))
-            .map(|r| self.wrap_receipt(r))
-    }
-    /// Invalidate a batch with independent marker options.
-    pub fn try_remove_by_tags_with(
+    /// Expires L1 and removes L2 by default.
+    pub fn expire<K: AsRef<str>>(
         &self,
-        tags: impl IntoIterator<Item = Tag>,
-        options: Option<EntryOptions>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove_by_tags_with(tags, options))
-            .map(|r| self.wrap_receipt(r))
+        key: K,
+    ) -> BlockingRequest<'_, super::super::ExpireRequest<'_, K, V>> {
+        BlockingRequest {
+            runtime: &self.runtime,
+            request: self.cache.expire(key),
+        }
     }
-    /// Cancellable batch invalidation using the same marker pipeline.
-    pub fn try_remove_by_tags_with_cancellable(
+    /// Invalidates a raw tag, optionally adding a batch before execution.
+    pub fn remove_by_tag(
         &self,
-        tags: impl IntoIterator<Item = Tag>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(
-                self.cache
-                    .try_remove_by_tags_with_cancellable(tags, options, token),
-            )
-            .map(|r| self.wrap_receipt(r))
+        tag: impl AsRef<str>,
+    ) -> BlockingRequest<'_, super::super::TagInvalidationRequest<'_, V>> {
+        BlockingRequest {
+            runtime: &self.runtime,
+            request: self.cache.remove_by_tag(tag),
+        }
     }
-    /// Scoped expire/remove clear using marker defaults.
-    pub fn try_clear(&self, mode: ClearMode) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_clear(mode))
-            .map(|r| self.wrap_receipt(r))
-    }
-    /// Cancellable scoped clear with independent marker policy.
-    pub fn try_clear_with_cancellable(
-        &self,
-        mode: ClearMode,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_clear_with_cancellable(mode, options, token))
-            .map(|r| self.wrap_receipt(r))
+    /// Invalidates this cache using an explicit expiration or removal mode.
+    pub fn clear(&self, mode: ClearMode) -> BlockingRequest<'_, super::super::ClearRequest<'_, V>> {
+        BlockingRequest {
+            runtime: &self.runtime,
+            request: self.cache.clear(mode),
+        }
     }
     /// Initiates cache shutdown without claiming drainage.
     pub fn close(&self) -> CloseOutcome {
@@ -569,103 +536,6 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
                 ),
             )
             .map(|value| self.wrap_value(value))
-    }
-
-    /// Remove with explicit per-entry options.
-    pub fn try_remove_with(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove_with(key, options))
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Expire with explicit per-entry options and retained stale L2.
-    pub fn try_expire_with(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_expire_with(key, options))
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Cancellable expiration with retained stale L2.
-    pub fn try_expire_with_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_expire_with_cancellable(key, options, token))
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Cancellable expiration with an explicit distributed retention policy.
-    pub fn try_expire_with_policy_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        policy: DistributedExpirePolicy,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(
-                self.cache
-                    .try_expire_with_policy_cancellable(key, options, policy, token),
-            )
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Invalidate one tag with independent explicit marker options.
-    pub fn try_remove_by_tag_with(
-        &self,
-        tag: Tag,
-        options: Option<EntryOptions>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove_by_tag_with(tag, options))
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Cancellable tag invalidation with independent marker options.
-    pub fn try_remove_by_tag_with_cancellable(
-        &self,
-        tag: Tag,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(
-                self.cache
-                    .try_remove_by_tag_with_cancellable(tag, options, token),
-            )
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Invalidate a batch using the independent marker defaults.
-    pub fn try_remove_by_tags(
-        &self,
-        tags: impl IntoIterator<Item = Tag>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_remove_by_tags(tags))
-            .map(|receipt| self.wrap_receipt(receipt))
-    }
-
-    /// Scoped clear with independent explicit marker options.
-    pub fn try_clear_with(
-        &self,
-        mode: ClearMode,
-        options: Option<EntryOptions>,
-    ) -> Result<BlockingMutationReceipt> {
-        self.runtime
-            .run(self.cache.try_clear_with(mode, options))
-            .map(|receipt| self.wrap_receipt(receipt))
     }
 
     /// Cancellable synchronous factory retrieval with actual commit completion.

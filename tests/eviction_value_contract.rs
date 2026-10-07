@@ -46,11 +46,25 @@ async fn replacement_and_removal_carry_exact_stored_payload_in_both_backends() {
         assert_eq!(event.key(), "key");
         assert_eq!(event.reason(), MemoryEvictionReason::Replaced);
         assert!(Arc::ptr_eq(event.value(), &first));
-        cache.try_remove("key").await.unwrap().wait().await.unwrap();
+        cache
+            .remove("key")
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         let event = events.try_recv().unwrap();
         assert_eq!(event.reason(), MemoryEvictionReason::Removed);
         assert!(Arc::ptr_eq(event.value(), &second));
-        cache.try_remove("key").await.unwrap().wait().await.unwrap();
+        cache
+            .remove("key")
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         assert!(matches!(
             events.try_recv(),
             Err(EvictionReceiveError::Empty)
@@ -94,7 +108,14 @@ async fn observation_and_multiple_receivers_never_clone_the_user_value() {
             .await
             .unwrap();
         let before = clones.load(Ordering::SeqCst);
-        cache.try_remove("k").await.unwrap().wait().await.unwrap();
+        cache
+            .remove("k")
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         let original = a.try_recv().unwrap();
         let peer = b.try_recv().unwrap();
         let copy = original.clone();
@@ -116,7 +137,14 @@ async fn insertion_capture_and_retirement_capture_have_explicit_late_subscriptio
                 .unwrap();
             cache.try_set("old", 9).await.unwrap().wait().await.unwrap();
             let mut events = cache.memory_evictions().subscribe();
-            cache.try_remove("old").await.unwrap().wait().await.unwrap();
+            cache
+                .remove("old")
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             match capture {
                 EvictionCapture::AtInsertion => assert!(matches!(
                     events.try_recv(),
@@ -152,12 +180,26 @@ async fn logical_expire_is_metadata_only_and_preserves_original_capture_admissio
                 .unwrap();
             let mut late = (!subscribed_before).then(|| cache.memory_evictions().subscribe());
             let events = early.as_mut().or(late.as_mut()).unwrap();
-            cache.try_expire("k").await.unwrap().wait().await.unwrap();
+            cache
+                .expire("k")
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             assert!(matches!(
                 events.try_recv(),
                 Err(EvictionReceiveError::Empty)
             ));
-            cache.try_remove("k").await.unwrap().wait().await.unwrap();
+            cache
+                .remove("k")
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             if subscribed_before {
                 assert!(Arc::ptr_eq(events.try_recv().unwrap().value(), &original));
             } else {
@@ -223,7 +265,8 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
             cache.try_set(k, v).await.unwrap().wait().await.unwrap();
         }
         cache
-            .try_clear(ClearMode::Remove)
+            .clear(ClearMode::Remove)
+            .with_receipt()
             .await
             .unwrap()
             .wait()
@@ -274,7 +317,14 @@ async fn lag_is_bounded_independent_and_remaining_records_drain_after_producer_c
             .wait()
             .await
             .unwrap();
-        cache.try_remove("k").await.unwrap().wait().await.unwrap();
+        cache
+            .remove("k")
+            .with_receipt()
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
         assert_eq!(*fast.recv().await.unwrap().value(), value);
     }
     assert_eq!(*slow.try_recv().unwrap().value(), 3);
@@ -327,7 +377,13 @@ fn ordinary_remove_and_replace_destructors_reenter_the_same_public_native_key() 
                         Arc::new(Probe {
                             on_drop: Some(Box::new(move || {
                                 let cache = owner.upgrade().unwrap();
-                                cache.try_remove("k").unwrap().wait().unwrap();
+                                cache
+                                    .remove("k")
+                                    .with_receipt()
+                                    .execute()
+                                    .unwrap()
+                                    .wait()
+                                    .unwrap();
                                 calls.fetch_add(1, Ordering::SeqCst);
                             })),
                         }),
@@ -338,7 +394,13 @@ fn ordinary_remove_and_replace_destructors_reenter_the_same_public_native_key() 
                 if replace {
                     cache.try_set("k", quiet()).unwrap().wait().unwrap();
                 } else {
-                    cache.try_remove("k").unwrap().wait().unwrap();
+                    cache
+                        .remove("k")
+                        .with_receipt()
+                        .execute()
+                        .unwrap()
+                        .wait()
+                        .unwrap();
                 }
                 assert_eq!(runs.load(Ordering::SeqCst), 1);
                 cache.shutdown().unwrap();
@@ -375,7 +437,9 @@ fn factory_replacement_releases_origin_coordination_before_old_value_destructor(
                             owner
                                 .upgrade()
                                 .unwrap()
-                                .try_remove("k")
+                                .remove("k")
+                                .with_receipt()
+                                .execute()
                                 .unwrap()
                                 .wait()
                                 .unwrap();
@@ -420,7 +484,9 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
                             owner
                                 .upgrade()
                                 .unwrap()
-                                .try_remove("k")
+                                .remove("k")
+                                .with_receipt()
+                                .execute()
                                 .unwrap()
                                 .wait()
                                 .unwrap();
@@ -431,10 +497,22 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
                 .unwrap()
                 .wait()
                 .unwrap();
-            cache.try_remove("k").unwrap().wait().unwrap();
+            cache
+                .remove("k")
+                .with_receipt()
+                .execute()
+                .unwrap()
+                .wait()
+                .unwrap();
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             cache.try_set("k", quiet()).unwrap().wait().unwrap();
-            cache.try_remove("k").unwrap().wait().unwrap();
+            cache
+                .remove("k")
+                .with_receipt()
+                .execute()
+                .unwrap()
+                .wait()
+                .unwrap();
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             assert_eq!(
                 events.try_recv().unwrap().reason(),
@@ -462,7 +540,13 @@ fn last_receiver_releases_retained_values_after_queue_unlock() {
                     on_drop: Some(Box::new(move || {
                         let cache = owner.upgrade().unwrap();
                         let _nested = cache.memory_evictions().subscribe();
-                        cache.try_remove("k").unwrap().wait().unwrap();
+                        cache
+                            .remove("k")
+                            .with_receipt()
+                            .execute()
+                            .unwrap()
+                            .wait()
+                            .unwrap();
                         runs.fetch_add(1, Ordering::SeqCst);
                     })),
                 }),
@@ -470,7 +554,13 @@ fn last_receiver_releases_retained_values_after_queue_unlock() {
             .unwrap()
             .wait()
             .unwrap();
-        cache.try_remove("k").unwrap().wait().unwrap();
+        cache
+            .remove("k")
+            .with_receipt()
+            .execute()
+            .unwrap()
+            .wait()
+            .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         drop(events);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -569,7 +659,9 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
                             owner
                                 .upgrade()
                                 .unwrap()
-                                .try_remove("k")
+                                .remove("k")
+                                .with_receipt()
+                                .execute()
                                 .unwrap()
                                 .wait()
                                 .unwrap();
@@ -655,7 +747,14 @@ async fn replacement_preserves_late_value_capture_and_original_metadata() {
                     assert_eq!(old.entry().meta().tags(), &[Tag::new("first-tag").unwrap()]);
                 }
             }
-            cache.try_remove("key").await.unwrap().wait().await.unwrap();
+            cache
+                .remove("key")
+                .with_receipt()
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
             let current = events.try_recv().unwrap();
             assert!(Arc::ptr_eq(current.value(), &second));
             assert_eq!(current.reason(), MemoryEvictionReason::Removed);

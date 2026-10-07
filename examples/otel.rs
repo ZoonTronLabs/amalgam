@@ -53,7 +53,7 @@ mod demo {
         cache.set("farewell", "goodbye".to_owned()).await.unwrap();
         println!("set farewell");
 
-        cache.remove("greeting").await;
+        cache.remove("greeting").await.unwrap();
         println!("removed greeting");
 
         println!();
