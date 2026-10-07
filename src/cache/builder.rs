@@ -422,7 +422,7 @@ impl<V> CacheBuilder<V> {
     /// When enabled, the per-read tag/clear-marker check is skipped entirely (a
     /// small read-path saving for caches that never tag), and
     /// [`remove_by_tag`](Cache::remove_by_tag) /
-    /// [`remove_by_tags`](Cache::remove_by_tags) / [`clear`](Cache::clear) are
+    /// [`remove_by_tag`](Cache::remove_by_tag) / [`clear`](Cache::clear) are
     /// ignored and logged at `warn` (never silently) — the Rust-idiomatic
     /// counterpart of FusionCache throwing on tag use when tagging is disabled.
     /// Off by default.
