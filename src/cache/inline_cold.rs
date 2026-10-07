@@ -186,7 +186,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
                 ),
             )
             .await?;
-        let version = memory.capture_origin_from(Arc::clone(&keys.full), Some(revision))?;
+        let version = memory.capture_borrowed_origin_from(&keys.full, Some(revision))?;
         token.check()?;
         let stale = match self.inline_memory_read(memory, &keys.full, O::KIND) {
             Some(MemoryRead::Fresh(value)) => {
@@ -239,7 +239,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
             product.last_modified,
         )?;
         let local_effect = if product.options.skip_memory_write() {
-            let current = memory.skip_origin(&keys.full, &version);
+            let current = memory.skip_borrowed_origin(&keys.full, &version);
             drop((local, version, entry));
             if current {
                 super::LocalEffect::Skipped
@@ -250,7 +250,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
             }
         } else {
             let prepared = memory.prepare_insert(Arc::clone(&keys.full), entry, now);
-            let commit = memory.apply_origin(prepared, &version);
+            let commit = memory.apply_borrowed_origin(prepared, &version);
             // User Drop/observations never run while the factory lock is held.
             drop((local, version));
             super::LocalEffect::Stored(memory.finish_insert(commit))

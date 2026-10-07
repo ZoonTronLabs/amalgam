@@ -248,7 +248,7 @@ impl<V> Sharded<V> {
         let (_, shard) = self.route(key);
         write(shard).origins.forget(key, revision);
     }
-    pub(super) fn skip_origin(&self, key: &str, origin: &super::MemoryOrigin<V>) -> bool {
+    pub(super) fn skip_origin(&self, key: &str, origin: &super::RevisionSnapshot) -> bool {
         let (_, shard) = self.route(key);
         let state = write(shard);
         if origin.matches(self.origin_generation()) {

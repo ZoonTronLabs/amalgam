@@ -100,24 +100,15 @@ impl Origins {
     }
 }
 
-pub(crate) struct MemoryOrigin<V> {
-    key: Arc<str>,
-    backend: Backend<V>,
+/// The complete revision predicate is independent of storage ownership.
+pub(super) struct RevisionSnapshot {
     revision: Arc<dyn RevisionSource>,
     captured: u64,
     generation: u64,
 }
-impl<V> MemoryOrigin<V> {
-    pub(super) fn new(
-        key: Arc<str>,
-        backend: Backend<V>,
-        revision: Arc<dyn RevisionSource>,
-        captured: u64,
-        generation: u64,
-    ) -> Self {
+impl RevisionSnapshot {
+    pub(super) fn new(revision: Arc<dyn RevisionSource>, captured: u64, generation: u64) -> Self {
         Self {
-            key,
-            backend,
             revision,
             captured,
             generation,
@@ -128,22 +119,66 @@ impl<V> MemoryOrigin<V> {
             && self.generation == generation
             && self.revision.current() == self.captured
     }
+}
+
+pub(crate) struct MemoryOrigin<V> {
+    key: Arc<str>,
+    backend: Backend<V>,
+    snapshot: RevisionSnapshot,
+}
+impl<V> MemoryOrigin<V> {
+    pub(super) fn new(key: Arc<str>, backend: Backend<V>, snapshot: RevisionSnapshot) -> Self {
+        Self {
+            key,
+            backend,
+            snapshot,
+        }
+    }
+    pub(super) fn snapshot(&self) -> &RevisionSnapshot {
+        &self.snapshot
+    }
     pub(crate) fn is_current(&self) -> bool {
         let generation = match &self.backend {
             Backend::Unbounded(store) => store.origin_generation(),
             Backend::Retained(store) => super::lock(store).generation,
         };
-        self.matches(generation)
+        self.snapshot.matches(generation)
     }
 }
 impl<V> Drop for MemoryOrigin<V> {
     fn drop(&mut self) {
-        match &self.backend {
-            Backend::Unbounded(store) => store.forget_origin(&self.key, &self.revision),
-            Backend::Retained(store) => {
-                super::lock(store).origins.forget(&self.key, &self.revision)
-            }
+        forget(&self.backend, &self.key, &self.snapshot);
+    }
+}
+
+/// An inline factory already owns CacheInner and its key in a stable pinned
+/// body. Its revision registration borrows those owners through every await.
+pub(crate) struct BorrowedMemoryOrigin<'a, V> {
+    key: &'a str,
+    backend: &'a Backend<V>,
+    snapshot: RevisionSnapshot,
+}
+impl<'a, V> BorrowedMemoryOrigin<'a, V> {
+    pub(super) fn new(key: &'a str, backend: &'a Backend<V>, snapshot: RevisionSnapshot) -> Self {
+        Self {
+            key,
+            backend,
+            snapshot,
         }
+    }
+    pub(super) fn snapshot(&self) -> &RevisionSnapshot {
+        &self.snapshot
+    }
+}
+impl<V> Drop for BorrowedMemoryOrigin<'_, V> {
+    fn drop(&mut self) {
+        forget(self.backend, self.key, &self.snapshot);
+    }
+}
+fn forget<V>(backend: &Backend<V>, key: &str, snapshot: &RevisionSnapshot) {
+    match backend {
+        Backend::Unbounded(store) => store.forget_origin(key, &snapshot.revision),
+        Backend::Retained(store) => super::lock(store).origins.forget(key, &snapshot.revision),
     }
 }
 
@@ -248,6 +283,43 @@ mod tests {
                 store.finish_insert(store.apply_origin(write, &newer)),
                 super::super::MemoryAdmission::Replaced
             );
+        }
+    }
+    #[test]
+    fn borrowed_origins_detect_clear_and_cannot_invalidate_a_newer_completion() {
+        for bounded in [false, true] {
+            let store = store(bounded);
+            let now = Timestamp::from_ticks(10_000);
+            let key: Arc<str> = Arc::from("borrowed");
+            let revision = Arc::new(Revision(AtomicU64::new(1)));
+            let old = store
+                .capture_borrowed_origin_from(&key, Some(revision.clone()))
+                .unwrap();
+            store.invalidate_all();
+            let write = store.prepare_insert(key.clone(), entry(1), now);
+            assert_eq!(
+                store.finish_insert(store.apply_borrowed_origin(write, &old)),
+                super::super::MemoryAdmission::Rejected(crate::CapacityRejection::VersionChanged)
+            );
+            assert!(!store.skip_borrowed_origin(&key, &old));
+            drop(old);
+            let current = store
+                .capture_borrowed_origin_from(&key, Some(revision.clone()))
+                .unwrap();
+            let write = store.prepare_insert(key.clone(), entry(2), now);
+            assert_eq!(
+                store.finish_insert(store.apply_borrowed_origin(write, &current)),
+                super::super::MemoryAdmission::Admitted
+            );
+            drop(current);
+            // A retained factory token must not keep idle revision registration.
+            store.invalidate_origin(&key);
+            assert_eq!(
+                revision.current(),
+                2,
+                "only the accepted commit advances this revision"
+            );
+            assert_eq!(*store.ready_at_for_mutation(&key, now).unwrap().value(), 2);
         }
     }
     #[test]

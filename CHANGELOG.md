@@ -7,6 +7,9 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Inline factories borrow their version's storage and key from the already
+  retained cache frame. Version comparison and commit remain atomic; snapshot
+  release still follows key coordination, including clear and late completion.
 - Default factory hits reuse the borrowed L1 plan, including native calls.
   Native factory executor captures are created only for a miss or eager refresh.
   Unused input destructors remain counted through final cancellation checks;

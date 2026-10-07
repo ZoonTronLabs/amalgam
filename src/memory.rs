@@ -3,9 +3,9 @@
 mod custom;
 mod deadlines;
 mod origin;
-pub(crate) use origin::MemoryOrigin;
-use origin::Origins;
 pub(crate) use origin::RevisionSource;
+pub(crate) use origin::{BorrowedMemoryOrigin, MemoryOrigin};
+use origin::{Origins, RevisionSnapshot};
 mod reclamation;
 mod sharded;
 use crate::entry::Entry;
@@ -543,31 +543,51 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         key: Arc<str>,
         revision: Option<Arc<dyn RevisionSource>>,
     ) -> crate::Result<MemoryOrigin<V>> {
+        let snapshot = self.capture_revision(&key, revision)?;
+        Ok(MemoryOrigin::new(key, self.backend.clone(), snapshot))
+    }
+    pub(crate) fn capture_borrowed_origin_from<'a>(
+        &'a self,
+        key: &'a Arc<str>,
+        revision: Option<Arc<dyn RevisionSource>>,
+    ) -> crate::Result<BorrowedMemoryOrigin<'a, V>> {
+        let snapshot = self.capture_revision(key, revision)?;
+        Ok(BorrowedMemoryOrigin::new(key, &self.backend, snapshot))
+    }
+    fn capture_revision(
+        &self,
+        key: &Arc<str>,
+        revision: Option<Arc<dyn RevisionSource>>,
+    ) -> crate::Result<RevisionSnapshot> {
         let (revision, captured, generation) = match &self.backend {
-            Backend::Unbounded(store) => store.capture_origin_from(&key, revision)?,
+            Backend::Unbounded(store) => store.capture_origin_from(key, revision)?,
             Backend::Retained(store) => {
                 let mut state = lock(store);
                 if state.generation == u64::MAX {
                     return Err(crate::RecoveryError::GenerationExhausted.into());
                 }
-                let (revision, captured) = state.origins.capture_from(&key, revision)?;
+                let (revision, captured) = state.origins.capture_from(key, revision)?;
                 (revision, captured, state.generation)
             }
         };
-        Ok(MemoryOrigin::new(
-            key,
-            self.backend.clone(),
-            revision,
-            captured,
-            generation,
-        ))
+        Ok(RevisionSnapshot::new(revision, captured, generation))
     }
     pub(crate) fn skip_origin(&self, key: &str, origin: &MemoryOrigin<V>) -> bool {
+        self.skip_revision(key, origin.snapshot())
+    }
+    pub(crate) fn skip_borrowed_origin(
+        &self,
+        key: &str,
+        origin: &BorrowedMemoryOrigin<'_, V>,
+    ) -> bool {
+        self.skip_revision(key, origin.snapshot())
+    }
+    fn skip_revision(&self, key: &str, snapshot: &RevisionSnapshot) -> bool {
         match &self.backend {
-            Backend::Unbounded(store) => store.skip_origin(key, origin),
+            Backend::Unbounded(store) => store.skip_origin(key, snapshot),
             Backend::Retained(store) => {
                 let state = lock(store);
-                if origin.matches(state.generation) {
+                if snapshot.matches(state.generation) {
                     state.origins.advance(key);
                     true
                 } else {
@@ -590,7 +610,14 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         write: PreparedWrite<'a, V>,
         origin: &MemoryOrigin<V>,
     ) -> MemoryCommit<'a, V> {
-        self.apply_write(write, Expected::Origin(origin))
+        self.apply_write(write, Expected::Origin(origin.snapshot()))
+    }
+    pub(crate) fn apply_borrowed_origin<'a>(
+        &self,
+        write: PreparedWrite<'a, V>,
+        origin: &BorrowedMemoryOrigin<'_, V>,
+    ) -> MemoryCommit<'a, V> {
+        self.apply_write(write, Expected::Origin(origin.snapshot()))
     }
     pub(crate) fn apply_expire<'a>(
         &self,
@@ -820,7 +847,7 @@ enum Expected<'a, V> {
     Same(&'a Entry<V>),
     Mutation,
     MutationOf(&'a Entry<V>),
-    Origin(&'a MemoryOrigin<V>),
+    Origin(&'a RevisionSnapshot),
 }
 
 impl<V> Expected<'_, V> {
