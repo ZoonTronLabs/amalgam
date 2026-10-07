@@ -290,7 +290,6 @@ impl<V> Sharded<V> {
         }
         let retired = match slot {
             RawEntryMut::Occupied(mut slot) => {
-                let key = Arc::clone(slot.key());
                 let old_capture = slot.get().capture;
                 let reason = match event {
                     MemoryWriteEvent::Set if slot.get().generation == generation => {
@@ -305,12 +304,12 @@ impl<V> Sharded<V> {
                     stored.expiration = expiration;
                     stored.capture = capture;
                     super::Retirements::Reused {
-                        key,
                         value: previous,
                         reason,
                         capture: old_capture,
                     }
                 } else {
+                    let key = Arc::clone(slot.key());
                     let old = slot.insert(Stored {
                         entry: entry.take_for_storage(),
                         generation,

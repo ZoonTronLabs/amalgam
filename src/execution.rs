@@ -7,8 +7,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll, Wake, Waker};
 use tokio::sync::Notify;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
+use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 
@@ -280,7 +283,9 @@ pub(crate) struct Scopes {
     // count. A non-Send guard prevents moving a local reservation to a writer
     // thread, so releasing local activity needs only a Release store.
     closing: AtomicBool,
-    scopes: Mutex<VecDeque<Weak<dyn CancelWork>>>,
+    shutdown: CancellationToken,
+    tasks: TaskTracker,
+    cancelled: parking_lot::Mutex<VecDeque<Arc<dyn CancelWork>>>,
     changed: Notify,
     active: [ActiveStripe; ACTIVE_STRIPES],
 }
@@ -288,7 +293,9 @@ impl Scopes {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             closing: AtomicBool::new(false),
-            scopes: Mutex::new(VecDeque::new()),
+            shutdown: CancellationToken::new(),
+            tasks: TaskTracker::new(),
+            cancelled: parking_lot::Mutex::new(VecDeque::new()),
             changed: Notify::new(),
             active: std::array::from_fn(|_| ActiveStripe {
                 owner: AtomicUsize::new(0),
@@ -361,6 +368,7 @@ impl Scopes {
             source,
             registry: Arc::clone(self),
             checkpoint: AtomicBool::new(false),
+            tracking: parking_lot::Mutex::new(None),
         });
         self.register_scope(scope)
     }
@@ -382,42 +390,73 @@ impl Scopes {
             source,
             registry: Arc::clone(self),
             checkpoint: AtomicBool::new(false),
+            tracking: parking_lot::Mutex::new(None),
         });
         self.register_scope(scope)
     }
     fn register_scope<T: Send + 'static>(self: &Arc<Self>, scope: Arc<Scope<T>>) -> Execution<T> {
         let erased: Arc<dyn CancelWork> = scope.clone();
-        self.register_work(erased);
+        self.register_work(erased, &scope.tracking);
         Execution { scope }
     }
-    /// Register only genuinely suspended work; initial Ready needs no entry.
-    pub(crate) fn register_work(&self, erased: Arc<dyn CancelWork>) {
+    /// Registration is local to suspended work; normal completion removes it.
+    pub(crate) fn register_work(
+        self: &Arc<Self>,
+        erased: Arc<dyn CancelWork>,
+        tracking: &parking_lot::Mutex<Option<TrackedCancellation>>,
+    ) {
+        let _activity = self.activity();
         let closed = {
-            let mut scopes = lock(&self.scopes);
-            let count = scopes.len().min(4);
-            for _ in 0..count {
-                if let Some(old) = scopes.pop_front()
-                    && old.strong_count() != 0
-                {
-                    scopes.push_back(old);
-                }
+            let mut slot = tracking.lock();
+            if slot.is_some() {
+                return;
             }
-            scopes.push_back(Arc::downgrade(&erased));
-            self.is_closed()
+            let mut registration = TrackedCancellation {
+                waiting: Box::pin(self.shutdown.clone().cancelled_owned()),
+                _task: self.tasks.token(),
+            };
+            let waker = Waker::from(Arc::new(CancelWake {
+                owner: Arc::downgrade(self),
+                target: Arc::downgrade(&erased),
+            }));
+            let closed = registration
+                .waiting
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready();
+            *slot = Some(registration);
+            closed
         };
-        if closed {
+        if closed || self.is_closed() {
             erased.cancel(Reason::CacheShutdown);
+        }
+        // Completion can race subscription setup. Activity accounting covers
+        // any destructor still running after terminal state was published.
+        if erased.finished() {
+            finish_tracking(tracking);
+            self.changed.notify_waiters();
         }
     }
     pub(crate) fn close(&self) -> bool {
         let _activity = self.activity();
         let started = !self.closing.swap(true, Ordering::SeqCst);
-        let scopes: Vec<_> = lock(&self.scopes)
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect();
-        for scope in scopes {
-            scope.cancel(Reason::CacheShutdown);
+        self.tasks.close();
+        self.shutdown.cancel();
+        let mut panic = None;
+        loop {
+            let next = self.cancelled.lock().pop_front();
+            let Some(work) = next else { break };
+            // Token notification only queues work. User Drop runs here, after
+            // both token and queue coordination have been released.
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                work.cancel(Reason::CacheShutdown);
+            })) && panic.is_none()
+            {
+                panic = Some(payload);
+            }
+        }
+        if let Some(payload) = panic {
+            std::panic::resume_unwind(payload);
         }
         started
     }
@@ -426,21 +465,52 @@ impl Scopes {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.idle()
-                && lock(&self.scopes)
-                    .iter()
-                    .filter_map(Weak::upgrade)
-                    .all(|scope| scope.finished())
-                // A concurrent cancel/poll can mark a scope terminal while its
-                // user future destructor is still running. Recheck activity
-                // after the terminal-state snapshot, before claiming drainage.
-                && self.idle()
-            {
+            if self.idle() && self.tasks.is_empty() && self.idle() {
                 return;
             }
-            notified.await;
+            if self.tasks.is_empty() {
+                notified.await;
+            } else {
+                tokio::select! {
+                    _ = self.tasks.wait() => {},
+                    _ = &mut notified => {},
+                }
+            }
         }
     }
+}
+
+/// Kept until user work has actually been destroyed, not just marked terminal.
+pub(crate) struct TrackedCancellation {
+    waiting: Pin<Box<WaitForCancellationFutureOwned>>,
+    _task: TaskTrackerToken,
+}
+struct CancelWake {
+    owner: Weak<Scopes>,
+    target: Weak<dyn CancelWork>,
+}
+impl Wake for CancelWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
+        let Some(target) = self.target.upgrade() else {
+            return;
+        };
+        owner.cancelled.lock().push_back(target);
+    }
+}
+pub(crate) fn finish_tracking(tracking: &parking_lot::Mutex<Option<TrackedCancellation>>) {
+    let retired = tracking.lock().take();
+    drop(retired);
+}
+/// Field order also preserves drainage when a user destructor unwinds.
+pub(crate) struct Retirement<T> {
+    pub(crate) _work: T,
+    pub(crate) _tracking: Option<TrackedCancellation>,
 }
 
 enum Activity<'a> {
@@ -567,6 +637,7 @@ struct Scope<T> {
     source: CancellationSource,
     registry: Arc<Scopes>,
     checkpoint: AtomicBool,
+    tracking: parking_lot::Mutex<Option<TrackedCancellation>>,
 }
 /// Work observes progress without owning its parent or creating a strong cycle.
 pub(crate) struct ExecutionCheckpoint<T> {
@@ -591,25 +662,33 @@ impl<T> Scope<T> {
 impl<T: Send + 'static> CancelWork for Scope<T> {
     fn cancel(&self, reason: Reason) {
         let _activity = self.registry.activity();
-        let pending = {
+        let (pending, terminal) = {
             let mut state = lock(&self.state);
             match &mut *state {
                 State::Pending(_) => match std::mem::replace(&mut *state, State::Cancelled(reason))
                 {
-                    State::Pending(work) => Some(work),
+                    State::Pending(work) => (Some(work), true),
                     _ => unreachable!("pending state was matched"),
                 },
                 State::Polling { cancellation } => {
                     if cancellation.is_none() {
                         *cancellation = Some(reason);
                     }
-                    None
+                    (None, false)
                 }
-                State::Cancelled(_) | State::Completed => None,
+                State::Cancelled(_) | State::Completed => (None, true),
             }
         };
+        let retirement = Retirement {
+            _work: pending,
+            _tracking: if terminal {
+                self.tracking.lock().take()
+            } else {
+                None
+            },
+        };
         self.source.cancel_with(reason);
-        drop(pending);
+        drop(retirement);
         let waker = lock(&self.waker).take();
         if let Some(waker) = waker {
             waker.wake();
@@ -654,6 +733,9 @@ impl<T: Send + 'static> Drop for PollLease<T> {
             self.0.source.cancel_with(reason);
             self.0.registry.changed.notify_waiters();
         }
+        if self.0.finished() {
+            finish_tracking(&self.0.tracking);
+        }
     }
 }
 impl<T: Send + 'static> Future for Execution<T> {
@@ -661,6 +743,7 @@ impl<T: Send + 'static> Future for Execution<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let _activity = self.scope.registry.activity();
         *lock(&self.scope.waker) = Some(cx.waker().clone());
+        let _lease = PollLease(Arc::clone(&self.scope));
         let mut work = {
             let mut state = lock(&self.scope.state);
             match &*state {
@@ -677,7 +760,6 @@ impl<T: Send + 'static> Future for Execution<T> {
                 }
             }
         };
-        let _lease = PollLease(Arc::clone(&self.scope));
         let result = work.as_mut().poll(cx);
         let cancellation = {
             let mut state = lock(&self.scope.state);
@@ -694,7 +776,11 @@ impl<T: Send + 'static> Future for Execution<T> {
                 *state = State::Pending(work);
             } else {
                 drop(state);
-                drop(work);
+                let tracking = self.scope.tracking.lock().take();
+                drop(Retirement {
+                    _work: work,
+                    _tracking: tracking,
+                });
             }
             cancellation
         };
@@ -874,5 +960,164 @@ mod close_drop_cause_tests {
             *lock(&scope.state),
             State::Cancelled(Reason::CacheShutdown)
         ));
+    }
+}
+
+#[cfg(test)]
+mod tracker_contract_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    struct ReenterDrop {
+        scopes: Weak<Scopes>,
+        drops: Arc<AtomicUsize>,
+        reenter: bool,
+    }
+    impl Drop for ReenterDrop {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+            if self.reenter {
+                let scopes = self.scopes.upgrade().unwrap();
+                let second = Self {
+                    scopes: Arc::downgrade(&scopes),
+                    drops: self.drops.clone(),
+                    reenter: false,
+                };
+                let work = scopes.execution(
+                    async move {
+                        let _second = second;
+                        std::future::pending::<Result<()>>().await
+                    },
+                    CancellationSource::new(),
+                );
+                drop(work);
+                assert!(!scopes.close());
+            }
+        }
+    }
+    #[test]
+    fn closing_unpolled_work_without_runtime_allows_drop_to_reenter() {
+        let scopes = Scopes::new();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let capture = ReenterDrop {
+            scopes: Arc::downgrade(&scopes),
+            drops: drops.clone(),
+            reenter: true,
+        };
+        let source = CancellationSource::new();
+        let token = source.token();
+        let work = scopes.execution(
+            async move {
+                let _capture = capture;
+                std::future::pending::<Result<()>>().await
+            },
+            source,
+        );
+        assert!(scopes.close());
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        assert_eq!(token.reason(), Some(Reason::CacheShutdown));
+        let mut drain = std::pin::pin!(scopes.drained());
+        assert!(
+            drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        drop(work);
+    }
+
+    struct WaitInDrop {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+    impl Drop for WaitInDrop {
+        fn drop(&mut self) {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn drainage_waits_for_drop_after_terminal_cancellation_was_published() {
+        let scopes = Scopes::new();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let capture = WaitInDrop {
+            entered: entered_tx,
+            release: release_rx,
+        };
+        let source = CancellationSource::new();
+        let token = source.token();
+        let work = scopes.execution(
+            async move {
+                let _capture = capture;
+                std::future::pending::<Result<()>>().await
+            },
+            source,
+        );
+        let closer_scopes = scopes.clone();
+        let closer = std::thread::spawn(move || closer_scopes.close());
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(token.reason(), Some(Reason::CacheShutdown));
+        let mut drain = std::pin::pin!(scopes.drained());
+        let waited = tokio::time::timeout(Duration::from_millis(20), &mut drain)
+            .await
+            .is_err();
+        // Release and join even if the assertion fails, so this test cannot
+        // strand a user destructor or hide the underlying drainage failure.
+        release_tx.send(()).unwrap();
+        assert!(closer.join().unwrap());
+        assert!(waited);
+        tokio::time::timeout(Duration::from_secs(1), drain)
+            .await
+            .unwrap();
+        drop(work);
+    }
+
+    struct CountDrop(Arc<AtomicUsize>);
+    impl Drop for CountDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    struct PanicDrop;
+    impl Drop for PanicDrop {
+        fn drop(&mut self) {
+            std::panic::panic_any(73_u32);
+        }
+    }
+    #[test]
+    fn a_panicking_destructor_does_not_leave_other_shutdown_work_alive() {
+        let scopes = Scopes::new();
+        let panic = PanicDrop;
+        let first = scopes.execution(
+            async move {
+                let _panic = panic;
+                std::future::pending::<Result<()>>().await
+            },
+            CancellationSource::new(),
+        );
+        let drops = Arc::new(AtomicUsize::new(0));
+        let count = CountDrop(drops.clone());
+        let second = scopes.execution(
+            async move {
+                let _count = count;
+                std::future::pending::<Result<()>>().await
+            },
+            CancellationSource::new(),
+        );
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scopes.close())).unwrap_err();
+        assert_eq!(panic.downcast_ref::<u32>(), Some(&73));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        let mut drain = std::pin::pin!(scopes.drained());
+        assert!(
+            drain
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_ready()
+        );
+        drop((first, second));
     }
 }

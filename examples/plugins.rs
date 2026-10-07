@@ -50,7 +50,7 @@ async fn main() {
     let cache: Cache<i32> = Cache::builder().plugin(plugin.clone()).build();
 
     println!("\n-- set(\"answer\", 42) --");
-    cache.set("answer", 42).await;
+    cache.set("answer", 42).await.unwrap();
 
     println!("\n-- get_or_set(\"answer\", ..) => cache HIT, factory skipped --");
     let hit = cache

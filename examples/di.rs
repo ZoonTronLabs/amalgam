@@ -122,7 +122,8 @@ async fn main() {
             "user:42:name".to_owned(),
             "Renamed via another handle".to_owned(),
         )
-        .await;
+        .await
+        .unwrap();
     let after = service.display_name("42").await;
     println!("after writing via a separate clone, service sees -> {after}");
     assert_eq!(

@@ -1,7 +1,10 @@
 //! Active computations, not per-key asynchronous lock lanes. A caller owns only
 //! a subscription; the table retains suspended work until completion or close.
 use crate::error::{Error, FactoryCancellationReason as Reason, Result};
-use crate::execution::{CancelWork, CancellationSource, Request, RequestOwner, Scopes};
+use crate::execution::{
+    CancelWork, CancellationSource, Request, RequestOwner, Retirement, Scopes, TrackedCancellation,
+    finish_tracking,
+};
 use ahash::RandomState;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
@@ -53,6 +56,7 @@ impl<T: Send + Sync + 'static> Flights<T> {
                     }),
                     runnable: AtomicBool::new(true),
                     wakers: Mutex::new(Vec::new()),
+                    tracking: Mutex::new(None),
                 });
                 entries.insert(key, Arc::clone(&flight));
                 (flight, true)
@@ -113,6 +117,7 @@ pub(crate) struct Flight<T: Send + Sync + 'static> {
     cell: Mutex<Cell<T>>,
     runnable: AtomicBool,
     wakers: Mutex<Vec<Waker>>,
+    tracking: Mutex<Option<TrackedCancellation>>,
 }
 impl<T: Send + Sync + 'static> std::fmt::Debug for Flight<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -245,6 +250,7 @@ impl<T: Send + Sync + 'static> Flight<T> {
         };
         drop(discarded);
         source.cancel_with(Reason::ScopeFinished);
+        finish_tracking(&self.tracking);
         self.notify();
     }
     fn abandon_start(&self) {
@@ -270,7 +276,7 @@ impl<T: Send + Sync + 'static> Flight<T> {
         }
     }
     pub(crate) fn register_pending(self: &Arc<Self>) {
-        self.scopes.register_work(self.clone());
+        self.scopes.register_work(self.clone(), &self.tracking);
     }
     pub(crate) fn is_finished(&self) -> bool {
         matches!(
@@ -327,7 +333,15 @@ impl<T: Send + Sync + 'static> CancelWork for Flight<T> {
             }
         };
         // Both the last future and any captures are destroyed outside the guard.
-        drop(work);
+        let tracking = if self.is_finished() {
+            self.tracking.lock().take()
+        } else {
+            None
+        };
+        drop(Retirement {
+            _work: work,
+            _tracking: tracking,
+        });
         let retired = self.owner.upgrade().and_then(|owner| {
             let mut entries = owner.shards[self.shard].lock();
             if entries

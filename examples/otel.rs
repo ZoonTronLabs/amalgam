@@ -48,7 +48,7 @@ mod demo {
             .await?;
         println!("get_or_set #2 → {again}");
 
-        cache.set("farewell", "goodbye".to_owned()).await;
+        cache.set("farewell", "goodbye".to_owned()).await.unwrap();
         println!("set farewell");
 
         cache.remove("greeting").await;

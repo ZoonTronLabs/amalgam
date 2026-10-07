@@ -190,7 +190,7 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
         .clock(clock.clone())
         .default_options(eager_options())
         .build();
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(6));
     let mut events = cache.events().subscribe();
     assert_eq!(
@@ -286,7 +286,7 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
         .clock(clock.clone())
         .default_options(options)
         .build();
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(20));
     let (release_tx, release_rx) = oneshot::channel();
     assert_eq!(
@@ -329,8 +329,8 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
     };
     let a = build();
     let b = build();
-    a.set("k", 1).await;
-    b.set("k", 1).await;
+    a.set("k", 1).await.unwrap();
+    b.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(6));
     let calls = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(Semaphore::new(0));
@@ -403,7 +403,7 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
     };
     let a = build();
     let b = build();
-    a.set("k", 1).await;
+    a.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(6));
     b.try_set("k", 2)
         .await
@@ -571,7 +571,7 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
         .clock(clock.clone())
         .default_options(options)
         .build();
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(20));
     let mut events = cache.events().subscribe();
     let (release_tx, release_rx) = oneshot::channel();

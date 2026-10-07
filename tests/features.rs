@@ -68,7 +68,7 @@ async fn plugin_receives_set_and_hit_events() {
     // `set` emits a `Set`. Plugins are notified *synchronously* on the emit
     // path, so the counters are up to date the moment `.await` returns — no
     // sleep is needed here.
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
 
     // The key is now fresh in L1, so this resolves from the hot path and emits a
     // fresh `Hit` (the factory never runs).
@@ -223,7 +223,7 @@ async fn circuit_breaker_opens_then_auto_recovery_replays_write() {
     // (a) With L2 down, a write fails: the L2 entry is never stored, the breaker
     // trips open (firing exactly one CircuitBreakerChange{closed:false}), and the
     // operation is queued for auto-recovery.
-    cache.set("k", "v1".to_owned()).await;
+    cache.set("k", "v1".to_owned()).await.unwrap();
 
     // The L2 layer prefixes stored keys with the wire-format version ("v2" by
     // default) and there is no key prefix, so the backend key is "v2:k".
@@ -383,8 +383,8 @@ async fn registry_resolves_named_caches_independently() {
     assert!(registry.get("missing").is_none());
 
     // The two named caches are independent stores.
-    alpha.set("k", 1).await;
-    beta.set("k", 2).await;
+    alpha.set("k", 1).await.unwrap();
+    beta.set("k", 2).await.unwrap();
     assert_eq!(alpha.try_get("k", None).await.value(), Some(&1));
     assert_eq!(beta.try_get("k", None).await.value(), Some(&2));
 
@@ -395,7 +395,7 @@ async fn registry_resolves_named_caches_independently() {
         builds.fetch_add(1, Ordering::SeqCst);
         make()
     });
-    gamma1.set("k", 7).await;
+    gamma1.set("k", 7).await.unwrap();
     let gamma2 = registry.get_or_create("gamma", || {
         builds.fetch_add(1, Ordering::SeqCst);
         make()

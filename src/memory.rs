@@ -418,7 +418,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
                 ),
             }
         };
-        commit.retired.finish(&self.observer);
+        commit.retired.finish(&self.observer, &key);
         drop(entry);
         self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
     }
@@ -604,7 +604,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             event,
             ..
         } = write;
-        commit.retired.finish(&self.observer);
+        commit.retired.finish(&self.observer, &key);
         if let Some(original) = original {
             self.observer.reclamation.retain(original);
         }
@@ -909,7 +909,6 @@ enum Retirements<V> {
     One(Retirement<V>),
     Many(Vec<Retirement<V>>),
     Reused {
-        key: Arc<str>,
         value: crate::entry::FreshValue<V>,
         reason: RetirementReason,
         capture: CaptureAdmission,
@@ -933,7 +932,7 @@ impl<V> From<Vec<Retirement<V>>> for Retirements<V> {
     }
 }
 impl<V: Clone + Send + Sync + 'static> Retirements<V> {
-    fn finish(self, observer: &MemoryObserver<V>) {
+    fn finish(self, observer: &MemoryObserver<V>, key: &str) {
         match self {
             Self::None => {}
             Self::One(value) => observer.retire(value),
@@ -943,7 +942,6 @@ impl<V: Clone + Send + Sync + 'static> Retirements<V> {
                 }
             }
             Self::Reused {
-                key,
                 value,
                 reason,
                 capture,
@@ -1331,7 +1329,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryObserver<V> {
     }
     fn retire_unique(
         &self,
-        key: Arc<str>,
+        key: &str,
         value: crate::entry::FreshValue<V>,
         reason: RetirementReason,
         capture: CaptureAdmission,
@@ -1341,21 +1339,27 @@ impl<V: Clone + Send + Sync + 'static> MemoryObserver<V> {
             && self.evictions.has_receivers();
         if interested || self.reclamation.is_deferred() {
             self.retire(Retirement {
-                key,
+                key: Arc::from(key),
                 entry: value.into_entry(),
                 reason,
                 capture,
             });
             return;
         }
-        // Facts carry no original value; their payload remains lazy.
+        // Borrow the operation's still-live key. Disabled observations do not
+        // clone a shared cache line or materialize an event-owned string.
         if reason.logical() {
-            self.emit(CacheEvent::Eviction {
-                key: Arc::clone(&key),
+            self.emit_lazy(|| CacheEvent::Eviction {
+                key: Arc::from(key),
             });
         }
         if let Some(reason) = reason.fact() {
-            self.emit_layer_lazy(|| LayerEvent::Memory(MemoryEvent::Eviction { key, reason }));
+            self.emit_layer_lazy(|| {
+                LayerEvent::Memory(MemoryEvent::Eviction {
+                    key: Arc::from(key),
+                    reason,
+                })
+            });
         }
         drop(value);
     }

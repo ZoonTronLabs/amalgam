@@ -1,6 +1,7 @@
 //! Public operation futures must compose on ordinary executor/thread stacks.
 
 use amalgam::{Cache, ClearMode};
+use std::future::IntoFuture;
 use std::mem::size_of_val;
 
 #[test]
@@ -8,7 +9,7 @@ fn ordinary_mutation_futures_fit_within_a_small_stack_budget() {
     let cache: Cache<u64> = Cache::builder().try_build().unwrap();
     const MAX_FUTURE_BYTES: usize = 16 * 1024;
     let sizes = [
-        ("set", size_of_val(&cache.set("x", 42))),
+        ("set", size_of_val(&cache.set("x", 42).into_future())),
         ("try_set", size_of_val(&cache.try_set("x", 42))),
         ("remove", size_of_val(&cache.remove("x"))),
         ("try_remove", size_of_val(&cache.try_remove("x"))),
@@ -48,7 +49,7 @@ fn ordinary_lookup_futures_fit_within_a_small_stack_budget() {
 
 #[tracing::instrument(skip_all)]
 async fn refresh(cache: &Cache<u64>, value: u64) {
-    cache.set("x", value).await;
+    cache.set("x", value).await.unwrap();
 }
 
 #[tracing::instrument(skip_all)]

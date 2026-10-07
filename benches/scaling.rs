@@ -155,24 +155,12 @@ fn mutations(rt: &tokio::runtime::Runtime) {
     let writes = cache();
     rt.block_on(async {
         for value in 0..WARMUP {
-            writes
-                .try_set("replace", value as u64)
-                .await
-                .unwrap()
-                .wait()
-                .await
-                .unwrap();
+            writes.set("replace", value as u64).await.unwrap();
         }
         begin_counting();
         let began = Instant::now();
         for value in 1..=WARMUP {
-            writes
-                .try_set("replace", value as u64)
-                .await
-                .unwrap()
-                .wait()
-                .await
-                .unwrap();
+            writes.set("replace", value as u64).await.unwrap();
         }
         let elapsed = began.elapsed();
         let allocations = end_counting();

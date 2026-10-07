@@ -72,6 +72,18 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Ordinary `set` is a lazy fluent request returning `Result<()>`. Options edit
+  cache defaults, string tags validate before mutation, and `.with_receipt()`
+  explicitly requests storage/publication evidence. Dropping a scheduled receipt
+  does not cancel its cache-owned work.
+- Track suspended work with Tokio's TaskTracker and an owned cancellation tree,
+  replacing the global weak-scope registry. Shutdown waits until user futures
+  are actually destroyed, including reentrant and panicking destructors.
+- Reused L1 writes borrow their retirement key. Quiet replacements neither clone
+  a key reference count nor construct an unused eviction payload; subscriptions
+  attached during the operation still observe the actual retirement.
+
+
 - Keep standalone mutation inputs lazy and create asynchronous work only for
   actual hybrid writes. Default lifetimes without jitter/eager refresh are
   prepared at construction; private local writes use one elapsed sample for

@@ -30,7 +30,7 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
     };
     let a = make();
     let b = make();
-    a.set("shared", 42).await;
+    a.set("shared", 42).await.unwrap();
     assert_eq!(b.read("shared", None).await.unwrap().value(), Some(&42));
     assert_eq!(b.read_or_default("shared", -1, None).await.unwrap(), 42);
     assert_eq!(
@@ -68,7 +68,7 @@ async fn registry_concurrent_get_or_create_returns_one_shared_cache() {
     let second = second.join().unwrap();
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(registry.len(), 1);
-    first.set("private-to-first", 1).await;
+    first.set("private-to-first", 1).await.unwrap();
     assert_eq!(
         second.try_get("private-to-first", None).await.value(),
         Some(&1)
@@ -136,7 +136,8 @@ async fn auto_clone_isolates_mutable_arc_at_public_boundaries() {
         .build();
     cache
         .set("shared-mutable", Arc::new(AtomicI32::new(1)))
-        .await;
+        .await
+        .unwrap();
     let returned = cache.try_get("shared-mutable", None).await;
     returned.value().unwrap().store(2, Ordering::SeqCst);
     assert_eq!(
@@ -197,7 +198,7 @@ async fn eviction_events_reach_plugins_exactly_once() {
         .build();
     let mut events = cache.events().subscribe();
     for i in 0..20 {
-        cache.set(format!("key-{i}"), i).await;
+        cache.set(format!("key-{i}"), i).await.unwrap();
     }
     cache.run_pending_tasks().await;
     let mut hub_evictions = 0;
@@ -245,7 +246,7 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
             .auto_recovery(no_recovery())
     };
     let writer = build().build();
-    writer.set("healthy-key", 42).await;
+    writer.set("healthy-key", 42).await.unwrap();
     l2.set(
         "v2:corrupt-key",
         b"not valid json".to_vec(),

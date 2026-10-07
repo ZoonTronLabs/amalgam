@@ -7,15 +7,13 @@ use super::{
 };
 use crate::memory::{CacheMemory, MemoryStore};
 
-pub(super) enum MutationStart<'a> {
-    Ready(Result<MutationReceipt>),
-    Pending(
-        std::pin::Pin<Box<dyn std::future::Future<Output = Result<MutationReceipt>> + Send + 'a>>,
-    ),
+pub(super) enum MutationStart<'a, T = MutationReceipt> {
+    Ready(Result<T>),
+    Pending(std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>>),
     Done,
 }
-impl std::future::Future for MutationStart<'_> {
-    type Output = Result<MutationReceipt>;
+impl<T: Unpin> std::future::Future for MutationStart<'_, T> {
+    type Output = Result<T>;
     fn poll(
         self: std::pin::Pin<&mut Self>,
         context: &mut std::task::Context<'_>,
@@ -75,9 +73,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         raw: &str,
         value: V,
         options: Option<Box<EntryOptions>>,
-        tags: Box<[Tag]>,
+        tags: std::result::Result<Box<[Tag]>, crate::TagError>,
         token: Option<&FactoryCancellation>,
-    ) -> Result<MutationReceipt> {
+    ) -> Result<LocalEffect> {
         let permit = self.inline();
         let key = match &self.inner.key_prefix {
             Some(prefix) => std::borrow::Cow::Owned(format!("{prefix}{raw}")),
@@ -109,13 +107,14 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         key: &str,
         value: V,
         options: Option<Box<EntryOptions>>,
-        tags: Box<[Tag]>,
+        tags: std::result::Result<Box<[Tag]>, crate::TagError>,
         token: Option<&FactoryCancellation>,
         permit: &super::InlinePermit<'_>,
-    ) -> Result<MutationReceipt> {
+    ) -> Result<LocalEffect> {
         (|| {
             permit.admit()?;
             permit.status(token)?;
+            let tags = tags?;
             let resolved = options.or_else(|| {
                 self.inner
                     .default_options_provider
@@ -169,12 +168,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             // when the stored copy is pinned. Attribute a reentrant close now.
             drop(value);
             permit.status(token)?;
-            Ok(receipt(local))
+            Ok(local)
         })()
     }
 }
 
-fn set_outcome(result: &Result<MutationReceipt>) -> OperationOutcome {
+fn set_outcome<T>(result: &Result<T>) -> OperationOutcome {
     match result {
         Ok(_) => OperationOutcome::Stored,
         Err(error) => OperationOutcome::from_error(error),

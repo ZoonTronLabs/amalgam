@@ -71,7 +71,7 @@ fn same_name_registry_initializes_once_outside_runtime() {
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(registry.len(), 1);
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        caches[0].set("shared", 42).await;
+        caches[0].set("shared", 42).await.unwrap();
         for cache in caches {
             assert_eq!(cache.try_get("shared", None).await.into_value(), Some(42));
         }

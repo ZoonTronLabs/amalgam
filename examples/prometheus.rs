@@ -75,7 +75,8 @@ mod demo {
             if i % 5 == 0 {
                 cache
                     .set(format!("explicit-{i}"), "set-directly".to_owned())
-                    .await;
+                    .await
+                    .unwrap();
             }
 
             // A remove every few iterations so the keys churn and re-miss later.

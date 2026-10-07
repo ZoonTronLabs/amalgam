@@ -81,7 +81,7 @@ async fn audit_clear_marker_survives_a_fresh_node_without_backplane() {
     let clock = Arc::new(ManualClock::default());
     let l2 = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let writer = build(clock.clone(), l2.clone());
-    writer.set("k", 1).await;
+    writer.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
     writer.clear(false).await;
     let fresh_node = build(clock, l2);
@@ -97,7 +97,7 @@ async fn audit_expire_from_cold_node_updates_l2() {
     let clock = Arc::new(ManualClock::default());
     let l2 = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let writer = build(clock.clone(), l2.clone());
-    writer.set("k", 1).await;
+    writer.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
     let invalidator = build(clock.clone(), l2.clone());
     invalidator.expire("k").await;
@@ -222,11 +222,11 @@ async fn audit_successful_set_supersedes_pending_recovery_remove() {
             ..RecoveryConfig::default()
         })
         .build();
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
     cache.remove("k").await;
     clock.advance(Duration::from_secs(1));
-    cache.set("k", 2).await;
+    cache.set("k", 2).await.unwrap();
     l2.down.store(false, Ordering::SeqCst);
     assert!(
         tokio::time::timeout(Duration::from_millis(150), l2.removed.notified())
@@ -275,7 +275,7 @@ async fn audit_passive_refresh_does_not_resurrect_after_remove() {
         release: Semaphore::new(0),
     });
     let writer = build(clock.clone(), l2.clone());
-    writer.set("k", 1).await;
+    writer.set("k", 1).await.unwrap();
     let backplane = Arc::new(InProcessBackplane::default());
     let reader: Cache<i32> = Cache::builder()
         .clock(clock.clone())
@@ -334,7 +334,7 @@ async fn audit_old_backplane_expire_does_not_expire_newer_entry() {
         .auto_recovery(no_recovery())
         .build();
     clock.advance(Duration::from_secs(10));
-    cache.set("k", 2).await;
+    cache.set("k", 2).await.unwrap();
     let mut events = cache.events().subscribe();
     backplane
         .publish(message(
@@ -360,7 +360,7 @@ async fn audit_lagged_backplane_invalidates_possibly_stale_l1() {
         .default_options(opts().with_skip_backplane_notifications(true))
         .auto_recovery(no_recovery())
         .build();
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
     let mut events = cache.events().subscribe();
     tokio::task::yield_now().await;
     backplane
@@ -547,7 +547,7 @@ async fn audit_clear_respects_cache_key_prefix() {
     };
     let alpha = make("alpha:");
     let beta = make("beta:");
-    beta.set("k", 7).await;
+    beta.set("k", 7).await.unwrap();
     clock.advance(Duration::from_secs(1));
     let mut controls = bp.subscribe();
     alpha
@@ -595,7 +595,7 @@ async fn audit_ordinary_cache_key_is_not_interpreted_as_a_clear_command() {
     .await;
     clock.advance(Duration::from_secs(1));
     let mut events = peer.events().subscribe();
-    writer.set("__amalgam:clear:remove", 1).await;
+    writer.set("__amalgam:clear:remove", 1).await.unwrap();
     received(&mut events, "__amalgam:clear:remove").await;
     assert_eq!(
         peer.try_get("k", None).await.value(),
@@ -771,7 +771,7 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
     let writer = make();
     let reader = make();
     let mut events = reader.events().subscribe();
-    writer.set("k", 1).await;
+    writer.set("k", 1).await.unwrap();
     received(&mut events, "k").await;
     reader.get_or_set_value("k", 0, None).await.unwrap();
     l2.stored.notified().await;

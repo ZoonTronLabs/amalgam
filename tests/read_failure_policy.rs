@@ -184,7 +184,7 @@ async fn canonical_stale_read_preserves_timeout_while_legacy_read_serves_configu
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    cache.set("k", 7).await;
+    cache.set("k", 7).await.unwrap();
     clock.advance(Duration::from_secs(2));
     assert!(matches!(
         cache.read("k", None).await,

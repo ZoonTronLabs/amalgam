@@ -1222,22 +1222,19 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> impl Future<Output = Result<MutationReceipt>> {
         super::mutation_request::MutationRequest::new(self, key, value, options, tags, Some(token))
     }
-    pub(super) fn set_impl(
+    pub(super) fn set_impl<T: super::mutation_request::MutationOutput>(
         &self,
         key: &str,
         value: V,
         options: Option<Box<EntryOptions>>,
-        tags: Box<[Tag]>,
+        tags: std::result::Result<Box<[Tag]>, crate::TagError>,
         token: Option<FactoryCancellation>,
-    ) -> super::memory_inline::MutationStart<'_> {
+    ) -> super::memory_inline::MutationStart<'_, T> {
         if self.inner.write_plan.is_inline() {
-            return super::memory_inline::MutationStart::Ready(self.inline_set(
-                key,
-                value,
-                options,
-                tags,
-                token.as_ref(),
-            ));
+            return super::memory_inline::MutationStart::Ready(
+                self.inline_set(key, value, options, tags, token.as_ref())
+                    .map(T::local),
+            );
         }
         let worker = self.worker();
         let raw: Arc<str> = Arc::from(key);
@@ -1255,18 +1252,24 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                         raw,
                         value,
                         options.map(|options| *options),
-                        tags,
+                        tags?,
                         &cancellation,
                     )
                     .await
+                    .map(|observed| {
+                        Observed::new(
+                            T::pipeline(observed.value),
+                            observed.outcome,
+                            observed.level,
+                        )
+                    })
             }),
         )))
     }
-    /// Legacy unit adapter. Prefer try_set to inspect actual completion.
-    pub async fn set(&self, key: impl AsRef<str>, value: V) {
-        if let Err(error) = self.try_set(key, value).await {
-            self.legacy_error(&error);
-        }
+    /// Stores a value lazily; options overlay this cache's defaults.
+    /// Use `with_receipt()` to inspect the actual distributed commit stages.
+    pub fn set<K: AsRef<str>>(&self, key: K, value: V) -> super::SetRequest<'_, K, V> {
+        super::SetRequest::new(self, key, value)
     }
     /// Legacy unit adapter with options and tags.
     pub async fn set_full(

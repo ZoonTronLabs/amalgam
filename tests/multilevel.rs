@@ -93,7 +93,7 @@ async fn backplane_remove_invalidates_peer() {
     let cache1 = build("node-1");
     let cache2 = build("node-2");
 
-    cache1.set("k", "v1".to_owned()).await;
+    cache1.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await; // let the Set propagate
 
     let served = cache2
@@ -134,7 +134,7 @@ async fn backplane_set_makes_peer_repull_new_value() {
     let cache2 = build("node-2");
     let calls = Arc::new(AtomicUsize::new(0));
 
-    cache1.set("k", "v1".to_owned()).await;
+    cache1.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
 
     // cache2 caches v1 locally.
@@ -151,7 +151,7 @@ async fn backplane_set_makes_peer_repull_new_value() {
     }
 
     // cache1 updates the value → backplane Set → cache2 drops its stale L1 copy.
-    cache1.set("k", "v2".to_owned()).await;
+    cache1.set("k", "v2".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let v = {
@@ -194,7 +194,7 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
     let cache1 = build("node-1");
     let cache2 = build("node-2");
 
-    cache1.set("k", "v1".to_owned()).await;
+    cache1.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
 
     // cache2 caches v1 in its own L1.
@@ -207,7 +207,7 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
     // cache1 updates the value → backplane Set. FusionCache "passive update": a
     // peer that already holds the key eagerly refreshes its L1 from L2 instead of
     // merely evicting and re-pulling on the next read.
-    cache1.set("k", "v2".to_owned()).await;
+    cache1.set("k", "v2".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // try_get reads L1 ONLY (no factory, no L2 read): the fresh value is already
@@ -242,7 +242,7 @@ async fn backplane_expire_marks_peer_stale_keeping_physical() {
     let cache1 = build("node-1");
     let cache2 = build("node-2");
 
-    cache1.set("k", "v1".to_owned()).await;
+    cache1.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
     // cache2 holds it fresh in L1.
     cache2
@@ -292,7 +292,7 @@ async fn backplane_clear_remove_propagates_to_peer() {
     let cache1 = build("node-1");
     let cache2 = build("node-2");
 
-    cache1.set("k", "v1".to_owned()).await;
+    cache1.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
     cache2
         .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
@@ -340,7 +340,7 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
         .serializer(Arc::new(JsonSerializer))
         .default_options(EntryOptions::new(Duration::from_secs(60)))
         .build();
-    writer.set("k", "v1".to_owned()).await;
+    writer.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(40)).await;
 
     // Reader whose serializer always fails to deserialize the L2 payload.

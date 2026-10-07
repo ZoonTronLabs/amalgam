@@ -493,8 +493,8 @@ fn wait_for_initial_backplane_subscribe_defaults_true_and_is_configurable() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn clear_removes_everything() {
     let (cache, _clock) = build::<i32>();
-    cache.set("a", 1).await;
-    cache.set("b", 2).await;
+    cache.set("a", 1).await.unwrap();
+    cache.set("b", 2).await.unwrap();
     assert_eq!(cache.try_get("a", None).await.value(), Some(&1));
 
     cache.clear(false).await; // hard remove
@@ -509,7 +509,7 @@ async fn try_get_and_get_or_default() {
     assert!(!cache.try_get("k", None).await.has_value());
     assert_eq!(cache.get_or_default("k", -1, None).await, -1);
 
-    cache.set("k", 5).await;
+    cache.set("k", 5).await.unwrap();
     assert_eq!(cache.try_get("k", None).await.value(), Some(&5));
     assert_eq!(cache.get_or_default("k", -1, None).await, 5);
 }
@@ -536,7 +536,7 @@ async fn events_are_emitted() {
     let cache: Cache<i32> = Cache::new();
     let mut rx = cache.events().subscribe();
 
-    cache.set("k", 1).await;
+    cache.set("k", 1).await.unwrap();
     let _ = cache
         .get_or_set("k", |ctx| async move { Ok(ctx.value(1)) })
         .await

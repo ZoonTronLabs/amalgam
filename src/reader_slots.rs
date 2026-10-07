@@ -22,6 +22,7 @@ static NEXT_READER: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
     static READER: Cell<Option<usize>> = const { Cell::new(None) };
 }
+#[allow(deprecated, reason = "Atomic::try_update is unavailable on Rust 1.88")]
 fn reader_index() -> usize {
     READER.with(|reader| match reader.get() {
         Some(index) => index,
@@ -116,6 +117,7 @@ impl<T> ReaderSlots<T> {
             value: UnsafeCell::new(value),
         }
     }
+    #[allow(deprecated, reason = "Atomic::try_update is unavailable on Rust 1.88")]
     fn reserve(&self) -> Reservation<'_> {
         let reader = reader_index();
         let index = reader & (self.slots.len() - 1);

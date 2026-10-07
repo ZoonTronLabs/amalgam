@@ -9,6 +9,8 @@ mod inline_cold;
 mod markers;
 mod memory_inline;
 mod mutation_request;
+mod set_request;
+pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest};
 mod origin;
 mod plain_ready;
 mod plugin;
