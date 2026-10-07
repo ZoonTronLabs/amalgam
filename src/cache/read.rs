@@ -352,12 +352,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         let Some(local) = source
             .entry
-            .for_memory_hydration(opts, self.inner.clock.now())?
+            .prepare_memory_hydration(opts, self.inner.clock.now())?
         else {
             return Ok(HydrationOutcome::Skipped(SkipReason::PhysicallyExpired));
         };
-        let local =
-            local.with_hydrated_value(self.copy(local.value(), opts)?, fence.continuity_stamp());
+        let local = local.with_hydrated_value(
+            self.copy(source.entry.value(), opts)?,
+            fence.continuity_stamp(),
+        );
         if !fence.passive_is_current() {
             return Ok(HydrationOutcome::Skipped(SkipReason::Superseded));
         }

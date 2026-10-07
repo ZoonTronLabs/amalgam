@@ -38,6 +38,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
   of losing it in the legacy adapter; cached contents remain unchanged.
 
 ### Factory API and distributed execution
+- Prepare local hydration metadata before the selected value copy. Populate L1
+  directly from the decoded value rather than cloning it into a temporary entry
+  and replacing that copy. Preserve the public hydration helper, original
+  lifetime limits and continuity fencing; auto-clone uses the supplied cloner.
 - Move upgraded L2 coordination owners directly into their consumers. Reusing a
   live identity does not sweep the idle queue; bounded cleanup runs on identity
   creation and explicit maintenance. Retain holder/waiter identity and generation

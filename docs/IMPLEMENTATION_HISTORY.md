@@ -468,3 +468,24 @@ reopening frozen hot-read optimization. Safety, individual features, dependency
 advisories and both package consumers passed; Windows and Linux logs confirm the
 platform/runtime jobs fail at the repaired OpenTelemetry doctest. No gate was
 waived and no main merge or publication was attempted.
+
+
+## 2026-10-08 — L2 hydration selected-copy contract
+
+Chose a private validated metadata preparation over creating a temporary Entry
+and replacing its cloned value. The existing public for_memory_hydration helper
+still returns the same ordinary clone with the same eligibility/deadline rules.
+Internal foreground and passive hydration copy directly from the decoded source
+using the selected configured strategy. A public supplied-cloner contract catches
+the removed extra ordinary Clone; all 740 default checks, formatting and strict
+all-target/all-feature clippy passed.
+
+Three frozen counterbalanced pairs settled all 48 warmups. L2 read 1157.141 ->
+1151.733 ns; get_or_set 1436.673 -> 1448.186 ns. Both differences are below one
+percent and allocation counts remain nine: the original temporary Arc was already
+reused. No allocation or timing gain is claimed for the integer fixture. The
+change is retained for the selected-copy contract and simpler construction.
+Default-PGO FC gives read 1158.325 and get_or_set 1283.052 ns; set 90.042 / 108.698
+still misses <=0.75x, cold 1098.070 / 1578.242 ns. The report is
+docs/benchmarks/2026-10-08-l2-hydration-prepared.json. No hot-path change, new
+dependency, unsafe boundary, main merge or publication is introduced.

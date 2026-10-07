@@ -379,10 +379,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         if !opts.skip_memory_write()
                             && let Some(local) = entry
                                 .entry
-                                .for_memory_hydration(&opts, worker.inner.clock.now())?
+                                .prepare_memory_hydration(&opts, worker.inner.clock.now())?
                         {
                             let local = local.with_hydrated_value(
-                                worker.copy(local.value(), &opts)?,
+                                worker.copy(entry.entry.value(), &opts)?,
                                 fence.continuity_stamp(),
                             );
                             if !fence.passive_is_current() {
