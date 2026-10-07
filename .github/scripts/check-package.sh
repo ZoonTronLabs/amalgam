@@ -61,6 +61,16 @@ if len(blocks) != 1:
 (pathlib.Path(sys.argv[2]) / 'src/main.rs').write_text(blocks[0])
 PY_README
   cargo run --manifest-path "$amalgam_consumer_dir/Cargo.toml" --all-features --features amalgam/full
+  python3 - "$amalgam_package_dir" "$amalgam_consumer_dir" <<'PY_SYNC'
+import json, pathlib, re, sys
+package = json.loads((pathlib.Path(sys.argv[1]) / 'package.json').read_text())
+document = (pathlib.Path(package['source']) / 'docs/SYNC.md').read_text()
+blocks = re.findall(r'^```rust\s*\n(.*?)^```\s*$', document, re.M | re.S)
+if len(blocks) != 1:
+    sys.exit('Expected exactly one executable SYNC Rust block')
+(pathlib.Path(sys.argv[2]) / 'src/main.rs').write_text(blocks[0])
+PY_SYNC
+  cargo run --manifest-path "$amalgam_consumer_dir/Cargo.toml" --all-features --features amalgam/full
   python3 - "$amalgam_consumer_dir/Cargo.lock" <<'PY_LOCK'
 import pathlib, sys, tomllib
 lock = tomllib.loads(pathlib.Path(sys.argv[1]).read_text())
