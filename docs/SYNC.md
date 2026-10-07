@@ -7,12 +7,17 @@ values into a separate cache. Cloned async handles retain the driven executor
 after the last native handle is dropped.
 
 ```rust
-use amalgam::BlockingCache;
+use amalgam::{BlockingCache, source};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache = BlockingCache::<u64>::new()?;
-    assert_eq!(cache.get_or_set("answer", |ctx| Ok(ctx.value(42)))?, 42);
-    cache.try_remove("answer")?.wait()?;
+    assert_eq!(
+        cache
+            .get_or_set("answer", source::factory(|_| Ok::<_, std::convert::Infallible>(42)))
+            .execute()?,
+        42
+    );
+    cache.remove("answer").with_receipt().execute()?.wait()?;
     assert!(!cache.read("answer", None)?.has_value());
     cache.shutdown()?;
     Ok(())
@@ -20,8 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `from_builder` accepts the existing cache configuration. For explicitly shared
-executors and transport dependencies, create a `BlockingRuntime`, construct
-async providers through `runtime.run(...)`, and use `BlockingCache::on_runtime`.
+executors and transport dependencies, create an `advanced::BlockingRuntime`,
+construct async providers through `runtime.run(...)`, and use
+`BlockingCache::on_runtime`. Storage, backplane, locker and serializer interfaces
+and implementations are available in `amalgam::provider`.
 A provider depending on a different executor still needs that executor alive.
 The facade drives cache I/O and timers independently; its caller remains
 occupied, including when called on a foreign current-thread Tokio worker.
@@ -33,9 +40,9 @@ An ordinary infinite-budget factory runs inline on its initial caller thread.
 Finite effective deadlines, explicit cancellation and eager refresh dispatch
 onto separate callback pools. `FactoryContext::invocation()` distinguishes
 foreground and eager work. Effective budgets use Amalgam's existing fail-safe
-rules: an explicit default can activate its soft budget without stale data.
-Released FusionCache 2.9 does not activate that soft budget without stale data;
-this remains a documented semantic difference.
+rules, matching FusionCache 2.9 defaults: a soft timeout requires a usable stale
+entry. An explicit fail-safe default does not activate the soft timeout on its
+own. The configured hard deadline still limits factory execution.
 
 The default executor has two I/O workers and at most 32 root callback threads
 per callback class. User factories and optional synchronous memory acquisition
@@ -71,12 +78,19 @@ executor through asynchronous drainage. Explicit shutdown reports failures.
 
 ## Supplied values and completion
 
-`get_or_set_value*` supplies data, not a user factory. Factory timeouts and eager
+`get_or_set(key, source::value(value))` supplies data. Factory timeouts and eager
 value refresh do not apply, and factory success/eager events are not fabricated.
-The configured options and tags still govern storage, reads and mutations.
-Factory and supplied-value operations offer actual commit receipts, including
-cancellable forms. `Scheduled` retains a driven completion handle; `wait()`
-observes storage/publication and cleanup, not peer receipt of a notification.
+`source::factory(callback)` accepts an ordinary `Result<V, E>` callback; context
+methods remain available for tags, options and conditional refresh. Both forms
+return a lazy request. Choose `.options(...)`, `.tags(...)`,
+`.fail_safe_default(...)`, `.cancellation(...)` and optional `.with_receipt()`
+before calling `.execute()`. Dropping an unexecuted request drops its captures
+without starting cache work.
+
+Factory and supplied-value operations offer actual commit receipts. The receipt
+types live in `amalgam::advanced`. `Scheduled` retains a driven completion handle;
+`wait()` observes storage/publication and cleanup, not peer receipt of a
+notification.
 
 Public runtime, mixed-view and real Redis/Valkey contracts are in
 `blocking_contract`, `blocking_mixed_contract`, `blocking_scheduling`,
