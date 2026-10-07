@@ -57,39 +57,62 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
-## Repository reproduction with corrected warmup
+## Current repository diagnostic with corrected warmup
 
 Three process triplets per API on macOS 26.6.2 arm64, M4 Pro, 12 available
 physical/logical cores; Rust 1.88.0, .NET SDK 10.0.300/runtime 10.0.8,
-released FC 2.9.0. All recorded warmups settled. This initial diagnostic uses
-the f277 runtime with the same two unrelated owner edits and the corrected
-fixture. Runtime/fixture identities match between APIs. It predates the
-ready-path simplification and real-Loom instrumentation and does not qualify
-those changes or the final 0.4 API. Final qualification uses seven pairs.
+released FC 2.9.0. This measures `a327912` plus two unrelated owner removals
+of `#[inline]` in `src/cache.rs`. It includes the two ready plans and actual
+ReaderSlots instrumentation. All 306 warmup records per API settled.
+Runtime/fixture identities, ranges, allocations and gate failures are in
+[the extracted diagnostic report](benchmarks/2026-10-07-honest-fc-two-ready.json).
+Full per-window reports remain the local benchmark artifacts; the extracted
+report contains their verdict summaries and source/binary hashes.
+These are diagnostic results, not final-source or API 0.4 qualification.
+Final release qualification uses seven process triplets.
 
-| Operation | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Result |
-|---|---:|---:|---:|---:|---|
-| Async L1 read, one worker | 39.214 | 200.613 | 304.923 | 0.195 | Pass in this diagnostic |
-| Async L1 get_or_set hit, one worker | 47.926 | 225.737 | 339.434 | 0.212 | Pass in this diagnostic |
-| Same key, eight workers, read | 5.347 | 71.260 | 77.850 | 0.075 | Pass in this diagnostic |
-| Distinct keys, eight workers, read | 5.228 | 36.918 | 71.729 | 0.142 | Pass in this diagnostic |
-| Same key, eight workers, get_or_set | 6.813 | 72.552 | 79.649 | 0.094 | Pass in this diagnostic |
-| Distinct keys, eight workers, get_or_set | 6.199 | 52.530 | 64.616 | 0.118 | Pass in this diagnostic |
-| L1 replacement | 91.567 | 108.605 | 142.947 | 0.843 | **Fail: <=0.75** |
-| Cold factory | 973.577 | 1671.965 | 1888.517 | 0.582 | Pass in this diagnostic |
-| L2 plus JSON, read | 1325.387 | 1166.768 | 1824.795 | 1.136 | **Fail: <=1.00** |
-| L2 plus JSON, get_or_set | 1681.109 | 1274.437 | 2025.353 | 1.319 | **Fail: <=1.00** |
+| API / operation | Workers | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Budget result |
+|---|---:|---:|---:|---:|---:|---|
+| read: same key | 1 | 40.435 | 205.495 | 325.288 | 0.197 | Pass in diagnostic |
+| read: distinct keys | 1 | 43.029 | 204.356 | 322.578 | 0.211 | Pass in diagnostic |
+| read: same key | 2 | 22.977 | 110.830 | 208.408 | 0.207 | Pass in diagnostic |
+| read: distinct keys | 2 | 21.681 | 105.414 | 192.730 | 0.206 | Pass in diagnostic |
+| read: same key | 4 | 10.784 | 78.737 | 115.022 | 0.137 | Pass in diagnostic |
+| read: distinct keys | 4 | 11.314 | 61.964 | 104.711 | 0.183 | Pass in diagnostic |
+| read: same key | 8 | 8.242 | 76.981 | 91.725 | 0.107 | Pass in diagnostic |
+| read: distinct keys | 8 | 7.967 | 41.761 | 70.528 | 0.191 | Pass in diagnostic |
+| read: sync hit | 1 | 31.877 | 182.581 | 277.608 | 0.175 | Pass in diagnostic |
+| read: L1 replacement | 1 | 95.202 | 112.871 | 150.951 | 0.843 | **Fail** |
+| read: cold factory | 1 | 1136.762 | 2021.164 | 2241.473 | 0.562 | Pass in diagnostic |
+| read: L2 plus JSON | 1 | 1415.105 | 1218.116 | 1921.003 | 1.162 | **Fail** |
+| get-or-set: same key | 1 | 47.691 | 245.797 | 358.984 | 0.194 | Pass in diagnostic |
+| get-or-set: distinct keys | 1 | 48.565 | 251.305 | 363.122 | 0.193 | Pass in diagnostic |
+| get-or-set: same key | 2 | 25.077 | 142.338 | 229.694 | 0.176 | Pass in diagnostic |
+| get-or-set: distinct keys | 2 | 24.359 | 129.381 | 187.692 | 0.188 | Pass in diagnostic |
+| get-or-set: same key | 4 | 13.663 | 92.231 | 133.917 | 0.148 | Pass in diagnostic |
+| get-or-set: distinct keys | 4 | 13.365 | 89.583 | 113.053 | 0.149 | Pass in diagnostic |
+| get-or-set: same key | 8 | 9.730 | 91.584 | 90.649 | 0.106 | Pass in diagnostic |
+| get-or-set: distinct keys | 8 | 9.879 | 67.025 | 85.042 | 0.147 | Pass in diagnostic |
+| get-or-set: sync hit | 1 | 41.456 | 216.430 | 300.002 | 0.192 | Pass in diagnostic |
+| get-or-set: L1 replacement | 1 | 95.333 | 118.035 | 152.124 | 0.808 | **Fail** |
+| get-or-set: cold factory | 1 | 1152.338 | 1989.289 | 2346.730 | 0.579 | Pass in diagnostic |
+| get-or-set: L2 plus JSON | 1 | 1773.824 | 1345.739 | 2132.849 | 1.318 | **Fail** |
 
-Both APIs fail exactly the set and L2 budgets. Warm hits and replacement
-allocate zero; cold allocates 5.009 per operation; L2 allocates 14.
-Distinct-key scaling is 7.335x for read and 7.639x for get_or_set.
-These throughput results support retaining the hot path and concentrating
-new speed work on L2 and set. They do not establish a release-ready result.
+**Both APIs fail the set and L2 budgets and the sixfold scaling gate.**
+Distinct-key scaling is 5.401x for read and 4.916x for get_or_set.
+The previous, pre-simplification diagnostic was 7.335x / 7.639x; this change
+cannot be dismissed as noise or assigned to a runtime cause without a
+controlled comparison. The scaling threshold is unchanged. Hot-read speed
+relative to FC and zero allocations still pass; their runtime design is frozen.
+New speed changes target L2 and set.
 
-read L2 ranges: Amalgam 1314.579-1338.438 ns; FC default 1142.919-1176.967; FC TC=0 1821.077-1832.342.
+Warm hits and replacement allocate zero; cold allocates 5.009 per operation;
+L2 allocates 14. The two API fixtures produce separate set/cold repetitions;
+both repetitions are shown rather than selecting the faster one.
 
-get-or-set L2 ranges: Amalgam 1659.685-1697.982 ns; FC default 1268.726-1283.017; FC TC=0 2000.192-2037.038.
+read L2 ranges: Amalgam 1391.016-1434.773 ns; FC default 1217.290-1270.044; FC TC=0 1911.018-2118.354.
 
+get-or-set L2 ranges: Amalgam 1766.992-1852.467 ns; FC default 1310.891-1347.143; FC TC=0 2130.958-2173.934.
 
 ## Release gate
 
@@ -110,3 +133,23 @@ Seven pairs are the default. Use `--pairs 3` for an initial diagnostic, not fina
 release qualification. Keep generated files outside the checkout and reuse one
 Cargo target. Reports include both FC columns, source/binary hashes, identities,
 topology, ranges, operation counts, allocations and full warmup evidence.
+
+
+## ReaderSlots verification scope
+
+Loom instruments the actual `src/reader_slots.rs` admission, guard and wakeup
+algorithm through `cfg(loom)`, including full-lifetime tracked value access.
+Deliberately bypassing the writer gate produces a tracked value-access race;
+restored source passes its bounded models. Native TSan also runs the actual
+parking and collision stress. These checks supplement contracts rather than
+proving every possible execution.
+
+Miri checks actual native guard borrowing and overlapping reader reservations.
+The contended parking case explicitly remains ignored under Miri because the
+released `parking_lot_core` 0.9.12 uses a C-variadic futex argument rejected by
+current Miri. The cause and fix are documented by
+[upstream parking_lot](https://github.com/Amanieu/parking_lot/pull/539).
+No Miri UB/alias/race check is disabled, and the runtime algorithm/dependency is
+not replaced for the check. Native TSan and Loom retain parking coverage.
+Full contended Miri coverage remains open until a compatible released
+dependency includes the upstream fix.

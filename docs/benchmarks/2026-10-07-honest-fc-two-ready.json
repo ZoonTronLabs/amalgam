@@ -1,0 +1,883 @@
+{
+  "measured_commit": "a32791282026f159cba8ec6dd1ebe473828a0977",
+  "working_tree_overlay": "Two owner removals of #[inline] in src/cache.rs",
+  "qualification": "Diagnostic only: three triplets; mandatory budgets fail",
+  "reports": {
+    "read": {
+      "schema_version": 2,
+      "gate_reference": "fusion_default_tiering_pgo",
+      "warmup_policy": {
+        "minimum_seconds": 3,
+        "maximum_seconds": 15,
+        "operation_window_milliseconds": 100,
+        "stable_windows": 5,
+        "maximum_window_ratio": 1.1
+      },
+      "api": "read",
+      "fixture_processes": [
+        "warm",
+        "mutations",
+        "distributed"
+      ],
+      "gate": "all",
+      "pairs": 3,
+      "environment": {
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "available_cpus": 12,
+        "cpu_topology": {
+          "physical_cores_available": 12,
+          "logical_cpus_available": 12,
+          "model": null
+        },
+        "rust": "rustc 1.88.0 (6b00bc388 2025-06-23)\nbinary: rustc\ncommit-hash: 6b00bc3880198600130e1cf62b8f8a93494488cc\ncommit-date: 2025-06-23\nhost: aarch64-apple-darwin\nrelease: 1.88.0\nLLVM version: 20.1.5",
+        "dotnet": "10.0.300",
+        "dotnet_tiered_compilation": "default",
+        "fusion_identity": [
+          "2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd",
+          "d9deecffee82413ac35e658691a628a09dd91944c0217c18115433aa7daa2c38",
+          ".NET 10.0.8"
+        ],
+        "removed_jit_override_names": [],
+        "fusion_modes": {
+          "fusion": "runtime defaults; gate reference",
+          "fusion_no_tiering": "DOTNET_TieredCompilation=0; diagnostic only"
+        }
+      },
+      "sources_sha256": {
+        "Cargo.lock": "3c3a288cd0f6446f8efa0073290392f6d93500b8a69aa0bf7011a5660594e7be",
+        "Cargo.toml": "8aa365c341bc7c41436144f62e0cc916d43f2b03b4e3b6dec2e4849e7d5dfc2d",
+        "benches/fusioncache/FusionBench.csproj": "230b69907641856b700afec1eed367680b956adc48cd3fb676d692a9e0086118",
+        "benches/fusioncache/Program.cs": "83f6a1cc8b9c1de67042b92372848176d9cf8b3d38f9cf0dad565a1b9e9854ae",
+        "benches/fusioncache/SteadyWarmup.cs": "9a276893fa2f21e08208f293a72ca479bf717b697a0701ecf6d4c41c6f2671aa",
+        "benches/fusioncache/packages.lock.json": "9721692683e35dfd1a9bacd56f63c08310e72f36cd17776e74cd58d299344c16",
+        "benches/l2_ownership.rs": "299def9297f06e8ccba959a325ffa74a38baefd398bf2d9cc0ba910670e53756",
+        "benches/run-scaling.py": "637daf31374571638c259685c452587a3cf7aa2bb09ddb99f2ad1a6f94cdea9a",
+        "benches/scaling/warmup.rs": "07be5d0e20e654bdd4a08e1ed8441304d8b493b3d7bdf1bf2d0e47ebd23a16d3",
+        "benches/scaling.rs": "adbe79e808cecb98fb55f0675e6554d78cd9aa1ce65c434bd8ec9908ff753937",
+        "src/backplane.rs": "cf60bb3c652f0016bd8f36401ed04e73a08fccae57253abef35d88bf5e75fe5d",
+        "src/cache/api.rs": "832125447604c601bae08bb1450e17fd5fc4f9b92a19da9cad93a3c47c896b8d",
+        "src/cache/blocking/api.rs": "e29ef47f26ffa20eed3388d9c26492b648a09e368adcb128ce9ea4660ada4f09",
+        "src/cache/blocking/memory_locker.rs": "1f7031b774e67357e1a14250ce432fb02f5791bf6a497018997c7163cd4d702f",
+        "src/cache/blocking/runtime.rs": "c26d8451c3805404a49b03af336ae74fa8995050f59c71328c2a4497b15ea580",
+        "src/cache/blocking.rs": "8433744857344e6c07455e1d3c093b0dc91d4df02d790cd2b7c3c6ce0de1ab0b",
+        "src/cache/builder.rs": "9d6e0981a977a63c006092c9ef6b2ecc9f9938e63a992efe8ca1702852c12a20",
+        "src/cache/callback_free.rs": "3d64d889d39e8c7d80881d75a4ed7ce5fe147b4dacfaba9e4d1209da2a4ddce4",
+        "src/cache/clock.rs": "656644ba157adb4bafbd5c2f706f836a4eb8548729d5cbb8ce02ce768663a31a",
+        "src/cache/get_request.rs": "0d68055d76b10a6dcb6ca5a635c00b2b1f9f1516ff97c2a74b8397f96b668717",
+        "src/cache/inline_cold.rs": "b10d3697fa3c251165ad80e0b309749ffb8afc83cc98c94c0d64edd3fb43b434",
+        "src/cache/marker_eager.rs": "e580a9b4131c612720987143e842e1a75102045dfc08dac0369703b9e406efb7",
+        "src/cache/marker_local.rs": "74373e44fc091e1cd9bf317cb6ad4393b794a7ab2812830737ab0cfbcad0c55f",
+        "src/cache/marker_recovery.rs": "13d6908d83a686bdbbb53175b9735776cc78b962a20cb89b5ba4412a6e18b83a",
+        "src/cache/markers.rs": "5fe9cd639ff6b6132cda89224bdc96000b380af6c9c7336b2198656cb47d5ad2",
+        "src/cache/memory_inline.rs": "042ae1e2430ed1eb0ebdbea8edb791ea93a866d04f8394574b9127e43a849ba0",
+        "src/cache/mutation_request.rs": "6a51c9077b89472dfacd2a08e3ead451a2d9ce612fe97e3eb71fdcf99a64bf89",
+        "src/cache/observed_execution.rs": "88fb2c8cba712ac615861a75f5d51047185942baa4cc1a57d843cd7e6a14b26c",
+        "src/cache/origin.rs": "ea533b7571243afdfd7ca112d59276e27ed35c7e29d517361efb59870e8c02e8",
+        "src/cache/plain_ready.rs": "a2147f296acd0930e4279be4f77317adcea58af5e231d63e3ba24cc3003baea9",
+        "src/cache/plugin.rs": "073e039400625917465cd7f7e936cc3e6f43d56a51b3c74cbb2b76523e63277f",
+        "src/cache/read.rs": "60f4100e5de9483c6c342a2b2c57d558480fc9b3125d85da0f72ad7e9cf3055e",
+        "src/cache/read_request.rs": "3a0f150b69414f91c0c5839a0d5b82fa2357bb24af2c989db94d075d7a355ddf",
+        "src/cache/ready.rs": "c8aa3689db68eb2309002ca06ae7444d98190d41c977fbb4e3e4747a62810526",
+        "src/cache/recovery.rs": "db9bf02eca139d050ffdb71aa5efd8e98936129942b8719731bc1f400040ffd2",
+        "src/cache/runtime.rs": "cc3c2b617dab0a309a9e402b786aa236ce6cafe43e357052cc3681b033165231",
+        "src/cache/set_request.rs": "43e68e2b83bb69d78dc755af8d467c079bf06df75fd96276563e39a1beb8d50b",
+        "src/cache/write.rs": "49f24733e60110ddfef1d8b53862d0ce042ae48a97c3cd33eb54b83bc96f6ac0",
+        "src/cache.rs": "de02bc6993ecc4da0291edc098cdcef7c6387b47fc73795cafc8c5300cb0118f",
+        "src/circuit.rs": "3856e733c6138f42bcdc858ea02a0fe83c18894c8f2e97ee5d172626fddc5868",
+        "src/commit/ordered/tests.rs": "729b0976b053549017535055a0aeb718446827e17626e32d50bfd48c77047c26",
+        "src/commit/ordered.rs": "116e8cb06c1f1699ba6fc40c22fee1e86d76b492e38b642452cb3144d65a59b5",
+        "src/commit.rs": "0eb3239bd55091176b2f7b51526d582d6ffa1e1d61d48ed103d3a396ce473e81",
+        "src/distributed.rs": "d33c1ab523c1040c4380c1475188c81d1bed1fcc5d9b9644bb6dbdefbc2c125c",
+        "src/distributed_lock.rs": "e11c6a02189440f09333a5332fc50d9e4abd6b2594f8c59e926fe9a4b4fbad95",
+        "src/entry/plain.rs": "9df54231bde87b0780345f077d9058e0c31946f756500d1e41a5f36fbf699f4c",
+        "src/entry.rs": "93e27fad2f9ba8c906bb10de4389f90e84bf34bfbba7f4fb28cddfb718530efd",
+        "src/error.rs": "3b96d609051dd2eeaf765a49bd922bff588ebe66b3eec1782a2d9e70cbf217cd",
+        "src/events/eviction.rs": "c81442f85dd69de74b10eb223640a9ade2aaf312410f7d12ca769348a9251b7e",
+        "src/events/layers.rs": "f6197a5cb4ea3a8799e5427d959078550858c97bdf56c5dab84a9e5c9b08394a",
+        "src/events.rs": "c115518106cff62eb63c7eba6ad8ebb0ba511fe236b811c03b84b38ab87bd39b",
+        "src/execution/cache_request.rs": "a4e28621e068d2bb59e31eb2e3359d860951dfe62107964a2515e246fa35a2d1",
+        "src/execution/frame.rs": "e5987fe2f67efd7a94776c8025643caf51e2fb859aac1fa44fb3724c215367e0",
+        "src/execution/frame_tests.rs": "024f437297684f78cc9eb5cc06f6822a8b07fd10389ae5e5632c5516ca371bbf",
+        "src/execution/phase.rs": "47ba98479356af86f860db4b87fdf0d47954ac5e94b4d52cdc5f0ac50037706a",
+        "src/execution.rs": "5d01d906573244d260ce2a9d55845082ec513f0691d5bc6507548bec3727b695",
+        "src/factory.rs": "f3859c15f17e9d1586540f7b548421d234ca55cf2f5b50b5f3d30a2bfbb3eb7e",
+        "src/lib.rs": "3b5c4177343894cbac7c34f87bc36d6880467560f58802d06775c79c22dd6839",
+        "src/lifecycle.rs": "a5282af05755ff01b01983a344f430af7dad860151dcbc3d1f5a0d2b72a0130b",
+        "src/locking.rs": "11d1d4ea27241b32daa99ef6254698b3fcb7c2bf516f2c1a4fe5d974b100a701",
+        "src/marker_leases.rs": "f6353847e8760bcf9789a1e137638ab868e07f7d4b2bab68840efdd5f8e1794d",
+        "src/marker_reads/memory.rs": "ca2dcbb443dbfa841240b37d1c67f704ad67ad7254f4e9b54aa33a6a5c4d51f5",
+        "src/marker_reads.rs": "335e760b9665cd705255ad6e77302b9763b2b54a75c259c48f85e4b72b733375",
+        "src/marker_snapshots.rs": "48e22e4d13530d1a511a1d6424c3795f6c5d7af6bdcdde3471dda47e8540d56f",
+        "src/maybe.rs": "c5c5a9118e0132e564be3acd3eb0eda6e9f927b804e735c3eb17da042fd66a6d",
+        "src/memory/custom.rs": "5f98897325df1ee36198ef30f38d9a5f2ea46012f371e4a35e71d090c9935d37",
+        "src/memory/deadlines.rs": "f7de01def4b14d4c2944c40704fb60ff1e7f7e90c6c3e914cc315167fb52f119",
+        "src/memory/origin.rs": "924725cb7c73024cac4b5b8bac7811f4a1e5bad3b2a6df6940c444a466fd1e1f",
+        "src/memory/reclamation.rs": "fe89414525872fd52ca5ccee97cacb7c2f1ba88c822d9b4efeedb78e9bc31bf7",
+        "src/memory/sharded/plain.rs": "c8ed44466b6a4de24675a504904d9dd135189435ccdba4250b6f7ac449cbcbeb",
+        "src/memory/sharded.rs": "d28ec40c1292fd15f26dfb33ee872950c9cb91bdbb8116b3f56d147229227cf5",
+        "src/memory.rs": "bedf3f942afe4e0bed12c073eab360e456d2394b77406a148a41c974922189ea",
+        "src/memory_locker/runtime.rs": "f065858e8dbe3eeb105023de88d3c4ca557ae6b3ac23ba3b7726c247831cf589",
+        "src/memory_locker.rs": "7fbefc88d555ed2cc28e518ce1594dc4aa974e90440b6b4a811eca1e3f321f14",
+        "src/memory_storage.rs": "50f04d6eaef3e3eea317ec4194c809792d181ac5cbaa840e59f3f4ff9e024013",
+        "src/observability/labels.rs": "2f590194902392b76951f5fa68e7f2d72a5cb86e554048e03df712853b2c0a3f",
+        "src/observability/otel_metrics/catalog.rs": "17386b232ffc29c793372270204099071c706f19bb6488b63392d5313b8f612a",
+        "src/observability/otel_metrics.rs": "9491f90f455080c32f405d689c5f0a69588c7d996d4e23ef5fdc3f4164fc6726",
+        "src/observability.rs": "e8ed08f226292955c4b2ccfd1dcf642409b987830be0352b46dcaa6a993e5b65",
+        "src/options.rs": "325e1c7f3f5c51594d54052c4f7c7ed8906304cb86fa54a258f8839ce05fd2cf",
+        "src/otel.rs": "7998671d2fa5e2fe9b1f593ac07daece7f14ba28cbdef96b3d2e2e6c35c6f7f2",
+        "src/plugins.rs": "8aa74cae213f447e02119334233104c2211c75179cbdf2598f7a79fb257ceb8f",
+        "src/reader_slots/allocation.rs": "3fd1ec66c37dbcb566eb50bca8de3f4f77058d1bdf9cdd893600d20b467c8c19",
+        "src/reader_slots/loom_tests.rs": "1a7b20d524844c695bfb655e6a26d5514088b17e307918b24211a566ef0f02ab",
+        "src/reader_slots/safety_contract.rs": "fb3cb5f45aa536c6039a965215512676a9c89a052b1496697e9890a19f41bec4",
+        "src/reader_slots.rs": "7da9d67bcb6d866e1cbbfc68878565079e0fc9ae8d64c55de7fc1d43d4221b0f",
+        "src/recovery/marker_snapshots.rs": "00689fd942bc74f6baf3cabb9177a563ae6e2ab496b75fd7348506a8634693a7",
+        "src/recovery.rs": "f726cf4eb72dcba69550a12cbfde692f87697de30b92dd0aeefe4b24f4532f63",
+        "src/redis_backend.rs": "6121a2dc8f4aa945a9ec97f9eb53cf9f454df0a1346029a1c836cdce11eb6aaf",
+        "src/registry.rs": "1d0138766712b9d120afc09dab76167f924653e4ad0fab5f6610cc96b8dbda09",
+        "src/retained_origin.rs": "bbd086179c60df45c1fcad1daba78616c88e80c02473e890241e9640d85a4362",
+        "src/serializers/value_copy.rs": "7de8fbf4cf1414f46125e4e17925d01431514e4134d445fd0ff53a8061d78d17",
+        "src/serializers.rs": "332687b97b43e7d8d1558508071fcb3982a92eb67104c8c4b373b3faf1070de8",
+        "src/single_flight.rs": "4a8254f46f05aaae9edc53e57df8633ccdb106f871a8325d210d5f18eeb4be88",
+        "src/tags.rs": "f6edc2d0fede3070c552d0a57a79b8051393d3927514dd40adb5493e301889ce",
+        "src/time/local.rs": "12b9032b0a37063caa8a2b98dc551e31f1c6b3169358d59e1a46df73f713cfb2",
+        "src/time.rs": "eca1fcce80e9c95c769180ac80485dc115f5dc774e880502c9b4952777a9715c"
+      },
+      "binaries_sha256": {
+        "rust": "8dd42a151161ca8e16ddb4b37f2f1d401ee8be644166d908e39d5af4e3efb104",
+        "fusion_fixture": "12e0964f484737e88c8d0e42a3937f1463b921bedfcc0e67e725646add2ad18f"
+      },
+      "distinct_scaling": 5.400903727877496,
+      "scaling_limit": 6,
+      "eight_core_scaling_verified": false,
+      "measurements": [
+        {
+          "scenario": "same",
+          "threads": 1,
+          "rust_ns": 40.435,
+          "fusion_ns": 205.495,
+          "rust_over_fusion": 0.19676877782914426,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 325.288,
+          "rust_over_fusion_no_tiering": 0.1243052310567866,
+          "rust_range_ns": [
+            39.805,
+            47.161
+          ],
+          "fusion_range_ns": [
+            203.705,
+            212.854
+          ],
+          "fusion_no_tiering_range_ns": [
+            316.244,
+            325.611
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 1,
+          "rust_ns": 43.029,
+          "fusion_ns": 204.356,
+          "rust_over_fusion": 0.21055902444753277,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 322.578,
+          "rust_over_fusion_no_tiering": 0.13339099380614924,
+          "rust_range_ns": [
+            40.013,
+            52.962
+          ],
+          "fusion_range_ns": [
+            196.057,
+            212.774
+          ],
+          "fusion_no_tiering_range_ns": [
+            314.151,
+            334.869
+          ]
+        },
+        {
+          "scenario": "same",
+          "threads": 2,
+          "rust_ns": 22.977,
+          "fusion_ns": 110.83,
+          "rust_over_fusion": 0.20731751330867093,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 208.408,
+          "rust_over_fusion_no_tiering": 0.11025008636904535,
+          "rust_range_ns": [
+            19.971,
+            23.141
+          ],
+          "fusion_range_ns": [
+            109.039,
+            118.487
+          ],
+          "fusion_no_tiering_range_ns": [
+            187.69,
+            211.05
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 2,
+          "rust_ns": 21.681,
+          "fusion_ns": 105.414,
+          "rust_over_fusion": 0.20567476805737378,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 192.73,
+          "rust_over_fusion_no_tiering": 0.11249416281845069,
+          "rust_range_ns": [
+            20.106,
+            22.378
+          ],
+          "fusion_range_ns": [
+            102.252,
+            107.153
+          ],
+          "fusion_no_tiering_range_ns": [
+            181.625,
+            215.738
+          ]
+        },
+        {
+          "scenario": "same",
+          "threads": 4,
+          "rust_ns": 10.784,
+          "fusion_ns": 78.737,
+          "rust_over_fusion": 0.13696229218791675,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 115.022,
+          "rust_over_fusion_no_tiering": 0.09375597711742102,
+          "rust_range_ns": [
+            10.249,
+            12.464
+          ],
+          "fusion_range_ns": [
+            71.766,
+            79.278
+          ],
+          "fusion_no_tiering_range_ns": [
+            113.93,
+            115.621
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 4,
+          "rust_ns": 11.314,
+          "fusion_ns": 61.964,
+          "rust_over_fusion": 0.18258989090439612,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 104.711,
+          "rust_over_fusion_no_tiering": 0.1080497750952622,
+          "rust_range_ns": [
+            11.311,
+            12.55
+          ],
+          "fusion_range_ns": [
+            59.498,
+            67.273
+          ],
+          "fusion_no_tiering_range_ns": [
+            89.996,
+            109.153
+          ]
+        },
+        {
+          "scenario": "same",
+          "threads": 8,
+          "rust_ns": 8.242,
+          "fusion_ns": 76.981,
+          "rust_over_fusion": 0.10706537976903394,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 91.725,
+          "rust_over_fusion_no_tiering": 0.08985554647042793,
+          "rust_range_ns": [
+            8.196,
+            14.335
+          ],
+          "fusion_range_ns": [
+            74.706,
+            79.817
+          ],
+          "fusion_no_tiering_range_ns": [
+            86.4,
+            103.986
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 8,
+          "rust_ns": 7.967,
+          "fusion_ns": 41.761,
+          "rust_over_fusion": 0.19077608294820525,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 70.528,
+          "rust_over_fusion_no_tiering": 0.11296222776769509,
+          "rust_range_ns": [
+            7.966,
+            9.47
+          ],
+          "fusion_range_ns": [
+            41.413,
+            52.87
+          ],
+          "fusion_no_tiering_range_ns": [
+            58.153,
+            72.591
+          ]
+        },
+        {
+          "scenario": "sync",
+          "threads": 1,
+          "rust_ns": 31.877,
+          "fusion_ns": 182.581,
+          "rust_over_fusion": 0.1745910034450463,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 277.608,
+          "rust_over_fusion_no_tiering": 0.11482738249618166,
+          "rust_range_ns": [
+            29.234,
+            34.343
+          ],
+          "fusion_range_ns": [
+            176.97,
+            199.114
+          ],
+          "fusion_no_tiering_range_ns": [
+            277.203,
+            280.07
+          ]
+        },
+        {
+          "scenario": "set",
+          "threads": 1,
+          "rust_ns": 95.202,
+          "fusion_ns": 112.871,
+          "rust_over_fusion": 0.8434584614294195,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 150.951,
+          "rust_over_fusion_no_tiering": 0.6306814794204743,
+          "rust_range_ns": [
+            93.815,
+            98.324
+          ],
+          "fusion_range_ns": [
+            111.05,
+            128.216
+          ],
+          "fusion_no_tiering_range_ns": [
+            148.335,
+            159.413
+          ]
+        },
+        {
+          "scenario": "cold",
+          "threads": 1,
+          "rust_ns": 1136.762,
+          "fusion_ns": 2021.164,
+          "rust_over_fusion": 0.5624293723814594,
+          "rust_allocations_per_op": 5.0091,
+          "fusion_no_tiering_ns": 2241.473,
+          "rust_over_fusion_no_tiering": 0.5071495396107827,
+          "rust_range_ns": [
+            1031.804,
+            1174.067
+          ],
+          "fusion_range_ns": [
+            1927.097,
+            2031.695
+          ],
+          "fusion_no_tiering_range_ns": [
+            2150.067,
+            2328.702
+          ]
+        },
+        {
+          "scenario": "l2_json",
+          "threads": 1,
+          "rust_ns": 1415.105,
+          "fusion_ns": 1218.116,
+          "rust_over_fusion": 1.1617161255578288,
+          "rust_allocations_per_op": 14.0,
+          "fusion_no_tiering_ns": 1921.003,
+          "rust_over_fusion_no_tiering": 0.7366490317818348,
+          "rust_range_ns": [
+            1391.016,
+            1434.773
+          ],
+          "fusion_range_ns": [
+            1217.29,
+            1270.044
+          ],
+          "fusion_no_tiering_range_ns": [
+            1911.018,
+            2118.354
+          ]
+        }
+      ],
+      "failures": [
+        "('set', 1): 0.843 x FC exceeds 0.75",
+        "('l2_json', 1): 1.162 x FC exceeds 1.00",
+        "distinct scaling: 5.40 below 6.00 for 12 available physical cores"
+      ],
+      "warmup_summary": {
+        "rust": {
+          "records": 102,
+          "unsettled_records": 0,
+          "maximum_seconds": 8.580099792,
+          "total_operations": 7107780000
+        },
+        "fusion": {
+          "records": 102,
+          "unsettled_records": 0,
+          "maximum_seconds": 13.1303371,
+          "total_operations": 1478700000
+        },
+        "fusion_no_tiering": {
+          "records": 102,
+          "unsettled_records": 0,
+          "maximum_seconds": 14.1745662,
+          "total_operations": 976400000
+        }
+      }
+    },
+    "get-or-set": {
+      "schema_version": 2,
+      "gate_reference": "fusion_default_tiering_pgo",
+      "warmup_policy": {
+        "minimum_seconds": 3,
+        "maximum_seconds": 15,
+        "operation_window_milliseconds": 100,
+        "stable_windows": 5,
+        "maximum_window_ratio": 1.1
+      },
+      "api": "get-or-set",
+      "fixture_processes": [
+        "warm",
+        "mutations",
+        "distributed"
+      ],
+      "gate": "all",
+      "pairs": 3,
+      "environment": {
+        "platform": "macOS-26.6.2-arm64-arm-64bit",
+        "available_cpus": 12,
+        "cpu_topology": {
+          "physical_cores_available": 12,
+          "logical_cpus_available": 12,
+          "model": null
+        },
+        "rust": "rustc 1.88.0 (6b00bc388 2025-06-23)\nbinary: rustc\ncommit-hash: 6b00bc3880198600130e1cf62b8f8a93494488cc\ncommit-date: 2025-06-23\nhost: aarch64-apple-darwin\nrelease: 1.88.0\nLLVM version: 20.1.5",
+        "dotnet": "10.0.300",
+        "dotnet_tiered_compilation": "default",
+        "fusion_identity": [
+          "2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd",
+          "d9deecffee82413ac35e658691a628a09dd91944c0217c18115433aa7daa2c38",
+          ".NET 10.0.8"
+        ],
+        "removed_jit_override_names": [],
+        "fusion_modes": {
+          "fusion": "runtime defaults; gate reference",
+          "fusion_no_tiering": "DOTNET_TieredCompilation=0; diagnostic only"
+        }
+      },
+      "sources_sha256": {
+        "Cargo.lock": "3c3a288cd0f6446f8efa0073290392f6d93500b8a69aa0bf7011a5660594e7be",
+        "Cargo.toml": "8aa365c341bc7c41436144f62e0cc916d43f2b03b4e3b6dec2e4849e7d5dfc2d",
+        "benches/fusioncache/FusionBench.csproj": "230b69907641856b700afec1eed367680b956adc48cd3fb676d692a9e0086118",
+        "benches/fusioncache/Program.cs": "83f6a1cc8b9c1de67042b92372848176d9cf8b3d38f9cf0dad565a1b9e9854ae",
+        "benches/fusioncache/SteadyWarmup.cs": "9a276893fa2f21e08208f293a72ca479bf717b697a0701ecf6d4c41c6f2671aa",
+        "benches/fusioncache/packages.lock.json": "9721692683e35dfd1a9bacd56f63c08310e72f36cd17776e74cd58d299344c16",
+        "benches/l2_ownership.rs": "299def9297f06e8ccba959a325ffa74a38baefd398bf2d9cc0ba910670e53756",
+        "benches/run-scaling.py": "637daf31374571638c259685c452587a3cf7aa2bb09ddb99f2ad1a6f94cdea9a",
+        "benches/scaling/warmup.rs": "07be5d0e20e654bdd4a08e1ed8441304d8b493b3d7bdf1bf2d0e47ebd23a16d3",
+        "benches/scaling.rs": "adbe79e808cecb98fb55f0675e6554d78cd9aa1ce65c434bd8ec9908ff753937",
+        "src/backplane.rs": "cf60bb3c652f0016bd8f36401ed04e73a08fccae57253abef35d88bf5e75fe5d",
+        "src/cache/api.rs": "832125447604c601bae08bb1450e17fd5fc4f9b92a19da9cad93a3c47c896b8d",
+        "src/cache/blocking/api.rs": "e29ef47f26ffa20eed3388d9c26492b648a09e368adcb128ce9ea4660ada4f09",
+        "src/cache/blocking/memory_locker.rs": "1f7031b774e67357e1a14250ce432fb02f5791bf6a497018997c7163cd4d702f",
+        "src/cache/blocking/runtime.rs": "c26d8451c3805404a49b03af336ae74fa8995050f59c71328c2a4497b15ea580",
+        "src/cache/blocking.rs": "8433744857344e6c07455e1d3c093b0dc91d4df02d790cd2b7c3c6ce0de1ab0b",
+        "src/cache/builder.rs": "9d6e0981a977a63c006092c9ef6b2ecc9f9938e63a992efe8ca1702852c12a20",
+        "src/cache/callback_free.rs": "3d64d889d39e8c7d80881d75a4ed7ce5fe147b4dacfaba9e4d1209da2a4ddce4",
+        "src/cache/clock.rs": "656644ba157adb4bafbd5c2f706f836a4eb8548729d5cbb8ce02ce768663a31a",
+        "src/cache/get_request.rs": "0d68055d76b10a6dcb6ca5a635c00b2b1f9f1516ff97c2a74b8397f96b668717",
+        "src/cache/inline_cold.rs": "b10d3697fa3c251165ad80e0b309749ffb8afc83cc98c94c0d64edd3fb43b434",
+        "src/cache/marker_eager.rs": "e580a9b4131c612720987143e842e1a75102045dfc08dac0369703b9e406efb7",
+        "src/cache/marker_local.rs": "74373e44fc091e1cd9bf317cb6ad4393b794a7ab2812830737ab0cfbcad0c55f",
+        "src/cache/marker_recovery.rs": "13d6908d83a686bdbbb53175b9735776cc78b962a20cb89b5ba4412a6e18b83a",
+        "src/cache/markers.rs": "5fe9cd639ff6b6132cda89224bdc96000b380af6c9c7336b2198656cb47d5ad2",
+        "src/cache/memory_inline.rs": "042ae1e2430ed1eb0ebdbea8edb791ea93a866d04f8394574b9127e43a849ba0",
+        "src/cache/mutation_request.rs": "6a51c9077b89472dfacd2a08e3ead451a2d9ce612fe97e3eb71fdcf99a64bf89",
+        "src/cache/observed_execution.rs": "88fb2c8cba712ac615861a75f5d51047185942baa4cc1a57d843cd7e6a14b26c",
+        "src/cache/origin.rs": "ea533b7571243afdfd7ca112d59276e27ed35c7e29d517361efb59870e8c02e8",
+        "src/cache/plain_ready.rs": "a2147f296acd0930e4279be4f77317adcea58af5e231d63e3ba24cc3003baea9",
+        "src/cache/plugin.rs": "073e039400625917465cd7f7e936cc3e6f43d56a51b3c74cbb2b76523e63277f",
+        "src/cache/read.rs": "60f4100e5de9483c6c342a2b2c57d558480fc9b3125d85da0f72ad7e9cf3055e",
+        "src/cache/read_request.rs": "3a0f150b69414f91c0c5839a0d5b82fa2357bb24af2c989db94d075d7a355ddf",
+        "src/cache/ready.rs": "c8aa3689db68eb2309002ca06ae7444d98190d41c977fbb4e3e4747a62810526",
+        "src/cache/recovery.rs": "db9bf02eca139d050ffdb71aa5efd8e98936129942b8719731bc1f400040ffd2",
+        "src/cache/runtime.rs": "cc3c2b617dab0a309a9e402b786aa236ce6cafe43e357052cc3681b033165231",
+        "src/cache/set_request.rs": "43e68e2b83bb69d78dc755af8d467c079bf06df75fd96276563e39a1beb8d50b",
+        "src/cache/write.rs": "49f24733e60110ddfef1d8b53862d0ce042ae48a97c3cd33eb54b83bc96f6ac0",
+        "src/cache.rs": "de02bc6993ecc4da0291edc098cdcef7c6387b47fc73795cafc8c5300cb0118f",
+        "src/circuit.rs": "3856e733c6138f42bcdc858ea02a0fe83c18894c8f2e97ee5d172626fddc5868",
+        "src/commit/ordered/tests.rs": "729b0976b053549017535055a0aeb718446827e17626e32d50bfd48c77047c26",
+        "src/commit/ordered.rs": "116e8cb06c1f1699ba6fc40c22fee1e86d76b492e38b642452cb3144d65a59b5",
+        "src/commit.rs": "0eb3239bd55091176b2f7b51526d582d6ffa1e1d61d48ed103d3a396ce473e81",
+        "src/distributed.rs": "d33c1ab523c1040c4380c1475188c81d1bed1fcc5d9b9644bb6dbdefbc2c125c",
+        "src/distributed_lock.rs": "e11c6a02189440f09333a5332fc50d9e4abd6b2594f8c59e926fe9a4b4fbad95",
+        "src/entry/plain.rs": "9df54231bde87b0780345f077d9058e0c31946f756500d1e41a5f36fbf699f4c",
+        "src/entry.rs": "93e27fad2f9ba8c906bb10de4389f90e84bf34bfbba7f4fb28cddfb718530efd",
+        "src/error.rs": "3b96d609051dd2eeaf765a49bd922bff588ebe66b3eec1782a2d9e70cbf217cd",
+        "src/events/eviction.rs": "c81442f85dd69de74b10eb223640a9ade2aaf312410f7d12ca769348a9251b7e",
+        "src/events/layers.rs": "f6197a5cb4ea3a8799e5427d959078550858c97bdf56c5dab84a9e5c9b08394a",
+        "src/events.rs": "c115518106cff62eb63c7eba6ad8ebb0ba511fe236b811c03b84b38ab87bd39b",
+        "src/execution/cache_request.rs": "a4e28621e068d2bb59e31eb2e3359d860951dfe62107964a2515e246fa35a2d1",
+        "src/execution/frame.rs": "e5987fe2f67efd7a94776c8025643caf51e2fb859aac1fa44fb3724c215367e0",
+        "src/execution/frame_tests.rs": "024f437297684f78cc9eb5cc06f6822a8b07fd10389ae5e5632c5516ca371bbf",
+        "src/execution/phase.rs": "47ba98479356af86f860db4b87fdf0d47954ac5e94b4d52cdc5f0ac50037706a",
+        "src/execution.rs": "5d01d906573244d260ce2a9d55845082ec513f0691d5bc6507548bec3727b695",
+        "src/factory.rs": "f3859c15f17e9d1586540f7b548421d234ca55cf2f5b50b5f3d30a2bfbb3eb7e",
+        "src/lib.rs": "3b5c4177343894cbac7c34f87bc36d6880467560f58802d06775c79c22dd6839",
+        "src/lifecycle.rs": "a5282af05755ff01b01983a344f430af7dad860151dcbc3d1f5a0d2b72a0130b",
+        "src/locking.rs": "11d1d4ea27241b32daa99ef6254698b3fcb7c2bf516f2c1a4fe5d974b100a701",
+        "src/marker_leases.rs": "f6353847e8760bcf9789a1e137638ab868e07f7d4b2bab68840efdd5f8e1794d",
+        "src/marker_reads/memory.rs": "ca2dcbb443dbfa841240b37d1c67f704ad67ad7254f4e9b54aa33a6a5c4d51f5",
+        "src/marker_reads.rs": "335e760b9665cd705255ad6e77302b9763b2b54a75c259c48f85e4b72b733375",
+        "src/marker_snapshots.rs": "48e22e4d13530d1a511a1d6424c3795f6c5d7af6bdcdde3471dda47e8540d56f",
+        "src/maybe.rs": "c5c5a9118e0132e564be3acd3eb0eda6e9f927b804e735c3eb17da042fd66a6d",
+        "src/memory/custom.rs": "5f98897325df1ee36198ef30f38d9a5f2ea46012f371e4a35e71d090c9935d37",
+        "src/memory/deadlines.rs": "f7de01def4b14d4c2944c40704fb60ff1e7f7e90c6c3e914cc315167fb52f119",
+        "src/memory/origin.rs": "924725cb7c73024cac4b5b8bac7811f4a1e5bad3b2a6df6940c444a466fd1e1f",
+        "src/memory/reclamation.rs": "fe89414525872fd52ca5ccee97cacb7c2f1ba88c822d9b4efeedb78e9bc31bf7",
+        "src/memory/sharded/plain.rs": "c8ed44466b6a4de24675a504904d9dd135189435ccdba4250b6f7ac449cbcbeb",
+        "src/memory/sharded.rs": "d28ec40c1292fd15f26dfb33ee872950c9cb91bdbb8116b3f56d147229227cf5",
+        "src/memory.rs": "bedf3f942afe4e0bed12c073eab360e456d2394b77406a148a41c974922189ea",
+        "src/memory_locker/runtime.rs": "f065858e8dbe3eeb105023de88d3c4ca557ae6b3ac23ba3b7726c247831cf589",
+        "src/memory_locker.rs": "7fbefc88d555ed2cc28e518ce1594dc4aa974e90440b6b4a811eca1e3f321f14",
+        "src/memory_storage.rs": "50f04d6eaef3e3eea317ec4194c809792d181ac5cbaa840e59f3f4ff9e024013",
+        "src/observability/labels.rs": "2f590194902392b76951f5fa68e7f2d72a5cb86e554048e03df712853b2c0a3f",
+        "src/observability/otel_metrics/catalog.rs": "17386b232ffc29c793372270204099071c706f19bb6488b63392d5313b8f612a",
+        "src/observability/otel_metrics.rs": "9491f90f455080c32f405d689c5f0a69588c7d996d4e23ef5fdc3f4164fc6726",
+        "src/observability.rs": "e8ed08f226292955c4b2ccfd1dcf642409b987830be0352b46dcaa6a993e5b65",
+        "src/options.rs": "325e1c7f3f5c51594d54052c4f7c7ed8906304cb86fa54a258f8839ce05fd2cf",
+        "src/otel.rs": "7998671d2fa5e2fe9b1f593ac07daece7f14ba28cbdef96b3d2e2e6c35c6f7f2",
+        "src/plugins.rs": "8aa74cae213f447e02119334233104c2211c75179cbdf2598f7a79fb257ceb8f",
+        "src/reader_slots/allocation.rs": "3fd1ec66c37dbcb566eb50bca8de3f4f77058d1bdf9cdd893600d20b467c8c19",
+        "src/reader_slots/loom_tests.rs": "1a7b20d524844c695bfb655e6a26d5514088b17e307918b24211a566ef0f02ab",
+        "src/reader_slots/safety_contract.rs": "fb3cb5f45aa536c6039a965215512676a9c89a052b1496697e9890a19f41bec4",
+        "src/reader_slots.rs": "7da9d67bcb6d866e1cbbfc68878565079e0fc9ae8d64c55de7fc1d43d4221b0f",
+        "src/recovery/marker_snapshots.rs": "00689fd942bc74f6baf3cabb9177a563ae6e2ab496b75fd7348506a8634693a7",
+        "src/recovery.rs": "f726cf4eb72dcba69550a12cbfde692f87697de30b92dd0aeefe4b24f4532f63",
+        "src/redis_backend.rs": "6121a2dc8f4aa945a9ec97f9eb53cf9f454df0a1346029a1c836cdce11eb6aaf",
+        "src/registry.rs": "1d0138766712b9d120afc09dab76167f924653e4ad0fab5f6610cc96b8dbda09",
+        "src/retained_origin.rs": "bbd086179c60df45c1fcad1daba78616c88e80c02473e890241e9640d85a4362",
+        "src/serializers/value_copy.rs": "7de8fbf4cf1414f46125e4e17925d01431514e4134d445fd0ff53a8061d78d17",
+        "src/serializers.rs": "332687b97b43e7d8d1558508071fcb3982a92eb67104c8c4b373b3faf1070de8",
+        "src/single_flight.rs": "4a8254f46f05aaae9edc53e57df8633ccdb106f871a8325d210d5f18eeb4be88",
+        "src/tags.rs": "f6edc2d0fede3070c552d0a57a79b8051393d3927514dd40adb5493e301889ce",
+        "src/time/local.rs": "12b9032b0a37063caa8a2b98dc551e31f1c6b3169358d59e1a46df73f713cfb2",
+        "src/time.rs": "eca1fcce80e9c95c769180ac80485dc115f5dc774e880502c9b4952777a9715c"
+      },
+      "binaries_sha256": {
+        "rust": "8dd42a151161ca8e16ddb4b37f2f1d401ee8be644166d908e39d5af4e3efb104",
+        "fusion_fixture": "bf37f6cae8f1aff89740f2f195b819cdc59546c36008774a309a35daf2d84e3f"
+      },
+      "distinct_scaling": 4.915983399129466,
+      "scaling_limit": 6,
+      "eight_core_scaling_verified": false,
+      "measurements": [
+        {
+          "scenario": "same",
+          "threads": 1,
+          "rust_ns": 47.691,
+          "fusion_ns": 245.797,
+          "rust_over_fusion": 0.19402596451543347,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 358.984,
+          "rust_over_fusion_no_tiering": 0.1328499320303969,
+          "rust_range_ns": [
+            47.244,
+            49.36
+          ],
+          "fusion_range_ns": [
+            236.047,
+            251.771
+          ],
+          "fusion_no_tiering_range_ns": [
+            352.479,
+            359.389
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 1,
+          "rust_ns": 48.565,
+          "fusion_ns": 251.305,
+          "rust_over_fusion": 0.193251228586777,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 363.122,
+          "rust_over_fusion_no_tiering": 0.13374292937359894,
+          "rust_range_ns": [
+            48.376,
+            52.254
+          ],
+          "fusion_range_ns": [
+            251.01,
+            255.16
+          ],
+          "fusion_no_tiering_range_ns": [
+            355.275,
+            365.327
+          ]
+        },
+        {
+          "scenario": "same",
+          "threads": 2,
+          "rust_ns": 25.077,
+          "fusion_ns": 142.338,
+          "rust_over_fusion": 0.17617923534123006,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 229.694,
+          "rust_over_fusion_no_tiering": 0.10917568591256194,
+          "rust_range_ns": [
+            24.353,
+            25.932
+          ],
+          "fusion_range_ns": [
+            140.587,
+            143.18
+          ],
+          "fusion_no_tiering_range_ns": [
+            200.34,
+            233.138
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 2,
+          "rust_ns": 24.359,
+          "fusion_ns": 129.381,
+          "rust_over_fusion": 0.1882733940841391,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 187.692,
+          "rust_over_fusion_no_tiering": 0.1297817701340494,
+          "rust_range_ns": [
+            23.593,
+            26.105
+          ],
+          "fusion_range_ns": [
+            128.29,
+            133.226
+          ],
+          "fusion_no_tiering_range_ns": [
+            184.653,
+            188.016
+          ]
+        },
+        {
+          "scenario": "same",
+          "threads": 4,
+          "rust_ns": 13.663,
+          "fusion_ns": 92.231,
+          "rust_over_fusion": 0.14813891207945268,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 133.917,
+          "rust_over_fusion_no_tiering": 0.1020258817028458,
+          "rust_range_ns": [
+            12.347,
+            13.711
+          ],
+          "fusion_range_ns": [
+            88.491,
+            94.848
+          ],
+          "fusion_no_tiering_range_ns": [
+            132.065,
+            134.362
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 4,
+          "rust_ns": 13.365,
+          "fusion_ns": 89.583,
+          "rust_over_fusion": 0.1491912528046616,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 113.053,
+          "rust_over_fusion_no_tiering": 0.11821888848593139,
+          "rust_range_ns": [
+            13.134,
+            13.894
+          ],
+          "fusion_range_ns": [
+            88.662,
+            97.572
+          ],
+          "fusion_no_tiering_range_ns": [
+            112.191,
+            128.481
+          ]
+        },
+        {
+          "scenario": "same",
+          "threads": 8,
+          "rust_ns": 9.73,
+          "fusion_ns": 91.584,
+          "rust_over_fusion": 0.10624126484975542,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 90.649,
+          "rust_over_fusion_no_tiering": 0.10733709141854847,
+          "rust_range_ns": [
+            8.364,
+            15.394
+          ],
+          "fusion_range_ns": [
+            90.339,
+            96.969
+          ],
+          "fusion_no_tiering_range_ns": [
+            89.013,
+            106.555
+          ]
+        },
+        {
+          "scenario": "distinct",
+          "threads": 8,
+          "rust_ns": 9.879,
+          "fusion_ns": 67.025,
+          "rust_over_fusion": 0.14739276389406936,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 85.042,
+          "rust_over_fusion_no_tiering": 0.11616612967710072,
+          "rust_range_ns": [
+            9.291,
+            10.39
+          ],
+          "fusion_range_ns": [
+            61.374,
+            73.555
+          ],
+          "fusion_no_tiering_range_ns": [
+            76.9,
+            95.239
+          ]
+        },
+        {
+          "scenario": "sync",
+          "threads": 1,
+          "rust_ns": 41.456,
+          "fusion_ns": 216.43,
+          "rust_over_fusion": 0.1915446102665989,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 300.002,
+          "rust_over_fusion_no_tiering": 0.13818574542836382,
+          "rust_range_ns": [
+            40.237,
+            42.162
+          ],
+          "fusion_range_ns": [
+            202.99,
+            228.325
+          ],
+          "fusion_no_tiering_range_ns": [
+            289.756,
+            303.809
+          ]
+        },
+        {
+          "scenario": "set",
+          "threads": 1,
+          "rust_ns": 95.333,
+          "fusion_ns": 118.035,
+          "rust_over_fusion": 0.8076672173507858,
+          "rust_allocations_per_op": 0.0,
+          "fusion_no_tiering_ns": 152.124,
+          "rust_over_fusion_no_tiering": 0.6266795508926928,
+          "rust_range_ns": [
+            94.494,
+            97.706
+          ],
+          "fusion_range_ns": [
+            116.309,
+            120.134
+          ],
+          "fusion_no_tiering_range_ns": [
+            148.139,
+            153.747
+          ]
+        },
+        {
+          "scenario": "cold",
+          "threads": 1,
+          "rust_ns": 1152.338,
+          "fusion_ns": 1989.289,
+          "rust_over_fusion": 0.5792712873795612,
+          "rust_allocations_per_op": 5.0091,
+          "fusion_no_tiering_ns": 2346.73,
+          "rust_over_fusion_no_tiering": 0.49103987250344094,
+          "rust_range_ns": [
+            1133.157,
+            1223.178
+          ],
+          "fusion_range_ns": [
+            1945.741,
+            2183.542
+          ],
+          "fusion_no_tiering_range_ns": [
+            2262.947,
+            2431.826
+          ]
+        },
+        {
+          "scenario": "l2_json",
+          "threads": 1,
+          "rust_ns": 1773.824,
+          "fusion_ns": 1345.739,
+          "rust_over_fusion": 1.318104030573536,
+          "rust_allocations_per_op": 14.0,
+          "fusion_no_tiering_ns": 2132.849,
+          "rust_over_fusion_no_tiering": 0.8316688148106124,
+          "rust_range_ns": [
+            1766.992,
+            1852.467
+          ],
+          "fusion_range_ns": [
+            1310.891,
+            1347.143
+          ],
+          "fusion_no_tiering_range_ns": [
+            2130.958,
+            2173.934
+          ]
+        }
+      ],
+      "failures": [
+        "('set', 1): 0.808 x FC exceeds 0.75",
+        "('l2_json', 1): 1.318 x FC exceeds 1.00",
+        "distinct scaling: 4.92 below 6.00 for 12 available physical cores"
+      ],
+      "warmup_summary": {
+        "rust": {
+          "records": 102,
+          "unsettled_records": 0,
+          "maximum_seconds": 6.453483792,
+          "total_operations": 5904640000
+        },
+        "fusion": {
+          "records": 102,
+          "unsettled_records": 0,
+          "maximum_seconds": 7.2421695,
+          "total_operations": 1044280000
+        },
+        "fusion_no_tiering": {
+          "records": 102,
+          "unsettled_records": 0,
+          "maximum_seconds": 6.1789845,
+          "total_operations": 729400000
+        }
+      }
+    }
+  }
+}
