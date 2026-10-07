@@ -43,9 +43,9 @@ async fn adaptive_caching() {
     // …but the factory decides this particular (empty) result is cheap and should
     // only live for 100ms, so a real value is fetched again soon.
     let value = cache
-        .get_or_set_with(
+        .get_or_set(
             "search:zzz",
-            |mut ctx: FactoryContext<String>| async move {
+            typed_factory(|mut ctx: FactoryContext<String>| async move {
                 let result = String::new(); // pretend the search returned nothing
                 if result.is_empty() {
                     // Adapt: shorten THIS entry's lifetime to 100ms.
@@ -53,23 +53,23 @@ async fn adaptive_caching() {
                     println!("  [factory] empty result → adapting duration down to 100ms");
                 }
                 Ok::<_, amalgam::FactoryError>(ctx.value(result))
-            },
-            base.clone(),
+            }),
         )
+        .options(|_| base.clone())
         .await
         .expect("factory runs");
     println!("produced (empty) value, cached for only 100ms: {value:?}");
 
     // Within 100ms it is still cached (factory not re-run).
     let cached = cache
-        .get_or_set_with(
+        .get_or_set(
             "search:zzz",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 println!("  [factory] (should NOT run yet)");
                 Ok::<_, amalgam::FactoryError>(ctx.value("late".to_owned()))
-            },
-            base.clone(),
+            }),
         )
+        .options(|_| base.clone())
         .await
         .expect("served from cache");
     println!("immediately after  => served from cache: {cached:?}");
@@ -77,14 +77,14 @@ async fn adaptive_caching() {
     // After the adapted 100ms window the entry expires and the factory re-runs.
     tokio::time::sleep(Duration::from_millis(150)).await;
     let refreshed = cache
-        .get_or_set_with(
+        .get_or_set(
             "search:zzz",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 println!("  [factory] adapted window elapsed → re-running");
                 Ok::<_, amalgam::FactoryError>(ctx.value("RESULTS NOW".to_owned()))
-            },
-            base,
+            }),
         )
+        .options(|_| base)
         .await
         .expect("factory re-runs after the adapted window");
     println!("after 150ms        => factory re-ran: {refreshed:?}");
@@ -106,16 +106,16 @@ async fn conditional_refresh() {
 
     // 1. Prime with a value carrying an ETag.
     let primed = cache
-        .get_or_set_with(
+        .get_or_set(
             "doc",
-            |ctx| async move {
+            typed_factory(|ctx| async move {
                 Ok(ctx
                     .modified("document v1".to_owned())
                     .etag("etag-v1")
                     .done())
-            },
-            opts.clone(),
+            }),
         )
+        .options(|_| opts.clone())
         .await
         .expect("priming succeeds");
     println!("primed with etag-v1 => {primed:?}");
@@ -125,9 +125,9 @@ async fn conditional_refresh() {
 
     // 3a. Server says "Not Modified": reuse the stale value, bump its expiration.
     let reused = cache
-        .get_or_set_with(
+        .get_or_set(
             "doc",
-            |ctx: FactoryContext<String>| async move {
+            typed_factory(|ctx: FactoryContext<String>| async move {
                 // The stale ETag is available to issue a conditional request.
                 println!(
                     "  [factory] revalidating with stale etag = {:?}",
@@ -135,9 +135,9 @@ async fn conditional_refresh() {
                 );
                 println!("  [factory] server replied 304 Not Modified");
                 ctx.not_modified() // already a Result<FactoryProduct, _>
-            },
-            opts.clone(),
+            }),
         )
+        .options(|_| opts.clone())
         .await
         .expect("not_modified reuses the stale value");
     println!("after 304 NotModified => {reused:?}  (stale value reused, expiration bumped)");
@@ -146,9 +146,9 @@ async fn conditional_refresh() {
     // 3b. Let it go stale again, then the server returns a genuinely new version.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let updated = cache
-        .get_or_set_with(
+        .get_or_set(
             "doc",
-            |ctx: FactoryContext<String>| async move {
+            typed_factory(|ctx: FactoryContext<String>| async move {
                 println!(
                     "  [factory] revalidating with stale etag = {:?}",
                     ctx.stale_etag()
@@ -158,12 +158,20 @@ async fn conditional_refresh() {
                     .modified("document v2".to_owned())
                     .etag("etag-v2")
                     .done())
-            },
-            opts,
+            }),
         )
+        .options(|_| opts)
         .await
         .expect("modified replaces the value");
     println!("after 200 Modified    => {updated:?}  (new value + new etag cached)");
     assert_eq!(updated, "document v2");
     println!("OK: adaptive duration + conditional (304/200) refresh both demonstrated.");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

@@ -123,116 +123,16 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         self.runtime
             .run(self.cache.get_or_default(key, value, options))
     }
-    /// Invokes a synchronous origin with the same cache/product rules.
-    pub fn get_or_set<F, E>(&self, key: impl AsRef<str>, factory: F) -> Result<V>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, E> + Send + 'static,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        self.get_or_set_full(
-            key,
-            move |context| factory(context).map_err(FactoryError::from_boundary),
-            None,
-            Box::from([]),
-            MaybeValue::none(),
-        )
-    }
-    /// Synchronous origin with explicit options.
-    pub fn get_or_set_with<F>(
+    /// Lazily retrieves a value from a native factory or `source::value`.
+    /// Ordinary factories retain direct caller-thread execution on `execute()`.
+    pub fn get_or_set<K: AsRef<str>, S: crate::source::BlockingSource<V>>(
         &self,
-        key: impl AsRef<str>,
-        factory: F,
-        options: EntryOptions,
-    ) -> Result<V>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
-    {
-        self.get_or_set_full(
-            key,
-            factory,
-            Some(options),
-            Box::from([]),
-            MaybeValue::none(),
-        )
+        key: K,
+        source: S,
+    ) -> super::BlockingGetOrSetRequest<'_, K, S, V> {
+        super::BlockingGetOrSetRequest::new(self, key, source)
     }
-    /// Constant retrieval uses the same key coordination and commit rules.
-    pub fn get_or_set_value(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-    ) -> Result<V> {
-        self.runtime
-            .run(self.cache.get_or_set_value(key, value, options))
-    }
-    /// Full native origin, adaptive/conditional product, tags and fallback.
-    pub fn get_or_set_full<F>(
-        &self,
-        key: impl AsRef<str>,
-        factory: F,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        fallback: MaybeValue<V>,
-    ) -> Result<V>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
-    {
-        Ok(self
-            .retrieve(key.as_ref(), factory, options, tags, fallback, None)?
-            .value)
-    }
-    /// Full native origin with a synchronous actual commit receipt.
-    pub fn get_or_set_full_with_commit<F>(
-        &self,
-        key: impl AsRef<str>,
-        factory: F,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        fallback: MaybeValue<V>,
-    ) -> Result<BlockingCacheValue<V>>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
-    {
-        self.retrieve(key.as_ref(), factory, options, tags, fallback, None)
-            .map(|value| self.wrap_value(value))
-    }
-    /// Explicit cancellation remains prompt for a running blocking origin.
-    pub fn get_or_set_cancellable<F>(
-        &self,
-        key: impl AsRef<str>,
-        factory: F,
-        token: FactoryCancellation,
-    ) -> Result<V>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
-    {
-        self.get_or_set_full_cancellable(
-            key,
-            factory,
-            None,
-            Box::from([]),
-            MaybeValue::none(),
-            token,
-        )
-    }
-    /// Full native origin with explicit cancellation until deliberate handoff.
-    pub fn get_or_set_full_cancellable<F>(
-        &self,
-        key: impl AsRef<str>,
-        factory: F,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        fallback: MaybeValue<V>,
-        token: FactoryCancellation,
-    ) -> Result<V>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
-    {
-        Ok(self
-            .retrieve(key.as_ref(), factory, options, tags, fallback, Some(token))?
-            .value)
-    }
-    fn retrieve<F>(
+    pub(super) fn retrieve<F>(
         &self,
         key: &str,
         factory: F,
@@ -282,7 +182,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             }
         }
     }
-    fn wrap_value(&self, value: CacheValue<V>) -> BlockingCacheValue<V> {
+    pub(super) fn wrap_value(&self, value: CacheValue<V>) -> BlockingCacheValue<V> {
         BlockingCacheValue {
             value: value.value,
             commit: match value.commit {
@@ -475,83 +375,5 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             self.cache
                 .read_or_default_cancellable(key, value, options, token),
         )
-    }
-
-    /// Supplied-value retrieval with tags; no factory timeouts or eager work.
-    pub fn get_or_set_value_full(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-    ) -> Result<V> {
-        self.runtime
-            .run(self.cache.get_or_set_value_full(key, value, options, tags))
-    }
-
-    /// Cancellable supplied-value retrieval with tags and per-entry options.
-    pub fn get_or_set_value_full_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        token: FactoryCancellation,
-    ) -> Result<V> {
-        self.runtime.run(
-            self.cache
-                .get_or_set_value_full_cancellable(key, value, options, tags, token),
-        )
-    }
-
-    /// Supplied-value retrieval and its actual synchronous commit receipt.
-    pub fn get_or_set_value_full_with_commit(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-    ) -> Result<BlockingCacheValue<V>> {
-        self.runtime
-            .run(
-                self.cache
-                    .get_or_set_value_full_with_commit(key, value, options, tags),
-            )
-            .map(|value| self.wrap_value(value))
-    }
-
-    /// Cancellable supplied-value retrieval and its actual commit receipt.
-    pub fn get_or_set_value_full_with_commit_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingCacheValue<V>> {
-        self.runtime
-            .run(
-                self.cache.get_or_set_value_full_with_commit_cancellable(
-                    key, value, options, tags, token,
-                ),
-            )
-            .map(|value| self.wrap_value(value))
-    }
-
-    /// Cancellable synchronous factory retrieval with actual commit completion.
-    pub fn get_or_set_full_with_commit_cancellable<F>(
-        &self,
-        key: impl AsRef<str>,
-        factory: F,
-        options: Option<EntryOptions>,
-        tags: Box<[Tag]>,
-        fallback: MaybeValue<V>,
-        token: FactoryCancellation,
-    ) -> Result<BlockingCacheValue<V>>
-    where
-        F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
-    {
-        self.retrieve(key.as_ref(), factory, options, tags, fallback, Some(token))
-            .map(|value| self.wrap_value(value))
     }
 }

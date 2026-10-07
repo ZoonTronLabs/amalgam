@@ -57,11 +57,14 @@ async fn main() {
     let v1 = {
         let runs = factory_runs.clone();
         node1
-            .get_or_set("profile", move |ctx| async move {
-                runs.fetch_add(1, Ordering::SeqCst);
-                println!("  [node-1 factory] producing the value");
-                Ok::<_, amalgam::FactoryError>(ctx.value("Alice".to_owned()))
-            })
+            .get_or_set(
+                "profile",
+                amalgam::source::factory(move |ctx| async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    println!("  [node-1 factory] producing the value");
+                    Ok::<_, amalgam::FactoryError>(ctx.value("Alice".to_owned()))
+                }),
+            )
             .await
             .expect("node-1 produces the value")
     };
@@ -72,11 +75,14 @@ async fn main() {
     let v2 = {
         let runs = factory_runs.clone();
         node2
-            .get_or_set("profile", move |ctx| async move {
-                runs.fetch_add(1, Ordering::SeqCst);
-                println!("  [node-2 factory] (this should NOT run)");
-                Ok::<_, amalgam::FactoryError>(ctx.value("should-not-run".to_owned()))
-            })
+            .get_or_set(
+                "profile",
+                amalgam::source::factory(move |ctx| async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    println!("  [node-2 factory] (this should NOT run)");
+                    Ok::<_, amalgam::FactoryError>(ctx.value("should-not-run".to_owned()))
+                }),
+            )
             .await
             .expect("node-2 reads through L2")
     };

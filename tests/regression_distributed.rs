@@ -69,7 +69,10 @@ async fn audit_tag_marker_survives_a_fresh_node_without_backplane() {
     clock.advance(Duration::from_secs(1));
     writer.remove_by_tag("group").await.unwrap();
     let fresh_node = build(clock, l2);
-    let actual = fresh_node.get_or_set_value("k", 2, None).await.unwrap();
+    let actual = fresh_node
+        .get_or_set("k", amalgam::source::value(2))
+        .await
+        .unwrap();
     assert_eq!(
         actual, 2,
         "the tag invalidation must remain effective in shared L2"
@@ -85,7 +88,10 @@ async fn audit_clear_marker_survives_a_fresh_node_without_backplane() {
     clock.advance(Duration::from_secs(1));
     writer.clear(amalgam::ClearMode::Remove).await.unwrap();
     let fresh_node = build(clock, l2);
-    let actual = fresh_node.get_or_set_value("k", 2, None).await.unwrap();
+    let actual = fresh_node
+        .get_or_set("k", amalgam::source::value(2))
+        .await
+        .unwrap();
     assert_eq!(
         actual, 2,
         "clear must prevent a new node reading the uncleared L2 value"
@@ -102,7 +108,10 @@ async fn audit_expire_from_cold_node_updates_l2() {
     let invalidator = build(clock.clone(), l2.clone());
     invalidator.expire("k").await.unwrap();
     let reader = build(clock, l2);
-    let actual = reader.get_or_set_value("k", 2, None).await.unwrap();
+    let actual = reader
+        .get_or_set("k", amalgam::source::value(2))
+        .await
+        .unwrap();
     assert_eq!(
         actual, 2,
         "expire must affect an L2 entry even when local L1 is empty"
@@ -121,7 +130,11 @@ async fn audit_l2_uses_its_own_logical_duration() {
         .await;
     clock.advance(Duration::from_secs(2));
     let reader = build(clock, l2);
-    let actual = reader.get_or_set_value("k", 2, Some(custom)).await.unwrap();
+    let actual = reader
+        .get_or_set("k", amalgam::source::value(2))
+        .options(|_| custom)
+        .await
+        .unwrap();
     assert_eq!(
         actual, 1,
         "L2 must still be logically fresh during its ten-second duration"
@@ -285,7 +298,10 @@ async fn audit_passive_refresh_does_not_resurrect_after_remove() {
         .default_options(opts())
         .auto_recovery(no_recovery())
         .build();
-    reader.get_or_set_value("k", 0, None).await.unwrap();
+    reader
+        .get_or_set("k", amalgam::source::value(0))
+        .await
+        .unwrap();
     let mut events = reader.events().subscribe();
     l2.pause_next.store(true, Ordering::SeqCst);
     clock.advance(Duration::from_secs(1));
@@ -463,7 +479,7 @@ async fn audit_factory_write_honors_rethrow_serialization_flag() {
         .default_options(opts())
         .auto_recovery(no_recovery())
         .build();
-    let actual = cache.get_or_set_value("k", 1, None).await;
+    let actual = cache.get_or_set("k", amalgam::source::value(1)).await;
     assert!(
         matches!(actual, Err(Error::Serialization(_))),
         "serialization rethrow is enabled by default"
@@ -493,7 +509,7 @@ async fn audit_factory_write_honors_rethrow_distributed_flag() {
         .default_options(opts().with_rethrow_distributed_exceptions(true))
         .auto_recovery(no_recovery())
         .build();
-    let actual = cache.get_or_set_value("k", 1, None).await;
+    let actual = cache.get_or_set("k", amalgam::source::value(1)).await;
     assert!(
         matches!(actual, Err(Error::Distributed(_))),
         "awaited L2 writes must propagate opted-in transport errors"
@@ -527,7 +543,10 @@ async fn audit_tag_marker_survives_node_joining_after_backplane_publication() {
         .auto_recovery(no_recovery())
         .build();
     assert_eq!(
-        reader.get_or_set_value("k", 2, None).await.unwrap(),
+        reader
+            .get_or_set("k", amalgam::source::value(2))
+            .await
+            .unwrap(),
         2,
         "a node joining after publication must discover the persisted tag marker"
     );
@@ -687,10 +706,13 @@ async fn shared_fc_tag_invalidation_rechecks_origin_despite_failsafe_throttle() 
         let calls = calls.clone();
         assert_eq!(
             cache
-                .get_or_set("k", move |_| async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err(FactoryError::new("offline"))
-                })
+                .get_or_set(
+                    "k",
+                    amalgam::source::factory(move |_| async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(FactoryError::new("offline"))
+                    })
+                )
                 .await
                 .unwrap(),
             1
@@ -777,7 +799,10 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
     let mut events = reader.events().subscribe();
     writer.set("k", 1).await.unwrap();
     received(&mut events, "k").await;
-    reader.get_or_set_value("k", 0, None).await.unwrap();
+    reader
+        .get_or_set("k", amalgam::source::value(0))
+        .await
+        .unwrap();
     l2.stored.notified().await;
     l2.read.notified().await;
     l2.pause_next.store(true, Ordering::SeqCst);

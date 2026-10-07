@@ -218,9 +218,10 @@ async fn required_marker_read_respects_soft_budget_and_preserves_origin_fallback
     clock.advance(Duration::from_secs(2));
     let result = tokio::time::timeout(
         Duration::from_secs(1),
-        cache.get_or_set("key", |_ctx| async move {
-            Err(FactoryError::new("origin fault"))
-        }),
+        cache.get_or_set(
+            "key",
+            amalgam::source::factory(|_ctx| async move { Err(FactoryError::new("origin fault")) }),
+        ),
     )
     .await;
     cache.shutdown().await.unwrap();

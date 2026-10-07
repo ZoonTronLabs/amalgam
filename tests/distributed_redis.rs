@@ -776,9 +776,10 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .unwrap();
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("hydrated", |_| async {
-                panic!("L2 must hydrate")
-            })
+            .get_or_set::<_, _>(
+                "hydrated",
+                typed_factory(|_| async { panic!("L2 must hydrate") })
+            )
             .await
             .unwrap(),
         41
@@ -813,9 +814,10 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         let expected = if key == "local" { 42 } else { 41 };
         assert_eq!(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>(key, |_| async {
-                    panic!("gap must retain L1")
-                })
+                .get_or_set::<_, _>(
+                    key,
+                    typed_factory(|_| async { panic!("gap must retain L1") })
+                )
                 .await
                 .unwrap(),
             expected
@@ -827,9 +829,10 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         let expected = if key == "local" { 42 } else { 41 };
         assert_eq!(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>(key, |_| async {
-                    panic!("reconnect must retain L1")
-                })
+                .get_or_set::<_, _>(
+                    key,
+                    typed_factory(|_| async { panic!("reconnect must retain L1") })
+                )
                 .await
                 .unwrap(),
             expected
@@ -869,4 +872,12 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .query_async::<i64>(&mut connection)
         .await
         .unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

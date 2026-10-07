@@ -74,17 +74,20 @@ fn a_new_caller_drives_the_same_pinned_origin_across_option_paths_without_a_runt
         let destroyed = dropped.clone();
         let mut first = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("retained", move |context| {
-                    count.fetch_add(1, Ordering::SeqCst);
-                    PinnedOrigin {
-                        context: RefCell::new(Some(context)),
-                        ready: released,
-                        address: observed,
-                        dropped: destroyed,
-                        panics: false,
-                        _pin: PhantomPinned,
-                    }
-                })
+                .get_or_set::<_, _>(
+                    "retained",
+                    typed_factory(move |context| {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        PinnedOrigin {
+                            context: RefCell::new(Some(context)),
+                            ready: released,
+                            address: observed,
+                            dropped: destroyed,
+                            panics: false,
+                            _pin: PhantomPinned,
+                        }
+                    }),
+                )
                 .options(move |_| options(first_general))
                 .into_future(),
         );
@@ -98,9 +101,12 @@ fn a_new_caller_drives_the_same_pinned_origin_across_option_paths_without_a_runt
         ready.store(true, Ordering::SeqCst);
         let mut next = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("retained", |_| async {
-                    panic!("a replacement caller started a second factory")
-                })
+                .get_or_set::<_, _>(
+                    "retained",
+                    typed_factory(|_| async {
+                        panic!("a replacement caller started a second factory")
+                    }),
+                )
                 .options(move |_| options(next_general))
                 .into_future(),
         );
@@ -122,25 +128,27 @@ fn panic_is_preserved_for_the_leader_and_typed_for_waiters_across_option_paths()
         let destroyed = dropped.clone();
         let mut leader = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("panic", move |context| {
-                    PinnedOrigin {
+                .get_or_set::<_, _>(
+                    "panic",
+                    typed_factory(move |context| PinnedOrigin {
                         context: RefCell::new(Some(context)),
                         ready: released,
                         address,
                         dropped: destroyed,
                         panics: true,
                         _pin: PhantomPinned,
-                    }
-                })
+                    }),
+                )
                 .options(move |_| options(first_general))
                 .into_future(),
         );
         assert!(once(leader.as_mut()).is_pending());
         let mut waiter = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("panic", |_| async {
-                    panic!("a waiter started its own factory")
-                })
+                .get_or_set::<_, _>(
+                    "panic",
+                    typed_factory(|_| async { panic!("a waiter started its own factory") }),
+                )
                 .options(move |_| options(next_general))
                 .into_future(),
         );
@@ -157,9 +165,10 @@ fn panic_is_preserved_for_the_leader_and_typed_for_waiters_across_option_paths()
         assert!(dropped.load(Ordering::SeqCst));
         let mut retry = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("panic", |ctx| async {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                })
+                .get_or_set::<_, _>(
+                    "panic",
+                    typed_factory(|ctx| async { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+                )
                 .into_future(),
         );
         assert!(matches!(once(retry.as_mut()), Poll::Ready(Ok(7))));
@@ -214,13 +223,16 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
     let saved = token.clone();
     let mut first = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("hybrid", move |ctx| async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                *saved.lock().unwrap() = Some(ctx.cancellation().clone());
-                released.acquire().await.unwrap().forget();
-                ctx.cancellation().check().unwrap();
-                Ok::<_, amalgam::FactoryError>(ctx.value(9))
-            })
+            .get_or_set::<_, _>(
+                "hybrid",
+                typed_factory(move |ctx| async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    *saved.lock().unwrap() = Some(ctx.cancellation().clone());
+                    released.acquire().await.unwrap().forget();
+                    ctx.cancellation().check().unwrap();
+                    Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                }),
+            )
             .into_future(),
     );
     started(first.as_mut(), &runs).await;
@@ -230,9 +242,10 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
     for _ in 0..30 {
         let mut waiter = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("hybrid", |_| async {
-                    panic!("hybrid waiter started another factory")
-                })
+                .get_or_set::<_, _>(
+                    "hybrid",
+                    typed_factory(|_| async { panic!("hybrid waiter started another factory") }),
+                )
                 .into_future(),
         );
         assert!(once(waiter.as_mut()).is_pending());
@@ -258,9 +271,10 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
         .unwrap();
     assert_eq!(
         other
-            .get_or_set::<_, _, _, amalgam::FactoryError>("hybrid", |_| async {
-                panic!("retained result was not committed to L2")
-            })
+            .get_or_set::<_, _>(
+                "hybrid",
+                typed_factory(|_| async { panic!("retained result was not committed to L2") })
+            )
             .await
             .unwrap(),
         9
@@ -288,13 +302,16 @@ async fn explicit_cancellation_still_releases_a_general_factory_without_failsafe
     let guard = Destroyed(drops.clone());
     let mut first = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("explicit", move |ctx| async move {
-                let _guard = guard;
-                count.fetch_add(1, Ordering::SeqCst);
-                std::future::pending::<()>().await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(9))
-            })
-            .fail_safe_default(99)
+            .get_or_set::<_, _>(
+                "explicit",
+                typed_factory(move |ctx| async move {
+                    let _guard = guard;
+                    count.fetch_add(1, Ordering::SeqCst);
+                    std::future::pending::<()>().await;
+                    Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                }),
+            )
+            .fail_safe_default(Some(99))
             .cancellation(source.token())
             .into_future(),
     );
@@ -309,9 +326,10 @@ async fn explicit_cancellation_still_releases_a_general_factory_without_failsafe
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("explicit", |ctx| async {
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
-            })
+            .get_or_set::<_, _>(
+                "explicit",
+                typed_factory(|ctx| async { Ok::<_, amalgam::FactoryError>(ctx.value(7)) })
+            )
             .await
             .unwrap(),
         7
@@ -376,17 +394,20 @@ fn a_waiter_admitted_before_factory_installation_is_not_stranded() {
     let destroyed = dropped.clone();
     let mut first = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("late-install", move |context| {
-                count.fetch_add(1, Ordering::SeqCst);
-                PinnedOrigin {
-                    context: RefCell::new(Some(context)),
-                    ready: released,
-                    address: Arc::new(AtomicUsize::new(0)),
-                    dropped: destroyed,
-                    panics: false,
-                    _pin: PhantomPinned,
-                }
-            })
+            .get_or_set::<_, _>(
+                "late-install",
+                typed_factory(move |context| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    PinnedOrigin {
+                        context: RefCell::new(Some(context)),
+                        ready: released,
+                        address: Arc::new(AtomicUsize::new(0)),
+                        dropped: destroyed,
+                        panics: false,
+                        _pin: PhantomPinned,
+                    }
+                }),
+            )
             .into_future(),
     );
     assert!(once(first.as_mut()).is_pending());
@@ -399,9 +420,10 @@ fn a_waiter_admitted_before_factory_installation_is_not_stranded() {
     let waker = Waker::from(wakes.clone());
     let mut second = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("late-install", |_| async {
-                panic!("second factory")
-            })
+            .get_or_set::<_, _>(
+                "late-install",
+                typed_factory(|_| async { panic!("second factory") }),
+            )
             .into_future(),
     );
     assert!(
@@ -441,15 +463,15 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
     let saved = token.clone();
     let mut first = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>(
+            .get_or_set::<_, _>(
                 "detached-explicit",
-                move |ctx| async move {
+                typed_factory(move |ctx| async move {
                     let _guard = guard;
                     *saved.lock().unwrap() = Some(ctx.cancellation().clone());
                     count.fetch_add(1, Ordering::SeqCst);
                     std::future::pending::<()>().await;
                     Ok::<_, amalgam::FactoryError>(ctx.value(9))
-                },
+                }),
             )
             .cancellation(source.token())
             .into_future(),
@@ -467,9 +489,10 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
     );
     assert_eq!(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("detached-explicit", |ctx| async {
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
-            })
+            .get_or_set::<_, _>(
+                "detached-explicit",
+                typed_factory(|ctx| async { Ok::<_, amalgam::FactoryError>(ctx.value(7)) })
+            )
             .await
             .unwrap(),
         7
@@ -488,11 +511,14 @@ async fn a_retained_background_panic_preserves_the_supervised_shutdown_cause() {
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let mut first = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("background-panic", move |_| async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                released.await.unwrap();
-                panic!("retained original factory panic")
-            })
+            .get_or_set::<_, _>(
+                "background-panic",
+                typed_factory(move |_| async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    released.await.unwrap();
+                    panic!("retained original factory panic")
+                }),
+            )
             .into_future(),
     );
     started(first.as_mut(), &runs).await;
@@ -505,4 +531,12 @@ async fn a_retained_background_panic_preserves_the_supervised_shutdown_cause() {
     assert!(report.failures().iter().any(|failure| matches!(failure,
         ShutdownFailure::BackgroundTask { task: ShutdownTask::Factory, source } if source.is_panic()
     )));
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

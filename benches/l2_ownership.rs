@@ -82,9 +82,12 @@ impl Lookup {
                 .into_value()
                 .unwrap(),
             Self::GetOrSet => cache
-                .get_or_set("l2-json", |context| async move {
-                    Err(context.fail("a warmed L2 factory must never run"))
-                })
+                .get_or_set(
+                    "l2-json",
+                    amalgam::source::factory(|context| async move {
+                        Err(context.fail("a warmed L2 factory must never run"))
+                    }),
+                )
                 .await
                 .unwrap(),
         }

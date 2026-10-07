@@ -10,11 +10,17 @@ async fn get_or_set_value_sets_then_returns_existing() {
     let cache: Cache<i32> = Cache::new();
 
     // Absent → stores and returns the constant.
-    let first = cache.get_or_set_value("k", 7, None).await.unwrap();
+    let first = cache
+        .get_or_set("k", amalgam::source::value(7))
+        .await
+        .unwrap();
     assert_eq!(first, 7);
 
     // Present → returns the existing value, ignoring the new constant.
-    let second = cache.get_or_set_value("k", 999, None).await.unwrap();
+    let second = cache
+        .get_or_set("k", amalgam::source::value(999))
+        .await
+        .unwrap();
     assert_eq!(second, 7);
 }
 

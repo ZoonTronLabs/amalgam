@@ -42,14 +42,15 @@ async fn async_constant_ignores_factory_budget_and_does_not_report_factory_succe
         .try_build()
         .unwrap();
     let answer = cache
-        .get_or_set_value("constant", 42, Some(zero_budget()))
+        .get_or_set("constant", amalgam::source::value(42))
+        .options(|_| zero_budget())
         .await;
     let factory = cache
-        .get_or_set_with(
+        .get_or_set(
             "factory",
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(99)) },
-            zero_budget(),
+            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(99)) }),
         )
+        .options(|_| zero_budget())
         .await;
     cache.shutdown().await.unwrap();
     assert_eq!(answer.unwrap(), 42);
@@ -66,7 +67,10 @@ fn native_constant_ignores_factory_budget_and_does_not_report_factory_success() 
     let events = Arc::new(OriginEvents::default());
     let cache =
         BlockingCache::<u64>::from_builder(Cache::builder().plugin(events.clone())).unwrap();
-    let answer = cache.get_or_set_value("constant", 42, Some(zero_budget()));
+    let answer = cache
+        .get_or_set("constant", amalgam::source::value(42))
+        .options(|_| zero_budget())
+        .execute();
     cache.shutdown().unwrap();
     assert_eq!(answer.unwrap(), 42);
     assert_eq!(events.0.load(Ordering::SeqCst), 0);
@@ -91,7 +95,8 @@ async fn async_warm_constant_never_eagerly_replaces_the_existing_value() {
     clock.set(Timestamp::from_ticks(410_000_000));
     assert_eq!(
         cache
-            .get_or_set_value("warm", 99, Some(eager()))
+            .get_or_set("warm", amalgam::source::value(99))
+            .options(|_| eager())
             .await
             .unwrap(),
         1
@@ -118,7 +123,11 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
         .unwrap();
     clock.set(Timestamp::from_ticks(410_000_000));
     assert_eq!(
-        cache.get_or_set_value("warm", 99, Some(eager())).unwrap(),
+        cache
+            .get_or_set("warm", amalgam::source::value(99))
+            .options(|_| eager())
+            .execute()
+            .unwrap(),
         1
     );
     cache.flush_pending().unwrap();
@@ -126,4 +135,12 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
     cache.shutdown().unwrap();
     assert_eq!(after, Some(1));
     assert_eq!(events.0.load(Ordering::SeqCst), 0);
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

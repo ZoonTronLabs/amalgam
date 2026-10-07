@@ -3,9 +3,11 @@
 //! The executor stays driven while callers block. Timed, cancellable and eager
 //! factories run on its blocking pool and retain counted execution and join
 //! supervision until their actual callback, captures and result have finished.
+pub(crate) mod origin_request;
 use super::*;
 use crate::commit::TaskResult;
 use crate::factory::FactoryInvocation;
+pub use origin_request::{BlockingGetOrSetRequest, BlockingReceiptGetOrSetRequest};
 use std::thread::{self, ThreadId};
 mod api;
 mod requests;
@@ -305,15 +307,17 @@ mod tests {
         let (started_tx, started_rx) = mpsc::channel();
         let occupied = busy.clone();
         let occupier = thread::spawn(move || {
-            occupied.get_or_set_cancellable(
-                "busy",
-                move |ctx| {
-                    started_tx.send(()).unwrap();
-                    gate.wait();
-                    Ok::<_, crate::FactoryError>(ctx.value(1))
-                },
-                CancellationSource::new().token(),
-            )
+            occupied
+                .get_or_set(
+                    "busy",
+                    crate::source::factory(move |ctx| {
+                        started_tx.send(()).unwrap();
+                        gate.wait();
+                        Ok::<_, crate::FactoryError>(ctx.value(1))
+                    }),
+                )
+                .cancellation(CancellationSource::new().token())
+                .execute()
         });
         started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -324,15 +328,17 @@ mod tests {
         let token = source.token();
         let request = queued.clone();
         let caller = thread::spawn(move || {
-            request.get_or_set_cancellable(
-                "queued",
-                move |ctx| {
-                    let _held = &captured;
-                    invoked.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, crate::FactoryError>(ctx.value(99))
-                },
-                token,
-            )
+            request
+                .get_or_set(
+                    "queued",
+                    crate::source::factory(move |ctx| {
+                        let _held = &captured;
+                        invoked.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, crate::FactoryError>(ctx.value(99))
+                    }),
+                )
+                .cancellation(token)
+                .execute()
         });
         runtime.run(async {
             tokio::time::timeout(Duration::from_secs(2), async {

@@ -48,26 +48,27 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
     let caller = thread::current().id();
     let tag = Tag::new("native").unwrap();
     let value = cache
-        .get_or_set_full(
+        .get_or_set(
             "key",
-            move |ctx| {
+            typed_blocking_factory(move |ctx| {
                 assert_eq!(thread::current().id(), caller);
                 assert_eq!(ctx.invocation(), FactoryInvocation::Foreground);
                 Ok::<_, amalgam::FactoryError>(ctx.value(None))
-            },
-            None,
-            Box::from([tag.clone()]),
-            MaybeValue::none(),
+            }),
         )
+        .tags([tag.clone()])
+        .execute()
         .unwrap();
     assert_eq!(value, None);
     assert_eq!(cache.read("key", None).unwrap().into_value(), Some(None));
     assert_eq!(cache.read("miss", None).unwrap().into_value(), None);
     assert_eq!(
         cache
-            .get_or_set::<_, amalgam::FactoryError>("key", |_| panic!(
-                "warm value must not invoke origin"
-            ))
+            .get_or_set(
+                "key",
+                typed_blocking_factory(|_| panic!("warm value must not invoke origin"))
+            )
+            .execute()
             .unwrap(),
         None
     );
@@ -104,11 +105,15 @@ fn same_key_native_callers_share_one_origin() {
             thread::spawn(move || {
                 barrier.wait();
                 cache
-                    .get_or_set("one", move |ctx| {
-                        calls.fetch_add(1, Ordering::SeqCst);
-                        thread::sleep(Duration::from_millis(15));
-                        Ok::<_, amalgam::FactoryError>(ctx.value(42))
-                    })
+                    .get_or_set(
+                        "one",
+                        amalgam::source::factory(move |ctx| {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(15));
+                            Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                        }),
+                    )
+                    .execute()
                     .unwrap()
             })
         })
@@ -129,15 +134,17 @@ fn hard_deadline_returns_before_callback_finishes_but_shutdown_owns_it() {
     let (result_tx, result_rx) = mpsc::channel();
     let requester = cache.clone();
     let caller = thread::spawn(move || {
-        let result = requester.get_or_set_with(
-            "timed",
-            move |ctx| {
-                started_tx.send(ctx.cancellation().clone()).unwrap();
-                blocked.wait();
-                Ok::<_, amalgam::FactoryError>(ctx.value(99))
-            },
-            timed(),
-        );
+        let result = requester
+            .get_or_set(
+                "timed",
+                typed_blocking_factory(move |ctx| {
+                    started_tx.send(ctx.cancellation().clone()).unwrap();
+                    blocked.wait();
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                }),
+            )
+            .options(|_| timed())
+            .execute();
         result_tx.send(result).unwrap();
     });
     let token = started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -180,18 +187,21 @@ fn explicit_cancel_never_returns_failsafe_default_or_stores_late_product() {
     let (result_tx, result_rx) = mpsc::channel();
     let requester = cache.clone();
     let caller = thread::spawn(move || {
-        let result = requester.get_or_set_full_cancellable(
-            "cancel",
-            move |ctx| {
-                started_tx.send(ctx.cancellation().clone()).unwrap();
-                blocked.wait();
-                Ok::<_, amalgam::FactoryError>(ctx.value(99))
-            },
-            Some(EntryOptions::new(Duration::from_secs(30)).with_fail_safe(true, None, None)),
-            Box::from([]),
-            MaybeValue::from_value(7),
-            requested,
-        );
+        let result = requester
+            .get_or_set(
+                "cancel",
+                typed_blocking_factory(move |ctx| {
+                    started_tx.send(ctx.cancellation().clone()).unwrap();
+                    blocked.wait();
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                }),
+            )
+            .options(|_| {
+                EntryOptions::new(Duration::from_secs(30)).with_fail_safe(true, None, None)
+            })
+            .fail_safe_default((MaybeValue::from_value(7)).into_value())
+            .cancellation(requested)
+            .execute();
         result_tx.send(result).unwrap();
     });
     let origin = started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -237,12 +247,16 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
     let (started_tx, started_rx) = mpsc::channel();
     assert_eq!(
         cache
-            .get_or_set("eager", move |ctx| {
-                assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
-                started_tx.send(()).unwrap();
-                blocked.wait();
-                Ok::<_, amalgam::FactoryError>(ctx.value(2))
-            })
+            .get_or_set(
+                "eager",
+                amalgam::source::factory(move |ctx| {
+                    assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
+                    started_tx.send(()).unwrap();
+                    blocked.wait();
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                })
+            )
+            .execute()
             .unwrap(),
         1
     );
@@ -328,7 +342,12 @@ fn timed_callback_panic_retains_original_join_in_shutdown_report() {
         false,
     );
     let error = cache
-        .get_or_set_with("panic", |_| panic!("native-original-panic"), options)
+        .get_or_set(
+            "panic",
+            typed_blocking_factory(|_| panic!("native-original-panic")),
+        )
+        .options(|_| options)
+        .execute()
         .unwrap_err();
     let Error::FactoryWithSource { source, .. } = error else {
         panic!("expected the original callback panic, got {error:?}");
@@ -351,14 +370,15 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
     assert_eq!(cache.read("native", None).unwrap().into_value(), Some(4));
     assert_eq!(
         cache
-            .get_or_set_with(
+            .get_or_set(
                 "timed",
-                |ctx| {
+                typed_blocking_factory(|ctx| {
                     thread::sleep(Duration::from_millis(2));
                     Ok::<_, amalgam::FactoryError>(ctx.value(5))
-                },
-                timed()
+                })
             )
+            .options(|_| timed())
+            .execute()
             .unwrap(),
         5
     );
@@ -368,4 +388,11 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
     active.try_set("drop", 7).unwrap().wait().unwrap();
     drop(active);
     tokio::task::yield_now().await;
+}
+
+fn typed_blocking_factory<V, F>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+{
+    factory
 }

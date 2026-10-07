@@ -34,6 +34,67 @@ helpers publish their conditional metadata through the request rather than
 returning a public product envelope. Factory option and tag edits apply to
 that origin's eventual commit even when it suspends.
 
+## One retrieval operation, two source kinds
+
+The factory and supplied-value overloads use the same `get_or_set`. A plain
+factory whose context is unused can remain a closure. When using context
+methods, `source::factory` gives Rust the context type without allocating or
+wrapping the callback at runtime:
+
+```rust
+use amalgam::{source, Cache};
+# async fn example(cache: &Cache<String>) -> amalgam::Result<()> {
+let value = cache
+    .get_or_set("profile", source::factory(|mut ctx| async move {
+        ctx.try_set_tags(["profiles"]).map_err(amalgam::FactoryError::from_source)?;
+        Ok::<_, amalgam::FactoryError>("Alice".to_owned())
+    }))
+    .options(|options| options.with_duration(std::time::Duration::from_secs(30)))
+    .await?;
+let existing_or_supplied = cache.get_or_set("profile", source::value(value)).await?;
+# let _ = existing_or_supplied;
+# Ok(())
+# }
+```
+
+A supplied value preserves the previous constant-source behavior: it does not
+run factory-only timeouts, emit factory-success events or trigger eager refresh.
+It returns an existing eligible value instead of unconditionally replacing it;
+use `set` for replacement.
+
+The former `get_or_set_with`, `get_or_set_full`, cancellable and commit variants,
+and `get_or_set_value*` methods are removed. Use `.options(...)`, `.tags(...)`,
+`.cancellation(...)` and `.with_receipt()` on the ordinary request. An optional
+fallback uses `.fail_safe_default(Some(value))`; `None` removes the fallback.
+For `Cache<Option<T>>`, `Some(None)` is a present null fallback, distinct from no
+fallback. Factory capture destruction, cancellation and commit ownership retain
+the same contracts.
+
+Native requests use the same source choices and execute explicitly. Ordinary
+native factories continue to run on the caller thread:
+
+```rust
+use amalgam::{source, BlockingCache};
+# fn example(cache: &BlockingCache<String>) -> amalgam::Result<()> {
+let value = cache
+    .get_or_set("profile", source::factory(|_| {
+        Ok::<_, std::convert::Infallible>("Alice".to_owned())
+    }))
+    .execute()?;
+let observed = cache.get_or_set("profile", source::value(value))
+    .with_receipt().execute()?;
+match observed.commit {
+    amalgam::BlockingCommitReceipt::Unchanged => {}
+    amalgam::BlockingCommitReceipt::Mutation(receipt) => { receipt.wait()?; }
+}
+# Ok(())
+# }
+```
+
+A dropped request does nothing. Manually polling an async request requires
+`.into_future()` before pinning it; configuring the request itself does not
+start work.
+
 ## Value writes
 
 Ordinary writes return `Result<()>` and report failures to the caller:
@@ -107,7 +168,7 @@ unchanged. Handle this error explicitly if that configuration is intentional.
 
 ## Remaining migration work
 
-The read and retrieval facades, remaining legacy adapters, provider and
-advanced namespaces, and the complete examples are still being migrated.
+The read facade, remaining write/maintenance aliases, provider and advanced
+namespaces, and the complete examples are still being migrated.
 They must be complete before publishing 0.4.0. The 0.3 `MaybeValue` and
 error-swallowing adapters are not the target API.

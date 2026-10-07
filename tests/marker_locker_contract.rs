@@ -708,9 +708,12 @@ async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
     assert_eq!(
         first
             .cache
-            .get_or_set("new-value", |ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(11))
-            })
+            .get_or_set(
+                "new-value",
+                amalgam::source::factory(|ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(11))
+                })
+            )
             .await
             .unwrap(),
         11

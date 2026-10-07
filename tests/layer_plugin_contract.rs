@@ -458,12 +458,17 @@ impl PluginSession for MarkerSession {
                 .context
                 .cache()?
                 .blocking(self.runtime.clone())
-                .get_or_set_with(
+                .get_or_set(
                     "caller",
-                    |_| panic!("completed origin must already be visible to its marker observer"),
-                    EntryOptions::new(Duration::from_secs(60))
-                        .with_lock_timeout(Timeout::After(Duration::from_millis(20))),
+                    typed_blocking_factory(|_| {
+                        panic!("completed origin must already be visible to its marker observer")
+                    }),
                 )
+                .options(|_| {
+                    EntryOptions::new(Duration::from_secs(60))
+                        .with_lock_timeout(Timeout::After(Duration::from_millis(20)))
+                })
+                .execute()
                 .map_err(|error| {
                     PluginError::from_source("marker-reentrant", PluginStage::Event, error)
                 })?;
@@ -538,9 +543,11 @@ fn marker_observer_after_value_commit(fact: MarkerFact) {
     .unwrap();
     assert_eq!(
         cache
-            .get_or_set("caller", |ctx| Ok::<_, amalgam::FactoryError>(
-                ctx.value(29)
-            ))
+            .get_or_set(
+                "caller",
+                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(29)))
+            )
+            .execute()
             .unwrap(),
         29
     );
@@ -564,4 +571,11 @@ fn selected_marker_read_observer_runs_after_the_ordinary_value_flight_and_commit
 #[test]
 fn selected_marker_snapshot_observer_runs_after_the_ordinary_value_flight_and_commit() {
     marker_observer_after_value_commit(MarkerFact::SnapshotWrite);
+}
+
+fn typed_blocking_factory<V, F>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+{
+    factory
 }

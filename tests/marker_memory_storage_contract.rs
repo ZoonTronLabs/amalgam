@@ -78,9 +78,10 @@ async fn actual_records_include_local_authority_independent_metadata_and_ready_r
     let gets = store.lookups.load(Ordering::SeqCst);
     let ready = store.ready.load(Ordering::SeqCst);
     assert_eq!(
-        c.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-            panic!("hot value ran origin")
-        })
+        c.get_or_set::<_, _>(
+            "key",
+            typed_factory(|_| forbidden_factory("hot value ran origin"))
+        )
         .await
         .unwrap(),
         7
@@ -110,16 +111,14 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
     let calls = Arc::new(AtomicUsize::new(0));
     let runs = calls.clone();
     assert_eq!(
-        b.get_or_set_full(
+        b.get_or_set(
             "key",
-            move |ctx| async move {
+            typed_factory(move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 Ok::<_, amalgam::FactoryError>(ctx.value(17))
-            },
-            None,
-            Box::from([tag()]),
-            MaybeValue::none()
+            })
         )
+        .tags([tag()])
         .await
         .unwrap(),
         17
@@ -294,10 +293,13 @@ async fn marker_lookup_and_admission_failures_keep_causes_and_do_not_run_origin(
         let called = Arc::new(AtomicUsize::new(0));
         let runs = called.clone();
         let error = c
-            .get_or_set::<_, _, _, amalgam::FactoryError>("key", move |ctx| async move {
-                runs.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(43))
-            })
+            .get_or_set::<_, _>(
+                "key",
+                typed_factory(move |ctx| async move {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(43))
+                }),
+            )
             .await
             .unwrap_err();
         assert_eq!(cause(&error), fault);
@@ -1043,9 +1045,10 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
     let b = &nodes[1];
     tagged(a, 131).await;
     assert_eq!(
-        b.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-            panic!("cold L1 must reuse Redis value")
-        })
+        b.get_or_set::<_, _>(
+            "key",
+            typed_factory(|_| forbidden_factory("cold L1 must reuse Redis value"))
+        )
         .await
         .unwrap(),
         131
@@ -1062,9 +1065,12 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
     tokio::time::sleep(Duration::from_millis(100)).await;
     tagged(a, 137).await;
     assert_eq!(
-        b.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
-            panic!("newer Redis value must survive the retained marker")
-        })
+        b.get_or_set::<_, _>(
+            "key",
+            typed_factory(|_| async {
+                panic!("newer Redis value must survive the retained marker")
+            })
+        )
         .await
         .unwrap(),
         137
@@ -1097,4 +1103,18 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
     for node in nodes {
         node.shutdown().await.unwrap();
     }
+}
+
+async fn forbidden_factory(
+    message: &'static str,
+) -> std::result::Result<u64, amalgam::FactoryError> {
+    panic!("{message}");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

@@ -87,17 +87,16 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
     ));
     let tag = Tag::new("native-null").unwrap();
     let constant = first
-        .get_or_set_value_full_with_commit_cancellable(
-            "null",
-            None,
-            Some(
-                EntryOptions::new(Duration::from_secs(60))
-                    .with_factory_timeouts(Timeout::Infinite, Timeout::After(Duration::ZERO), false)
-                    .with_allow_background_distributed_operations(true),
-            ),
-            Box::from([tag.clone()]),
-            CancellationSource::new().token(),
-        )
+        .get_or_set("null", amalgam::source::value(None))
+        .options(|_| {
+            EntryOptions::new(Duration::from_secs(60))
+                .with_factory_timeouts(Timeout::Infinite, Timeout::After(Duration::ZERO), false)
+                .with_allow_background_distributed_operations(true)
+        })
+        .tags([tag.clone()])
+        .cancellation(CancellationSource::new().token())
+        .with_receipt()
+        .execute()
         .unwrap();
     assert_eq!(constant.value, None);
     let BlockingCommitReceipt::Mutation(receipt) = constant.commit else {
@@ -161,13 +160,10 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
     let cancelled = CancellationSource::new();
     cancelled.cancel();
     assert!(matches!(
-        first.get_or_set_value_full_cancellable(
-            "cancelled",
-            Some(99),
-            None,
-            Box::from([]),
-            cancelled.token()
-        ),
+        first
+            .get_or_set("cancelled", amalgam::source::value(Some(99)))
+            .cancellation(cancelled.token())
+            .execute(),
         Err(Error::OperationCancelled {
             reason: FactoryCancellationReason::CallerCancelled
         })

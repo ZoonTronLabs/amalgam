@@ -35,10 +35,13 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
     let factory_calls = calls.clone();
     assert_eq!(
         second
-            .get_or_set("null", move |ctx| async move {
-                factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(Some("origin".to_owned())))
-            })
+            .get_or_set(
+                "null",
+                amalgam::source::factory(move |ctx| async move {
+                    factory_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(Some("origin".to_owned())))
+                })
+            )
             .await
             .unwrap(),
         None
@@ -65,20 +68,26 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
         .try_build()
         .unwrap();
     cache
-        .get_or_set("null", |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.modified(None).etag("null-etag").done())
-        })
+        .get_or_set(
+            "null",
+            amalgam::source::factory(|ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.modified(None).etag("null-etag").done())
+            }),
+        )
         .await
         .unwrap();
     clock.advance(Duration::from_secs(2));
     assert_eq!(
         cache
-            .get_or_set("null", |ctx| async move {
-                assert!(ctx.has_stale_value());
-                assert_eq!(ctx.stale_value(), Some(&None));
-                assert_eq!(ctx.stale_etag(), Some("null-etag"));
-                ctx.not_modified()
-            })
+            .get_or_set(
+                "null",
+                amalgam::source::factory(|ctx| async move {
+                    assert!(ctx.has_stale_value());
+                    assert_eq!(ctx.stale_value(), Some(&None));
+                    assert_eq!(ctx.stale_etag(), Some("null-etag"));
+                    ctx.not_modified()
+                })
+            )
             .await
             .unwrap(),
         None
@@ -88,7 +97,7 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
         cache
             .get_or_set(
                 "null",
-                |ctx| async move { Err(ctx.fail("expected failure")) }
+                amalgam::source::factory(|ctx| async move { Err(ctx.fail("expected failure")) })
             )
             .await
             .unwrap(),
@@ -114,28 +123,33 @@ async fn present_null_fallback_is_distinct_from_absent_fallback() {
     let options = EntryOptions::default().with_fail_safe(true, None, None);
     assert_eq!(
         cache
-            .get_or_set_full(
+            .get_or_set(
                 "null",
-                |ctx| async move { Err(ctx.fail("expected failure")) },
-                Some(options.clone()),
-                Box::from([]),
-                MaybeValue::from_value(None)
+                typed_factory(|ctx| async move { Err(ctx.fail("expected failure")) })
             )
+            .options(|_| options.clone())
+            .fail_safe_default((MaybeValue::from_value(None)).into_value())
             .await
             .unwrap(),
         None
     );
     assert!(matches!(
         cache
-            .get_or_set_full(
+            .get_or_set(
                 "absent",
-                |ctx| async move { Err(ctx.fail("expected failure")) },
-                Some(options),
-                Box::from([]),
-                MaybeValue::none()
+                typed_factory(|ctx| async move { Err(ctx.fail("expected failure")) })
             )
+            .options(|_| options)
             .await,
         Err(Error::Factory { .. })
     ));
     cache.shutdown().await.unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

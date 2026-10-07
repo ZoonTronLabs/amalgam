@@ -57,6 +57,29 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
+## Focused L2 origin partition diagnostic
+
+Three counterbalanced comparisons on the same M4 Pro and frozen reference
+binaries. The candidate moves factory execution into its own state only after
+L1/L2 have actually missed; successful L2 lookup retains coordination, provider
+I/O, JSON, marker checks and hydration. All 48 warmup records settled. This
+precedes the unified source API migration and is diagnostic evidence, not
+final-source release qualification.
+
+| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
+|---|---:|---:|---:|---:|---:|---:|---|
+| L2 JSON read | 1188.2 | 1184.3 | 1174.0 | 1841.0 | **1.009** | 9 | **Fail: <=1.00** |
+| L2 JSON get_or_set | 1537.7 | 1488.7 | 1287.7 | 2027.8 | **1.156** | 9 | **Fail: <=1.00** |
+| L1 replacement | 91.9 | 90.6 | 107.7 | 144.9 | **0.842** | 0 | **Fail: <=0.75** |
+| Cold factory | 1068.2 | 1098.8 | 1859.5 | 1878.1 | 0.591 | 5.009 | <=0.75, <=6 allocations |
+
+Read differs by 0.3%, below the one-percent signal threshold. The get_or_set
+median improves 3.2%, but its ranges overlap; this does not establish a repeatable
+speedup. The untimed ownership probe observes a 512-byte reduction in the pinned
+get_or_set execution frame, with the same nine allocations. Set and cold ranges
+also overlap. L2 and set qualification remain open. See the
+[source identities, ranges and verdicts](benchmarks/2026-10-07-l2-origin-partition.json).
+
 ## Focused L2 key and marker diagnostic
 
 Three counterbalanced comparisons on the same M4 Pro and reference binaries

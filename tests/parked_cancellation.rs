@@ -24,16 +24,20 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
     let dropped = Arc::new(AtomicUsize::new(0));
     let entered_factory = entered.clone();
     let dropped_factory = dropped.clone();
-    let mut operation = Box::pin(cache.get_or_set_cancellable(
-        "parked",
-        move |ctx| async move {
-            let _lifetime = OriginDrop(dropped_factory);
-            entered_factory.fetch_add(1, Ordering::SeqCst);
-            pending::<()>().await;
-            Ok::<_, amalgam::FactoryError>(ctx.value(42))
-        },
-        source.token(),
-    ));
+    let mut operation = Box::pin(
+        cache
+            .get_or_set(
+                "parked",
+                typed_factory(move |ctx| async move {
+                    let _lifetime = OriginDrop(dropped_factory);
+                    entered_factory.fetch_add(1, Ordering::SeqCst);
+                    pending::<()>().await;
+                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                }),
+            )
+            .cancellation(source.token())
+            .into_future(),
+    );
     tokio::time::timeout(
         Duration::from_secs(2),
         poll_fn(|cx| {
@@ -62,12 +66,23 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
     assert!(!cache.read("parked", None).await.expect("read").has_value());
     assert_eq!(
         cache
-            .get_or_set("parked", |ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
-            })
+            .get_or_set(
+                "parked",
+                amalgam::source::factory(|ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                })
+            )
             .await
             .expect("new origin owns released key"),
         7
     );
     cache.shutdown().await.expect("cleanup");
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

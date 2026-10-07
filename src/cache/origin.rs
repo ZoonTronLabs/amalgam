@@ -13,11 +13,14 @@ pub(super) enum OriginCompletion<V> {
 use std::future::{Future, ready};
 
 #[derive(Clone, Copy)]
-pub(super) enum OriginKind {
+#[doc(hidden)]
+pub enum OriginKind {
     Factory,
     Constant,
 }
-pub(super) trait CacheOrigin<V>: Send + 'static {
+/// Sealed engine invocation contract; not an extensible provider interface.
+#[doc(hidden)]
+pub trait CacheOrigin<V>: Send + 'static {
     const KIND: OriginKind;
     fn invoke(
         self,
@@ -30,7 +33,7 @@ impl<F> FactoryOrigin<F> {
         Self(factory)
     }
 }
-impl<V, F, Fut, E> CacheOrigin<V> for FactoryOrigin<F>
+impl<V, F, Fut, E> CacheOrigin<V> for F
 where
     V: Clone + Send + Sync + 'static,
     F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
@@ -43,7 +46,7 @@ where
         context: FactoryContext<V>,
     ) -> impl Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static {
         let completion = context.completion();
-        let work = (self.0)(context);
+        let work = self(context);
         async move {
             work.await
                 .map(|value| completion.complete(value))
@@ -51,13 +54,16 @@ where
         }
     }
 }
-pub(super) struct ConstantOrigin<V>(V);
-impl<V> ConstantOrigin<V> {
-    pub(super) fn new(value: V) -> Self {
-        Self(value)
+impl<V, F: CacheOrigin<V>> CacheOrigin<V> for FactoryOrigin<F> {
+    const KIND: OriginKind = F::KIND;
+    fn invoke(
+        self,
+        context: FactoryContext<V>,
+    ) -> impl Future<Output = Result<FactoryProduct<V>, FactoryError>> + Send + 'static {
+        self.0.invoke(context)
     }
 }
-impl<V: Clone + Send + Sync + 'static> CacheOrigin<V> for ConstantOrigin<V> {
+impl<V: Clone + Send + Sync + 'static> CacheOrigin<V> for crate::source::Value<V> {
     const KIND: OriginKind = OriginKind::Constant;
     fn invoke(
         self,
@@ -66,7 +72,6 @@ impl<V: Clone + Send + Sync + 'static> CacheOrigin<V> for ConstantOrigin<V> {
         ready(Ok(context.constant(self.0)))
     }
 }
-
 /// The observer scope and an optional explicit signal have distinct lifetimes.
 pub(super) struct OriginCaller {
     pub(super) operation: crate::FactoryCancellation,

@@ -99,17 +99,24 @@ struct OriginHit;
 impl WarmHit for OriginHit {
     async fn value(cache: &Cache<u64>, key: &str) -> u64 {
         cache
-            .get_or_set(key, |ctx| async move {
-                Err(ctx.fail("a warmed factory must never run"))
-            })
+            .get_or_set(
+                key,
+                amalgam::source::factory(|ctx| async move {
+                    Err(ctx.fail("a warmed factory must never run"))
+                }),
+            )
             .await
             .unwrap()
     }
     fn native(cache: &BlockingCache<u64>, key: &str) -> u64 {
         cache
-            .get_or_set(key, |ctx| {
-                Err(ctx.fail("a warmed native factory must never run"))
-            })
+            .get_or_set(
+                key,
+                amalgam::source::factory(|ctx| {
+                    Err(ctx.fail("a warmed native factory must never run"))
+                }),
+            )
+            .execute()
             .unwrap()
     }
 }
@@ -234,9 +241,12 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             let began = Instant::now();
             for key in &warm_keys {
                 assert_eq!(
-                    warm.get_or_set(key, |context| async move {
-                        Ok::<_, amalgam::FactoryError>(context.value(7))
-                    })
+                    warm.get_or_set(
+                        key,
+                        amalgam::source::factory(|context| async move {
+                            Ok::<_, amalgam::FactoryError>(context.value(7))
+                        })
+                    )
                     .await
                     .unwrap(),
                     7
@@ -258,9 +268,12 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             assert_eq!(
                 black_box(
                     writes
-                        .get_or_set(key, |context| async move {
-                            Ok::<_, amalgam::FactoryError>(context.value(7))
-                        })
+                        .get_or_set(
+                            key,
+                            amalgam::source::factory(|context| async move {
+                                Ok::<_, amalgam::FactoryError>(context.value(7))
+                            })
+                        )
                         .await
                         .unwrap()
                 ),

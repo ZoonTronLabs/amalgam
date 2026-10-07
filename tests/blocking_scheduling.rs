@@ -8,18 +8,20 @@ use std::time::Duration;
 fn nested(cache: BlockingCache<u64>, remaining: u32, token: FactoryCancellation) -> Result<u64> {
     let child = cache.clone();
     let next = token.clone();
-    cache.get_or_set_cancellable(
-        format!("level/{remaining}"),
-        move |ctx| {
-            if remaining == 0 {
-                return Ok::<_, amalgam::FactoryError>(ctx.value(1));
-            }
-            nested(child, remaining - 1, next)
-                .map(|value| ctx.value(value + 1))
-                .map_err(FactoryError::from_source)
-        },
-        token,
-    )
+    cache
+        .get_or_set(
+            format!("level/{remaining}"),
+            typed_blocking_factory(move |ctx| {
+                if remaining == 0 {
+                    return Ok::<_, amalgam::FactoryError>(ctx.value(1));
+                }
+                nested(child, remaining - 1, next)
+                    .map(|value| ctx.value(value + 1))
+                    .map_err(FactoryError::from_source)
+            }),
+        )
+        .cancellation(token)
+        .execute()
 }
 
 #[test]
@@ -75,21 +77,24 @@ fn opposite_cross_runtime_nested_calls_progress() {
         let nested_token = token.clone();
         let sender = sender.clone();
         thread::spawn(move || {
-            let result = outer.get_or_set_cancellable(
-                key,
-                move |ctx| {
-                    barrier.wait();
-                    inner
-                        .get_or_set_cancellable(
-                            format!("child/{key}"),
-                            |child| Ok(child.value(7)),
-                            nested_token,
-                        )
-                        .map(|value| ctx.value(value + 1))
-                        .map_err(FactoryError::from_source)
-                },
-                token,
-            );
+            let result = outer
+                .get_or_set(
+                    key,
+                    typed_blocking_factory(move |ctx| {
+                        barrier.wait();
+                        inner
+                            .get_or_set(
+                                format!("child/{key}"),
+                                typed_blocking_factory(|child| Ok(child.value(7))),
+                            )
+                            .cancellation(nested_token)
+                            .execute()
+                            .map(|value| ctx.value(value + 1))
+                            .map_err(FactoryError::from_source)
+                    }),
+                )
+                .cancellation(token)
+                .execute();
             sender.send(result).unwrap();
         })
     })
@@ -138,4 +143,11 @@ fn nested_dispatch_limit_returns_its_original_typed_error_and_drains() {
         "nesting rejection must retain the concrete typed cause: {error}"
     );
     cache.shutdown().unwrap();
+}
+
+fn typed_blocking_factory<V, F>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+{
+    factory
 }

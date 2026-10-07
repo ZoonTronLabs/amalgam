@@ -175,7 +175,7 @@ impl<V> CacheBuilder<V> {
     /// let cache: Cache<u64> = Cache::builder()
     ///     .memory_locker(Arc::new(KeyedLock::default()))
     ///     .try_build()?;
-    /// assert_eq!(cache.get_or_set("key", |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(42)) }).await?, 42);
+    /// assert_eq!(cache.get_or_set("key", amalgam::source::factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(42)) })).await?, 42);
     /// cache.shutdown().await?;
     /// # Ok(()) }
     /// ```

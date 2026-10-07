@@ -87,10 +87,13 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
     let origin_calls = Arc::new(AtomicUsize::new(0));
     let calls = origin_calls.clone();
     let acquisition = cache
-        .get_or_set("key", move |ctx| async move {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, amalgam::FactoryError>(ctx.value(7))
-        })
+        .get_or_set(
+            "key",
+            amalgam::source::factory(move |ctx| async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+            }),
+        )
         .await;
     assert!(
         matches!(acquisition, Err(Error::Lease(LeaseError::Backend { source })) if source.to_string() == "original lost acquisition reply")

@@ -24,16 +24,18 @@ fn ready_factory_and_receipt_finish_without_a_runtime() {
     let cache = Cache::<u64>::new();
     let token = Arc::new(Mutex::new(None));
     let saved = token.clone();
-    let value = ready(cache.get_or_set_full_with_commit(
-        "ready",
-        move |context| async move {
-            *saved.lock().unwrap() = Some(context.cancellation().clone());
-            Ok::<_, amalgam::FactoryError>(context.value(7))
-        },
-        None,
-        Box::new([]),
-        amalgam::MaybeValue::none(),
-    ))
+    let value = ready(
+        cache
+            .get_or_set(
+                "ready",
+                typed_factory(move |context| async move {
+                    *saved.lock().unwrap() = Some(context.cancellation().clone());
+                    Ok::<_, amalgam::FactoryError>(context.value(7))
+                }),
+            )
+            .fail_safe_default((amalgam::MaybeValue::none()).into_value())
+            .with_receipt(),
+    )
     .unwrap();
     assert_eq!(value.value, 7);
     assert!(matches!(
@@ -48,11 +50,10 @@ fn ready_factory_and_receipt_finish_without_a_runtime() {
         })
     ));
     assert_eq!(
-        ready(
-            cache.get_or_set::<_, _, _, amalgam::FactoryError>("ready", |_| async {
-                panic!("already cached")
-            })
-        )
+        ready(cache.get_or_set::<_, _>(
+            "ready",
+            typed_factory(|_| async { panic!("already cached") })
+        ))
         .unwrap(),
         7
     );
@@ -108,16 +109,19 @@ fn dropping_a_caller_keeps_the_pinned_factory_for_a_new_driver() {
     let destroyed = dropped.clone();
     let mut caller = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("pinned", move |context| {
-                runs.fetch_add(1, Ordering::SeqCst);
-                PinnedFactory {
-                    context: std::cell::RefCell::new(Some(context)),
-                    ready: release,
-                    address: seen,
-                    dropped: destroyed,
-                    _pin: std::marker::PhantomPinned,
-                }
-            })
+            .get_or_set::<_, _>(
+                "pinned",
+                typed_factory(move |context| {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    PinnedFactory {
+                        context: std::cell::RefCell::new(Some(context)),
+                        ready: release,
+                        address: seen,
+                        dropped: destroyed,
+                        _pin: std::marker::PhantomPinned,
+                    }
+                }),
+            )
             .into_future(),
     );
     assert!(once(caller.as_mut()).is_pending());
@@ -130,11 +134,10 @@ fn dropping_a_caller_keeps_the_pinned_factory_for_a_new_driver() {
     assert!(dropped.load(Ordering::SeqCst));
 }
 fn ready_value(cache: &Cache<u64>) -> u64 {
-    ready(
-        cache.get_or_set::<_, _, _, amalgam::FactoryError>("pinned", |_| async {
-            panic!("a new driver must use the existing factory")
-        }),
-    )
+    ready(cache.get_or_set::<_, _>(
+        "pinned",
+        typed_factory(|_| async { panic!("a new driver must use the existing factory") }),
+    ))
     .unwrap()
 }
 
@@ -146,14 +149,17 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
     let count = runs.clone();
     let mut leader = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("failed", move |_| async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                released.await.unwrap();
-                Err(FactoryError::from_source(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "source refused",
-                )))
-            })
+            .get_or_set::<_, _>(
+                "failed",
+                typed_factory(move |_| async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    released.await.unwrap();
+                    Err(FactoryError::from_source(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "source refused",
+                    )))
+                }),
+            )
             .into_future(),
     );
     assert!(once(leader.as_mut()).is_pending());
@@ -161,9 +167,10 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
     for _ in 0..20 {
         let mut follower = Box::pin(
             cache
-                .get_or_set::<_, _, _, amalgam::FactoryError>("failed", |_| async {
-                    panic!("must not start another factory")
-                })
+                .get_or_set::<_, _>(
+                    "failed",
+                    typed_factory(|_| async { panic!("must not start another factory") }),
+                )
                 .into_future(),
         );
         assert!(once(follower.as_mut()).is_pending());
@@ -204,18 +211,22 @@ async fn leader_gets_original_panic_and_followers_get_a_typed_outcome() {
     let (release, released) = tokio::sync::oneshot::channel::<()>();
     let mut leader = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("panic", |_| async move {
-                released.await.unwrap();
-                std::panic::panic_any(91_u64)
-            })
+            .get_or_set::<_, _>(
+                "panic",
+                typed_factory(|_| async move {
+                    released.await.unwrap();
+                    std::panic::panic_any(91_u64)
+                }),
+            )
             .into_future(),
     );
     assert!(once(leader.as_mut()).is_pending());
     let mut follower = Box::pin(
         cache
-            .get_or_set::<_, _, _, amalgam::FactoryError>("panic", |_| async {
-                panic!("second factory")
-            })
+            .get_or_set::<_, _>(
+                "panic",
+                typed_factory(|_| async { panic!("second factory") }),
+            )
             .into_future(),
     );
     assert!(once(follower.as_mut()).is_pending());
@@ -258,12 +269,12 @@ fn a_retained_factory_token_does_not_pin_a_completed_value() {
     let token: Arc<Mutex<Option<FactoryCancellation>>> = Arc::new(Mutex::new(None));
     let saved = token.clone();
     let destroyed = count.clone();
-    let value = ready(cache.get_or_set::<_, _, _, amalgam::FactoryError>(
+    let value = ready(cache.get_or_set::<_, _>(
         "drop",
-        move |context| async move {
+        typed_factory(move |context| async move {
             *saved.lock().unwrap() = Some(context.cancellation().clone());
             Ok::<_, amalgam::FactoryError>(context.value(Arc::new(Tracked(destroyed))))
-        },
+        }),
     ))
     .unwrap();
     let weak = Arc::downgrade(&value);
@@ -286,26 +297,36 @@ async fn disabling_fail_safe_preserves_an_existing_conditional_snapshot() {
         .clone()
         .with_fail_safe(true, Some(Duration::from_secs(60)), None);
     cache
-        .get_or_set_with(
+        .get_or_set(
             "conditional",
-            |ctx| async { Ok::<_, amalgam::FactoryError>(ctx.modified(7).etag("saved").done()) },
-            retained,
+            typed_factory(|ctx| async {
+                Ok::<_, amalgam::FactoryError>(ctx.modified(7).etag("saved").done())
+            }),
         )
+        .options(|_| retained)
         .await
         .unwrap();
     clock.advance(Duration::from_secs(2));
     let refreshed = cache
-        .get_or_set_with(
+        .get_or_set(
             "conditional",
-            |ctx| async {
+            typed_factory(|ctx| async {
                 assert_eq!(ctx.stale_value(), Some(&7));
                 assert_eq!(ctx.stale_etag(), Some("saved"));
                 ctx.not_modified()
-            },
-            normal,
+            }),
         )
+        .options(|_| normal)
         .await
         .unwrap();
     assert_eq!(refreshed, 7);
     cache.shutdown().await.unwrap();
+}
+
+fn typed_factory<V, F, Fut>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+{
+    factory
 }

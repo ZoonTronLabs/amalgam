@@ -34,7 +34,9 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
     assert_eq!(b.read("shared", None).await.unwrap().value(), Some(&42));
     assert_eq!(b.read_or_default("shared", -1, None).await.unwrap(), 42);
     assert_eq!(
-        b.get_or_set_value("shared", 999, None).await.unwrap(),
+        b.get_or_set("shared", amalgam::source::value(999))
+            .await
+            .unwrap(),
         42,
         "the authoritative value was present in L2 all along"
     );
@@ -179,7 +181,10 @@ impl Plugin for Observer {
 async fn cold_get_or_set_emits_one_logical_miss() {
     let observer = Arc::new(Observer::default());
     let cache = Cache::<i32>::builder().plugin(observer.clone()).build();
-    cache.get_or_set_value("cold", 1, None).await.unwrap();
+    cache
+        .get_or_set("cold", amalgam::source::value(1))
+        .await
+        .unwrap();
     assert_eq!(observer.misses.load(Ordering::SeqCst), 1);
     cache.try_get("absent", None).await;
     assert_eq!(
@@ -222,11 +227,14 @@ async fn eviction_events_reach_plugins_exactly_once() {
 async fn factory_error_source_survives_cache_boundary() {
     let cache = Cache::<i32>::new();
     let error = cache
-        .get_or_set("fail", |_ctx| async move {
-            Err(FactoryError::from_source(std::io::Error::other(
-                "upstream I/O failure",
-            )))
-        })
+        .get_or_set(
+            "fail",
+            amalgam::source::factory(|_ctx| async move {
+                Err(FactoryError::from_source(std::io::Error::other(
+                    "upstream I/O failure",
+                )))
+            }),
+        )
         .await
         .unwrap_err();
     let wrapped = std::error::Error::source(&error).expect("factory wrapper");
@@ -260,14 +268,14 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
         .build();
     assert_eq!(
         reader
-            .get_or_set_value("corrupt-key", 1, None)
+            .get_or_set("corrupt-key", amalgam::source::value(1))
             .await
             .unwrap(),
         1
     );
     assert_eq!(
         reader
-            .get_or_set_value("healthy-key", 999, None)
+            .get_or_set("healthy-key", amalgam::source::value(999))
             .await
             .unwrap(),
         42,
@@ -276,7 +284,7 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
     assert_eq!(
         build()
             .build()
-            .get_or_set_value("healthy-key", -1, None)
+            .get_or_set("healthy-key", amalgam::source::value(-1))
             .await
             .unwrap(),
         42,
@@ -355,8 +363,14 @@ async fn metrics_include_factory_misses_and_distinct_cache_labels() {
         .plugin(Arc::new(amalgam::MetricsPlugin::new()))
         .build();
     for cache in [a, b] {
-        cache.get_or_set_value("k", 1, None).await.unwrap(); // Actual cache miss.
-        cache.get_or_set_value("k", 2, None).await.unwrap(); // Actual cache hit.
+        cache
+            .get_or_set("k", amalgam::source::value(1))
+            .await
+            .unwrap(); // Actual cache miss.
+        cache
+            .get_or_set("k", amalgam::source::value(2))
+            .await
+            .unwrap(); // Actual cache hit.
     }
     let exposition = handle.render();
     assert!(

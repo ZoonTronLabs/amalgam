@@ -48,12 +48,17 @@ enum FactoryOutput<V> {
         tags: Result<Box<[Tag]>, TagError>,
     },
 }
-/// A factory's modified or conditional result, constructed through its context.
-#[derive(Debug)]
-pub(crate) struct FactoryProduct<V> {
-    output: FactoryOutput<V>,
-    options: EntryOptions,
+mod product {
+    use super::{EntryOptions, FactoryOutput};
+
+    /// A private engine product, constructed through its factory context.
+    #[derive(Debug)]
+    pub struct FactoryProduct<V> {
+        pub(super) output: FactoryOutput<V>,
+        pub(super) options: EntryOptions,
+    }
 }
+pub(crate) use product::FactoryProduct;
 impl<V> FactoryProduct<V> {
     pub(crate) fn into_payload(self) -> crate::Result<FactoryPayload<V>> {
         match self.output {

@@ -14,7 +14,10 @@ async fn plain_result_and_custom_error_keep_value_and_original_source() {
     let cache = Cache::<u64>::new();
     assert_eq!(
         cache
-            .get_or_set("plain", |_| async { Ok::<_, Infallible>(7) })
+            .get_or_set(
+                "plain",
+                amalgam::source::factory(|_| async { Ok::<_, Infallible>(7) })
+            )
             .await
             .unwrap(),
         7
@@ -22,9 +25,10 @@ async fn plain_result_and_custom_error_keep_value_and_original_source() {
     let id = Arc::new(());
     let original = id.clone();
     let error = cache
-        .get_or_set("error", move |_| async move {
-            Err::<u64, _>(OriginError(original))
-        })
+        .get_or_set(
+            "error",
+            amalgam::source::factory(move |_| async move { Err::<u64, _>(OriginError(original)) }),
+        )
         .await
         .unwrap_err();
     assert!(Arc::ptr_eq(
@@ -49,14 +53,22 @@ fn blocking_factory_accepts_the_same_plain_value_and_custom_error() {
     let cache = BlockingCache::<u64>::new().unwrap();
     assert_eq!(
         cache
-            .get_or_set("plain", |_| Ok::<_, Infallible>(7))
+            .get_or_set(
+                "plain",
+                amalgam::source::factory(|_| Ok::<_, Infallible>(7))
+            )
+            .execute()
             .unwrap(),
         7
     );
     let id = Arc::new(());
     let original = id.clone();
     let error = cache
-        .get_or_set("error", move |_| Err::<u64, _>(OriginError(original)))
+        .get_or_set(
+            "error",
+            amalgam::source::factory(move |_| Err::<u64, _>(OriginError(original))),
+        )
+        .execute()
         .unwrap_err();
     assert!(Arc::ptr_eq(
         &id,
@@ -83,13 +95,16 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
         .try_build()
         .unwrap();
     let value = cache
-        .get_or_set("adaptive", |mut ctx| async move {
-            let options = ctx.options().clone().with_duration(Duration::from_secs(10));
-            *ctx.options_mut() = options;
-            ctx.try_set_tags(["adapted"]).unwrap();
-            tokio::task::yield_now().await;
-            Ok::<_, Infallible>(9)
-        })
+        .get_or_set(
+            "adaptive",
+            amalgam::source::factory(|mut ctx| async move {
+                let options = ctx.options().clone().with_duration(Duration::from_secs(10));
+                *ctx.options_mut() = options;
+                ctx.try_set_tags(["adapted"]).unwrap();
+                tokio::task::yield_now().await;
+                Ok::<_, Infallible>(9)
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(value, 9);

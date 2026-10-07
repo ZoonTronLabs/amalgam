@@ -33,20 +33,26 @@ mod demo {
         // Each of these cache operations emits `tracing` spans that are bridged
         // to OpenTelemetry and exported to the collector.
         let first = cache
-            .get_or_set("greeting", |ctx| async move {
-                println!("  factory ran (cache miss)");
-                Ok::<_, amalgam::FactoryError>(
-                    ctx.value("hello from an OpenTelemetry-traced amalgam".to_owned()),
-                )
-            })
+            .get_or_set(
+                "greeting",
+                amalgam::source::factory(|ctx| async move {
+                    println!("  factory ran (cache miss)");
+                    Ok::<_, amalgam::FactoryError>(
+                        ctx.value("hello from an OpenTelemetry-traced amalgam".to_owned()),
+                    )
+                }),
+            )
             .await?;
         println!("get_or_set #1 → {first}");
 
         let again = cache
-            .get_or_set("greeting", |ctx| async move {
-                println!("  (should NOT print — served from cache)");
-                Ok::<_, amalgam::FactoryError>(ctx.value("unused".to_owned()))
-            })
+            .get_or_set(
+                "greeting",
+                amalgam::source::factory(|ctx| async move {
+                    println!("  (should NOT print — served from cache)");
+                    Ok::<_, amalgam::FactoryError>(ctx.value("unused".to_owned()))
+                }),
+            )
             .await?;
         println!("get_or_set #2 → {again}");
 

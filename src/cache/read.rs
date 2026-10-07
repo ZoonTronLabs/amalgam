@@ -3,11 +3,12 @@ use super::{
     AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CircuitComponent,
     CommitReceipt, DistributedEvent, DistributedLookup, Duration, Entry, EntryOptions, Error,
     Execution, ExecutionCheckpoint, FactoryCancellation, FactoryContext, FallbackAvailability,
-    HitKind, HydrationFence, HydrationOutcome, Instrument, L1Read, L2ReadPolicy, LayerEvent,
-    LeaseError, LeasePolicy, LocalParticipation, LockOutcome, LookupKey, MarkerReadPolicy,
-    MaybeValue, MemoryEvent, Observed, OperationOutcome, Ordering, OriginCompletion, OriginKind,
-    ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict, Timeout, Worker,
-    acquire_owned_supervised, bounded, component_span, lease_lost, newer_of,
+    FlightGuard, HitKind, HydrationFence, HydrationOutcome, Instrument, L1Read, L2ReadPolicy,
+    LayerEvent, LeaseError, LeasePolicy, LocalParticipation, LockOutcome, LookupKey,
+    MarkerReadPolicy, MaybeValue, MemoryEvent, Observed, OperationOutcome, Ordering,
+    OriginCompletion, OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage,
+    Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded, component_span,
+    lease_lost, newer_of,
 };
 
 // Physical completion remains visible after a later marker timeout. The
@@ -29,6 +30,20 @@ impl<V> L2ReadBudget<V> {
             Err(error) => Self::Completed(Err(error)),
         }
     }
+}
+
+// Only a confirmed lookup miss transfers the flight guard into origin work.
+// Keeping this continuation behind its own pin avoids reserving the retained
+// factory/timeout/store state in every successful hybrid lookup frame.
+struct OriginMiss<V, O> {
+    key: LookupKey,
+    origin: O,
+    options: EntryOptions,
+    tags: Box<[Tag]>,
+    stale: Option<Entry<V>>,
+    default: MaybeValue<V>,
+    caller: super::origin::OriginCaller,
+    guard: FlightGuard,
 }
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
@@ -653,6 +668,45 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 stale = Some(newer_of(stale, entry.entry));
             }
         }
+        Box::pin(self.compute_origin(OriginMiss {
+            key: LookupKey {
+                raw: raw_key,
+                full: key,
+            },
+            origin,
+            options: opts,
+            tags,
+            stale,
+            default,
+            caller: super::origin::OriginCaller {
+                operation: caller,
+                explicit,
+            },
+            guard,
+        }))
+        .await
+    }
+    async fn compute_origin<O: CacheOrigin<V>>(
+        &self,
+        miss: OriginMiss<V, O>,
+    ) -> Result<Observed<CacheValue<V>>> {
+        let OriginMiss {
+            key: LookupKey {
+                raw: raw_key,
+                full: key,
+            },
+            origin,
+            options: opts,
+            tags,
+            stale,
+            default,
+            caller:
+                super::origin::OriginCaller {
+                    operation: caller,
+                    explicit,
+                },
+            guard,
+        } = miss;
         let (timeout, soft, operation) = match O::KIND {
             OriginKind::Factory => {
                 let timeout = opts.appropriate_factory_timeout(stale.is_some());

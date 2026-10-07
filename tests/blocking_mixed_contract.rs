@@ -38,10 +38,13 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
         Some(7)
     );
     let value = asynchronous
-        .get_or_set("after", |ctx| async move {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-            Ok::<_, amalgam::FactoryError>(ctx.value(9))
-        })
+        .get_or_set(
+            "after",
+            amalgam::source::factory(|ctx| async move {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                Ok::<_, amalgam::FactoryError>(ctx.value(9))
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(value, 9);
@@ -56,14 +59,16 @@ fn native_operations_progress_from_their_own_single_io_worker() {
     let request = cache.clone();
     let (sender, receiver) = mpsc::channel();
     let work = spawn_driven(&driver, async move {
-        let result = request.get_or_set_cancellable(
-            "own-worker",
-            |ctx| {
-                std::thread::sleep(Duration::from_millis(2));
-                Ok::<_, amalgam::FactoryError>(ctx.value(42))
-            },
-            CancellationSource::new().token(),
-        );
+        let result = request
+            .get_or_set(
+                "own-worker",
+                typed_blocking_factory(|ctx| {
+                    std::thread::sleep(Duration::from_millis(2));
+                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                }),
+            )
+            .cancellation(CancellationSource::new().token())
+            .execute();
         sender.send(result).unwrap();
     });
     assert_eq!(
@@ -88,12 +93,15 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let origin = spawn_driven(&driver, async move {
         asynchronous
-            .get_or_set("shared-flight", move |ctx| async move {
-                first_calls.fetch_add(1, Ordering::SeqCst);
-                started_tx.send(()).unwrap();
-                release_rx.await.unwrap();
-                Ok::<_, amalgam::FactoryError>(ctx.value(17))
-            })
+            .get_or_set(
+                "shared-flight",
+                amalgam::source::factory(move |ctx| async move {
+                    first_calls.fetch_add(1, Ordering::SeqCst);
+                    started_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    Ok::<_, amalgam::FactoryError>(ctx.value(17))
+                }),
+            )
             .await
     });
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -103,10 +111,15 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
     let (entered_tx, entered_rx) = mpsc::channel();
     let caller = std::thread::spawn(move || {
         entered_tx.send(()).unwrap();
-        request.get_or_set("shared-flight", move |ctx| {
-            second_calls.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, amalgam::FactoryError>(ctx.value(99))
-        })
+        request
+            .get_or_set(
+                "shared-flight",
+                amalgam::source::factory(move |ctx| {
+                    second_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                }),
+            )
+            .execute()
     });
     entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     let miss = driver.run(async {
@@ -153,9 +166,14 @@ fn callbacks_cannot_drain_their_own_cache() {
             Ok::<_, amalgam::FactoryError>(ctx.value(7))
         };
         let answer = if case.starts_with("inline") {
-            cache.get_or_set("self-drain", factory)
+            cache
+                .get_or_set("self-drain", amalgam::source::factory(factory))
+                .execute()
         } else {
-            cache.get_or_set_cancellable("self-drain", factory, CancellationSource::new().token())
+            cache
+                .get_or_set("self-drain", typed_blocking_factory(factory))
+                .cancellation(CancellationSource::new().token())
+                .execute()
         };
         assert_eq!(answer.unwrap(), 7);
         assert_eq!(
@@ -230,4 +248,11 @@ fn invalid_callback_count_is_rejected_before_any_factory_dispatch() {
             pool: actual, requested, maximum: limit
         } if actual == pool && requested.get() == requested_count && limit == maximum));
     }
+}
+
+fn typed_blocking_factory<V, F>(factory: F) -> F
+where
+    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+{
+    factory
 }

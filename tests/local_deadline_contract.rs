@@ -22,10 +22,13 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
         .await
         .unwrap();
     let stale = cache
-        .get_or_set("k", |ctx| async move {
-            assert_eq!(ctx.stale_value(), Some(&7));
-            Err(ctx.fail("source unavailable"))
-        })
+        .get_or_set(
+            "k",
+            amalgam::source::factory(|ctx| async move {
+                assert_eq!(ctx.stale_value(), Some(&7));
+                Err(ctx.fail("source unavailable"))
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(stale, 7);
@@ -38,10 +41,13 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
         .await
         .unwrap();
     let value = cache
-        .get_or_set("k", |ctx| async move {
-            assert_eq!(ctx.stale_value(), None);
-            Ok::<_, amalgam::FactoryError>(ctx.value(9))
-        })
+        .get_or_set(
+            "k",
+            amalgam::source::factory(|ctx| async move {
+                assert_eq!(ctx.stale_value(), None);
+                Ok::<_, amalgam::FactoryError>(ctx.value(9))
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(value, 9);
@@ -91,10 +97,13 @@ async fn physically_expired_stale_is_neither_returned_nor_given_to_the_factory()
     assert_eq!(cache.read("k", None).await.unwrap().into_value(), None);
     assert!(
         cache
-            .get_or_set("k", |ctx| async move {
-                assert_eq!(ctx.stale_value(), None);
-                Err(ctx.fail("source unavailable"))
-            })
+            .get_or_set(
+                "k",
+                amalgam::source::factory(|ctx| async move {
+                    assert_eq!(ctx.stale_value(), None);
+                    Err(ctx.fail("source unavailable"))
+                })
+            )
             .await
             .is_err()
     );

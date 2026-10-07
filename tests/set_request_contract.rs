@@ -85,9 +85,12 @@ fn duration_overlay_preserves_fail_safe_from_cache_defaults() {
     .unwrap();
     clock.advance(Duration::from_secs(2));
     assert!(!ready(cache.read("value", None)).unwrap().has_value());
-    let fallback = ready(cache.get_or_set("value", |context| {
-        std::future::ready(Err(context.fail("source unavailable")))
-    }))
+    let fallback = ready(cache.get_or_set(
+        "value",
+        amalgam::source::factory(|context| {
+            std::future::ready(Err(context.fail("source unavailable")))
+        }),
+    ))
     .unwrap();
     assert_eq!(
         fallback, 17,
