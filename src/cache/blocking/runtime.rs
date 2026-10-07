@@ -157,7 +157,7 @@ pub(super) fn callback_scope(owner: &Arc<Scopes>) -> CallbackScope {
 }
 pub(super) fn check_drain(
     owner: &Arc<Scopes>,
-    operation: crate::DrainOperation,
+    operation: crate::advanced::DrainOperation,
 ) -> crate::Result<()> {
     let identity = Arc::downgrade(owner);
     let own_factory = FACTORY_OWNERS.with(|owners| {

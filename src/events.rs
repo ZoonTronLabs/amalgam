@@ -204,14 +204,16 @@ impl OperationOutcome {
             crate::Error::MemoryInvalidation(_) => Self::MemoryError,
             crate::Error::MemoryStorage(error) | crate::Error::MarkerMemoryStorage(error) => {
                 match error {
-                    crate::MemoryStorageError::Provider { .. }
-                    | crate::MemoryStorageError::InvalidRecord { .. } => Self::MemoryError,
-                    crate::MemoryStorageError::GenerationExhausted => Self::Rejected,
+                    crate::provider::MemoryStorageError::Provider { .. }
+                    | crate::provider::MemoryStorageError::InvalidRecord { .. } => {
+                        Self::MemoryError
+                    }
+                    crate::provider::MemoryStorageError::GenerationExhausted => Self::Rejected,
                 }
             }
             crate::Error::MemoryLocker(error) => match error {
-                crate::MemoryLockerError::Provider { .. } => Self::LockError,
-                crate::MemoryLockerError::Cancelled { .. } => Self::Cancelled,
+                crate::provider::MemoryLockerError::Provider { .. } => Self::LockError,
+                crate::provider::MemoryLockerError::Cancelled { .. } => Self::Cancelled,
             },
             crate::Error::Lease(error) => match error {
                 crate::distributed_lock::LeaseError::Lost
@@ -296,26 +298,26 @@ pub enum CacheEvent {
     /// A fresh control observation began an owned, nonblocking eager refresh.
     MarkerEagerRefresh {
         /// The control identity; ordinary value factories are not involved.
-        kind: crate::MarkerKind,
+        kind: crate::advanced::MarkerKind,
     },
     /// An expiring control snapshot write finished, separate from invalidation.
     MarkerSnapshotWrite {
         /// The scoped marker category; ordinary value keys are not parsed.
-        kind: crate::MarkerKind,
+        kind: crate::advanced::MarkerKind,
         /// The actual completion, including deliberately suppressed provider faults.
-        outcome: crate::MarkerSnapshotWriteOutcome,
+        outcome: crate::advanced::MarkerSnapshotWriteOutcome,
     },
     /// A typed peer invalidation was applied and its observation cache updated.
     MarkerReceived {
         /// The full scoped control command, including the source and revision.
-        command: crate::MarkerCommand,
+        command: crate::provider::MarkerCommand,
     },
     /// A secondary invalidation read completed with explicit authority.
     MarkerRead {
         /// The control identity, independent of value keys.
-        kind: crate::MarkerKind,
+        kind: crate::advanced::MarkerKind,
         /// Confirmed, reused, skipped or deliberately degraded control authority.
-        outcome: crate::MarkerReadOutcome,
+        outcome: crate::advanced::MarkerReadOutcome,
     },
     /// A supervised deferred storage/publication pipeline failed.
     BackgroundCommitError {

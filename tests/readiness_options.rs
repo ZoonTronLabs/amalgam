@@ -1,9 +1,11 @@
 //! Initial subscription policy and explicit readiness have separate effects.
 
 use amalgam::{
-    Backplane, BackplaneMessage, BackplaneReadiness, BackplaneState, Cache, CacheEvent,
-    CloseOutcome, ContinuityEpoch, EffectOutcome, EntryOptions, Error, FactoryCancellationReason,
-    InProcessBackplane, LocalEffect, MemoryAdmission, RecoveryConfig, Result, SkipReason,
+    BackplaneReadiness, Cache, CacheEvent, CloseOutcome, EntryOptions, Error,
+    FactoryCancellationReason, RecoveryConfig, Result, advanced::EffectOutcome,
+    advanced::LocalEffect, advanced::SkipReason, provider::Backplane, provider::BackplaneMessage,
+    provider::BackplaneState, provider::ContinuityEpoch, provider::InProcessBackplane,
+    provider::MemoryAdmission,
 };
 use async_trait::async_trait;
 use std::future::IntoFuture;

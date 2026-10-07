@@ -15,8 +15,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use amalgam::{
-    AutoRecoveryService, Clock, ManualClock, RecoveryAction, RecoveryConfig, RecoveryExecutor,
-    RecoveryItem, Result, Timestamp,
+    RecoveryConfig, Result, Timestamp, advanced::AutoRecoveryService, advanced::RecoveryAction,
+    advanced::RecoveryItem, provider::Clock, provider::ManualClock, provider::RecoveryExecutor,
 };
 
 /// A configurable [`RecoveryExecutor`] mock.

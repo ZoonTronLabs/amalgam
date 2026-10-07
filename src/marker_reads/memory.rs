@@ -2,14 +2,16 @@
 use super::{Entry, MarkerKind, MarkerObservation};
 use crate::memory::{CacheMemory, MemoryInvalidation};
 use crate::{
-    Clock, Error, Events, EvictionCapture, MemoryAdmission, MemoryExpiry, MemoryLimits,
-    MemoryNamespace, MemoryStorage, MemoryStorageError, MemoryUsage, Result, Timestamp,
+    Error, Events, Result, Timestamp, advanced::EvictionCapture, provider::Clock,
+    provider::MemoryAdmission, provider::MemoryExpiry, provider::MemoryLimits,
+    provider::MemoryNamespace, provider::MemoryStorage, provider::MemoryStorageError,
+    provider::MemoryUsage,
 };
 use std::sync::Arc;
 
 pub(crate) enum MarkerMemoryNamespace {
     Local(Arc<str>),
-    Durable(crate::CacheScope),
+    Durable(crate::advanced::CacheScope),
 }
 impl MarkerMemoryNamespace {
     fn storage_namespace(&self) -> MemoryNamespace {

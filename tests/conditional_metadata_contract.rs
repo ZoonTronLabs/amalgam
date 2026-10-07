@@ -1,3 +1,5 @@
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::Arc;
 use std::time::Duration;

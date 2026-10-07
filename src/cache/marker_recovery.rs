@@ -4,7 +4,7 @@ use crate::recovery::{MarkerMutationStage, RecoveryError, RecoveryStageTransitio
 
 enum CompactionReplay {
     Continued(Box<MarkerMutationRecovery>),
-    Stopped(crate::ReplayOutcome),
+    Stopped(crate::advanced::ReplayOutcome),
 }
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
@@ -266,10 +266,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
 
     pub(in crate::cache) async fn replay_marker_snapshot(
         &self,
-        ticket: &crate::ReplayTicket,
+        ticket: &crate::advanced::ReplayTicket,
         work: &MarkerSnapshotReplay,
         cancellation: &FactoryCancellation,
-    ) -> Result<crate::ReplayOutcome> {
+    ) -> Result<crate::advanced::ReplayOutcome> {
         if work.scope() != &self.inner.scope {
             return Err(RecoveryError::MarkerIdentityChanged.into());
         }
@@ -294,9 +294,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .as_ref()
             .is_some_and(|recovery| recovery.is_current(ticket))
         {
-            Ok(crate::ReplayOutcome::Superseded)
+            Ok(crate::advanced::ReplayOutcome::Superseded)
         } else if !self.replay_admitted()? {
-            Ok(crate::ReplayOutcome::Paused)
+            Ok(crate::advanced::ReplayOutcome::Paused)
         } else {
             self.commit_control_snapshot(
                 cache,
@@ -311,16 +311,20 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .await
     }
 
-    fn marker_replay_effect(effect: EffectOutcome) -> Result<crate::ReplayOutcome> {
+    fn marker_replay_effect(effect: EffectOutcome) -> Result<crate::advanced::ReplayOutcome> {
         match effect {
             EffectOutcome::Applied | EffectOutcome::NotConfigured => {
-                Ok(crate::ReplayOutcome::Applied)
+                Ok(crate::advanced::ReplayOutcome::Applied)
             }
             EffectOutcome::Skipped(SkipReason::PhysicallyExpired) => {
-                Ok(crate::ReplayOutcome::Expired)
+                Ok(crate::advanced::ReplayOutcome::Expired)
             }
-            EffectOutcome::Skipped(SkipReason::Superseded) => Ok(crate::ReplayOutcome::Paused),
-            EffectOutcome::Skipped(SkipReason::Policy) => Ok(crate::ReplayOutcome::Superseded),
+            EffectOutcome::Skipped(SkipReason::Superseded) => {
+                Ok(crate::advanced::ReplayOutcome::Paused)
+            }
+            EffectOutcome::Skipped(SkipReason::Policy) => {
+                Ok(crate::advanced::ReplayOutcome::Superseded)
+            }
             EffectOutcome::Batch(_)
             | EffectOutcome::RecoveryQueued { .. }
             | EffectOutcome::FailedSuppressed { .. } => {
@@ -370,10 +374,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
 
     pub(in crate::cache) async fn replay_marker_mutation(
         &self,
-        ticket: &crate::ReplayTicket,
+        ticket: &crate::advanced::ReplayTicket,
         original: &MarkerMutationRecovery,
         cancellation: &FactoryCancellation,
-    ) -> Result<crate::ReplayOutcome> {
+    ) -> Result<crate::advanced::ReplayOutcome> {
         if original.command().scope() != &self.inner.scope {
             return Err(RecoveryError::MarkerIdentityChanged.into());
         }
@@ -382,10 +386,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .memory
             .guard(Arc::clone(&self.inner.marker_lane).lock_owned().await);
         if !recovery.is_current(ticket) {
-            return Ok(crate::ReplayOutcome::Superseded);
+            return Ok(crate::advanced::ReplayOutcome::Superseded);
         }
         if !self.replay_admitted()? {
-            return Ok(crate::ReplayOutcome::Paused);
+            return Ok(crate::advanced::ReplayOutcome::Paused);
         }
         cancellation.check()?;
         let inherited;
@@ -408,7 +412,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if recovery.marker_population_stage(ticket, advanced.clone())
                     == RecoveryStageTransition::Superseded
                 {
-                    return Ok(crate::ReplayOutcome::Superseded);
+                    return Ok(crate::advanced::ReplayOutcome::Superseded);
                 }
                 &advanced
             }
@@ -420,7 +424,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
 
     async fn replay_inherited_compaction(
         &self,
-        ticket: &crate::ReplayTicket,
+        ticket: &crate::advanced::ReplayTicket,
         parent: &MarkerMutationRecovery,
         child: &MarkerMutationRecovery,
         cancellation: &FactoryCancellation,
@@ -444,7 +448,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     )
                     .await?;
                 if matches!(effect, EffectOutcome::Skipped(SkipReason::Superseded)) {
-                    return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Paused));
+                    return Ok(CompactionReplay::Stopped(
+                        crate::advanced::ReplayOutcome::Paused,
+                    ));
                 }
                 if options.skip_backplane_notifications() {
                     return self.complete_inherited_compaction(ticket, parent);
@@ -453,7 +459,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 if recovery.marker_population_stage(ticket, notify.clone())
                     == RecoveryStageTransition::Superseded
                 {
-                    return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Superseded));
+                    return Ok(CompactionReplay::Stopped(
+                        crate::advanced::ReplayOutcome::Superseded,
+                    ));
                 }
                 &notify
             }
@@ -461,23 +469,27 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         cancellation.check()?;
         if !recovery.is_current(ticket) {
-            return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Superseded));
+            return Ok(CompactionReplay::Stopped(
+                crate::advanced::ReplayOutcome::Superseded,
+            ));
         }
         if !self.replay_admitted()? {
-            return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Paused));
+            return Ok(CompactionReplay::Stopped(
+                crate::advanced::ReplayOutcome::Paused,
+            ));
         }
         if let Some(backplane) = &self.inner.backplane {
             backplane
                 .publish_command(BackplaneCommand::Marker(child.command().clone()))
                 .await?;
-            self.close_circuit(crate::CircuitComponent::Backplane);
+            self.close_circuit(crate::advanced::CircuitComponent::Backplane);
         }
         self.complete_inherited_compaction(ticket, parent)
     }
 
     fn complete_inherited_compaction(
         &self,
-        ticket: &crate::ReplayTicket,
+        ticket: &crate::advanced::ReplayTicket,
         parent: &MarkerMutationRecovery,
     ) -> Result<CompactionReplay> {
         let recovery = self.inner.recovery.as_ref().ok_or(RecoveryError::Stopped)?;
@@ -485,17 +497,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if recovery.marker_population_stage(ticket, next.clone())
             == RecoveryStageTransition::Superseded
         {
-            return Ok(CompactionReplay::Stopped(crate::ReplayOutcome::Superseded));
+            return Ok(CompactionReplay::Stopped(
+                crate::advanced::ReplayOutcome::Superseded,
+            ));
         }
         Ok(CompactionReplay::Continued(Box::new(next)))
     }
 
     async fn finish_captured_marker(
         &self,
-        ticket: &crate::ReplayTicket,
+        ticket: &crate::advanced::ReplayTicket,
         work: &MarkerMutationRecovery,
         cancellation: &FactoryCancellation,
-    ) -> Result<crate::ReplayOutcome> {
+    ) -> Result<crate::advanced::ReplayOutcome> {
         let recovery = self.inner.recovery.as_ref().ok_or(RecoveryError::Stopped)?;
         let additional = match work.stage() {
             MarkerMutationStage::Advance { .. } => {
@@ -510,10 +524,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 for command in std::iter::once(work.command()).chain(additional.iter()) {
                     cancellation.check()?;
                     if !recovery.is_current(ticket) {
-                        return Ok(crate::ReplayOutcome::Superseded);
+                        return Ok(crate::advanced::ReplayOutcome::Superseded);
                     }
                     if !self.replay_admitted()? {
-                        return Ok(crate::ReplayOutcome::Paused);
+                        return Ok(crate::advanced::ReplayOutcome::Paused);
                     }
                     let effect = self
                         .populate_marker_snapshot(
@@ -525,14 +539,14 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         )
                         .await?;
                     if matches!(effect, EffectOutcome::Skipped(SkipReason::Superseded)) {
-                        return Ok(crate::ReplayOutcome::Paused);
+                        return Ok(crate::advanced::ReplayOutcome::Paused);
                     }
                 }
                 if options.skip_backplane_notifications() {
-                    return Ok(crate::ReplayOutcome::Applied);
+                    return Ok(crate::advanced::ReplayOutcome::Applied);
                 }
                 if recovery.notification_stage(ticket) == RecoveryStageTransition::Superseded {
-                    return Ok(crate::ReplayOutcome::Superseded);
+                    return Ok(crate::advanced::ReplayOutcome::Superseded);
                 }
                 additional
             }
@@ -540,18 +554,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         for command in std::iter::once(work.command()).chain(additional.iter()) {
             cancellation.check()?;
             if !recovery.is_current(ticket) {
-                return Ok(crate::ReplayOutcome::Superseded);
+                return Ok(crate::advanced::ReplayOutcome::Superseded);
             }
             if !self.replay_admitted()? {
-                return Ok(crate::ReplayOutcome::Paused);
+                return Ok(crate::advanced::ReplayOutcome::Paused);
             }
             if let Some(backplane) = &self.inner.backplane {
                 backplane
                     .publish_command(BackplaneCommand::Marker(command.clone()))
                     .await?;
-                self.close_circuit(crate::CircuitComponent::Backplane);
+                self.close_circuit(crate::advanced::CircuitComponent::Backplane);
             }
         }
-        Ok(crate::ReplayOutcome::Applied)
+        Ok(crate::advanced::ReplayOutcome::Applied)
     }
 }

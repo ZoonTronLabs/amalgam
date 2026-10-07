@@ -1,8 +1,9 @@
 //! Canonical absence must not disguise provider failure or an open circuit.
 
 use amalgam::{
-    Cache, CircuitComponent, CodecError, DistributedCache, EntryOptions, Error,
-    InMemoryDistributedCache, JsonSerializer, ManualClock, RecoveryConfig, Result, Timeout,
+    Cache, CodecError, EntryOptions, Error, RecoveryConfig, Result, Timeout,
+    advanced::CircuitComponent, provider::DistributedCache, provider::InMemoryDistributedCache,
+    provider::JsonSerializer, provider::ManualClock,
 };
 use async_trait::async_trait;
 use std::sync::Arc;

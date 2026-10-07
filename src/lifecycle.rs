@@ -81,7 +81,7 @@ impl Tasks {
             .cloned()
             .or_else(|| tokio::runtime::Handle::try_current().ok())
             .ok_or(crate::ConfigError::MissingRuntime {
-                component: crate::RuntimeComponent::Execution,
+                component: crate::advanced::RuntimeComponent::Execution,
             })?;
         let _ = self.runtime.set(runtime.clone());
         Ok(runtime)

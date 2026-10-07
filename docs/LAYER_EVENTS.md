@@ -80,13 +80,13 @@ before attachment; original-value capture remains separately configurable.
 ## Example
 
 ```rust
-use amalgam::{Cache, LayerEvent, MemoryEvent};
+use amalgam::{Cache, advanced::LayerEvent, advanced::MemoryEvent};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache = Cache::<u64>::builder().try_build()?;
     let mut facts = cache.events().subscribe_layers_resilient();
-    cache.try_set("answer", 42).await?.wait().await?;
+    cache.set("answer", 42).with_receipt().await?.wait().await?;
     assert_eq!(facts.recv().await?, LayerEvent::Memory(MemoryEvent::Set {
         key: "answer".into(),
     }));

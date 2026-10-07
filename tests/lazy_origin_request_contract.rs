@@ -1,6 +1,6 @@
 use amalgam::{
-    Cache, CancellationSource, CommitReceipt, EntryOptions, Error, FactoryCancellationReason,
-    ManualClock, MutationReceipt,
+    Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason,
+    advanced::CommitReceipt, advanced::MutationReceipt, provider::ManualClock,
 };
 use std::future::{Future, IntoFuture};
 use std::sync::Arc;
@@ -189,7 +189,7 @@ fn native_request_keeps_captures_lazy_and_runs_the_factory_on_the_caller() {
         .execute()
         .unwrap();
     assert_eq!(created.value, 9);
-    let amalgam::BlockingCommitReceipt::Mutation(receipt) = created.commit else {
+    let amalgam::advanced::BlockingCommitReceipt::Mutation(receipt) = created.commit else {
         panic!("a newly computed value must retain its actual mutation receipt");
     };
     receipt.wait().unwrap();

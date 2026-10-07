@@ -6,8 +6,7 @@ providers. `CachedSnapshots` is an explicit additional capability for
 of tag/clear revisions, while retaining the permanent invalidation journal.
 
 ```rust
-use amalgam::{Cache, EntryOptions, InMemoryDistributedCache, JsonSerializer,
-    MarkerLifecyclePolicy, MarkerReadPolicy, SystemClock};
+use amalgam::{Cache, EntryOptions, provider::InMemoryDistributedCache, provider::JsonSerializer, advanced::MarkerLifecyclePolicy, advanced::MarkerReadPolicy, provider::SystemClock};
 use std::{sync::Arc, time::Duration};
 
 # #[tokio::main]

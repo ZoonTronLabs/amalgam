@@ -7,8 +7,8 @@
 #[test]
 fn named_metrics_attribute_sessions_and_bound_historical_labels() {
     use amalgam::{
-        CacheEvent, CacheLabelBudget, CacheLevel, CacheOperation, Events, MetricsPlugin,
-        OperationOutcome, Plugin, PluginContext, PluginHost,
+        CacheEvent, CacheLevel, CacheOperation, Events, MetricsPlugin, OperationOutcome, Plugin,
+        PluginContext, advanced::CacheLabelBudget, advanced::PluginHost,
     };
     use std::collections::BTreeSet;
     use std::num::NonZeroUsize;
@@ -207,12 +207,12 @@ mod tracing_contract {
     #[test]
     fn otlp_requires_runtime_deliberately_and_validates_identity() {
         assert!(matches!(
-            amalgam::otlp_layer::<Registry>("service", "http://127.0.0.1:4317"),
-            Err(amalgam::OtelInitError::MissingRuntime)
+            amalgam::advanced::otlp_layer::<Registry>("service", "http://127.0.0.1:4317"),
+            Err(amalgam::advanced::OtelInitError::MissingRuntime)
         ));
         assert!(matches!(
-            amalgam::otlp_layer::<Registry>("  ", "http://127.0.0.1:4317"),
-            Err(amalgam::OtelInitError::BlankServiceName)
+            amalgam::advanced::otlp_layer::<Registry>("  ", "http://127.0.0.1:4317"),
+            Err(amalgam::advanced::OtelInitError::BlankServiceName)
         ));
     }
 
@@ -225,7 +225,7 @@ mod tracing_contract {
             .is_valid();
         let captured = Arc::new(Captured::default());
         let (layer, guard) =
-            amalgam::otlp_layer("composed-service", "http://127.0.0.1:4317").unwrap();
+            amalgam::advanced::otlp_layer("composed-service", "http://127.0.0.1:4317").unwrap();
         let subscriber = Registry::default()
             .with(CaptureLayer(captured.clone()))
             .with(layer);
@@ -276,8 +276,8 @@ mod tracing_contract {
         opentelemetry::global::set_tracer_provider(original.clone());
         tracing::subscriber::set_global_default(Registry::default()).unwrap();
         assert!(matches!(
-            amalgam::try_init_otlp("rejected", "http://127.0.0.1:4317"),
-            Err(amalgam::OtelInitError::Subscriber(_))
+            amalgam::advanced::try_init_otlp("rejected", "http://127.0.0.1:4317"),
+            Err(amalgam::advanced::OtelInitError::Subscriber(_))
         ));
         let span = opentelemetry::global::tracer("verify-original").start("verify-original");
         assert_eq!(span.span_context().trace_id(), TraceId::from(42_u128));

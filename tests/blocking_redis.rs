@@ -1,10 +1,12 @@
 #![cfg(feature = "redis")]
 //! Native caller-thread contracts on actual Redis/Valkey storage and notifications.
-use amalgam::redis_backend::{RedisBackplane, RedisDistributedCache};
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use {amalgam::redis_backend::RedisBackplane, amalgam::redis_backend::RedisDistributedCache};
 mod support {
     pub mod redis_fixture;
 }

@@ -429,7 +429,7 @@ impl RedisInvalidationStore {
         kind: &MarkerKind,
         snapshot: MarkerSnapshot,
         now: crate::Timestamp,
-        proof: Option<&crate::LeaseProof>,
+        proof: Option<&crate::provider::LeaseProof>,
         cancellation: crate::FactoryCancellation,
     ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         MarkerSnapshotCacheError::check_cancellation(&cancellation)?;
@@ -546,7 +546,7 @@ impl MarkerSnapshotCache for RedisInvalidationStore {
         kind: &MarkerKind,
         snapshot: MarkerSnapshot,
         now: crate::Timestamp,
-        proof: &crate::LeaseProof,
+        proof: &crate::provider::LeaseProof,
         cancellation: crate::FactoryCancellation,
     ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         self.renew_marker_snapshot(scope, kind, snapshot, now, Some(proof), cancellation)

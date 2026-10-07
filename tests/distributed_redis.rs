@@ -8,17 +8,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use amalgam::{
-    AcquisitionPolicy, Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage,
-    BackplaneState, CacheScope, DistributedCache, DistributedLocker, InvalidationStore,
-    KeyModifierMode, LeaseError, LeaseState, LeaseTtl, LeasedMutation, LeasedWriteOutcome,
-    MarkerKind, MarkerStoreLimits, MarkerVersion, RedisBackplane, RedisDistributedCache,
-    RedisDistributedLocker, RedisInvalidationStore, RedisIoOptions, Tag, Timeout, Timestamp,
-    acquire_owned,
-};
 use redis::aio::MultiplexedConnection;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Notify;
+use {
+    amalgam::Tag, amalgam::Timeout, amalgam::Timestamp, amalgam::advanced::CacheScope,
+    amalgam::advanced::KeyModifierMode, amalgam::advanced::MarkerKind,
+    amalgam::advanced::MarkerStoreLimits, amalgam::advanced::MarkerVersion,
+    amalgam::provider::AcquisitionPolicy, amalgam::provider::Backplane,
+    amalgam::provider::BackplaneAction, amalgam::provider::BackplaneCommand,
+    amalgam::provider::BackplaneMessage, amalgam::provider::BackplaneState,
+    amalgam::provider::DistributedCache, amalgam::provider::DistributedLocker,
+    amalgam::provider::InvalidationStore, amalgam::provider::LeaseError,
+    amalgam::provider::LeaseState, amalgam::provider::LeaseTtl, amalgam::provider::LeasedMutation,
+    amalgam::provider::LeasedWriteOutcome, amalgam::provider::RedisBackplane,
+    amalgam::provider::RedisDistributedCache, amalgam::provider::RedisDistributedLocker,
+    amalgam::provider::RedisInvalidationStore, amalgam::provider::RedisIoOptions,
+    amalgam::provider::acquire_owned,
+};
 
 fn unique(name: &str) -> String {
     format!("amalgam_protocol_{name}_{:016x}", fastrand::u64(..))
@@ -714,7 +721,10 @@ async fn live_bounded_push_overflow_and_malformed_wire_create_new_continuity_epo
 
 #[tokio::test]
 async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber_gap() {
-    use amalgam::{Cache, EntryOptions, JsonSerializer, ReconciliationPolicy, RecoveryConfig};
+    use amalgam::{
+        Cache, EntryOptions, RecoveryConfig, advanced::ReconciliationPolicy,
+        provider::JsonSerializer,
+    };
     let Some(url) = fixture::redis_url() else {
         return;
     };

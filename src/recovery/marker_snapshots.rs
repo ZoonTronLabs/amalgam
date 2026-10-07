@@ -1,7 +1,8 @@
 //! Immutable control replay payloads with original policy and lifetime.
 use super::RecoveryError;
 use crate::{
-    CacheScope, EntryOptions, MarkerCommand, MarkerKind, MarkerSnapshot, Result, Timestamp,
+    EntryOptions, Result, Timestamp, advanced::CacheScope, advanced::MarkerKind,
+    advanced::MarkerSnapshot, provider::MarkerCommand,
 };
 
 /// Cluster authority which must be reacquired by an observation retry.

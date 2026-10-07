@@ -3,7 +3,9 @@
     dead_code,
     reason = "each integration binary exercises a different provider subset"
 )]
+use amalgam::advanced::*;
 use amalgam::entry::Entry;
+use amalgam::provider::*;
 use amalgam::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

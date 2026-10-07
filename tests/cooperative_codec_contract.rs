@@ -1,3 +1,5 @@
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::future::Future;

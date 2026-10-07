@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 
 use amalgam::entry::Entry;
 use amalgam::{
-    DistributedEntry, DistributedSerializer, DistributedSnapshot, EntryOptions, EntryWeight,
-    JitterSample, JsonSerializer, Priority, SnapshotRetention, Timestamp,
+    EntryOptions, EntryWeight, Priority, Timestamp, provider::DistributedEntry,
+    provider::DistributedSerializer, provider::DistributedSnapshot, provider::JitterSample,
+    provider::JsonSerializer, provider::SnapshotRetention,
 };
 
 type Codec = (&'static str, Box<dyn DistributedSerializer<Vec<u8>>>);
@@ -14,9 +15,12 @@ fn codecs() -> Vec<Codec> {
     vec![
         ("json", Box::new(JsonSerializer)),
         #[cfg(feature = "messagepack")]
-        ("messagepack", Box::new(amalgam::MessagePackSerializer)),
+        (
+            "messagepack",
+            Box::new(amalgam::provider::MessagePackSerializer),
+        ),
         #[cfg(feature = "postcard")]
-        ("postcard", Box::new(amalgam::PostcardSerializer)),
+        ("postcard", Box::new(amalgam::provider::PostcardSerializer)),
     ]
 }
 

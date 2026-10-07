@@ -1,5 +1,7 @@
 //! Canonical set is lazy, fallible and keeps the cache's unedited defaults.
-use amalgam::{Cache, EntryOptions, Error, ManualClock, MutationReceipt, TagError};
+use amalgam::{
+    Cache, EntryOptions, Error, TagError, advanced::MutationReceipt, provider::ManualClock,
+};
 use std::future::{Future, IntoFuture};
 use std::pin::pin;
 use std::sync::Arc;

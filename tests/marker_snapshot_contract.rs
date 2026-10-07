@@ -1,4 +1,6 @@
 //! Public expiring-observation contracts; permanent invalidations never expire.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};

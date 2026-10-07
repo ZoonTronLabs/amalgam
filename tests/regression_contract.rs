@@ -5,8 +5,9 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
 use amalgam::{
-    Cache, CacheEvent, CacheRegistry, Clock, DistributedCache, EntryOptions, FactoryError,
-    InMemoryDistributedCache, JsonSerializer, ManualClock, Plugin, Priority, RecoveryConfig,
+    Cache, CacheEvent, CacheRegistry, EntryOptions, FactoryError, Plugin, Priority, RecoveryConfig,
+    provider::Clock, provider::DistributedCache, provider::InMemoryDistributedCache,
+    provider::JsonSerializer, provider::ManualClock,
 };
 
 fn no_recovery() -> RecoveryConfig {
@@ -117,7 +118,7 @@ async fn first_admitted_never_remove_entry_survives_capacity_pressure() {
 #[tokio::test]
 async fn auto_clone_isolates_mutable_arc_at_public_boundaries() {
     struct AtomicCloner;
-    impl amalgam::ValueCloner<Arc<AtomicI32>> for AtomicCloner {
+    impl amalgam::provider::ValueCloner<Arc<AtomicI32>> for AtomicCloner {
         fn clone_value(
             &self,
             value: &Arc<AtomicI32>,
@@ -396,7 +397,7 @@ async fn otlp_failed_init_preserves_global_provider() {
             .is_valid()
     );
     tracing_subscriber::registry().try_init().unwrap(); // Application already owns tracing setup.
-    let result = amalgam::init_otlp("audit-service", "http://127.0.0.1:1");
+    let result = amalgam::advanced::init_otlp("audit-service", "http://127.0.0.1:1");
     assert!(
         result.is_err(),
         "the existing subscriber causes initialization to fail"

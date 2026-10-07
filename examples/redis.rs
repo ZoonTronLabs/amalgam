@@ -13,9 +13,11 @@
 mod demo {
     use std::sync::Arc;
 
-    use amalgam::{
-        Backplane, Cache, DistributedCache, DistributedLocker, DistributedSerializer,
-        JsonSerializer, RedisBackplane, RedisDistributedCache, RedisDistributedLocker,
+    use {
+        amalgam::Cache, amalgam::provider::Backplane, amalgam::provider::DistributedCache,
+        amalgam::provider::DistributedLocker, amalgam::provider::DistributedSerializer,
+        amalgam::provider::JsonSerializer, amalgam::provider::RedisBackplane,
+        amalgam::provider::RedisDistributedCache, amalgam::provider::RedisDistributedLocker,
     };
 
     pub async fn run() -> Result<(), Box<dyn std::error::Error>> {

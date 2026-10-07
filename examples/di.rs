@@ -24,7 +24,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use amalgam::{Cache, CacheRegistry, DefaultEntryOptionsProvider, EntryOptions};
+use amalgam::{Cache, CacheRegistry, EntryOptions, provider::DefaultEntryOptionsProvider};
 
 // ---------------------------------------------------------------------------
 // Pattern 1 — constructor injection of one shared cache.

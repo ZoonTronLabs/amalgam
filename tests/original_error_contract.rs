@@ -1,4 +1,5 @@
 //! Codec/provider boundaries retain concrete causes and the selected failure policy.
+use amalgam::provider::*;
 use amalgam::*;
 use serde::{Deserialize, Serialize};
 use std::error::Error as _;

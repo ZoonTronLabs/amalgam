@@ -78,7 +78,7 @@ impl<V: Clone + Send + Sync + 'static> CachePluginContext<V> {
         })
     }
     /// Acquires the owner's typed original-value stream without retaining it.
-    pub fn memory_evictions(&self) -> Result<crate::MemoryEvictions<V>, PluginError> {
+    pub fn memory_evictions(&self) -> Result<crate::advanced::MemoryEvictions<V>, PluginError> {
         Ok(self.cache()?.memory_evictions().clone())
     }
 }
@@ -167,7 +167,7 @@ impl PluginSession for CacheSession {
     fn observations(&self) -> crate::plugins::PluginObservations {
         self.session.observations()
     }
-    fn on_layer_event(&self, event: &crate::LayerEvent) -> Result<(), PluginError> {
+    fn on_layer_event(&self, event: &crate::advanced::LayerEvent) -> Result<(), PluginError> {
         self.session.on_layer_event(event)
     }
     fn on_operation_started(&self, operation: crate::CacheOperation) -> Result<(), PluginError> {
@@ -176,7 +176,10 @@ impl PluginSession for CacheSession {
     fn on_event(&self, event: &crate::CacheEvent) -> Result<(), PluginError> {
         self.session.on_event(event)
     }
-    fn on_component_read(&self, component: crate::ComponentRead) -> Result<(), PluginError> {
+    fn on_component_read(
+        &self,
+        component: crate::advanced::ComponentRead,
+    ) -> Result<(), PluginError> {
         self.session.on_component_read(component)
     }
     fn stop(&self) -> Result<(), PluginError> {
@@ -311,7 +314,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             PublicLifetime::NativeMemory(view) => view.source().inline(),
         }
     }
-    pub(super) fn check_plugin_drain(&self, operation: crate::DrainOperation) -> crate::Result<()> {
+    pub(super) fn check_plugin_drain(
+        &self,
+        operation: crate::advanced::DrainOperation,
+    ) -> crate::Result<()> {
         match &*self.lifetime {
             PublicLifetime::NativeMemory(view) => view.source().check_plugin_drain(operation),
             PublicLifetime::PluginAccess(access) if access.is_stopping() => {

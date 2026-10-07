@@ -178,7 +178,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
                 &keys.full,
                 self.locks.acquire(
                     &keys.full,
-                    crate::MemoryLockKind::Entry,
+                    crate::provider::MemoryLockKind::Entry,
                     Timeout::Infinite,
                     &token,
                     super::MemoryAcquireRoute::Asynchronous,
@@ -241,7 +241,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
                 super::LocalEffect::Skipped
             } else {
                 super::LocalEffect::Stored(MemoryAdmission::Rejected(
-                    crate::CapacityRejection::VersionChanged,
+                    crate::provider::CapacityRejection::VersionChanged,
                 ))
             }
         } else {
@@ -256,7 +256,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         if !matches!(
             local_effect,
             super::LocalEffect::Stored(MemoryAdmission::Rejected(
-                crate::CapacityRejection::VersionChanged
+                crate::provider::CapacityRejection::VersionChanged
             ))
         ) {
             self.events.emit_lazy(|| CacheEvent::Set {

@@ -1,5 +1,5 @@
 //! Cancellation remains first-wins and wakes all waiters around registration.
-use amalgam::{CancellationRequest, CancellationSource, FactoryCancellationReason};
+use amalgam::{CancellationSource, FactoryCancellationReason, advanced::CancellationRequest};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Barrier;

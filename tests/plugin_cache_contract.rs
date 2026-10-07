@@ -1,4 +1,6 @@
 //! Cache-aware plugins use the exact cache without keeping its public owner alive.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

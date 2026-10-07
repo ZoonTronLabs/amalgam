@@ -53,7 +53,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         self.cache.events()
     }
     /// Independent original-value eviction cursors, shared with the async view.
-    pub fn memory_evictions(&self) -> &crate::MemoryEvictions<V> {
+    pub fn memory_evictions(&self) -> &crate::advanced::MemoryEvictions<V> {
         self.cache.memory_evictions()
     }
     /// Original per-entry defaults.
@@ -67,7 +67,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     /// Registers a plugin under the same cache lifecycle.
     pub fn register_cache_plugin(
         &self,
-        plugin: Arc<dyn crate::CachePlugin<V>>,
+        plugin: Arc<dyn crate::advanced::CachePlugin<V>>,
     ) -> Result<crate::PluginRegistration> {
         self.runtime
             .run(async { self.cache.register_cache_plugin(plugin) })
@@ -258,21 +258,21 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         self.runtime.run(self.cache.run_pending_tasks())
     }
     /// The explicitly configured shared L1 provider.
-    pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {
+    pub fn memory_storage(&self) -> Option<&Arc<dyn crate::provider::MemoryStorage<V>>> {
         self.cache.memory_storage()
     }
     /// The actual supplied secondary observation L1, when configured.
     pub fn marker_memory_storage(
         &self,
-    ) -> Option<&Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>> {
+    ) -> Option<&Arc<dyn crate::provider::MemoryStorage<crate::advanced::MarkerObservation>>> {
         self.cache.marker_memory_storage()
     }
     /// Actual observation count/weight; absent when independent reads are disabled.
-    pub fn marker_memory_usage(&self) -> Result<Option<crate::MemoryUsage>> {
+    pub fn marker_memory_usage(&self) -> Result<Option<crate::provider::MemoryUsage>> {
         self.cache.marker_memory_usage()
     }
     /// Diagnostic usage of the actual L1 keyspace.
-    pub fn memory_usage(&self) -> Result<crate::MemoryUsage> {
+    pub fn memory_usage(&self) -> Result<crate::provider::MemoryUsage> {
         self.cache.memory_usage()
     }
     /// The configured distributed byte store, if enabled.

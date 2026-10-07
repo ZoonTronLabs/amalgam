@@ -226,7 +226,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 LocalEffect::Skipped
             } else {
                 LocalEffect::Stored(MemoryAdmission::Rejected(
-                    crate::CapacityRejection::VersionChanged,
+                    crate::provider::CapacityRejection::VersionChanged,
                 ))
             }));
         }

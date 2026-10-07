@@ -123,6 +123,15 @@ cache.shutdown()?;
 Native retrieval and mutation requests are lazy until `.execute()`. Request
 options, tags, fallback and cancellation use the same fluent choices as async.
 
+## Optional provider and advanced APIs
+
+`provider` contains storage, serialization, backplane, Redis, locking and clock
+interfaces/implementations. `advanced` contains explicit receipts, stronger
+policies, marker snapshots, recovery inspection and detailed event payloads.
+The root exposes the ordinary cache, options, factory context and errors.
+Imports preserve existing runtime behavior; additional contracts are selected
+through configuration or request choices.
+
 ## Freshness, origin work and cancellation
 
 Entries have independent logical freshness and physical fail-safe retention. Fail-safe can serve a captured stale value after an ordinary origin failure or timeout, within its physical lifetime. Cancellation stays a cancellation and bypasses fail-safe.

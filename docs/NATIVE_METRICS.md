@@ -7,7 +7,7 @@ has not changed; a working manifest with the same version is not that release.
 
 ```rust
 use std::sync::Arc;
-use amalgam::{Cache, OtelMetricsPlugin, otlp_meter_provider};
+use amalgam::{Cache, OtelMetricsPlugin, advanced::otlp_meter_provider};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .name("profiles")
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
         .try_build()?;
-    cache.try_set("answer", 42).await?.wait().await?;
+    cache.set("answer", 42).with_receipt().await?.wait().await?;
     assert_eq!(cache.read("answer", None).await?.value(), Some(&42));
     cache.shutdown().await?;
     tokio::task::spawn_blocking(move || provider.shutdown()).await??;

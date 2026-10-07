@@ -1,5 +1,7 @@
 //! Independent user-supplied local coordination, including owned background work.
+use amalgam::advanced::*;
 use amalgam::locking::{KeyGuard, KeyedLock};
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};

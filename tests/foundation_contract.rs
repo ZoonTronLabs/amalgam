@@ -10,12 +10,14 @@ use amalgam::entry::Entry;
 use amalgam::observability::OperationObservation;
 use amalgam::serializers::copy_value;
 use amalgam::{
-    Cache, CacheEvent, CacheLevel, CacheOperation, CacheRegistry, CapacityRejection, Clock,
-    CloneError, ConfigError, DistributedSerializer, EagerThreshold, EntryOptions, EntryWeight,
-    Error, Events, FactoryCancellationReason, FactoryError, JitterSample, JitterSource,
-    JsonSerializer, ManualClock, MemoryAdmission, MemoryLimits, MemoryStore, OperationOutcome,
-    Plugin, PluginContext, PluginError, PluginHost, PluginSession, PluginStage, PluginStopOutcome,
-    Priority, RegistryError, Timestamp, ValueCloner,
+    Cache, CacheEvent, CacheLevel, CacheOperation, CacheRegistry, CloneError, ConfigError,
+    EagerThreshold, EntryOptions, EntryWeight, Error, Events, FactoryCancellationReason,
+    FactoryError, OperationOutcome, Plugin, PluginContext, PluginError, PluginSession, PluginStage,
+    PluginStopOutcome, Priority, RegistryError, Timestamp, advanced::PluginHost,
+    provider::CapacityRejection, provider::Clock, provider::DistributedSerializer,
+    provider::JitterSample, provider::JitterSource, provider::JsonSerializer,
+    provider::ManualClock, provider::MemoryAdmission, provider::MemoryLimits,
+    provider::MemoryStore, provider::ValueCloner,
 };
 
 fn at(millis: u64) -> Timestamp {
@@ -249,12 +251,12 @@ fn json_codec_supplies_real_isolation() {
 #[cfg(feature = "messagepack")]
 #[test]
 fn messagepack_codec_supplies_real_isolation() {
-    codec_isolation(&amalgam::MessagePackSerializer);
+    codec_isolation(&amalgam::provider::MessagePackSerializer);
 }
 #[cfg(feature = "postcard")]
 #[test]
 fn postcard_codec_supplies_real_isolation() {
-    codec_isolation(&amalgam::PostcardSerializer);
+    codec_isolation(&amalgam::provider::PostcardSerializer);
 }
 
 #[test]
@@ -1295,7 +1297,7 @@ async fn owning_shutdown_waits_detached_draining_callbacks_and_retains_failures(
 #[test]
 fn cloned_shutdown_report_keeps_the_same_nonempty_failure_sources() {
     let report = amalgam::ShutdownError::new(
-        amalgam::ShutdownFailure::Plugin(PluginError::from_source(
+        amalgam::advanced::ShutdownFailure::Plugin(PluginError::from_source(
             "shutdown",
             PluginStage::Stop,
             std::io::Error::other("retained source"),

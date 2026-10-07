@@ -1,4 +1,6 @@
 //! Ownership contracts across the builtin and general factory paths.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::cell::RefCell;
 use std::future::{Future, IntoFuture};

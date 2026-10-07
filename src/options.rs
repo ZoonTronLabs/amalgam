@@ -531,9 +531,9 @@ impl EntryOptions {
 
     /// Controls ordinary foreground acquisition errors in cooperative lease mode.
     ///
-    /// With [`crate::LeasePolicy::Cooperative`], `false` permits origin
+    /// With [`crate::advanced::LeasePolicy::Cooperative`], `false` permits origin
     /// work without a lease after an acquisition failure. The default
-    /// [`crate::LeasePolicy::Fenced`] always propagates acquisition failures;
+    /// [`crate::advanced::LeasePolicy::Fenced`] always propagates acquisition failures;
     /// this option cannot authorize an unfenced commit. Ordinary fresh L1
     /// service does not require lease acquisition; a notification continuity
     /// gap first makes old L1 entries ineligible.
@@ -789,7 +789,7 @@ impl EntryOptions {
     /// `true` if cache inputs and public values must be deeply isolated.
     ///
     /// Ordinary [`Clone`] can share interior mutable state (for example an
-    /// `Arc`). Auto-clone uses an explicit [`ValueCloner`](crate::ValueCloner)
+    /// `Arc`). Auto-clone uses an explicit [`ValueCloner`](crate::provider::ValueCloner)
     /// and surfaces its failure instead of returning a shared value.
     #[must_use]
     pub fn enable_auto_clone(&self) -> bool {

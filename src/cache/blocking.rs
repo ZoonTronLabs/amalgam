@@ -21,7 +21,10 @@ pub use runtime::{
     BlockingDispatchError, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool,
 };
 
-pub(super) fn check_drain(owner: &Arc<Scopes>, operation: crate::DrainOperation) -> Result<()> {
+pub(super) fn check_drain(
+    owner: &Arc<Scopes>,
+    operation: crate::advanced::DrainOperation,
+) -> Result<()> {
     runtime::check_drain(owner, operation)
 }
 

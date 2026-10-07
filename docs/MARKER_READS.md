@@ -12,7 +12,7 @@ owned deadline. A missing/stale observation can send a fresh value L1 hit throug
 the asynchronous owned pipeline.
 
 ```rust
-use amalgam::{Cache, EntryOptions, MarkerReadPolicy, MemoryLimits, Timeout};
+use amalgam::{Cache, EntryOptions, advanced::MarkerReadPolicy, provider::MemoryLimits, Timeout};
 use std::time::Duration;
 
 let cache = Cache::<u64>::builder()

@@ -7,9 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use amalgam::{
-    Cache, CacheEvent, Clock, DistributedCache, DistributedLocker, EagerThreshold, EntryOptions,
-    InMemoryDistributedCache, InMemoryDistributedLocker, JsonSerializer, ManualClock,
-    RemoveByTagBehavior, Tag, Timeout,
+    Cache, CacheEvent, EagerThreshold, EntryOptions, RemoveByTagBehavior, Tag, Timeout,
+    provider::Clock, provider::DistributedCache, provider::DistributedLocker,
+    provider::InMemoryDistributedCache, provider::InMemoryDistributedLocker,
+    provider::JsonSerializer, provider::ManualClock,
 };
 use tokio::sync::{Semaphore, oneshot};
 
@@ -413,7 +414,7 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
 
 #[tokio::test]
 async fn distributed_locker_must_not_acquire_a_lease_after_the_wait_deadline() {
-    let locker = InMemoryDistributedLocker::new(Arc::new(amalgam::SystemClock));
+    let locker = InMemoryDistributedLocker::new(Arc::new(amalgam::provider::SystemClock));
     let first = locker
         .acquire("k", Duration::from_millis(5), Timeout::Infinite)
         .await

@@ -1,4 +1,5 @@
 //! A supplied value is not a user factory: deadlines, eager work and events differ.
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::{
     Arc,

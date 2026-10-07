@@ -7,17 +7,24 @@ use std::time::Duration;
 use amalgam::entry::Entry;
 use amalgam::tags::{TagRegistry, TagVerdict, try_collect_tags};
 use amalgam::{
-    AcquisitionPolicy, AutoRecoveryService, Backplane, BackplaneAction, BackplaneCommand,
-    BackplaneMessage, BackplaneState, CacheScope, DataMutation, DistributedCache, DistributedEntry,
-    DistributedLocker, DistributedSerializer, DistributedSnapshot, EnqueueOutcome, EntryOptions,
-    EntryWeight, Error, InMemoryDistributedCache, InMemoryDistributedLocker,
-    InMemoryInvalidationStore, InProcessBackplane, InvalidationStore, JsonSerializer,
-    KeyModifierMode, LeaseError, LeaseSupport, LeaseToken, LeaseTtl, LeasedMutation,
-    LeasedWriteOutcome, ManualClock, MarkerAdvanceOutcome, MarkerCommand, MarkerError, MarkerKind,
-    MarkerStoreLimits, MarkerVersion, OperationGeneration, PendingMutation, Priority,
-    RecoveryAction, RecoveryConfig, RecoveryExecutor, RecoveryFence, RecoveryItem, RecoveryStart,
-    RecoveryWork, RemoveByTagBehavior, Result, SnapshotRetention, StoredMarker, SupersedeOutcome,
-    SystemClock, Tag, TagError, Timeout, Timestamp, TokenAcquisition, acquire_owned,
+    EntryOptions, EntryWeight, Error, Priority, RecoveryConfig, RemoveByTagBehavior, Result, Tag,
+    TagError, Timeout, Timestamp, advanced::AutoRecoveryService, advanced::CacheScope,
+    advanced::DataMutation, advanced::EnqueueOutcome, advanced::KeyModifierMode,
+    advanced::MarkerAdvanceOutcome, advanced::MarkerError, advanced::MarkerKind,
+    advanced::MarkerStoreLimits, advanced::MarkerVersion, advanced::OperationGeneration,
+    advanced::PendingMutation, advanced::RecoveryAction, advanced::RecoveryFence,
+    advanced::RecoveryItem, advanced::RecoveryStart, advanced::RecoveryWork,
+    advanced::StoredMarker, advanced::SupersedeOutcome, provider::AcquisitionPolicy,
+    provider::Backplane, provider::BackplaneAction, provider::BackplaneCommand,
+    provider::BackplaneMessage, provider::BackplaneState, provider::DistributedCache,
+    provider::DistributedEntry, provider::DistributedLocker, provider::DistributedSerializer,
+    provider::DistributedSnapshot, provider::InMemoryDistributedCache,
+    provider::InMemoryDistributedLocker, provider::InMemoryInvalidationStore,
+    provider::InProcessBackplane, provider::InvalidationStore, provider::JsonSerializer,
+    provider::LeaseError, provider::LeaseSupport, provider::LeaseToken, provider::LeaseTtl,
+    provider::LeasedMutation, provider::LeasedWriteOutcome, provider::ManualClock,
+    provider::MarkerCommand, provider::RecoveryExecutor, provider::SnapshotRetention,
+    provider::SystemClock, provider::TokenAcquisition, provider::acquire_owned,
 };
 use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
@@ -250,12 +257,12 @@ fn v2_snapshot_preserves_legacy_json_and_independent_l2_metadata() {
 #[cfg(feature = "messagepack")]
 #[test]
 fn v2_snapshot_preserves_legacy_positional_messagepack() {
-    snapshot(&amalgam::MessagePackSerializer);
+    snapshot(&amalgam::provider::MessagePackSerializer);
 }
 #[cfg(feature = "postcard")]
 #[test]
 fn v2_snapshot_preserves_legacy_positional_postcard() {
-    snapshot(&amalgam::PostcardSerializer);
+    snapshot(&amalgam::provider::PostcardSerializer);
 }
 
 struct Fence {
@@ -434,11 +441,11 @@ async fn recovery_reconnect_barrier_uses_real_time_and_shutdown_releases_pins() 
     queue.shutdown().await.unwrap();
     assert!(matches!(
         queue.try_spawn(),
-        Err(amalgam::RecoveryError::Stopped)
+        Err(amalgam::advanced::RecoveryError::Stopped)
     ));
     assert!(matches!(
         OperationGeneration::new(u64::MAX).next(),
-        Err(amalgam::RecoveryError::GenerationExhausted)
+        Err(amalgam::advanced::RecoveryError::GenerationExhausted)
     ));
 }
 
@@ -655,7 +662,7 @@ fn invalid_distributed_payloads_are_rejected_before_hydration() {
 
 #[test]
 fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
-    use amalgam::{OperationOutcome, RecoveryError};
+    use amalgam::{OperationOutcome, advanced::RecoveryError};
     use std::error::Error as _;
     let marker: Error = MarkerError::backend(std::io::Error::new(
         std::io::ErrorKind::ConnectionReset,
@@ -708,7 +715,7 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
 
 #[tokio::test]
 async fn owned_worker_task_failures_distinguish_cancellation_and_contract_panic() {
-    use amalgam::{OperationOutcome, RecoveryError};
+    use amalgam::{OperationOutcome, advanced::RecoveryError};
     let cancelled = tokio::spawn(std::future::pending::<()>());
     cancelled.abort();
     let error: Error = RecoveryError::Task {

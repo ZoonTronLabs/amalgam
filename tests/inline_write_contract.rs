@@ -1,5 +1,5 @@
 //! Inline L1 writes still own close attribution and deterministic reclamation.
-use amalgam::{Cache, EntryOptions, MutationReceipt};
+use amalgam::{Cache, EntryOptions, advanced::MutationReceipt};
 use std::future::Future;
 use std::future::IntoFuture;
 use std::pin::pin;
@@ -135,7 +135,7 @@ fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
 
 #[tokio::test]
 async fn scalar_zero_jitter_callback_still_drains_before_shutdown_completes() {
-    use amalgam::{Error, FactoryCancellationReason, JitterSource};
+    use amalgam::{Error, FactoryCancellationReason, provider::JitterSource};
     use std::sync::mpsc;
 
     struct BlockingJitter {

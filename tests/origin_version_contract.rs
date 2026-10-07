@@ -1,5 +1,5 @@
 //! A factory owns its starting version, rather than whichever version exists later.
-use amalgam::{Cache, ClearMode, EntryOptions, ManualClock, Timestamp};
+use amalgam::{Cache, ClearMode, EntryOptions, Timestamp, provider::ManualClock};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;

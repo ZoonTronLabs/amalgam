@@ -1,4 +1,6 @@
 //! Lease admission and notification continuity have independent outage policies.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::Arc;

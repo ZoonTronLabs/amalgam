@@ -274,7 +274,7 @@ async fn the_first_inline_factory_miss_starts_physical_cleanup() {
 
 #[tokio::test]
 async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
-    use amalgam::{EagerThreshold, FactoryInvocation, ManualClock};
+    use amalgam::{EagerThreshold, advanced::FactoryInvocation, provider::ManualClock};
     let clock = Arc::new(ManualClock::default());
     let cache = Cache::builder().clock(clock.clone()).try_build().unwrap();
     cache

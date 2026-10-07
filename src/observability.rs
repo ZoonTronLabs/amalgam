@@ -451,11 +451,15 @@ mod imp {
                 }
                 CacheEvent::MarkerSnapshotWrite { outcome, .. } => {
                     let outcome = match outcome {
-                        crate::MarkerSnapshotWriteOutcome::Stored => "stored",
-                        crate::MarkerSnapshotWriteOutcome::KeptNewer => "kept_newer",
-                        crate::MarkerSnapshotWriteOutcome::Expired => "expired",
-                        crate::MarkerSnapshotWriteOutcome::BackendFailure => "backend_failure",
-                        crate::MarkerSnapshotWriteOutcome::ProtocolFailure => "protocol_failure",
+                        crate::advanced::MarkerSnapshotWriteOutcome::Stored => "stored",
+                        crate::advanced::MarkerSnapshotWriteOutcome::KeptNewer => "kept_newer",
+                        crate::advanced::MarkerSnapshotWriteOutcome::Expired => "expired",
+                        crate::advanced::MarkerSnapshotWriteOutcome::BackendFailure => {
+                            "backend_failure"
+                        }
+                        crate::advanced::MarkerSnapshotWriteOutcome::ProtocolFailure => {
+                            "protocol_failure"
+                        }
                     };
                     metrics::counter!("amalgam_marker_snapshot_writes_total", "cache_name" => self.label.to_string(), "outcome" => outcome).increment(1);
                     None
@@ -492,8 +496,8 @@ mod imp {
                 CacheEvent::MessageReceived { .. } => Some(&self.counters.received),
                 CacheEvent::CircuitBreakerChange { component, closed } => {
                     let component = match component {
-                        crate::CircuitComponent::Distributed => "distributed",
-                        crate::CircuitComponent::Backplane => "backplane",
+                        crate::advanced::CircuitComponent::Distributed => "distributed",
+                        crate::advanced::CircuitComponent::Backplane => "backplane",
                     };
                     metrics::counter!("amalgam_circuit_transitions_total", "cache_name" => self.label.to_string(), "component" => component, "state" => if *closed { "closed" } else { "open" }).increment(1);
                     None

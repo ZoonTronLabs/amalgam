@@ -131,7 +131,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             (Err(values), Ok(())) => Err(Error::MemoryStorage(values)),
             (Ok(()), Err(markers)) => Err(Error::MarkerMemoryStorage(markers)),
             (Err(values), Err(markers)) => Err(Error::MemoryInvalidation(Box::new(
-                crate::MemoryInvalidationFailure { values, markers },
+                crate::provider::MemoryInvalidationFailure { values, markers },
             ))),
         }
     }

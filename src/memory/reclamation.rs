@@ -13,7 +13,7 @@ struct Retired<V> {
 }
 enum Retained<V> {
     Entry(Entry<V>),
-    Observer(crate::MemoryEvictions<V>),
+    Observer(crate::advanced::MemoryEvictions<V>),
 }
 impl<V> Drop for Garbage<V> {
     fn drop(&mut self) {
@@ -79,7 +79,7 @@ impl<V: Send + Sync + 'static> Reclamation<V> {
                 .push(Retained::Entry(entry)),
         }
     }
-    pub(super) fn retain_observer(&self, observer: crate::MemoryEvictions<V>) {
+    pub(super) fn retain_observer(&self, observer: crate::advanced::MemoryEvictions<V>) {
         match self {
             Self::Immediate => drop(observer),
             Self::Operation(owner) => owner
@@ -133,7 +133,10 @@ impl<G> std::ops::Deref for ReclamationGuard<G> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntryOptions, Events, ManualClock, MemoryLimits, MemoryStore, Timestamp};
+    use crate::{
+        EntryOptions, Events, Timestamp, provider::ManualClock, provider::MemoryLimits,
+        provider::MemoryStore,
+    };
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[derive(Clone)]
@@ -224,7 +227,7 @@ mod tests {
         let guard = memory.guard(runtime.block_on(lock.clone().lock_owned()));
         assert_eq!(
             runtime.block_on(memory.insert_at(Arc::from("k"), entry, Timestamp::from_ticks(10))),
-            crate::MemoryAdmission::Admitted
+            crate::provider::MemoryAdmission::Admitted
         );
         assert_eq!(drops.load(Ordering::SeqCst), 0);
         drop(memory);

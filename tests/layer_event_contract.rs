@@ -1,4 +1,6 @@
 //! Component facts differ from logical acceptance, bypass and cancellation.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

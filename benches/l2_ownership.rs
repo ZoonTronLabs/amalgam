@@ -1,7 +1,10 @@
 //! Untimed allocation stacks for the public L2 fixture.
 //! Kept in a separate executable so tracing cannot affect the scaling allocator.
 //! Run explicitly: cargo test --release --bench l2_ownership -- --ignored --nocapture
-use amalgam::{Cache, EntryOptions, InMemoryDistributedCache, JsonSerializer, SystemClock};
+use amalgam::{
+    Cache, EntryOptions, provider::InMemoryDistributedCache, provider::JsonSerializer,
+    provider::SystemClock,
+};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::backtrace::Backtrace;
 use std::cell::Cell;

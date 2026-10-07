@@ -212,7 +212,7 @@ impl MarkerReads {
         &self,
     ) -> std::result::Result<
         Option<MemoryInvalidation<'_, MarkerObservation>>,
-        crate::MemoryStorageError,
+        crate::provider::MemoryStorageError,
     > {
         match self {
             Self::DurableRequired => Ok(None),
@@ -227,7 +227,7 @@ impl MarkerReads {
 impl MarkerObservations {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        provider: Option<Arc<dyn crate::MemoryStorage<MarkerObservation>>>,
+        provider: Option<Arc<dyn crate::provider::MemoryStorage<MarkerObservation>>>,
         limits: MemoryLimits,
         clock: Arc<dyn Clock>,
         expiry: MemoryExpiry,
@@ -374,7 +374,7 @@ impl MarkerObservations {
         &self,
         kind: &MarkerKind,
         observation: MarkerObservation,
-        snapshot: crate::MarkerSnapshot,
+        snapshot: crate::advanced::MarkerSnapshot,
         options: &EntryOptions,
         now: Timestamp,
         stamp: ContinuityStamp,
@@ -499,7 +499,7 @@ impl MarkerObservations {
     pub(crate) async fn retain_snapshot_fallback(
         &self,
         kind: &MarkerKind,
-        snapshot: crate::MarkerSnapshot,
+        snapshot: crate::advanced::MarkerSnapshot,
         presence: MarkerPresence,
         options: &EntryOptions,
         now: Timestamp,

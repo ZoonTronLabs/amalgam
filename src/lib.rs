@@ -25,6 +25,9 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod advanced;
+pub mod provider;
+
 pub mod backplane;
 pub mod cache;
 pub mod circuit;
@@ -66,120 +69,43 @@ pub mod otel;
 #[cfg(feature = "redis")]
 pub mod redis_backend;
 
-pub use backplane::{
-    Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState,
-    ContinuityEpoch, InProcessBackplane, MarkerCommand,
-};
 pub use cache::{
-    BackplaneReadiness, BlockingCache, BlockingCacheBuildError, BlockingCacheValue,
-    BlockingCommitCompletion, BlockingCommitReceipt, BlockingDispatchError,
-    BlockingMutationReceipt, BlockingRuntime, BlockingRuntimeError, BlockingThreadPool, Cache,
-    CacheBuilder, CachePlugin, CachePluginContext, ClearMode, CloseOutcome,
-    DistributedExpirePolicy, LeasePolicy, PluginCache, ReconciliationPolicy, ShutdownReport,
+    BackplaneReadiness, BlockingCache, BlockingCacheBuildError, Cache, CacheBuilder, ClearMode,
+    CloseOutcome, ShutdownReport,
 };
-pub use circuit::{CircuitBreaker, CircuitCheck};
-pub use commit::{
-    CacheValue, CommitCompletion, CommitReceipt, CommitReport, EffectBatch, EffectOutcome,
-    LocalEffect, MutationReceipt, SkipReason,
-};
-pub use distributed::{
-    AsyncDistributedSerializer, DistributedCache, DistributedEntry, DistributedSerializer,
-    DistributedSnapshot, FencedWriteSupport, InMemoryDistributedCache, InMemoryInvalidationStore,
-    InvalidationStore, JsonSerializer, LeasedMutation, LeasedWriteOutcome, MarkerReadError,
-    SerializationMode, SnapshotRetention,
-};
-pub use distributed_lock::{
-    AcquisitionPolicy, DistributedLease, DistributedLocker, InMemoryDistributedLocker, LeaseError,
-    LeaseProof, LeaseReceipt, LeaseState, LeaseSupport, LeaseTask, LeaseTaskOwner, LeaseToken,
-    LeaseTtl, OwnershipCheck, RenewalOutcome, TokenAcquisition, acquire_owned,
-    acquire_owned_supervised,
-};
+
 pub use error::{
-    CloneError, CodecError, ConfigError, DrainOperation, Error, FactoryCancellationReason,
-    FactoryError, IdentityField, Result, RuntimeComponent, ShutdownError, ShutdownFailure,
-    ShutdownTask, TransportError,
+    CloneError, CodecError, ConfigError, Error, FactoryCancellationReason, FactoryError, Result,
+    ShutdownError, TransportError,
 };
+
 pub use events::{
-    BackplaneEvent, CacheEvent, CacheLevel, CacheOperation, CircuitComponent, ComponentRead,
-    DistributedEvent, EventEmission, EventStreamClosed, EventSubscription, Events, LayerEvent,
-    LayerEventSubscription, MemoryEvent, OperationOutcome,
+    CacheEvent, CacheLevel, CacheOperation, EventStreamClosed, EventSubscription, Events,
+    OperationOutcome,
 };
-pub use execution::{CancellationRequest, CancellationSource, FactoryCancellation};
+
+pub use execution::{CancellationSource, FactoryCancellation};
+
 pub(crate) use factory::FactoryProduct;
-pub use factory::{
-    ConditionalRefreshError, FactoryContext, FactoryInvocation, FactoryOptionsMut, ModifiedBuilder,
-    NotModifiedBuilder, ValidatorUpdate,
-};
-pub use marker_reads::{
-    MarkerObservation, MarkerPresence, MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy,
-};
-pub use marker_snapshots::{
-    MarkerLifecyclePolicy, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotCacheError,
-    MarkerSnapshotLimits, MarkerSnapshotRead, MarkerSnapshotRenewal, MarkerSnapshotValidationError,
-    MarkerSnapshotWriteOutcome,
-};
-pub use maybe::MaybeValue;
-pub use memory::{
-    CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryStore, MemoryUsage,
-};
-pub use memory_locker::{
-    BlockingMemoryLocker, MemoryLock, MemoryLockGuard, MemoryLockKind, MemoryLockOutcome,
-    MemoryLockRequest, MemoryLocker, MemoryLockerContext, MemoryLockerError,
-};
-pub use memory_storage::{
-    MemoryCondition, MemoryGeneration, MemoryInvalidationFailure, MemoryNamespace,
-    MemoryNamespacePurpose, MemoryRecord, MemoryRecordViolation, MemoryRetirement, MemoryStorage,
-    MemoryStorageEpoch, MemoryStorageError, MemoryStorageWrite,
-};
-pub use options::{
-    EagerThreshold, EntryOptions, EntryWeight, JitterSample, JitterSource, KeyModifierMode,
-    Priority, RandomJitterSource, RemoveByTagBehavior,
-};
+pub use factory::{ConditionalRefreshError, FactoryContext};
+
+pub use options::{EagerThreshold, EntryOptions, EntryWeight, Priority, RemoveByTagBehavior};
+
 pub use plugins::{
-    Plugin, PluginContext, PluginError, PluginHost, PluginObservations, PluginRegistration,
-    PluginSession, PluginStage, PluginStopOutcome,
+    Plugin, PluginContext, PluginError, PluginRegistration, PluginSession, PluginStage,
+    PluginStopOutcome,
 };
-pub use recovery::{
-    AutoRecoveryService, DataMutation, EnqueueOutcome, MarkerMutationRecovery, MarkerMutationStage,
-    MarkerReplay, MarkerSnapshotParticipation, MarkerSnapshotReplay, OperationGeneration,
-    PendingMutation, RecoveryAction, RecoveryConfig, RecoveryError, RecoveryExecutor,
-    RecoveryFence, RecoveryId, RecoveryItem, RecoveryStageTransition, RecoveryStart, RecoveryWork,
-    ReplayOutcome, ReplayTicket, SupersedeOutcome,
-};
-pub use registry::{CacheRegistry, DefaultEntryOptionsProvider, RegistryError};
-pub use serializers::{ImmutableValue, ValueCloner};
-pub use tags::{
-    CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerStoreLimits, MarkerVersion,
-    StoredMarker, Tag, TagError,
-};
-pub use time::{Clock, ClockTiming, ManualClock, SystemClock, Timeout, Timestamp};
 
-#[cfg(feature = "messagepack")]
-pub use serializers::MessagePackSerializer;
+pub use recovery::RecoveryConfig;
 
-#[cfg(feature = "postcard")]
-pub use serializers::PostcardSerializer;
+pub use registry::{CacheRegistry, RegistryError};
 
-#[cfg(any(feature = "metrics", feature = "opentelemetry"))]
-pub use observability::CacheLabelBudget;
+pub use tags::{Tag, TagError};
+
+pub use time::{Timeout, Timestamp};
+
 #[cfg(feature = "metrics")]
 pub use observability::MetricsPlugin;
-#[cfg(feature = "opentelemetry")]
-pub use observability::{MetricTags, OtelMetricMeters, OtelMetricsPlugin};
 
 #[cfg(feature = "opentelemetry")]
-pub use otel::{
-    OtelGuard, OtelInitError, init_otlp, otlp_layer, otlp_meter_provider, try_init_otlp,
-};
-
-#[cfg(feature = "redis")]
-pub use redis_backend::{
-    RedisBackplane, RedisBackplaneStats, RedisClientId, RedisDistributedCache,
-    RedisDistributedLocker, RedisInvalidationStore, RedisIoOptions,
-};
-
-/// Typed original-value memory observations.
-pub use events::{
-    EvictionCapture, EvictionReceiveError, MemoryEviction, MemoryEvictionReason,
-    MemoryEvictionSubscription, MemoryEvictions,
-};
+pub use observability::OtelMetricsPlugin;

@@ -1,4 +1,5 @@
 //! Ready L1 work retains cancellation, observation and synchronous drainage.
+use amalgam::provider::*;
 use amalgam::*;
 use std::error::Error as _;
 use std::future::{Future, IntoFuture, pending, poll_fn};

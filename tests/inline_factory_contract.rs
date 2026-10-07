@@ -1,6 +1,6 @@
 use amalgam::{
     Cache, Error, FactoryCancellation, FactoryCancellationReason, FactoryContext, FactoryError,
-    MutationReceipt,
+    advanced::MutationReceipt,
 };
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
@@ -33,14 +33,14 @@ fn ready_factory_and_receipt_finish_without_a_runtime() {
                     Ok::<_, amalgam::FactoryError>(context.value(7))
                 }),
             )
-            .fail_safe_default((amalgam::MaybeValue::none()).into_value())
+            .fail_safe_default((amalgam::advanced::MaybeValue::none()).into_value())
             .with_receipt(),
     )
     .unwrap();
     assert_eq!(value.value, 7);
     assert!(matches!(
         value.commit,
-        amalgam::CommitReceipt::Mutation(MutationReceipt::Completed(_))
+        amalgam::advanced::CommitReceipt::Mutation(MutationReceipt::Completed(_))
     ));
     let token = token.lock().unwrap().take().unwrap();
     assert!(matches!(
@@ -287,7 +287,7 @@ fn a_retained_factory_token_does_not_pin_a_completed_value() {
 
 #[tokio::test]
 async fn disabling_fail_safe_preserves_an_existing_conditional_snapshot() {
-    let clock = Arc::new(amalgam::ManualClock::default());
+    let clock = Arc::new(amalgam::provider::ManualClock::default());
     let cache = Cache::<u64>::builder()
         .clock(clock.clone())
         .try_build()

@@ -5,10 +5,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amalgam::{
-    BackplaneAction, BackplaneCommand, BackplaneMessage, CacheScope, DistributedEntry,
-    DistributedSerializer, DistributedSnapshot, EntryWeight, InMemoryInvalidationStore,
-    InvalidationStore, JsonSerializer, KeyModifierMode, MarkerCommand, MarkerKind,
-    MarkerStoreLimits, MarkerVersion, Priority, SnapshotRetention, StoredMarker, Tag, Timestamp,
+    EntryWeight, Priority, Tag, Timestamp, advanced::CacheScope, advanced::KeyModifierMode,
+    advanced::MarkerKind, advanced::MarkerStoreLimits, advanced::MarkerVersion,
+    advanced::StoredMarker, provider::BackplaneAction, provider::BackplaneCommand,
+    provider::BackplaneMessage, provider::DistributedEntry, provider::DistributedSerializer,
+    provider::DistributedSnapshot, provider::InMemoryInvalidationStore,
+    provider::InvalidationStore, provider::JsonSerializer, provider::MarkerCommand,
+    provider::SnapshotRetention,
 };
 
 struct Sequence(u64);
@@ -33,9 +36,12 @@ fn codecs() -> Vec<Codec> {
     vec![
         ("json", Arc::new(JsonSerializer)),
         #[cfg(feature = "messagepack")]
-        ("messagepack", Arc::new(amalgam::MessagePackSerializer)),
+        (
+            "messagepack",
+            Arc::new(amalgam::provider::MessagePackSerializer),
+        ),
         #[cfg(feature = "postcard")]
-        ("postcard", Arc::new(amalgam::PostcardSerializer)),
+        ("postcard", Arc::new(amalgam::provider::PostcardSerializer)),
     ]
 }
 

@@ -413,7 +413,7 @@ pub enum Error {
     MarkerMemoryStorage(#[source] crate::memory_storage::MemoryStorageError),
     /// Both value and control barriers were advanced but physical cleanup failed.
     #[error("{0}")]
-    MemoryInvalidation(#[source] Box<crate::MemoryInvalidationFailure>),
+    MemoryInvalidation(#[source] Box<crate::provider::MemoryInvalidationFailure>),
 
     /// Typed recovery construction/lifecycle failure.
     #[error(transparent)]

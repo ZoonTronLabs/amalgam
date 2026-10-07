@@ -84,8 +84,8 @@ let value = cache
 let observed = cache.get_or_set("profile", source::value(value))
     .with_receipt().execute()?;
 match observed.commit {
-    amalgam::BlockingCommitReceipt::Unchanged => {}
-    amalgam::BlockingCommitReceipt::Mutation(receipt) => { receipt.wait()?; }
+    amalgam::advanced::BlockingCommitReceipt::Unchanged => {}
+    amalgam::advanced::BlockingCommitReceipt::Mutation(receipt) => { receipt.wait()?; }
 }
 # Ok(())
 # }
@@ -186,9 +186,33 @@ removed. They did not select lookup sharding or serialize independent keys.
 Use `KeyedLock::new()` or its default. Lookup sharding remains an implementation
 detail; per-key ownership and timeout behavior are unchanged.
 
+## Provider and advanced imports
+
+The root keeps the ordinary cache, options, factory context, errors and common
+plugins. Optional provider interfaces and implementations are imported from
+`amalgam::provider`; explicit completion evidence and stronger/diagnostic
+contracts are imported from `amalgam::advanced`.
+
+```rust
+use amalgam::{Cache, EntryOptions};
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, SystemClock};
+use amalgam::advanced::{CommitReceipt, LeasePolicy, ReconciliationPolicy};
+```
+
+For Redis, import `RedisDistributedCache`, `RedisBackplane` and
+`RedisDistributedLocker` from `provider` with the `redis` feature enabled.
+Storage/locker capabilities and their associated outcomes remain beside those
+provider traits. Marker snapshots, detailed layer/eviction events, recovery
+tickets, receipt types and explicit runtime controls live in `advanced`.
+
+This moves 193 former root reexports to the two namespaces, leaving 49 with all
+features enabled. The types and execution guarantees are the same. Existing
+implementation module paths remain accessible, but new examples use the two
+intentional entry points. Imports do not enable a runtime feature or add work
+to a disabled cache path.
+
 ## Remaining migration work
 
-The read facade, provider and advanced namespaces, and the complete examples
-are still being migrated.
+The read facade and complete final examples are still being migrated.
 They must be complete before publishing 0.4.0. The 0.3 `MaybeValue` and
 error-swallowing adapters are not the target API.

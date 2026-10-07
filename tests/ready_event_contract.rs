@@ -1,4 +1,6 @@
 //! Lazy ready-hit emission retains observers admitted by synchronous user work.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};

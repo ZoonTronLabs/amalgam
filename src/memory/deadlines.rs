@@ -1,7 +1,7 @@
 //! Stored local deadlines avoid projecting elapsed time into UTC on each hit.
 use crate::entry::{Freshness, Metadata};
 use crate::time::local::{LocalClock, MonotonicDeadline, WriteTime};
-use crate::{MemoryExpiry, Timestamp};
+use crate::{Timestamp, provider::MemoryExpiry};
 use std::sync::Arc;
 use std::time::Instant;
 

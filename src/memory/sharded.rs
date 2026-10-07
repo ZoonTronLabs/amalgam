@@ -226,7 +226,7 @@ impl<V> Sharded<V> {
         let mut state = write(shard);
         let generation = self.origin_generation();
         if generation == u64::MAX {
-            return Err(crate::RecoveryError::GenerationExhausted.into());
+            return Err(crate::advanced::RecoveryError::GenerationExhausted.into());
         }
         let (revision, captured) = state.origins.capture_from(key, revision)?;
         Ok((revision, captured, generation))
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(committed.retired.len(), 1);
         assert_eq!(
             committed.retired[0].reason.fact(),
-            Some(crate::MemoryEvictionReason::Removed)
+            Some(crate::advanced::MemoryEvictionReason::Removed)
         );
         assert_eq!(*committed.retired[0].entry.value(), 1);
     }

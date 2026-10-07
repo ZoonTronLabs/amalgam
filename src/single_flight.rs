@@ -265,7 +265,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
             // factory token still records the precise loss of ownership.
             (
                 Some(Reason::LeaseLost),
-                Terminal::Owned(Err(error @ Error::Lease(crate::LeaseError::Lost))),
+                Terminal::Owned(Err(error @ Error::Lease(crate::provider::LeaseError::Lost))),
             ) => Terminal::Owned(Err(error)),
             (Some(reason), terminal) => {
                 drop(terminal);

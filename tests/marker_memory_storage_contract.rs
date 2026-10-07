@@ -1,4 +1,6 @@
 //! Marker storage uses an independent, externally owned public-protocol provider.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicUsize, Ordering};

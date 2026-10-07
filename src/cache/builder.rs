@@ -40,7 +40,8 @@ pub struct CacheBuilder<V> {
     marker_read_policy: MarkerReadPolicy,
     marker_lifecycle_policy: MarkerLifecyclePolicy,
     marker_read_limits: Option<MemoryLimits>,
-    marker_memory_storage: Option<Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>>,
+    marker_memory_storage:
+        Option<Arc<dyn crate::provider::MemoryStorage<crate::advanced::MarkerObservation>>>,
     clock: Option<Arc<dyn Clock>>,
     max_capacity: Option<u64>,
     max_weighted_capacity: Option<u64>,
@@ -50,11 +51,11 @@ pub struct CacheBuilder<V> {
     lease_policy: LeasePolicy,
     lease_ttl: Duration,
     reconciliation: Option<ReconciliationPolicy>,
-    memory_locker: Option<Arc<dyn crate::MemoryLocker>>,
-    memory_storage: Option<Arc<dyn crate::MemoryStorage<V>>>,
+    memory_locker: Option<Arc<dyn crate::provider::MemoryLocker>>,
+    memory_storage: Option<Arc<dyn crate::provider::MemoryStorage<V>>>,
     remove_by_tag_behavior: RemoveByTagBehavior,
     events_capacity: usize,
-    eviction_capture: crate::EvictionCapture,
+    eviction_capture: crate::advanced::EvictionCapture,
     distributed: Option<Arc<dyn DistributedCache>>,
     serializer: Option<crate::distributed::Serializer<V>>,
     serialization_mode: crate::distributed::SerializationMode,
@@ -100,7 +101,7 @@ impl<V> CacheBuilder<V> {
             memory_storage: None,
             remove_by_tag_behavior: RemoveByTagBehavior::default(),
             events_capacity: 256,
-            eviction_capture: crate::EvictionCapture::default(),
+            eviction_capture: crate::advanced::EvictionCapture::default(),
             distributed: None,
             serializer: None,
             serialization_mode: crate::distributed::SerializationMode::default(),
@@ -132,7 +133,7 @@ impl<V> CacheBuilder<V> {
 
     /// Supplies the actual L1 keyspace. The provider owns capacity policy and
     /// is shared by Arc; cache shutdown does not dispose a shared provider.
-    pub fn memory_storage(mut self, storage: Arc<dyn crate::MemoryStorage<V>>) -> Self {
+    pub fn memory_storage(mut self, storage: Arc<dyn crate::provider::MemoryStorage<V>>) -> Self {
         self.memory_storage = Some(storage);
         self
     }
@@ -142,14 +143,14 @@ impl<V> CacheBuilder<V> {
     /// The provider owns capacity and distinct stable epochs for each namespace.
     pub fn marker_memory_storage(
         mut self,
-        storage: Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>,
+        storage: Arc<dyn crate::provider::MemoryStorage<crate::advanced::MarkerObservation>>,
     ) -> Self {
         self.marker_memory_storage = Some(storage);
         self
     }
 
     /// Selects when entries become eligible for original-value eviction events.
-    pub fn memory_eviction_capture(mut self, capture: crate::EvictionCapture) -> Self {
+    pub fn memory_eviction_capture(mut self, capture: crate::advanced::EvictionCapture) -> Self {
         self.eviction_capture = capture;
         self
     }
@@ -177,7 +178,7 @@ impl<V> CacheBuilder<V> {
     /// cache.shutdown().await?;
     /// # Ok(()) }
     /// ```
-    pub fn memory_locker(mut self, locker: Arc<dyn crate::MemoryLocker>) -> Self {
+    pub fn memory_locker(mut self, locker: Arc<dyn crate::provider::MemoryLocker>) -> Self {
         self.memory_locker = Some(locker);
         self
     }
@@ -190,7 +191,7 @@ impl<V> CacheBuilder<V> {
     }
 
     /// Sets the serializer used for the L2 wire format (e.g.
-    /// [`JsonSerializer`](crate::JsonSerializer)).
+    /// [`JsonSerializer`](crate::provider::JsonSerializer)).
     pub fn serializer(mut self, serializer: Arc<dyn DistributedSerializer<V>>) -> Self {
         self.serializer = Some(crate::distributed::Serializer::Sync(serializer));
         self
@@ -265,7 +266,7 @@ impl<V> CacheBuilder<V> {
         self
     }
 
-    /// Injects a custom [`Clock`] (e.g. [`ManualClock`](crate::ManualClock) in
+    /// Injects a custom [`Clock`] (e.g. [`ManualClock`](crate::provider::ManualClock) in
     /// tests).
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
@@ -813,8 +814,8 @@ fn validate_fencing(
         return Ok(());
     }
     if locker.is_some_and(|locker| {
-        locker.lease_support() == crate::LeaseSupport::OpaqueLegacy
-            || locker.token_acquisition() != crate::TokenAcquisition::CallerSelected
+        locker.lease_support() == crate::provider::LeaseSupport::OpaqueLegacy
+            || locker.token_acquisition() != crate::provider::TokenAcquisition::CallerSelected
     }) {
         return Err(ConfigError::FencedLockerWithoutOwnedLifetime.into());
     }

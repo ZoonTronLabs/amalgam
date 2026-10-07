@@ -362,19 +362,21 @@ fn cost(label: &str, mut operation: impl FnMut() -> u64) {
         began.elapsed().as_nanos() as f64 / OPERATIONS as f64
     );
 }
-struct CostClock(amalgam::ClockTiming);
-impl amalgam::Clock for CostClock {
+struct CostClock(amalgam::provider::ClockTiming);
+impl amalgam::provider::Clock for CostClock {
     fn now(&self) -> amalgam::Timestamp {
         amalgam::Timestamp::from_ticks(10_000_000_000)
     }
-    fn timing_model(&self) -> amalgam::ClockTiming {
+    fn timing_model(&self) -> amalgam::provider::ClockTiming {
         self.0
     }
 }
 fn ready_costs() {
-    use amalgam::Clock;
+    use amalgam::provider::Clock;
     println!("component,ns_per_op");
-    cost("system_clock", || amalgam::SystemClock.now().ticks() as u64);
+    cost("system_clock", || {
+        amalgam::provider::SystemClock.now().ticks() as u64
+    });
     cost("system_time", || {
         black_box(std::time::SystemTime::now());
         1
@@ -409,15 +411,15 @@ fn ready_costs() {
     for (label, clock) in [
         (
             "controlled",
-            Some(Arc::new(CostClock(amalgam::ClockTiming::Controlled)) as Arc<dyn Clock>),
+            Some(Arc::new(CostClock(amalgam::provider::ClockTiming::Controlled)) as Arc<dyn Clock>),
         ),
         (
             "physical",
-            Some(Arc::new(CostClock(amalgam::ClockTiming::RealTime)) as Arc<dyn Clock>),
+            Some(Arc::new(CostClock(amalgam::provider::ClockTiming::RealTime)) as Arc<dyn Clock>),
         ),
         (
             "system",
-            Some(Arc::new(amalgam::SystemClock) as Arc<dyn Clock>),
+            Some(Arc::new(amalgam::provider::SystemClock) as Arc<dyn Clock>),
         ),
         ("default", None),
     ] {
@@ -538,7 +540,7 @@ fn metadata_costs() {
                 &options,
                 now,
                 now,
-                amalgam::JitterSample::ZERO,
+                amalgam::provider::JitterSample::ZERO,
                 case.tags(&tag),
                 None,
                 None,
@@ -606,10 +608,10 @@ fn distributed<H: WarmHit>() {
         let options = EntryOptions::new(Duration::from_secs(3600)).with_skip_memory(true, false);
         let cache = Cache::builder()
             .default_options(options.clone())
-            .distributed(Arc::new(amalgam::InMemoryDistributedCache::new(Arc::new(
-                amalgam::SystemClock,
-            ))))
-            .serializer(Arc::new(amalgam::JsonSerializer))
+            .distributed(Arc::new(amalgam::provider::InMemoryDistributedCache::new(
+                Arc::new(amalgam::provider::SystemClock),
+            )))
+            .serializer(Arc::new(amalgam::provider::JsonSerializer))
             .build();
         cache
             .set("l2-json", 7_u64)

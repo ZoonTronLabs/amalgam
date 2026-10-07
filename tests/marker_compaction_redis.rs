@@ -1,9 +1,11 @@
 #![cfg(feature = "redis")]
 //! Lower per-node limits must report the actual clear maximum after compaction.
-use amalgam::redis_backend::{RedisDistributedCache, RedisIoOptions};
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::Arc;
 use std::time::Duration;
+use {amalgam::redis_backend::RedisDistributedCache, amalgam::redis_backend::RedisIoOptions};
 mod support {
     pub mod redis_fixture;
 }

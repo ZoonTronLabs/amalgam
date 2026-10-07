@@ -1,5 +1,7 @@
 //! Actual SDK aggregation/export proves native metrics without a facade recorder.
 #![cfg(feature = "opentelemetry")]
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};

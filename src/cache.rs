@@ -189,7 +189,7 @@ pub enum BackplaneReadiness {
     /// No notification provider is configured.
     NotConfigured,
     /// Native provider acknowledged the current subscription epoch.
-    Acknowledged(crate::ContinuityEpoch),
+    Acknowledged(crate::provider::ContinuityEpoch),
     /// Legacy provider has no health/ACK facet; periodic reconciliation applies.
     BestEffort,
 }
@@ -691,7 +691,7 @@ impl ClusterParticipation {
             Self::Cooperative(owned) | Self::Fenced(owned) => Some(owned.lease.state()),
         }
     }
-    fn proof(&self) -> Result<Option<crate::LeaseProof>> {
+    fn proof(&self) -> Result<Option<crate::provider::LeaseProof>> {
         match self {
             Self::Local => Ok(None),
             Self::Fenced(owned) => Ok(Some(owned.lease.proof()?)),
@@ -719,7 +719,7 @@ impl ClusterParticipation {
     }
 }
 impl FlightGuard {
-    fn proof(&self) -> Result<Option<crate::LeaseProof>> {
+    fn proof(&self) -> Result<Option<crate::provider::LeaseProof>> {
         self.lease.proof()
     }
 }

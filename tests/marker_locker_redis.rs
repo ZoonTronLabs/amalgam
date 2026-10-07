@@ -1,12 +1,16 @@
 #![cfg(feature = "redis")]
 //! Native core acceptance: repair ownership, release and replaced-token rejection.
-use amalgam::redis_backend::{RedisDistributedCache, RedisDistributedLocker};
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, Semaphore};
+use {
+    amalgam::redis_backend::RedisDistributedCache, amalgam::redis_backend::RedisDistributedLocker,
+};
 mod support {
     pub mod redis_fixture;
 }
