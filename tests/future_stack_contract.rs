@@ -32,7 +32,9 @@ fn ordinary_lookup_futures_fit_within_a_small_stack_budget() {
         ("read", size_of_val(&cache.read("x", None))),
         (
             "get_or_set",
-            size_of_val(&cache.get_or_set("x", |ctx| std::future::ready(Ok(ctx.value(42))))),
+            size_of_val(&cache.get_or_set("x", |ctx| {
+                std::future::ready(Ok::<_, amalgam::FactoryError>(ctx.value(42)))
+            })),
         ),
         (
             "get_or_set_value",
@@ -55,7 +57,9 @@ async fn refresh(cache: &Cache<u64>, value: u64) {
 #[tracing::instrument(skip_all)]
 async fn read_then_refresh(cache: &Cache<u64>, value: u64) -> u64 {
     let current = cache
-        .get_or_set("x", |ctx| async move { Ok(ctx.value(1)) })
+        .get_or_set("x", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
+        })
         .await
         .unwrap();
     if current != value {

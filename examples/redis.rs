@@ -45,7 +45,9 @@ mod demo {
         let value = cache
             .get_or_set("greeting", |ctx| async move {
                 println!("  factory ran (cache miss) — fetching from the source");
-                Ok(ctx.value("hello from a Redis-backed amalgam".to_owned()))
+                Ok::<_, amalgam::FactoryError>(
+                    ctx.value("hello from a Redis-backed amalgam".to_owned()),
+                )
             })
             .await?;
         println!("first call  → {value}");
@@ -53,7 +55,7 @@ mod demo {
         let again = cache
             .get_or_set("greeting", |ctx| async move {
                 println!("  (this should NOT print — served from cache/L2)");
-                Ok(ctx.value("unused".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("unused".to_owned()))
             })
             .await?;
         println!("second call → {again}");

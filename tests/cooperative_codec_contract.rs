@@ -239,7 +239,9 @@ async fn codec_cancellation_is_never_suppressed_as_a_miss_or_local_only_write() 
         let result = match direction {
             Direction::Encode => cache.try_set("key", 2).await.map(|_| ()),
             Direction::Decode => cache
-                .get_or_set("key", |ctx| async move { Ok(ctx.value(2)) })
+                .get_or_set("key", |ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                })
                 .await
                 .map(|_| ()),
         };
@@ -285,7 +287,9 @@ async fn hard_factory_timeout_ends_the_owned_encoder_with_the_exact_reason() {
         .unwrap();
     assert!(matches!(
         cache
-            .get_or_set("key", |ctx| async move { Ok(ctx.value(2)) })
+            .get_or_set("key", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+            })
             .await,
         Err(Error::FactoryTimeout { .. })
     ));
@@ -325,7 +329,9 @@ async fn permitted_background_encoder_survives_caller_completion_and_owns_shutdo
             .unwrap();
         assert_eq!(
             cache
-                .get_or_set("key", |ctx| async move { Ok(ctx.value(2)) })
+                .get_or_set("key", |ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                })
                 .await
                 .unwrap(),
             1
@@ -384,7 +390,7 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
                 cache
                     .get_or_set_full(
                         "key",
-                        |ctx| async move { Ok(ctx.value(2)) },
+                        |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) },
                         None,
                         Box::from([]),
                         MaybeValue::from_value(1)
@@ -633,7 +639,9 @@ async fn eager_encoder_outlives_the_hit_and_is_cancelled_by_shutdown() {
     clock.advance(Duration::from_secs(6));
     assert_eq!(
         cache
-            .get_or_set("key", |ctx| async move { Ok(ctx.value(2)) })
+            .get_or_set("key", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+            })
             .await
             .unwrap(),
         1

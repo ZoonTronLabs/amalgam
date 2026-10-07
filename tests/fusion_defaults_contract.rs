@@ -107,7 +107,9 @@ async fn default_l2_only_keeps_l1_until_expiration_instead_of_clearing_each_seco
         tokio::task::yield_now().await;
         assert_eq!(
             cache
-                .get_or_set("hot", |ctx| async move { Ok(ctx.value(7)) })
+                .get_or_set("hot", |ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                })
                 .await
                 .unwrap(),
             42
@@ -163,7 +165,7 @@ async fn a_fail_safe_default_without_a_stale_entry_does_not_enable_soft_timeout(
             "cold",
             |ctx| async move {
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                Ok(ctx.value(7))
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
             },
             None,
             Box::from([]),

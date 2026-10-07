@@ -32,7 +32,7 @@ async fn provider_runs_once_on_miss_and_hit_uses_raw_key_and_explicit_options_by
                 .get_or_set("key", move |ctx| async move {
                     factories.fetch_add(1, Ordering::SeqCst);
                     assert_eq!(ctx.original_key(), "key");
-                    Ok(ctx.value(7))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
                 })
                 .await
                 .unwrap(),
@@ -74,7 +74,7 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
             .get_or_set("key", move |ctx| async move {
                 began.notify_one();
                 released.notified().await;
-                Ok(ctx.value(8))
+                Ok::<_, amalgam::FactoryError>(ctx.value(8))
             })
             .into_future(),
     );

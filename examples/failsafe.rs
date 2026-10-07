@@ -45,7 +45,9 @@ async fn main() {
     let primed = cache
         .get_or_set_with(
             "report",
-            |ctx| async move { Ok(ctx.value("GOOD report data".to_owned())) },
+            |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value("GOOD report data".to_owned()))
+            },
             opts.clone(),
         )
         .await

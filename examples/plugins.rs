@@ -54,14 +54,18 @@ async fn main() {
 
     println!("\n-- get_or_set(\"answer\", ..) => cache HIT, factory skipped --");
     let hit = cache
-        .get_or_set("answer", |ctx| async move { Ok(ctx.value(0)) })
+        .get_or_set("answer", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(0))
+        })
         .await
         .expect("served from cache");
     println!("   value = {hit}");
 
     println!("\n-- get_or_set(\"fresh\", ..) => MISS then factory runs --");
     let produced = cache
-        .get_or_set("fresh", |ctx| async move { Ok(ctx.value(7)) })
+        .get_or_set("fresh", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
+        })
         .await
         .expect("factory produces a value");
     println!("   value = {produced}");

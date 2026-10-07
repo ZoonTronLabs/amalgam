@@ -190,7 +190,7 @@ async fn same_key_shares_one_factory_and_fresh_hits_skip_the_provider() {
             c.get_or_set("same", move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok(ctx.value(42))
+                Ok::<_, amalgam::FactoryError>(ctx.value(42))
             })
             .await
             .unwrap()
@@ -203,9 +203,11 @@ async fn same_key_shares_one_factory_and_fresh_hits_skip_the_provider() {
     provider.drained();
     let calls = provider.requests.lock().unwrap().len();
     assert_eq!(
-        c.get_or_set("same", |_| async { panic!("hot hit invoked origin") })
-            .await
-            .unwrap(),
+        c.get_or_set::<_, _, _, amalgam::FactoryError>("same", |_| async {
+            panic!("hot hit invoked origin")
+        })
+        .await
+        .unwrap(),
         42
     );
     assert_eq!(provider.requests.lock().unwrap().len(), calls);
@@ -235,7 +237,7 @@ async fn distinct_keys_enter_factories_before_either_is_released() {
             c.get_or_set(key, move |ctx| async move {
                 entered.add_permits(1);
                 release.acquire().await.unwrap().forget();
-                Ok(ctx.value(7))
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
             })
             .await
             .unwrap()
@@ -268,7 +270,7 @@ async fn finite_wait_signals_provider_before_drop_and_factory_token_stays_active
     assert_eq!(
         c.get_or_set("deadline", |ctx| async move {
             assert!(ctx.cancellation().check().is_ok());
-            Ok(ctx.value(9))
+            Ok::<_, amalgam::FactoryError>(ctx.value(9))
         })
         .await
         .unwrap(),
@@ -299,15 +301,19 @@ async fn unavailable_guard_and_lock_timeout_preserve_existing_fallback_rules() {
         c.try_set("stale", 17).await.unwrap().wait().await.unwrap();
         clock.advance(Duration::from_secs(2));
         assert_eq!(
-            c.get_or_set("stale", |_| async { panic!("eligible stale was ignored") })
-                .await
-                .unwrap(),
+            c.get_or_set::<_, _, _, amalgam::FactoryError>("stale", |_| async {
+                panic!("eligible stale was ignored")
+            })
+            .await
+            .unwrap(),
             17
         );
         assert_eq!(
-            c.get_or_set("miss", |ctx| async move { Ok(ctx.value(19)) })
-                .await
-                .unwrap(),
+            c.get_or_set("miss", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(19))
+            })
+            .await
+            .unwrap(),
             19
         );
         c.shutdown().await.unwrap();
@@ -354,7 +360,7 @@ async fn original_provider_failure_is_not_a_miss_or_factory_failure() {
     *provider.mode.lock().unwrap() = Mode::Error;
     let c = cache(&provider);
     let error = c
-        .get_or_set("broken", |_| async {
+        .get_or_set::<_, _, _, amalgam::FactoryError>("broken", |_| async {
             panic!("provider failure invoked factory")
         })
         .await
@@ -379,9 +385,11 @@ async fn release_errors_and_panics_do_not_replace_computed_values_or_double_rele
         *provider.release.lock().unwrap() = result;
         let c = cache(&provider);
         assert_eq!(
-            c.get_or_set("release", |ctx| async move { Ok(ctx.value(23)) })
-                .await
-                .unwrap(),
+            c.get_or_set("release", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(23))
+            })
+            .await
+            .unwrap(),
             23
         );
         provider.drained();
@@ -434,7 +442,7 @@ async fn soft_completion_keeps_the_custom_guard_until_background_factory_finishe
         c.get_or_set("background", move |ctx| async move {
             factory_release.acquire().await.unwrap().forget();
             assert!(ctx.cancellation().check().is_ok());
-            Ok(ctx.value(37))
+            Ok::<_, amalgam::FactoryError>(ctx.value(37))
         })
         .await
         .unwrap(),
@@ -464,16 +472,20 @@ async fn eager_uses_nonblocking_custom_attempt_and_owned_guard() {
         .try_build()
         .unwrap();
     assert_eq!(
-        c.get_or_set("eager", |ctx| async move { Ok(ctx.value(41)) })
-            .await
-            .unwrap(),
+        c.get_or_set("eager", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(41))
+        })
+        .await
+        .unwrap(),
         41
     );
     clock.advance(Duration::from_secs(6));
     assert_eq!(
-        c.get_or_set("eager", |ctx| async move { Ok(ctx.value(43)) })
-            .await
-            .unwrap(),
+        c.get_or_set("eager", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(43))
+        })
+        .await
+        .unwrap(),
         41
     );
     c.flush_pending().await.unwrap();
@@ -502,7 +514,7 @@ async fn marker_and_entry_equal_text_keys_have_disjoint_custom_coordination() {
         Duration::from_secs(1),
         c.get_or_set_full(
             "tag:group",
-            |ctx| async move { Ok(ctx.value(47)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(47)) },
             None,
             vec![tag.clone()].into_boxed_slice(),
             MaybeValue::none(),
@@ -552,18 +564,18 @@ fn native_and_async_views_use_one_custom_local_locker() {
         BlockingCache::from_builder(Cache::builder().memory_locker(provider.clone())).unwrap();
     assert_eq!(
         native
-            .get_or_set("native", |ctx| Ok(ctx.value(53)))
+            .get_or_set("native", |ctx| Ok::<_, amalgam::FactoryError>(
+                ctx.value(53)
+            ))
             .unwrap(),
         53
     );
     assert_eq!(
         native
             .runtime()
-            .run(
-                native
-                    .as_async()
-                    .get_or_set("async", |ctx| async move { Ok(ctx.value(59)) })
-            )
+            .run(native.as_async().get_or_set("async", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(59))
+            }))
             .unwrap(),
         59
     );
@@ -592,7 +604,7 @@ async fn cached_marker_eager_refresh_uses_the_same_custom_provider() {
         .unwrap();
     c.get_or_set_full(
         "marker-eager",
-        |ctx| async move { Ok(ctx.value(61)) },
+        |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(61)) },
         None,
         vec![Tag::new("eager-group").unwrap()].into_boxed_slice(),
         MaybeValue::none(),
@@ -626,7 +638,9 @@ async fn dropped_caller_ends_the_pending_acquisition_before_destruction() {
     let request = c.clone();
     let work = tokio::spawn(async move {
         request
-            .get_or_set("drop", |_| async { panic!("dropped caller ran factory") })
+            .get_or_set::<_, _, _, amalgam::FactoryError>("drop", |_| async {
+                panic!("dropped caller ran factory")
+            })
             .await
     });
     provider.entered.notified().await;
@@ -652,8 +666,10 @@ async fn hard_factory_timeout_releases_the_acquired_local_guard() {
         .try_build()
         .unwrap();
     assert!(matches!(
-        c.get_or_set("hard", |_| async { std::future::pending().await })
-            .await,
+        c.get_or_set::<_, _, _, amalgam::FactoryError>("hard", |_| async {
+            std::future::pending().await
+        })
+        .await,
         Err(Error::FactoryTimeout { .. })
     ));
     c.flush_pending().await.unwrap();
@@ -702,14 +718,18 @@ async fn provider_can_be_shared_without_one_cache_shutdown_closing_the_other() {
         .instance_id("two")
         .try_build()
         .unwrap();
-    a.get_or_set("a", |ctx| async move { Ok(ctx.value(67)) })
-        .await
-        .unwrap();
+    a.get_or_set("a", |ctx| async move {
+        Ok::<_, amalgam::FactoryError>(ctx.value(67))
+    })
+    .await
+    .unwrap();
     a.shutdown().await.unwrap();
     assert_eq!(
-        b.get_or_set("b", |ctx| async move { Ok(ctx.value(71)) })
-            .await
-            .unwrap(),
+        b.get_or_set("b", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(71))
+        })
+        .await
+        .unwrap(),
         71
     );
     b.shutdown().await.unwrap();

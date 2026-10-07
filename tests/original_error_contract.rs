@@ -90,7 +90,9 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
             .is_some()
     );
     let value = cache
-        .get_or_set("key", |ctx| async move { Ok(ctx.modified(7).done()) })
+        .get_or_set("key", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.modified(7).done())
+        })
         .await
         .unwrap();
     assert_eq!(value, 7);

@@ -130,12 +130,10 @@ async fn run_factory<V, F>(
     dispatch: FactoryDispatch,
     factory: F,
     context: FactoryContext<V>,
-) -> std::result::Result<FactoryProduct<V>, FactoryError>
+) -> std::result::Result<V, FactoryError>
 where
     V: Clone + Send + Sync + 'static,
-    F: FnOnce(FactoryContext<V>) -> std::result::Result<FactoryProduct<V>, FactoryError>
-        + Send
-        + 'static,
+    F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
 {
     if dispatch.inline(&context) {
         let _callback = runtime::callback_scope(worker.scopes());
@@ -310,7 +308,7 @@ mod tests {
                 move |ctx| {
                     started_tx.send(()).unwrap();
                     gate.wait();
-                    Ok(ctx.value(1))
+                    Ok::<_, crate::FactoryError>(ctx.value(1))
                 },
                 CancellationSource::new().token(),
             )
@@ -329,7 +327,7 @@ mod tests {
                 move |ctx| {
                     let _held = &captured;
                     invoked.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(99))
+                    Ok::<_, crate::FactoryError>(ctx.value(99))
                 },
                 token,
             )

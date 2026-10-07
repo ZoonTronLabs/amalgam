@@ -30,7 +30,7 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
             let _lifetime = OriginDrop(dropped_factory);
             entered_factory.fetch_add(1, Ordering::SeqCst);
             pending::<()>().await;
-            Ok(ctx.value(42))
+            Ok::<_, amalgam::FactoryError>(ctx.value(42))
         },
         source.token(),
     ));
@@ -62,7 +62,9 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
     assert!(!cache.read("parked", None).await.expect("read").has_value());
     assert_eq!(
         cache
-            .get_or_set("parked", |ctx| async move { Ok(ctx.value(7)) })
+            .get_or_set("parked", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+            })
             .await
             .expect("new origin owns released key"),
         7

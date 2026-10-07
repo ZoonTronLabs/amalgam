@@ -5,6 +5,19 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Factory API and distributed execution
+- Accept ordinary `Result<V, E>` factory output with any thread-safe error type.
+  Preserve the concrete source error at the cache boundary. Conditional values,
+  adaptive options and tags remain scoped to the originating factory request.
+- Publish adaptive factory metadata only when it is used; a plain value factory
+  does not allocate another metadata owner. Preserve cancellation, stable pinning
+  and retirement order for suspended work.
+- Borrow the existing parent budget for L2 reads with synchronous serializers.
+  Keep the same provider, decode, marker-validation and hydration work inside
+  the read deadline. Asynchronous serializers retain their independent phase
+  cancellation token and precise timeout reason.
+
+
 ### ReaderSlots safety and simplification
 - Reduce ready selection to the general counted path and a build-proven primitive
   path; remove the separate x86 admission branch and its unused helpers.

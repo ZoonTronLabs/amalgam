@@ -161,6 +161,7 @@ pub(crate) struct Request {
     state: AtomicU8,
     changed: Notify,
     listeners: parking_lot::Mutex<VecDeque<Listener>>,
+    factory_adaptation: crate::factory::FactoryFeedback,
 }
 /// Cancellation can share the allocation of its owning flight.
 pub(crate) trait RequestOwner: std::fmt::Debug + Send + Sync + 'static {
@@ -231,6 +232,7 @@ impl Request {
             state: AtomicU8::new(0),
             changed: Notify::new(),
             listeners: parking_lot::Mutex::new(VecDeque::new()),
+            factory_adaptation: crate::factory::FactoryFeedback::default(),
         }
     }
 }
@@ -1316,5 +1318,17 @@ mod tracker_contract_tests {
                 .is_ready()
         );
         drop((first, second));
+    }
+}
+
+impl FactoryCancellation {
+    pub(crate) fn publish_factory_adaptation(&self, adaptation: crate::factory::FactoryAdaptation) {
+        self.request
+            .request()
+            .factory_adaptation
+            .publish(adaptation);
+    }
+    pub(crate) fn take_factory_adaptation(&self) -> Option<crate::factory::FactoryAdaptation> {
+        self.request.request().factory_adaptation.take()
     }
 }

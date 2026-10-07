@@ -24,10 +24,9 @@ fn an_abandoned_request_releases_its_capture_without_invoking_the_factory() {
     let cache = Cache::<u64>::new();
     let capture = Arc::new(7);
     let weak = Arc::downgrade(&capture);
-    let request = cache.get_or_set(
-        "abandoned",
-        move |ctx| async move { Ok(ctx.value(*capture)) },
-    );
+    let request = cache.get_or_set("abandoned", move |ctx| async move {
+        Ok::<_, amalgam::FactoryError>(ctx.value(*capture))
+    });
     assert!(weak.upgrade().is_some());
     assert!(!ready(cache.read("abandoned", None)).unwrap().has_value());
     drop(request);
@@ -40,7 +39,9 @@ fn receipts_are_completed_for_inline_factory_and_unchanged_for_a_ready_hit() {
     let cache = Cache::new();
     let created = ready(
         cache
-            .get_or_set("receipt", |ctx| async move { Ok(ctx.value(7)) })
+            .get_or_set("receipt", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+            })
             .with_receipt(),
     )
     .unwrap();
@@ -51,7 +52,9 @@ fn receipts_are_completed_for_inline_factory_and_unchanged_for_a_ready_hit() {
     ));
     let existing = ready(
         cache
-            .get_or_set("receipt", |_| async { panic!("hot factory must not run") })
+            .get_or_set::<_, _, _, amalgam::FactoryError>("receipt", |_| async {
+                panic!("hot factory must not run")
+            })
             .with_receipt(),
     )
     .unwrap();
@@ -72,7 +75,9 @@ async fn an_option_overlay_preserves_cache_fail_safe_and_keeps_its_defaults_immu
         .try_build()
         .unwrap();
     let value = cache
-        .get_or_set("overlay", |ctx| async move { Ok(ctx.value(7)) })
+        .get_or_set("overlay", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
+        })
         .options(|options| options.with_duration(Duration::from_millis(100)))
         .tags(["profile"])
         .await
@@ -97,7 +102,7 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
     let invalid = cache
         .get_or_set("invalid", move |ctx| async move {
             factory_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(7))
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
         })
         .tags(["valid", " "])
         .await;
@@ -109,7 +114,7 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
     let cancelled = cache
         .get_or_set("cancelled", move |ctx| async move {
             factory_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(7))
+            Ok::<_, amalgam::FactoryError>(ctx.value(7))
         })
         .cancellation(cancellation.token())
         .await;

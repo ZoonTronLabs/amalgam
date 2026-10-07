@@ -60,7 +60,7 @@ async fn main() {
             .get_or_set("profile", move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 println!("  [node-1 factory] producing the value");
-                Ok(ctx.value("Alice".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("Alice".to_owned()))
             })
             .await
             .expect("node-1 produces the value")
@@ -75,7 +75,7 @@ async fn main() {
             .get_or_set("profile", move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 println!("  [node-2 factory] (this should NOT run)");
-                Ok(ctx.value("should-not-run".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("should-not-run".to_owned()))
             })
             .await
             .expect("node-2 reads through L2")

@@ -42,7 +42,7 @@ async fn a_ready_origin_hit_reaches_an_observer_attached_by_the_unused_factory_d
         cache
             .get_or_set("hit", move |ctx| async move {
                 drop(capture);
-                Ok(ctx.value(99))
+                Ok::<_, amalgam::FactoryError>(ctx.value(99))
             })
             .await
             .unwrap(),
@@ -79,7 +79,7 @@ async fn closing_from_the_unused_factory_drop_rejects_the_ready_value_once() {
         cache
             .get_or_set("hit", move |ctx| async move {
                 drop(capture);
-                Ok(ctx.value(99))
+                Ok::<_, amalgam::FactoryError>(ctx.value(99))
             })
             .await,
         Err(Error::OperationCancelled {
@@ -114,7 +114,7 @@ fn native_ready_origins_preserve_unused_capture_events_and_close() {
         };
         let result = cache.get_or_set("hit", move |ctx| {
             drop(capture);
-            Ok(ctx.value(99))
+            Ok::<_, amalgam::FactoryError>(ctx.value(99))
         });
         let mut receiver = receiver.lock().unwrap().take().unwrap();
         let (outcome, level) = if closes {
@@ -233,7 +233,9 @@ async fn the_first_inline_factory_miss_starts_physical_cleanup() {
     let weak = Arc::downgrade(&source);
     drop(
         cache
-            .get_or_set("expires", move |ctx| async move { Ok(ctx.value(source)) })
+            .get_or_set("expires", move |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(source))
+            })
             .await
             .unwrap(),
     );
@@ -267,7 +269,7 @@ async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
         cache
             .get_or_set("eager", |ctx| async move {
                 assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
-                Ok(ctx.value(2))
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
             })
             .await
             .unwrap(),

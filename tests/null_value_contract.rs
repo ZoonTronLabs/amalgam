@@ -37,7 +37,7 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
         second
             .get_or_set("null", move |ctx| async move {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value(Some("origin".to_owned())))
+                Ok::<_, amalgam::FactoryError>(ctx.value(Some("origin".to_owned())))
             })
             .await
             .unwrap(),
@@ -66,7 +66,7 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
         .unwrap();
     cache
         .get_or_set("null", |ctx| async move {
-            Ok(ctx.modified(None).etag("null-etag").done())
+            Ok::<_, amalgam::FactoryError>(ctx.modified(None).etag("null-etag").done())
         })
         .await
         .unwrap();

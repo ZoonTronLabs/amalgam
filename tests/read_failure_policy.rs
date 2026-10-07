@@ -138,7 +138,7 @@ async fn origin_fallback_policy_and_legacy_adapters_keep_their_existing_behavior
         cache
             .get_or_set("k", move |context| async move {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(context.value(7))
+                Ok::<_, amalgam::FactoryError>(context.value(7))
             })
             .await
             .unwrap(),

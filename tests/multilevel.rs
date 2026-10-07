@@ -38,7 +38,7 @@ async fn l2_read_through_across_instances() {
         cache1
             .get_or_set("k", move |ctx| async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value("from-factory".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("from-factory".to_owned()))
             })
             .await
             .unwrap();
@@ -58,7 +58,7 @@ async fn l2_read_through_across_instances() {
         cache2
             .get_or_set("k", move |ctx| async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value("should-not-run".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("should-not-run".to_owned()))
             })
             .await
             .unwrap()
@@ -97,7 +97,9 @@ async fn backplane_remove_invalidates_peer() {
     tokio::time::sleep(Duration::from_millis(60)).await; // let the Set propagate
 
     let served = cache2
-        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+        })
         .await
         .unwrap();
     assert_eq!(served, "v1", "peer pulled the value from shared L2");
@@ -143,7 +145,7 @@ async fn backplane_set_makes_peer_repull_new_value() {
         let v = cache2
             .get_or_set("k", move |ctx| async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value("x".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
             })
             .await
             .unwrap();
@@ -159,7 +161,7 @@ async fn backplane_set_makes_peer_repull_new_value() {
         cache2
             .get_or_set("k", move |ctx| async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value("x".to_owned()))
+                Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
             })
             .await
             .unwrap()
@@ -199,7 +201,9 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
 
     // cache2 caches v1 in its own L1.
     let v = cache2
-        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+        })
         .await
         .unwrap();
     assert_eq!(v, "v1");
@@ -246,7 +250,9 @@ async fn backplane_expire_marks_peer_stale_keeping_physical() {
     tokio::time::sleep(Duration::from_millis(60)).await;
     // cache2 holds it fresh in L1.
     cache2
-        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+        })
         .await
         .unwrap();
 
@@ -295,7 +301,9 @@ async fn backplane_clear_remove_propagates_to_peer() {
     cache1.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(60)).await;
     cache2
-        .get_or_set("k", |ctx| async move { Ok(ctx.value("x".to_owned())) })
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+        })
         .await
         .unwrap();
     assert!(
@@ -354,10 +362,9 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
     // Default (rethrow_serialization_exceptions = true): the deserialize error
     // surfaces from get_or_set instead of silently degrading.
     let err = reader
-        .get_or_set(
-            "k",
-            |ctx| async move { Ok(ctx.value("factory".to_owned())) },
-        )
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value("factory".to_owned()))
+        })
         .await;
     assert!(err.is_err(), "deserialize error rethrows by default");
 
@@ -368,7 +375,7 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
     let v = reader
         .get_or_set_with(
             "k",
-            |ctx| async move { Ok(ctx.value("factory".to_owned())) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value("factory".to_owned())) },
             lenient,
         )
         .await

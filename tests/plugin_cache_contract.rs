@@ -53,7 +53,9 @@ impl CachePlugin<i32> for Probe {
         assert_eq!(
             boundary(
                 PluginStage::Start,
-                cache.get_or_set("plugin-start", |ctx| Ok(ctx.value(17)))
+                cache.get_or_set("plugin-start", |ctx| Ok::<_, amalgam::FactoryError>(
+                    ctx.value(17)
+                ))
             )?,
             17
         );
@@ -118,7 +120,9 @@ impl PluginSession for Session {
         let cache = self.context.cache()?.blocking(self.runtime.clone());
         let value = boundary(
             PluginStage::Stop,
-            cache.get_or_set("plugin-stop-factory", |ctx| Ok(ctx.value(29))),
+            cache.get_or_set("plugin-stop-factory", |ctx| {
+                Ok::<_, amalgam::FactoryError>(ctx.value(29))
+            }),
         )?;
         assert_eq!(value, 29);
         boundary(PluginStage::Stop, cache.try_set("plugin-stop", 30))?

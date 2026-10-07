@@ -290,7 +290,7 @@ async fn provider_reported_cancellation_cannot_be_suppressed_as_marker_failure()
     );
     let mut events = cache.events().subscribe();
     let error = cache
-        .get_or_set("key", |_| async {
+        .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
             panic!("cancellation must not run origin")
         })
         .await
@@ -525,7 +525,7 @@ async fn marker_fault_flags_are_independent_and_rethrow_original_cause_even_in_g
         store.mode(mode);
         let cache = reader(clock, backend, store, options);
         let error = cache
-            .get_or_set("key", |_| async {
+            .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
                 panic!("strict marker fault must not run origin")
             })
             .await
@@ -806,7 +806,7 @@ async fn marker_reads_bypass_value_provider_and_value_operation_override() {
     );
     assert_eq!(
         cache
-            .get_or_set("key", |_| async { panic!("L2 hit") })
+            .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async { panic!("L2 hit") })
             .await
             .unwrap(),
         7
@@ -1493,7 +1493,7 @@ async fn eager_marker_read_is_owned_by_refresh_and_shutdown() {
     clock.advance(Duration::from_secs(6));
     assert_eq!(
         cache
-            .get_or_set("key", |_| async {
+            .get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
                 panic!("parked L2 preflight must not run origin")
             })
             .await

@@ -618,6 +618,19 @@ impl FactoryError {
         }
     }
 
+    pub(crate) fn from_boundary<E: std::error::Error + Send + Sync + 'static>(error: E) -> Self {
+        let source: Box<dyn std::error::Error + Send + Sync> = Box::new(error);
+        match source.downcast::<Self>() {
+            Ok(factory) => *factory,
+            Err(source) => Self {
+                detail: FactoryErrorDetail::Source {
+                    message: into_nonblank(source.to_string()),
+                    source: std::sync::Arc::from(source),
+                },
+            },
+        }
+    }
+
     /// Reports cancellation without turning it into an origin failure.
     #[must_use]
     pub fn cancelled(reason: FactoryCancellationReason) -> Self {

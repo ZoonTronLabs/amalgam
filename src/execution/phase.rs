@@ -168,7 +168,13 @@ pub(crate) struct ExecutionCheckpoint<'a, T> {
     checkpoint: &'a AtomicBool,
     _value: PhantomData<fn() -> T>,
 }
-impl<T> ExecutionCheckpoint<'_, T> {
+impl<'a, T> ExecutionCheckpoint<'a, T> {
+    pub(crate) fn borrowing(checkpoint: &'a AtomicBool) -> Self {
+        Self {
+            checkpoint,
+            _value: PhantomData,
+        }
+    }
     pub(crate) fn record(&self) {
         self.checkpoint.store(true, Ordering::Release);
     }

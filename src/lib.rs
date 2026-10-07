@@ -104,8 +104,9 @@ pub use events::{
     LayerEventSubscription, MemoryEvent, OperationOutcome,
 };
 pub use execution::{CancellationRequest, CancellationSource, FactoryCancellation};
+pub(crate) use factory::FactoryProduct;
 pub use factory::{
-    ConditionalRefreshError, FactoryContext, FactoryInvocation, FactoryProduct, ModifiedBuilder,
+    ConditionalRefreshError, FactoryContext, FactoryInvocation, FactoryOptionsMut, ModifiedBuilder,
     NotModifiedBuilder, ValidatorUpdate,
 };
 pub use marker_reads::{

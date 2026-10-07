@@ -57,7 +57,29 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
-## Current repository diagnostic with corrected warmup
+## Focused L2 execution diagnostic
+
+Three counterbalanced before/after comparisons on the same M4 Pro, Rust 1.88.0
+and released FC 2.9. The source accepts plain factory values and errors. The
+candidate borrows the parent read budget for synchronous serializers; both
+versions retain identical provider, JSON, marker-validation and hydration work.
+All warmup windows settled. This focused comparison does not qualify hot reads,
+scaling, the complete API or release.
+
+| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
+|---|---:|---:|---:|---:|---:|---:|---|
+| L2 JSON read | 1339.0 | 1226.0 | 1177.5 | 1877.5 | **1.041** | 11 (was 14) | **Fail: <=1.00** |
+| L2 JSON get_or_set | 1748.3 | 1600.6 | 1278.7 | 2012.5 | **1.252** | 11 (was 14) | **Fail: <=1.00** |
+| L1 replacement | 90.3 | 91.0 | 109.1 | 144.5 | **0.835** | 0 | **Fail: <=0.75** |
+| Cold factory | 1070.4 | 1099.3 | 1687.3 | 1911.8 | 0.651 | 5.009 | <=0.75, <=6 allocations |
+
+Both L2 operations improve by about 8.4% against the same-runner baseline.
+Set is unchanged within one percent. Cold ranges overlap; its median alone is
+insufficient to attribute the difference to this L2 change. L2 and set budgets
+remain open. Ranges and exact source/binary identities are available in
+[the focused report](benchmarks/2026-10-07-l2-parent-budget.json).
+
+## Baseline after ready-plan simplification
 
 Three process triplets per API on macOS 26.6.2 arm64, M4 Pro, 12 available
 physical/logical cores; Rust 1.88.0, .NET SDK 10.0.300/runtime 10.0.8,

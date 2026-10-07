@@ -6,13 +6,13 @@ use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheOperation, CacheOrigin,
     CacheValue, CancellationSource, ClearMode, CloseOutcome, CommitReceipt, ConstantOrigin, Cow,
     DistributedCache, DistributedExpirePolicy, DistributedLocker, Entry, EntryOptions, Error,
-    Events, Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin,
-    FactoryProduct, Future, InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LayerEvent,
-    LookupKey, LookupMode, LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy,
-    MaybeValue, MemoryEvent, MutationReceipt, ObservationAdmission, Observed, OperationObservation,
-    OperationOutcome, Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyEager, ReadyHit,
-    ReadyLookup, ReadyObservation, ReadyRefresh, ReadyValue, ReplayTicket, Result, ShutdownReport,
-    Storage, Tag, TagVerdict, WorkAdmission, Worker,
+    Events, Execution, FactoryCancellation, FactoryContext, FactoryError, FactoryOrigin, Future,
+    InlinePermit, Instrument, KeyMutation, L2ReadPolicy, LayerEvent, LookupKey, LookupMode,
+    LookupStart, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MaybeValue, MemoryEvent,
+    MutationReceipt, ObservationAdmission, Observed, OperationObservation, OperationOutcome,
+    Ordering, OriginKind, Pin, Plugin, PublicLifetime, ReadyEager, ReadyHit, ReadyLookup,
+    ReadyObservation, ReadyRefresh, ReadyValue, ReplayTicket, Result, ShutdownReport, Storage, Tag,
+    TagVerdict, WorkAdmission, Worker,
 };
 use crate::marker_reads::MarkerReads;
 use crate::observability::QuietObservation;
@@ -432,11 +432,16 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     /// Lazily retrieves or computes a value. Options edit a copy of defaults;
     /// string tags, a fail-safe default and cancellation are optional inputs.
     /// Use `with_receipt()` to inspect the actual origin commit.
-    pub fn get_or_set<K, F, Fut>(&self, key: K, factory: F) -> super::GetOrSetRequest<'_, K, F, V>
+    pub fn get_or_set<K, F, Fut, E>(
+        &self,
+        key: K,
+        factory: F,
+    ) -> super::GetOrSetRequest<'_, K, F, V>
     where
         K: AsRef<str>,
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, E>> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
     {
         super::GetOrSetRequest::new(self, key, factory)
     }
@@ -449,7 +454,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<V>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         self.get_or_set_full(
             key,
@@ -561,7 +566,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<V>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         Ok(self
             .get_or_set_impl(
@@ -586,7 +591,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<CacheValue<V>>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         self.get_or_set_impl(
             key.as_ref(),
@@ -610,7 +615,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<CacheValue<V>>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         self.get_or_set_impl(
             key.as_ref(),
@@ -631,7 +636,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<V>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         self.get_or_set_full_cancellable(
             key,
@@ -655,7 +660,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<V>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         Ok(self
             .get_or_set_impl(
@@ -680,7 +685,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     ) -> Result<CacheValue<V>>
     where
         F: FnOnce(FactoryContext<V>) -> Fut + Send + 'static,
-        Fut: Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static,
+        Fut: Future<Output = std::result::Result<V, FactoryError>> + Send + 'static,
     {
         self.get_or_set_origin_impl(
             key,

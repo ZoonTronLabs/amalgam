@@ -47,7 +47,7 @@ async fn async_constant_ignores_factory_budget_and_does_not_report_factory_succe
     let factory = cache
         .get_or_set_with(
             "factory",
-            |ctx| async move { Ok(ctx.value(99)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(99)) },
             zero_budget(),
         )
         .await;

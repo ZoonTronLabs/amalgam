@@ -14,6 +14,23 @@ use super::{
 // checkpoint borrows the child phase; the owned parent retains the whole frame.
 type DistributedCheckpoint<'a, V> = ExecutionCheckpoint<'a, Option<DistributedLookup<V>>>;
 
+// A synchronous codec cannot retain a cancellation token. Its read can share
+// the already-owned parent, including provider suspension and shutdown drainage.
+// An asynchronous codec retains its separate phase reason and owned token.
+enum L2ReadBudget<V> {
+    Completed(Result<Option<DistributedLookup<V>>>),
+    TimedOut,
+}
+impl<V> L2ReadBudget<V> {
+    fn from_bounded(result: Result<Option<Result<Option<DistributedLookup<V>>>>>) -> Self {
+        match result {
+            Ok(Some(result)) => Self::Completed(result),
+            Ok(None) => Self::TimedOut,
+            Err(error) => Self::Completed(Err(error)),
+        }
+    }
+}
+
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn read_l1(
         &self,
@@ -97,39 +114,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         let timeout = opts
             .appropriate_distributed_timeout(matches!(fallback, FallbackAvailability::Available));
-        let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
-        let phase = crate::execution::BorrowedPhase::new(self.scopes(), cancellation);
-        let phase_cancellation = phase.token();
-        let checkpoint = phase.checkpoint();
-        let mut work = std::pin::pin!(
-            self.fetch_l2(key, &phase_cancellation, &checkpoint)
-                .instrument(span)
-        );
-        // This is declared after pinned work: cancellation/panic publishes its
-        // exact phase reason before codec destruction. The existing parent
-        // Execution owns this entire frame, including pending shutdown cleanup.
-        let _retirement = phase.retirement();
         let soft = opts.is_fail_safe_enabled()
             && matches!(fallback, FallbackAvailability::Available)
             && timeout == opts.distributed_soft_timeout()
             && timeout != opts.distributed_hard_timeout();
-        // Value retrieval, decoding and the required durable marker lookup are
-        // one read. A marker provider cannot escape the caller's chosen budget.
-        // Borrow execution through the deadline wrapper so we publish the exact
-        // phase reason before dropping its codec, independently of the caller.
-        let result = match bounded(
-            timeout,
-            std::future::poll_fn(|cx| phase.poll(cx, work.as_mut())),
-        )
-        .await
-        {
-            Ok(Some(result)) => result,
-            Ok(None) => {
-                phase.cancel(if soft {
-                    Reason::SoftTimeout
-                } else {
-                    Reason::HardTimeout
-                });
+        let (budget, physically_completed) =
+            self.read_l2_budget(key, timeout, soft, cancellation).await;
+        let result = match budget {
+            L2ReadBudget::Completed(result) => result,
+            L2ReadBudget::TimedOut => {
                 if policy == L2ReadPolicy::FactoryFallback
                     && opts.is_fail_safe_enabled()
                     && matches!(fallback, FallbackAvailability::Available)
@@ -142,11 +135,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     })
                 }
             }
-            Err(error) => Err(error),
         };
         match result {
             Ok(value) => {
-                if value.is_none() && !phase.checkpoint_reached() {
+                if value.is_none() && !physically_completed {
                     self.distributed_miss(key);
                 }
                 if let Some(entry) = &value {
@@ -161,13 +153,88 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     Err(error)
                 } else {
                     tracing::warn!(%error,key=%key,"distributed read degraded to miss");
-                    if !phase.checkpoint_reached() {
+                    if !physically_completed {
                         self.distributed_miss(key);
                     }
                     Ok(None)
                 }
             }
         }
+    }
+    async fn read_l2_budget(
+        &self,
+        key: &Arc<str>,
+        timeout: Timeout,
+        soft: bool,
+        cancellation: &FactoryCancellation,
+    ) -> (L2ReadBudget<V>, bool) {
+        match &self.inner.storage {
+            Storage::Hybrid {
+                serializer: crate::distributed::Serializer::Sync(_),
+                ..
+            } => self.read_l2_parent_budget(key, timeout, cancellation).await,
+            Storage::Hybrid {
+                serializer: crate::distributed::Serializer::Async(_),
+                ..
+            }
+            | Storage::MemoryOnly => {
+                self.read_l2_codec_budget(key, timeout, soft, cancellation)
+                    .await
+            }
+        }
+    }
+    async fn read_l2_parent_budget(
+        &self,
+        key: &Arc<str>,
+        timeout: Timeout,
+        cancellation: &FactoryCancellation,
+    ) -> (L2ReadBudget<V>, bool) {
+        let completed = std::sync::atomic::AtomicBool::new(false);
+        let checkpoint = DistributedCheckpoint::borrowing(&completed);
+        let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
+        let mut work = std::pin::pin!(
+            self.fetch_l2(key, cancellation, &checkpoint)
+                .instrument(span)
+        );
+        let result = bounded(timeout, work.as_mut()).await;
+        (
+            L2ReadBudget::from_bounded(result),
+            completed.load(Ordering::Acquire),
+        )
+    }
+    async fn read_l2_codec_budget(
+        &self,
+        key: &Arc<str>,
+        timeout: Timeout,
+        soft: bool,
+        cancellation: &FactoryCancellation,
+    ) -> (L2ReadBudget<V>, bool) {
+        let phase = crate::execution::BorrowedPhase::new(self.scopes(), cancellation);
+        let phase_cancellation = phase.token();
+        let checkpoint = phase.checkpoint();
+        let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
+        let mut work = std::pin::pin!(
+            self.fetch_l2(key, &phase_cancellation, &checkpoint)
+                .instrument(span)
+        );
+        // Publish the precise codec reason before its future is destroyed.
+        let _retirement = phase.retirement();
+        let result = bounded(
+            timeout,
+            std::future::poll_fn(|cx| phase.poll(cx, work.as_mut())),
+        )
+        .await;
+        if matches!(result, Ok(None)) {
+            phase.cancel(if soft {
+                Reason::SoftTimeout
+            } else {
+                Reason::HardTimeout
+            });
+        }
+        (
+            L2ReadBudget::from_bounded(result),
+            phase.checkpoint_reached(),
+        )
     }
     fn distributed_miss(&self, key: &Arc<str>) {
         self.memory.emit_layer_lazy(|| {

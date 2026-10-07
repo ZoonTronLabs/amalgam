@@ -287,17 +287,17 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
     let state = State::new();
     let cache = native(&state);
     assert_eq!(
-        cache.get_or_set("native", |ctx| Ok(ctx.value(1))).unwrap(),
+        cache
+            .get_or_set("native", |ctx| Ok::<_, amalgam::FactoryError>(ctx.value(1)))
+            .unwrap(),
         1
     );
     assert_eq!(
         cache
             .runtime()
-            .run(
-                cache
-                    .as_async()
-                    .get_or_set("async", |ctx| async move { Ok(ctx.value(2)) })
-            )
+            .run(cache.as_async().get_or_set("async", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+            }))
             .unwrap(),
         2
     );
@@ -305,7 +305,9 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
     assert_eq!(state.count(Method::Async), 1);
     for (key, value) in [("native", 1), ("async", 2)] {
         assert_eq!(
-            cache.get_or_set(key, |_| panic!("warm origin")).unwrap(),
+            cache
+                .get_or_set::<_, amalgam::FactoryError>(key, |_| panic!("warm origin"))
+                .unwrap(),
             value
         );
         assert_eq!(
@@ -314,7 +316,9 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
                 .run(
                     cache
                         .as_async()
-                        .get_or_set(key, |_| async { panic!("warm async origin") })
+                        .get_or_set::<_, _, _, amalgam::FactoryError>(key, |_| async {
+                            panic!("warm async origin")
+                        })
                 )
                 .unwrap(),
             value
@@ -349,7 +353,12 @@ fn legacy_provider_without_blocking_capability_remains_compatible() {
         driver(),
     )
     .unwrap();
-    assert_eq!(cache.get_or_set("old", |ctx| Ok(ctx.value(7))).unwrap(), 7);
+    assert_eq!(
+        cache
+            .get_or_set("old", |ctx| Ok::<_, amalgam::FactoryError>(ctx.value(7)))
+            .unwrap(),
+        7
+    );
     assert_eq!(state.count(Method::Blocking), 0);
     assert_eq!(state.count(Method::Async), 1);
     cache.shutdown().unwrap();
@@ -372,7 +381,7 @@ fn mixed_callers_share_one_factory_and_owned_guards() {
                 move |ctx| {
                     n.fetch_add(1, Ordering::SeqCst);
                     thread::sleep(Duration::from_millis(40));
-                    Ok(ctx.value(42))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
                 },
                 token,
             )
@@ -383,7 +392,7 @@ fn mixed_callers_share_one_factory_and_owned_guards() {
             c.get_or_set("same", move |ctx| async move {
                 n.fetch_add(1, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(40)).await;
-                Ok(ctx.value(42))
+                Ok::<_, amalgam::FactoryError>(ctx.value(42))
             })
             .await
         }));
@@ -420,7 +429,7 @@ fn blocking_waiter_cannot_starve_the_factory_with_one_callback_slot() {
             "shared",
             move |ctx| {
                 n.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value(17))
+                Ok::<_, amalgam::FactoryError>(ctx.value(17))
             },
             token,
         );
@@ -437,7 +446,7 @@ fn blocking_waiter_cannot_starve_the_factory_with_one_callback_slot() {
             "shared",
             move |ctx| {
                 n.fetch_add(1, Ordering::SeqCst);
-                Ok(ctx.value(99))
+                Ok::<_, amalgam::FactoryError>(ctx.value(99))
             },
             token,
         );
@@ -494,7 +503,7 @@ fn distinct_keys_enter_inline_factories_before_either_is_released() {
             c.get_or_set(key, move |ctx| {
                 s.send(()).unwrap();
                 g.wait();
-                Ok(ctx.value(7))
+                Ok::<_, amalgam::FactoryError>(ctx.value(7))
             })
         }));
     }
@@ -531,8 +540,10 @@ fn ignored_acquisition_deadline_serves_stale_and_flush_waits_for_late_release() 
     let c = cache.clone();
     let (send, receive) = mpsc::channel();
     let caller = thread::spawn(move || {
-        send.send(c.get_or_set("stale", |_| panic!("eligible stale must bypass origin")))
-            .unwrap()
+        send.send(c.get_or_set::<_, amalgam::FactoryError>("stale", |_| {
+            panic!("eligible stale must bypass origin")
+        }))
+        .unwrap()
     });
     let request = entered.recv_timeout(WAIT).unwrap();
     assert_eq!(receive.recv_timeout(WAIT).unwrap().unwrap(), 7);
@@ -593,7 +604,11 @@ fn queued_cancelled_acquisition_never_invokes_the_provider() {
     let entered = state.watch();
     let cache = native(&state);
     let c = cache.clone();
-    let first = thread::spawn(move || c.get_or_set("holding-slot", |ctx| Ok(ctx.value(1))));
+    let first = thread::spawn(move || {
+        c.get_or_set("holding-slot", |ctx| {
+            Ok::<_, amalgam::FactoryError>(ctx.value(1))
+        })
+    });
     entered.recv_timeout(WAIT).unwrap();
     let source = CancellationSource::new();
     let c = cache.clone();
@@ -630,7 +645,7 @@ fn shutdown_cancels_wait_but_drains_the_real_callback_and_late_guard() {
     let c = cache.clone();
     let (send, receive) = mpsc::channel();
     let caller = thread::spawn(move || {
-        send.send(c.get_or_set("shutdown", |_| panic!("closed origin")))
+        send.send(c.get_or_set::<_, amalgam::FactoryError>("shutdown", |_| panic!("closed origin")))
             .unwrap()
     });
     let request = entered.recv_timeout(WAIT).unwrap();
@@ -661,7 +676,7 @@ fn original_blocking_provider_error_is_not_a_miss_or_factory_failure() {
     *state.behavior.lock().unwrap() = Behavior::Error;
     let cache = native(&state);
     let error = cache
-        .get_or_set("cause", |_| panic!("provider failure ran origin"))
+        .get_or_set::<_, amalgam::FactoryError>("cause", |_| panic!("provider failure ran origin"))
         .unwrap_err();
     let Error::MemoryLocker(MemoryLockerError::Provider { source }) = error else {
         panic!("lost provider error: {error:?}")
@@ -676,7 +691,7 @@ fn blocking_provider_panic_keeps_its_join_cause_and_shutdown_stage() {
     *state.behavior.lock().unwrap() = Behavior::Panic;
     let cache = native(&state);
     let error = cache
-        .get_or_set("panic", |_| panic!("panicked provider ran origin"))
+        .get_or_set::<_, amalgam::FactoryError>("panic", |_| panic!("panicked provider ran origin"))
         .unwrap_err();
     let Error::MemoryLocker(MemoryLockerError::Provider { source }) = error else {
         panic!("lost callback panic: {error:?}")
@@ -706,7 +721,9 @@ fn unavailable_blocking_provider_permits_the_ordinary_unlocked_factory() {
     let cache = native(&state);
     assert_eq!(
         cache
-            .get_or_set("unlocked", |ctx| Ok(ctx.value(4)))
+            .get_or_set("unlocked", |ctx| Ok::<_, amalgam::FactoryError>(
+                ctx.value(4)
+            ))
             .unwrap(),
         4
     );
@@ -724,7 +741,9 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
     assert_eq!(
         cache
             .get_or_set("outer", move |ctx| run
-                .run(child.get_or_set("inner", |ctx| async move { Ok(ctx.value(8)) }))
+                .run(child.get_or_set("inner", |ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(8))
+                }))
                 .map(|value| ctx.value(value + 1))
                 .map_err(FactoryError::from_source))
             .unwrap(),
@@ -735,7 +754,9 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
     drop(cache);
     assert_eq!(
         driver
-            .run(asynchronous.get_or_set("after", |ctx| async move { Ok(ctx.value(11)) }))
+            .run(asynchronous.get_or_set("after", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(11))
+            }))
             .unwrap(),
         11
     );
@@ -815,7 +836,7 @@ fn soft_timeout_background_keeps_the_blocking_acquired_guard_until_commit() {
             .get_or_set("soft", move |ctx| {
                 send.send(()).unwrap();
                 blocked.wait();
-                Ok(ctx.value(2))
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
             })
             .unwrap(),
         1
@@ -841,12 +862,16 @@ fn eager_refresh_uses_nonblocking_try_and_never_blocking_acquisition() {
     )
     .unwrap();
     assert_eq!(
-        cache.get_or_set("eager", |ctx| Ok(ctx.value(1))).unwrap(),
+        cache
+            .get_or_set("eager", |ctx| Ok::<_, amalgam::FactoryError>(ctx.value(1)))
+            .unwrap(),
         1
     );
     clock.advance(Duration::from_secs(6));
     assert_eq!(
-        cache.get_or_set("eager", |ctx| Ok(ctx.value(2))).unwrap(),
+        cache
+            .get_or_set("eager", |ctx| Ok::<_, amalgam::FactoryError>(ctx.value(2)))
+            .unwrap(),
         1
     );
     cache.flush_pending().unwrap();
@@ -872,7 +897,7 @@ fn native_marker_factories_use_the_blocking_provider_and_disjoint_keys() {
         cache
             .get_or_set_full(
                 "tagged",
-                |ctx| Ok(ctx.value(7)),
+                |ctx| Ok::<_, amalgam::FactoryError>(ctx.value(7)),
                 None,
                 vec![tag.clone()].into_boxed_slice(),
                 MaybeValue::none()
@@ -924,7 +949,7 @@ fn opposite_nested_native_calls_progress_with_one_slot_per_class() {
                     inner
                         .get_or_set_cancellable(
                             format!("child/{key}"),
-                            |ctx| Ok(ctx.value(7)),
+                            |ctx| Ok::<_, amalgam::FactoryError>(ctx.value(7)),
                             nested,
                         )
                         .map(|value| ctx.value(value + 1))

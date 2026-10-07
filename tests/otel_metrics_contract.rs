@@ -341,7 +341,7 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
     cache
         .get_or_set_with(
             "failure",
-            |ctx| async move { Ok(ctx.value(17)) },
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(17)) },
             opts.clone(),
         )
         .await
@@ -364,7 +364,11 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
         true,
     );
     cache
-        .get_or_set_with("soft", |ctx| async move { Ok(ctx.value(23)) }, soft.clone())
+        .get_or_set_with(
+            "soft",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(23)) },
+            soft.clone(),
+        )
         .await
         .unwrap();
     clock.advance(Duration::from_millis(201));
@@ -379,7 +383,7 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
                 move |ctx| async move {
                     signal.notify_one();
                     gate.acquire().await.unwrap().forget();
-                    Ok(ctx.value(29))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(29))
                 },
                 soft
             )
@@ -503,13 +507,18 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
         .build();
     cache
-        .get_or_set("key", |ctx| async move { Ok(ctx.value(17)) })
+        .get_or_set::<_, _, _, amalgam::FactoryError>("key", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(17))
+        })
         .await
         .unwrap();
     clock.advance(Duration::from_millis(201));
     assert_eq!(
         cache
-            .get_or_set("key", |ctx| async move { ctx.not_modified() })
+            .get_or_set::<_, _, _, amalgam::FactoryError>(
+                "key",
+                |ctx| async move { ctx.not_modified() }
+            )
             .await
             .unwrap(),
         17
@@ -517,7 +526,10 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
     clock.advance(Duration::from_millis(101));
     assert_eq!(
         cache
-            .get_or_set("key", |ctx| async move { ctx.not_modified() })
+            .get_or_set::<_, _, _, amalgam::FactoryError>(
+                "key",
+                |ctx| async move { ctx.not_modified() }
+            )
             .await
             .unwrap(),
         17
@@ -571,9 +583,11 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
     clock.advance(Duration::from_secs(31));
     b.try_set("key", 23).await.unwrap().wait().await.unwrap();
     assert_eq!(
-        a.get_or_set("key", |_| async { panic!("newer L2 must bypass origin") })
-            .await
-            .unwrap(),
+        a.get_or_set::<_, _, _, amalgam::FactoryError>("key", |_| async {
+            panic!("newer L2 must bypass origin")
+        })
+        .await
+        .unwrap(),
         17
     );
     a.flush_pending().await.unwrap();

@@ -51,11 +51,11 @@ async fn cancelling_finite_factory_must_not_detach_it_and_release_singleflight()
         let active = active.clone();
         tokio::spawn(async move {
             cache
-                .get_or_set("k", move |ctx| async move {
+                .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
                     let _running = Running::start(active);
                     let _ = started_tx.send(());
                     let _ = release_rx.await;
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 })
                 .options(move |_| finite)
                 .cancellation(token)
@@ -77,8 +77,8 @@ async fn cancelling_finite_factory_must_not_detach_it_and_release_singleflight()
     let observed_active = {
         let active = active.clone();
         cache
-            .get_or_set("k", move |ctx| async move {
-                Ok(ctx.value(active.load(Ordering::SeqCst) as i32))
+            .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(active.load(Ordering::SeqCst) as i32))
             })
             .await
             .expect("second flight finishes")
@@ -109,12 +109,14 @@ async fn unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide(
     let nested_cache = cache.clone();
     let result = tokio::time::timeout(
         Duration::from_millis(80),
-        cache.get_or_set(outer, move |ctx| async move {
+        cache.get_or_set::<_, _, _, amalgam::FactoryError>(outer, move |ctx| async move {
             let nested = nested_cache
-                .get_or_set(inner, |ctx| async move { Ok(ctx.value(42)) })
+                .get_or_set::<_, _, _, amalgam::FactoryError>(inner, |ctx| async move {
+                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                })
                 .await
                 .map_err(amalgam::FactoryError::from_source)?;
-            Ok(ctx.value(nested))
+            Ok::<_, amalgam::FactoryError>(ctx.value(nested))
         }),
     )
     .await;
@@ -132,10 +134,13 @@ async fn distinct_cold_keys_are_not_serialized_by_the_legacy_shard_hint() {
         let cache = cache.clone();
         tasks.push(tokio::spawn(async move {
             cache
-                .get_or_set(format!("independent-{index}"), move |ctx| async move {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    Ok(ctx.value(index))
-                })
+                .get_or_set::<_, _, _, amalgam::FactoryError>(
+                    format!("independent-{index}"),
+                    move |ctx| async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        Ok::<_, amalgam::FactoryError>(ctx.value(index))
+                    },
+                )
                 .await
         }));
     }
@@ -181,7 +186,9 @@ async fn foreground_factory_panics_propagate_and_release_the_flight() {
         );
         let next = tokio::time::timeout(
             Duration::from_millis(100),
-            cache.get_or_set("k", |ctx| async move { Ok(ctx.value(2)) }),
+            cache.get_or_set::<_, _, _, amalgam::FactoryError>("k", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+            }),
         )
         .await
         .expect("panic released owned flight")
@@ -202,7 +209,7 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
     let mut events = cache.events().subscribe();
     assert_eq!(
         cache
-            .get_or_set("k", |_ctx| async move {
+            .get_or_set::<_, _, _, amalgam::FactoryError>("k", |_ctx| async move {
                 panic!("background factory contract defect");
             })
             .await
@@ -225,7 +232,9 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
     assert_eq!(
         tokio::time::timeout(
             Duration::from_millis(100),
-            cache.get_or_set("k", |ctx| async move { Ok(ctx.value(2)) })
+            cache.get_or_set::<_, _, _, amalgam::FactoryError>("k", |ctx| async move {
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+            })
         )
         .await
         .expect("panic released flight")
@@ -243,10 +252,10 @@ async fn a_configured_memory_lock_timeout_must_bound_a_cold_waiter() {
         let cache = cache.clone();
         tokio::spawn(async move {
             cache
-                .get_or_set("k", move |ctx| async move {
+                .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
                     let _ = started_tx.send(());
                     let _ = release_rx.await;
-                    Ok(ctx.value(1))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
                 })
                 .await
         })
@@ -261,7 +270,11 @@ async fn a_configured_memory_lock_timeout_must_bound_a_cold_waiter() {
         );
     let second = tokio::time::timeout(
         Duration::from_millis(60),
-        cache.get_or_set_with("k", |ctx| async move { Ok(ctx.value(2)) }, finite),
+        cache.get_or_set_with(
+            "k",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) },
+            finite,
+        ),
     )
     .await;
     let _ = release_tx.send(());
@@ -298,9 +311,9 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
     let (release_tx, release_rx) = oneshot::channel();
     assert_eq!(
         cache
-            .get_or_set("k", move |ctx| async move {
+            .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
                 let _ = release_rx.await;
-                Ok(ctx.value(2))
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
             })
             .await
             .expect("first stale fallback"),
@@ -309,7 +322,9 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
     clock.advance(Duration::from_secs(1)); // Throttle expired while background factory still holds lock.
     let second = tokio::time::timeout(
         Duration::from_millis(60),
-        cache.get_or_set("k", |ctx| async move { Ok(ctx.value(3)) }),
+        cache.get_or_set::<_, _, _, amalgam::FactoryError>("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(3))
+        }),
     )
     .await;
     let _ = release_tx.send(());
@@ -346,10 +361,10 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
         let gate = gate.clone();
         assert_eq!(
             cache
-                .get_or_set("k", move |ctx| async move {
+                .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     gate.acquire().await.expect("gate open").forget();
-                    Ok(ctx.value(2))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
                 })
                 .await
                 .expect("read returned"),
@@ -421,9 +436,9 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
     let calls = Arc::new(AtomicUsize::new(0));
     let factory_calls = calls.clone();
     assert_eq!(
-        a.get_or_set("k", move |ctx| async move {
+        a.get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
             factory_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(ctx.value(3))
+            Ok::<_, amalgam::FactoryError>(ctx.value(3))
         })
         .await
         .expect("fresh read"),
@@ -456,7 +471,7 @@ async fn an_immediate_factory_deadline_must_not_invoke_the_factory() {
             "k",
             move |ctx| {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                async move { Ok(ctx.value(1)) }
+                async move { Ok::<_, amalgam::FactoryError>(ctx.value(1)) }
             },
             options,
         )
@@ -487,7 +502,7 @@ async fn tag_invalidation_must_cover_a_factory_snapshot_started_before_its_marke
                         let database_snapshot = 1;
                         let _ = snapshot_tx.send(());
                         let _ = release_rx.await;
-                        Ok(ctx.value(database_snapshot))
+                        Ok::<_, amalgam::FactoryError>(ctx.value(database_snapshot))
                     },
                     None,
                     vec![Tag::new("group").expect("tag")].into_boxed_slice(),
@@ -537,7 +552,7 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
                     move |ctx| async move {
                         let _ = started_tx.send(());
                         let _ = release_rx.await;
-                        Ok(ctx.value(2))
+                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
                     },
                     options,
                 )
@@ -547,7 +562,11 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
     started_rx.await.expect("first factory holds lock");
     let second = tokio::time::timeout(
         Duration::from_millis(150),
-        cache.get_or_set_with("k", |ctx| async move { Ok(ctx.value(3)) }, options),
+        cache.get_or_set_with(
+            "k",
+            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(3)) },
+            options,
+        ),
     )
     .await;
     let _ = release_tx.send(());
@@ -584,9 +603,9 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
     let (release_tx, release_rx) = oneshot::channel();
     assert_eq!(
         cache
-            .get_or_set("k", move |ctx| async move {
+            .get_or_set::<_, _, _, amalgam::FactoryError>("k", move |ctx| async move {
                 let _ = release_rx.await;
-                Ok(ctx.value(2))
+                Ok::<_, amalgam::FactoryError>(ctx.value(2))
             })
             .await
             .expect("fail safe stale"),

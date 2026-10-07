@@ -73,7 +73,9 @@ async fn plugin_receives_set_and_hit_events() {
     // The key is now fresh in L1, so this resolves from the hot path and emits a
     // fresh `Hit` (the factory never runs).
     let v = cache
-        .get_or_set("k", |ctx| async move { Ok(ctx.value(999)) })
+        .get_or_set("k", |ctx| async move {
+            Ok::<_, amalgam::FactoryError>(ctx.value(999))
+        })
         .await
         .unwrap();
     assert_eq!(v, 1, "fresh L1 value short-circuits the factory");
@@ -125,7 +127,7 @@ async fn distributed_locker_enforces_cross_instance_single_flight() {
             // Hold the single-flight long enough that the second instance is
             // guaranteed to be waiting on the *distributed* lock when we finish.
             tokio::time::sleep(Duration::from_millis(50)).await;
-            Ok(ctx.value("from-factory".to_owned()))
+            Ok::<_, amalgam::FactoryError>(ctx.value("from-factory".to_owned()))
         }
     };
 
@@ -310,7 +312,7 @@ async fn remove_by_tag_propagates_across_nodes() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value("v1".to_owned()))
+                    Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned()))
                 },
                 Some(long()),
                 tagged(),
@@ -343,7 +345,7 @@ async fn remove_by_tag_propagates_across_nodes() {
                 "k",
                 move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value("v2".to_owned()))
+                    Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
                 },
                 Some(long()),
                 tagged(),
@@ -450,7 +452,7 @@ async fn default_options_provider_applies_per_key_duration() {
             cache
                 .get_or_set(key, move |ctx| async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Ok(ctx.value(val))
+                    Ok::<_, amalgam::FactoryError>(ctx.value(val))
                 })
                 .await
                 .unwrap()
