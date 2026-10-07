@@ -308,6 +308,9 @@ impl Scopes {
         self.closing.load(Ordering::SeqCst)
     }
     fn activity(&self) -> ThreadActivity<'_> {
+        self.reserve_activity(Ordering::SeqCst)
+    }
+    fn reserve_activity(&self, publication: Ordering) -> ThreadActivity<'_> {
         let stripe = current_stripe();
         let counter = &self.active[stripe.position];
         let owner = counter.owner.load(Ordering::Acquire);
@@ -319,10 +322,10 @@ impl Scopes {
                     .is_ok();
         let activity = if local {
             let count = counter.local.load(Ordering::Relaxed);
-            counter.local.store(count + 1, Ordering::SeqCst);
+            counter.local.store(count + 1, publication);
             Activity::Local(self, stripe)
         } else {
-            counter.shared.fetch_add(1, Ordering::SeqCst);
+            counter.shared.fetch_add(1, publication);
             Activity::Shared(self, stripe)
         };
         ThreadActivity {
@@ -343,6 +346,14 @@ impl Scopes {
         let activity = self.activity();
         InlinePermit {
             activity: InlineActivity::Thread(activity),
+        }
+    }
+    /// Reserve before storage admission. The storage fence must publish this
+    /// count before checking close or invoking any user code.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn defer_inline(&self) -> DeferredInlinePermit<'_> {
+        DeferredInlinePermit {
+            activity: self.reserve_activity(Ordering::Release),
         }
     }
     /// Transfers synchronous completion ownership through an internal result.
@@ -440,6 +451,8 @@ impl Scopes {
     pub(crate) fn close(&self) -> bool {
         let _activity = self.activity();
         let started = !self.closing.swap(true, Ordering::SeqCst);
+        // Pairs with both complete admission and the shared storage fence.
+        std::sync::atomic::fence(Ordering::SeqCst);
         self.tasks.close();
         self.shutdown.cancel();
         let mut panic = None;
@@ -588,6 +601,23 @@ impl InlineActivity<'_> {
         match self {
             Self::Thread(activity) => activity.activity.registry(),
             Self::Owned(permit) => &permit.registry,
+        }
+    }
+}
+/// A reservation cannot be checked or used for callbacks until a storage
+/// reader guard, acquired AFTER this reservation, supplies its SeqCst fence.
+#[cfg(target_arch = "x86_64")]
+pub(crate) struct DeferredInlinePermit<'a> {
+    activity: ThreadActivity<'a>,
+}
+#[cfg(target_arch = "x86_64")]
+impl<'a> DeferredInlinePermit<'a> {
+    pub(crate) fn after_reader<T>(
+        self,
+        _guard: &crate::reader_slots::ReadGuard<'_, T>,
+    ) -> InlinePermit<'a> {
+        InlinePermit {
+            activity: InlineActivity::Thread(self.activity),
         }
     }
 }

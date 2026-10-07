@@ -270,6 +270,32 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
     }
     /// The builtin map holds a reader slot through internal checks and ordinary
     /// value Clone. Observers run before locking; optional callbacks run after it.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn has_reader_slots(&self) -> bool {
+        matches!(self.backend, Backend::Unbounded(_))
+    }
+    /// Private unbounded local reads share storage and shutdown publication.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn with_admitted_local_ready<'a, R>(
+        &self,
+        key: &str,
+        clock: &crate::time::local::LocalClock,
+        reservation: crate::execution::DeferredInlinePermit<'a>,
+        token: Option<&crate::FactoryCancellation>,
+        read: impl FnOnce(&Entry<V>, Timestamp) -> R,
+    ) -> (crate::execution::InlinePermit<'a>, crate::Result<Option<R>>) {
+        let Backend::Unbounded(store) = &self.backend else {
+            unreachable!("the build-selected LocalSlots plan requires reader slots");
+        };
+        let (permit, result) =
+            store.with_admitted_local_ready(key, clock, reservation, token, read);
+        // Optional observers run after the slot is released and within the
+        // published operation, including subscriptions attached during Clone.
+        if result.is_ok() {
+            self.component_read(crate::events::ComponentRead::Memory);
+        }
+        (permit, result)
+    }
     pub(crate) fn with_local_ready<R>(
         &self,
         key: &str,

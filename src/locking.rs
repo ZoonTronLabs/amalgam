@@ -15,37 +15,69 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
-use dashmap::{DashMap, mapref::entry::Entry};
+use ahash::RandomState;
+use hashbrown::{HashMap, hash_map::RawEntryMut};
+use parking_lot::Mutex as ShardMutex;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-/// Weak slots with bounded incremental reclamation. Each lookup visits at most
-/// four queued slots, independent of the number of simultaneous live keys.
-pub(crate) struct WeakSlots<T> {
-    slots: DashMap<Arc<str>, Weak<T>>,
-    sweep: std::sync::Mutex<VecDeque<Arc<str>>>,
-    lookups: AtomicUsize,
+const SLOT_SHARDS: usize = 64;
+struct SlotShard<T> {
+    entries: HashMap<Arc<str>, Weak<T>, RandomState>,
+    sweep: VecDeque<Arc<str>>,
+}
+impl<T> SlotShard<T> {
+    fn clean(&mut self, budget: usize) -> usize {
+        let count = budget.min(self.sweep.len());
+        for _ in 0..count {
+            let key = self.sweep.pop_front().expect("count bounds the live queue");
+            if self
+                .entries
+                .get(key.as_ref())
+                .is_some_and(|slot| slot.strong_count() == 0)
+            {
+                self.entries.remove(key.as_ref());
+            } else if self.entries.contains_key(key.as_ref()) {
+                self.sweep.push_back(key);
+            }
+        }
+        count
+    }
 }
 
+/// Weak identity slots, with local bounded reclamation in the same shard.
+/// No lookup writes a process-wide counter or locks a separate sweep queue.
+pub(crate) struct WeakSlots<T> {
+    // Only explicit maintenance advances this cursor, never a lookup.
+    maintenance: AtomicUsize,
+    hash: RandomState,
+    shards: Box<[ShardMutex<SlotShard<T>>]>,
+}
 impl<T> WeakSlots<T> {
     pub(crate) fn new() -> Self {
+        let hash = RandomState::new();
         Self {
-            slots: DashMap::new(),
-            sweep: std::sync::Mutex::new(VecDeque::new()),
-            lookups: AtomicUsize::new(0),
+            maintenance: AtomicUsize::new(0),
+            shards: (0..SLOT_SHARDS)
+                .map(|_| {
+                    ShardMutex::new(SlotShard {
+                        entries: HashMap::with_hasher(hash.clone()),
+                        sweep: VecDeque::new(),
+                    })
+                })
+                .collect(),
+            hash,
         }
     }
-
     pub(crate) fn get(&self, key: &str, make: impl FnOnce() -> T) -> Arc<T> {
         self.get_with(key, make, Arc::clone)
     }
-
     pub(crate) fn get_with<R>(
         &self,
         key: &str,
         make: impl FnOnce() -> T,
         inspect: impl FnOnce(&Arc<T>) -> R,
     ) -> R {
-        self.get_arc_with(Arc::from(key), make, inspect)
+        self.lookup(key, || Arc::from(key), make, inspect)
     }
     pub(crate) fn get_arc_with<R>(
         &self,
@@ -53,62 +85,61 @@ impl<T> WeakSlots<T> {
         make: impl FnOnce() -> T,
         inspect: impl FnOnce(&Arc<T>) -> R,
     ) -> R {
-        if self
-            .lookups
-            .fetch_add(1, Ordering::Relaxed)
-            .is_multiple_of(16)
+        // A supplied key's allocation is reused only for a new lookup slot.
+        self.lookup(key.as_ref(), || Arc::clone(&key), make, inspect)
+    }
+    fn lookup<R>(
+        &self,
+        key: &str,
+        owned_key: impl FnOnce() -> Arc<str>,
+        make: impl FnOnce() -> T,
+        inspect: impl FnOnce(&Arc<T>) -> R,
+    ) -> R {
+        let hash = self.hash.hash_one(key);
+        let mut shard = self.shards[hash as usize & (SLOT_SHARDS - 1)].lock();
+        shard.clean(4);
+        let SlotShard { entries, sweep } = &mut *shard;
+        match entries
+            .raw_entry_mut()
+            .from_hash(hash, |stored| stored.as_ref() == key)
         {
-            self.clean(4);
-        }
-        let (value, inserted) = match self.slots.entry(Arc::clone(&key)) {
-            Entry::Occupied(mut slot) => match slot.get().upgrade() {
-                Some(value) => (inspect(&value), false),
+            RawEntryMut::Occupied(mut slot) => match slot.get().upgrade() {
+                Some(value) => inspect(&value),
                 None => {
                     let value = Arc::new(make());
                     slot.insert(Arc::downgrade(&value));
-                    (inspect(&value), false)
+                    inspect(&value)
                 }
             },
-            Entry::Vacant(slot) => {
+            RawEntryMut::Vacant(slot) => {
+                let key = owned_key();
                 let value = Arc::new(make());
-                slot.insert(Arc::downgrade(&value));
-                (inspect(&value), true)
+                sweep.push_back(Arc::clone(&key));
+                slot.insert_hashed_nocheck(hash, key, Arc::downgrade(&value));
+                inspect(&value)
             }
-        };
-        if inserted {
-            self.sweep
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push_back(key);
-            self.clean(4);
         }
-        value
     }
-
     pub(crate) fn clean(&self, budget: usize) {
-        let Ok(mut sweep) = self.sweep.try_lock() else {
-            return;
-        };
-        let count = budget.min(sweep.len());
-        for _ in 0..count {
-            let Some(key) = sweep.pop_front() else {
+        // Maintenance is infrequent. A complete pass respects the caller's
+        // total budget and does not contend with an unrelated lookup shard.
+        let start = self.maintenance.fetch_add(1, Ordering::Relaxed) & (SLOT_SHARDS - 1);
+        let mut remaining = budget;
+        for offset in 0..SLOT_SHARDS {
+            let shard = &self.shards[(start + offset) & (SLOT_SHARDS - 1)];
+            if remaining == 0 {
                 break;
-            };
-            match self.slots.entry(Arc::clone(&key)) {
-                Entry::Occupied(slot) if slot.get().strong_count() == 0 => {
-                    slot.remove();
-                }
-                Entry::Occupied(_) => sweep.push_back(key),
-                Entry::Vacant(_) => {}
+            }
+            if let Some(mut shard) = shard.try_lock() {
+                remaining -= shard.clean(remaining);
             }
         }
     }
 }
-
 impl<T> std::fmt::Debug for WeakSlots<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WeakSlots")
-            .field("slots", &self.slots.len())
+            .field("shards", &SLOT_SHARDS)
             .finish()
     }
 }
@@ -202,6 +233,37 @@ mod tests {
     }
 
     #[test]
+    fn bounded_maintenance_visits_idle_shards_despite_a_live_first_shard() {
+        let slots = WeakSlots::new();
+        let keys: Vec<_> = (0..SLOT_SHARDS)
+            .map(|shard| {
+                (0..)
+                    .map(|index| format!("{shard}-{index}"))
+                    .find(|key| {
+                        slots.hash.hash_one(key.as_str()) as usize & (SLOT_SHARDS - 1) == shard
+                    })
+                    .unwrap()
+            })
+            .collect();
+        let values: Vec<_> = keys
+            .iter()
+            .map(|key| slots.get(key, || Mutex::new(())))
+            .collect();
+        let first = values[0].clone();
+        drop(values);
+        for _ in 0..SLOT_SHARDS {
+            slots.clean(1);
+        }
+        let remaining: usize = slots
+            .shards
+            .iter()
+            .map(|shard| shard.lock().entries.len())
+            .sum();
+        assert_eq!(remaining, 1);
+        assert!(Arc::ptr_eq(&first, &slots.get(&keys[0], || Mutex::new(()))));
+    }
+
+    #[test]
     fn fifty_thousand_active_slots_keep_identity_and_reclaim_after_drop() {
         let slots = WeakSlots::new();
         let keys: Vec<_> = (0..50_000).map(|key| key.to_string()).collect();
@@ -212,11 +274,23 @@ mod tests {
         for (key, value) in keys.iter().zip(&values) {
             assert!(Arc::ptr_eq(value, &slots.get(key, || Mutex::new(()))));
         }
-        assert_eq!(slots.slots.len(), keys.len());
-        assert_eq!(slots.sweep.lock().unwrap().len(), keys.len());
+        let entries: usize = slots
+            .shards
+            .iter()
+            .map(|shard| shard.lock().entries.len())
+            .sum();
+        let queued: usize = slots
+            .shards
+            .iter()
+            .map(|shard| shard.lock().sweep.len())
+            .sum();
+        assert_eq!(entries, keys.len());
+        assert_eq!(queued, keys.len());
         drop(values);
         slots.clean(keys.len());
-        assert!(slots.slots.is_empty());
-        assert!(slots.sweep.lock().unwrap().is_empty());
+        assert!(slots.shards.iter().all(|shard| {
+            let shard = shard.lock();
+            shard.entries.is_empty() && shard.sweep.is_empty()
+        }));
     }
 }

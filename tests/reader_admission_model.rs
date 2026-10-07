@@ -123,3 +123,76 @@ fn opening_a_writer_gate_cannot_lose_a_reader_wakeup() {
         reader.join().unwrap();
     });
 }
+
+#[test]
+fn one_storage_fence_also_publishes_shutdown_activity() {
+    struct Shared {
+        active: AtomicUsize,
+        readers: AtomicUsize,
+        closing: AtomicBool,
+        writer: AtomicBool,
+        stored: UnsafeCell<usize>,
+        callback: UnsafeCell<usize>,
+    }
+    // SAFETY: model-check both storage exclusion and operation drainage.
+    unsafe impl Sync for Shared {}
+    let mut model = loom::model::Builder::new();
+    model.preemption_bound = Some(3);
+    model.max_permutations = Some(20_000);
+    model.check(|| {
+        let state = Arc::new(Shared {
+            active: AtomicUsize::new(0),
+            readers: AtomicUsize::new(0),
+            closing: AtomicBool::new(false),
+            writer: AtomicBool::new(false),
+            stored: UnsafeCell::new(0),
+            callback: UnsafeCell::new(0),
+        });
+        let reading = state.clone();
+        let reader = loom::thread::spawn(move || {
+            reading.active.store(1, Ordering::Release);
+            reading.readers.store(1, Ordering::Release);
+            fence(Ordering::SeqCst);
+            if !reading.writer.load(Ordering::Acquire) && !reading.closing.load(Ordering::SeqCst) {
+                reading.stored.with(|pointer| {
+                    // SAFETY: the reader fence passed both admission gates.
+                    assert!(unsafe { *pointer } <= 1);
+                    reading.callback.with(|pointer| {
+                        // SAFETY: shutdown cannot drain a started callback.
+                        assert_eq!(unsafe { *pointer }, 0);
+                        loom::thread::yield_now();
+                        assert_eq!(unsafe { *pointer }, 0);
+                    });
+                });
+            }
+            reading.readers.store(0, Ordering::Release);
+            reading.active.store(0, Ordering::Release);
+        });
+        let writing = state.clone();
+        let writer = loom::thread::spawn(move || {
+            writing.writer.store(true, Ordering::Release);
+            fence(Ordering::SeqCst);
+            if writing.readers.load(Ordering::Acquire) == 0 {
+                writing.stored.with_mut(|pointer| {
+                    // SAFETY: exclusive admission scanned the reader count.
+                    unsafe {
+                        *pointer = 1;
+                    }
+                });
+            }
+            writing.writer.store(false, Ordering::Release);
+        });
+        state.closing.swap(true, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        if state.active.load(Ordering::SeqCst) == 0 {
+            state.callback.with_mut(|pointer| {
+                // SAFETY: either the callback completed or admission rejects it.
+                unsafe {
+                    *pointer = 1;
+                }
+            });
+        }
+        reader.join().unwrap();
+        writer.join().unwrap();
+    });
+}

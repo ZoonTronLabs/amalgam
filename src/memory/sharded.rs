@@ -133,6 +133,43 @@ impl<V> Sharded<V> {
             .is_none()
             .then(|| read_entry(&stored.entry, now))
     }
+    #[cfg(target_arch = "x86_64")]
+    pub(super) fn with_admitted_local_ready<'a, R>(
+        &self,
+        key: &str,
+        clock: &crate::time::local::LocalClock,
+        reservation: crate::execution::DeferredInlinePermit<'a>,
+        token: Option<&crate::FactoryCancellation>,
+        read_entry: impl FnOnce(&Entry<V>, Timestamp) -> R,
+    ) -> (crate::execution::InlinePermit<'a>, crate::Result<Option<R>>) {
+        let (hash, shard) = self.route(key);
+        let state = read(shard);
+        // read() crossed its SeqCst fence after the operation count was stored.
+        // Check close BEFORE Clone or any optional/user callback.
+        let permit = reservation.after_reader(&state);
+        let result = (|| {
+            permit.admit()?;
+            permit.status(token)?;
+            let Some((_, stored)) = state
+                .entries
+                .raw_entry()
+                .from_hash(hash, |stored| stored.as_ref() == key)
+            else {
+                return Ok(None);
+            };
+            let (now, elapsed) = clock.sample();
+            Ok(stored
+                .retirement_at(
+                    Some(now),
+                    self.generation.load(Ordering::Acquire),
+                    Some(elapsed),
+                )
+                .is_none()
+                .then(|| read_entry(&stored.entry, now)))
+        })();
+        drop(state);
+        (permit, result)
+    }
     pub(super) fn get(&self, key: &str, now: Option<Timestamp>) -> MemoryRead<V> {
         let (hash, shard) = self.route(key);
         let candidate = {

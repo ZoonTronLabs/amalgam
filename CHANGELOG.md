@@ -72,6 +72,17 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Reclaim weak coordination identities inside their own lookup shards, without
+  a shared lookup counter or separate global sweep mutex. Explicit bounded
+  maintenance rotates its start shard, preserving active holder/waiter identity
+  and reclaiming quiet shards even when the first shard contains live work.
+- Plain x86 local reads share the reader admission fence with shutdown activity
+  publication, checking close before value Clone. ARM retains the measured
+  direct admission path; bounded/custom clocks and plugin-owned admission retain
+  complete publication. A weak-memory model and actual blocked-Clone shutdown
+  tests cover the compound protocol.
+
+
 - Ordinary `set` is a lazy fluent request returning `Result<()>`. Options edit
   cache defaults, string tags validate before mutation, and `.with_receipt()`
   explicitly requests storage/publication evidence. Dropping a scheduled receipt

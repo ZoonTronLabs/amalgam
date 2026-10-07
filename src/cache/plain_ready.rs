@@ -13,6 +13,8 @@ use std::sync::Arc;
 #[derive(Clone, Copy)]
 pub(super) enum ReadyPlan {
     Plain,
+    #[cfg(target_arch = "x86_64")]
+    LocalSlots,
     General,
 }
 impl ReadyPlan {
@@ -21,6 +23,7 @@ impl ReadyPlan {
         memory: &CacheMemory<V>,
         options: &EntryOptions,
         runtime: RuntimeRequirement,
+        #[cfg(target_arch = "x86_64")] clock: &crate::time::local::CacheClock,
     ) -> Self {
         if matches!(storage, Storage::MemoryOnly)
             && matches!(memory, CacheMemory::Builtin(_))
@@ -28,6 +31,13 @@ impl ReadyPlan {
             && !options.enable_auto_clone()
             && !options.skip_memory_read()
         {
+            #[cfg(target_arch = "x86_64")]
+            if let (CacheMemory::Builtin(memory), crate::time::local::CacheClock::Local(_)) =
+                (memory, clock)
+                && memory.has_reader_slots()
+            {
+                return Self::LocalSlots;
+            }
             Self::Plain
         } else {
             Self::General
@@ -56,12 +66,16 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<&FactoryCancellation>,
         operation: CacheOperation,
     ) -> QuietStart<'a, V> {
-        if !matches!(self.inner.ready_plan, ReadyPlan::Plain)
+        if matches!(self.inner.ready_plan, ReadyPlan::General)
             || options.is_some()
             || !self.inner.events.is_quiet()
             || tracing::level_filters::LevelFilter::current() >= tracing::Level::DEBUG
         {
             return QuietStart::General;
+        }
+        #[cfg(target_arch = "x86_64")]
+        if let Some(start) = self.quiet_slots_lookup(key, token, operation) {
+            return start;
         }
         let permit = self.inline();
         let observation = QuietObservation::new(&self.inner.events, operation);
@@ -106,6 +120,52 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 permit,
             },
         }
+    }
+    // x86's SeqCst store emits a separate locked instruction; the already
+    // required reader fence can publish operation admission instead. ARM keeps
+    // its direct release-store path, which measured faster without this frame.
+    #[cfg(target_arch = "x86_64")]
+    fn quiet_slots_lookup<'a>(
+        &'a self,
+        key: &str,
+        token: Option<&FactoryCancellation>,
+        operation: CacheOperation,
+    ) -> Option<QuietStart<'a, V>> {
+        let (
+            ReadyPlan::LocalSlots,
+            CacheMemory::Builtin(memory),
+            crate::time::local::CacheClock::Local(clock),
+        ) = (self.inner.ready_plan, &self.inner.memory, &self.inner.clock)
+        else {
+            return None;
+        };
+        let reservation = self.deferred_inline()?;
+        let observation = QuietObservation::new(&self.inner.events, operation);
+        let (permit, copied) =
+            memory.with_admitted_local_ready(key, clock, reservation, token, |entry, now| {
+                (self.inner.tags(entry) == TagVerdict::Valid && entry.freshness(now).is_fresh())
+                    .then(|| entry.value().clone())
+            });
+        let value = match copied.map(Option::flatten) {
+            Err(Error::CacheClosed) => Err(Error::CacheClosed),
+            value => permit.status(token).and(value),
+        };
+        Some(match value {
+            Ok(Some(value)) => QuietStart::Ready(QuietReady {
+                value: Ok(value),
+                observation,
+                permit,
+            }),
+            Err(error) => QuietStart::Ready(QuietReady {
+                value: Err(error),
+                observation,
+                permit,
+            }),
+            Ok(None) => QuietStart::Owned {
+                observation,
+                permit,
+            },
+        })
     }
 }
 impl<V> QuietReady<'_, V> {
