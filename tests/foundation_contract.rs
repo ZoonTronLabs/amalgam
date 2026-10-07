@@ -148,12 +148,15 @@ fn explicit_registry_registration_supersedes_inflight_builder() {
         building.get_or_create("name", || {
             started_tx.send(()).unwrap();
             resume_rx.recv().unwrap();
-            Cache::builder().name("old-candidate").build()
+            Cache::builder().name("old-candidate").try_build().unwrap()
         })
     });
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     registry
-        .try_register("name", Cache::builder().name("registered").build())
+        .try_register(
+            "name",
+            Cache::builder().name("registered").try_build().unwrap(),
+        )
         .unwrap();
     resume_tx.send(()).unwrap();
     assert_eq!(thread.join().unwrap().name(), "registered");

@@ -27,9 +27,10 @@ enum ConfigurationProfile {
 ///     .name("users")
 ///     .key_prefix("u:")
 ///     .default_options(EntryOptions::new(Duration::from_secs(60)))
-///     .build();
+///     .try_build()?;
+/// # Ok::<(), amalgam::Error>(())
 /// ```
-#[must_use = "a builder does nothing until `.build()` is called"]
+#[must_use = "a builder does nothing until `.try_build()` is called"]
 pub struct CacheBuilder<V> {
     profile: ConfigurationProfile,
     name: Option<Arc<str>>,
@@ -212,7 +213,7 @@ impl<V> CacheBuilder<V> {
 
     /// Attaches a backplane for multi-node L1 invalidation.
     ///
-    /// Note: when a backplane is configured, [`build`](Self::build) spawns a
+    /// Note: when a backplane is configured, [`try_build`](Self::try_build) spawns a
     /// listener task and so must be called from within a tokio runtime.
     pub fn backplane(mut self, backplane: Arc<dyn Backplane>) -> Self {
         self.backplane = Some(backplane);
@@ -454,14 +455,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         let cache = self.try_build()?;
         cache.ready().await?;
         Ok(cache)
-    }
-    /// Diagnostic legacy construction adapter. Prefer try_build for expected
-    /// configuration/plugin/runtime rejection.
-    pub fn build(self) -> Cache<V> {
-        match self.try_build() {
-            Ok(cache) => cache,
-            Err(error) => panic!("invalid legacy cache construction: {error}"),
-        }
     }
     /// Constructs a fully valid cache before starting its services.
     pub fn try_build(self) -> Result<Cache<V>> {

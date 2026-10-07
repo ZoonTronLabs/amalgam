@@ -37,7 +37,10 @@ fn key(s: &str) -> Arc<str> {
 
 #[tokio::test]
 async fn component_memory_attempts_do_not_change_the_legacy_stream() {
-    let c = Cache::<u64>::builder().default_options(options()).build();
+    let c = Cache::<u64>::builder()
+        .default_options(options())
+        .try_build()
+        .unwrap();
     let mut layer = c.events().subscribe_layers();
     let mut legacy = c.events().subscribe();
     let runs = Arc::new(AtomicUsize::new(0));
@@ -104,7 +107,7 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
 
 #[tokio::test]
 async fn rejected_and_skipped_memory_admission_never_claim_a_set() {
-    let c = Cache::<u64>::builder().max_capacity(0).build();
+    let c = Cache::<u64>::builder().max_capacity(0).try_build().unwrap();
     let mut events = c.events().subscribe_layers();
     let receipt = c
         .set("rejected", 1)
@@ -139,7 +142,8 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
     let c = Cache::<u64>::builder()
         .clock(clock.clone())
         .default_options(opts)
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = c.events().subscribe_layers();
     c.set("tagged", 3)
         .tags([Tag::new("group").unwrap()])
@@ -208,7 +212,8 @@ fn hybrid(clock: Arc<ManualClock>, store: Arc<dyn DistributedCache>) -> Cache<u6
         .default_options(options())
         .distributed_circuit_breaker(Duration::from_secs(2))
         .auto_recovery(no_recovery())
-        .build()
+        .try_build()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -479,7 +484,8 @@ async fn codec_failures_keep_causes_and_do_not_claim_transport_success_or_open_a
         .default_options(options().with_rethrow_serialization_exceptions(false))
         .distributed_circuit_breaker(Duration::from_secs(2))
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = c.events().subscribe_layers();
     let result = c
         .set("encode", 10)
@@ -549,7 +555,8 @@ async fn rich_backplane_frames_preserve_source_revision_action_key_and_rejected_
         .instance_id("local")
         .default_options(options())
         .reconciliation_policy(ReconciliationPolicy::BackplaneBestEffort)
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = c.events().subscribe_layers();
     c.set("k", 12)
         .with_receipt()
@@ -595,7 +602,8 @@ async fn explicit_layer_skips_and_ignore_incoming_emit_no_false_component_calls(
         .backplane(bp.clone())
         .ignore_incoming_backplane(true)
         .default_options(options())
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = c.events().subscribe_layers();
     let skip = options()
         .with_skip_memory(true, true)
@@ -795,7 +803,8 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
         .backplane_circuit_breaker(Duration::from_secs(60))
         .default_options(options())
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = c.events().subscribe_layers();
     let receipt = c
         .set("warm", 23)
@@ -891,7 +900,8 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
         .distributed_circuit_breaker(Duration::from_secs(2))
         .default_options(options())
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     let mut events = reader.events().subscribe_layers();
     let opts = options()
         .with_distributed_timeouts(Timeout::Infinite, Timeout::After(Duration::from_millis(15)));

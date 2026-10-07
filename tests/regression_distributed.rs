@@ -37,7 +37,8 @@ fn build(clock: Arc<dyn Clock>, l2: Arc<dyn DistributedCache>) -> Cache<i32> {
         .serializer(Arc::new(JsonSerializer))
         .default_options(opts())
         .auto_recovery(no_recovery())
-        .build()
+        .try_build()
+        .unwrap()
 }
 
 fn message(key: &str, action: BackplaneAction, timestamp: Timestamp) -> BackplaneMessage {
@@ -240,7 +241,8 @@ async fn audit_successful_set_supersedes_pending_recovery_remove() {
             delay: Duration::from_millis(50),
             ..RecoveryConfig::default()
         })
-        .build();
+        .try_build()
+        .unwrap();
     cache.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(1));
     cache.remove("k").await.unwrap();
@@ -303,7 +305,8 @@ async fn audit_passive_refresh_does_not_resurrect_after_remove() {
         .backplane(backplane.clone())
         .default_options(opts())
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     reader
         .get_or_set("k", amalgam::source::value(0))
         .await
@@ -354,7 +357,8 @@ async fn audit_old_backplane_expire_does_not_expire_newer_entry() {
         .backplane(backplane.clone())
         .default_options(opts().with_skip_backplane_notifications(true))
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     clock.advance(Duration::from_secs(10));
     cache.set("k", 2).await.unwrap();
     let mut events = cache.events().subscribe();
@@ -382,7 +386,8 @@ async fn audit_lagged_backplane_invalidates_possibly_stale_l1() {
         .reconciliation_policy(amalgam::advanced::ReconciliationPolicy::BackplaneContinuity)
         .default_options(opts().with_skip_backplane_notifications(true))
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     cache.set("k", 1).await.unwrap();
     let mut events = cache.events().subscribe();
     tokio::task::yield_now().await;
@@ -441,7 +446,8 @@ fn timeout_cache() -> Cache<i32> {
             Timeout::After(Duration::from_millis(10)),
         ))
         .auto_recovery(no_recovery())
-        .build()
+        .try_build()
+        .unwrap()
 }
 
 #[tokio::test]
@@ -484,7 +490,8 @@ async fn audit_factory_write_honors_rethrow_serialization_flag() {
         .serializer(Arc::new(BadSerialize))
         .default_options(opts())
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     let actual = cache.get_or_set("k", amalgam::source::value(1)).await;
     assert!(
         matches!(actual, Err(Error::Serialization(_))),
@@ -514,7 +521,8 @@ async fn audit_factory_write_honors_rethrow_distributed_flag() {
         .serializer(Arc::new(JsonSerializer))
         .default_options(opts().with_rethrow_distributed_exceptions(true))
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     let actual = cache.get_or_set("k", amalgam::source::value(1)).await;
     assert!(
         matches!(actual, Err(Error::Distributed(_))),
@@ -534,7 +542,8 @@ async fn audit_tag_marker_survives_node_joining_after_backplane_publication() {
         .backplane(bp.clone())
         .default_options(opts())
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     writer
         .set("k", 1)
         .tags([Tag::new("group").unwrap()])
@@ -549,7 +558,8 @@ async fn audit_tag_marker_survives_node_joining_after_backplane_publication() {
         .backplane(bp)
         .default_options(opts())
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     assert_eq!(
         reader
             .get_or_set("k", amalgam::source::value(2))
@@ -571,7 +581,8 @@ async fn audit_clear_respects_cache_key_prefix() {
             .key_prefix(prefix)
             .default_options(opts())
             .auto_recovery(no_recovery())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let alpha = make("alpha:");
     let beta = make("beta:");
@@ -611,7 +622,8 @@ async fn audit_ordinary_cache_key_is_not_interpreted_as_a_clear_command() {
             .backplane(bp.clone())
             .default_options(opts())
             .auto_recovery(no_recovery())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let writer = make();
     let peer = make();
@@ -664,7 +676,8 @@ async fn audit_failed_tag_marker_is_recovered_after_backplane_returns() {
                 delay: Duration::from_millis(50),
                 ..RecoveryConfig::default()
             })
-            .build()
+            .try_build()
+            .unwrap()
     };
     let sender = make();
     let peer = make();
@@ -702,7 +715,8 @@ async fn shared_fc_tag_invalidation_rechecks_origin_despite_failsafe_throttle() 
         .clock(clock.clone())
         .default_options(custom)
         .auto_recovery(no_recovery())
-        .build();
+        .try_build()
+        .unwrap();
     cache
         .set("k", 1)
         .tags([Tag::new("group").unwrap()])
@@ -740,7 +754,8 @@ async fn audit_same_tick_tag_marker_invalidates_entry_like_fusioncache() {
     let cache: Cache<i32> = Cache::builder()
         .clock(clock)
         .default_options(opts())
-        .build();
+        .try_build()
+        .unwrap();
     cache
         .set("k", 1)
         .tags([Tag::new("group").unwrap()])
@@ -803,7 +818,8 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
             .backplane(bp.clone())
             .default_options(opts())
             .auto_recovery(no_recovery())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let writer = make();
     let reader = make();

@@ -33,7 +33,8 @@ async fn l2_read_through_across_instances() {
         .distributed(l2.clone())
         .serializer(serializer.clone())
         .default_options(opts.clone())
-        .build();
+        .try_build()
+        .unwrap();
 
     {
         let calls = calls.clone();
@@ -56,7 +57,8 @@ async fn l2_read_through_across_instances() {
         .distributed(l2.clone())
         .serializer(serializer.clone())
         .default_options(opts)
-        .build();
+        .try_build()
+        .unwrap();
 
     let served = {
         let calls = calls.clone();
@@ -96,7 +98,8 @@ async fn backplane_remove_invalidates_peer() {
             .backplane(backplane.clone())
             .default_options(opts.clone())
             .instance_id(id)
-            .build()
+            .try_build()
+            .unwrap()
     };
     let cache1 = build("node-1");
     let cache2 = build("node-2");
@@ -141,7 +144,8 @@ async fn backplane_set_makes_peer_repull_new_value() {
             .backplane(backplane.clone())
             .default_options(opts.clone())
             .instance_id(id)
-            .build()
+            .try_build()
+            .unwrap()
     };
     let cache1 = build("node-1");
     let cache2 = build("node-2");
@@ -208,7 +212,8 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
             .backplane(backplane.clone())
             .default_options(opts.clone())
             .instance_id(id)
-            .build()
+            .try_build()
+            .unwrap()
     };
     let cache1 = build("node-1");
     let cache2 = build("node-2");
@@ -261,7 +266,8 @@ async fn backplane_expire_marks_peer_stale_keeping_physical() {
             .backplane(backplane.clone())
             .default_options(opts.clone())
             .instance_id(id)
-            .build()
+            .try_build()
+            .unwrap()
     };
     let cache1 = build("node-1");
     let cache2 = build("node-2");
@@ -316,7 +322,8 @@ async fn backplane_clear_remove_propagates_to_peer() {
             .backplane(backplane.clone())
             .default_options(opts.clone())
             .instance_id(id)
-            .build()
+            .try_build()
+            .unwrap()
     };
     let cache1 = build("node-1");
     let cache2 = build("node-2");
@@ -373,7 +380,8 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
         .distributed(l2.clone())
         .serializer(Arc::new(JsonSerializer))
         .default_options(EntryOptions::new(Duration::from_secs(60)))
-        .build();
+        .try_build()
+        .unwrap();
     writer.set("k", "v1".to_owned()).await.unwrap();
     tokio::time::sleep(Duration::from_millis(40)).await;
 
@@ -383,7 +391,8 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
         .distributed(l2.clone())
         .serializer(Arc::new(BadDeserialize))
         .default_options(EntryOptions::new(Duration::from_secs(60)))
-        .build();
+        .try_build()
+        .unwrap();
 
     // Default (rethrow_serialization_exceptions = true): the deserialize error
     // surfaces from get_or_set instead of silently degrading.

@@ -4,6 +4,24 @@ Version 0.4 is under development and has not been published. This guide is being
 updated alongside the API; the complete eight-operation migration is a release
 requirement.
 
+## Construction
+
+`CacheBuilder::build()` is removed. Use the existing `try_build()` and handle
+its typed configuration, provider, plugin or runtime rejection:
+
+```rust
+# fn example() -> amalgam::Result<()> {
+let cache = amalgam::Cache::<String>::builder().name("profiles").try_build()?;
+# let _ = cache;
+# Ok(())
+# }
+```
+
+`Cache::new()` remains an infallible, runtime-free constructor for the fixed
+valid memory-only defaults. Configured native construction remains fallible
+through `BlockingCache::from_builder`; acknowledged backplane construction uses
+`try_build_ready().await?`. Construction no longer has a public panicking alias.
+
 ## Factory output
 
 Factories return an ordinary `Result<V, E>` instead of a cache-specific product.

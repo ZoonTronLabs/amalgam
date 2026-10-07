@@ -27,7 +27,7 @@ async fn get_or_set_value_sets_then_returns_existing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn size_eviction_emits_eviction_event() {
     // Capacity 1 ⇒ inserting more entries evicts older ones by size.
-    let cache: Cache<i32> = Cache::builder().max_capacity(1).build();
+    let cache: Cache<i32> = Cache::builder().max_capacity(1).try_build().unwrap();
     let mut events = cache.events().subscribe();
 
     let long = EntryOptions::new(Duration::from_secs(3600));

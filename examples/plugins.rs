@@ -41,13 +41,13 @@ impl Plugin for LoggingPlugin {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> amalgam::Result<()> {
     let plugin = Arc::new(LoggingPlugin {
         seen: AtomicUsize::new(0),
     });
 
     // Register the plugin at build time. `on_start` fires immediately.
-    let cache: Cache<i32> = Cache::builder().plugin(plugin.clone()).build();
+    let cache: Cache<i32> = Cache::builder().plugin(plugin.clone()).try_build()?;
 
     println!("\n-- set(\"answer\", 42) --");
     cache.set("answer", 42).await.unwrap();
@@ -85,4 +85,5 @@ async fn main() {
     println!("\nplugin observed {total} event(s) in total.");
     assert!(total > 0, "the plugin should have observed several events");
     println!("OK: plugin received the cache's event stream.");
+    Ok(())
 }

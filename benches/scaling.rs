@@ -80,7 +80,8 @@ fn runtime() -> tokio::runtime::Runtime {
 fn cache() -> Cache<u64> {
     Cache::builder()
         .default_options(EntryOptions::new(Duration::from_secs(3600)))
-        .build()
+        .try_build()
+        .unwrap()
 }
 trait WarmHit {
     async fn value(cache: &Cache<u64>, key: &str) -> u64;
@@ -431,7 +432,7 @@ fn ready_costs() {
                 None => builder,
             }
         };
-        let cache = builder().build();
+        let cache = builder().try_build().unwrap();
         rt.block_on(async {
             cache
                 .set("cost", 7_u64)
@@ -567,7 +568,10 @@ fn metadata_costs() {
         metadata_cost(&format!("expire_{}", case.label()), || {
             drop(black_box(source.with_logical_expiration(now)));
         });
-        let cache = Cache::builder().default_options(options).build();
+        let cache = Cache::builder()
+            .default_options(options)
+            .try_build()
+            .unwrap();
         rt.block_on(async {
             let replacement = || async {
                 let request = cache.set("metadata-cost", 7_u64);
@@ -612,7 +616,8 @@ fn distributed<H: WarmHit>() {
                 Arc::new(amalgam::provider::SystemClock),
             )))
             .serializer(Arc::new(amalgam::provider::JsonSerializer))
-            .build();
+            .try_build()
+            .unwrap();
         cache
             .set("l2-json", 7_u64)
             .with_receipt()

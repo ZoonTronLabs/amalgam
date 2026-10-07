@@ -31,7 +31,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Creates the always-valid memory-only defaults without a runtime.
     pub fn new() -> Self {
-        CacheBuilder::new().build()
+        match CacheBuilder::new().try_build() {
+            Ok(cache) => cache,
+            Err(error) => unreachable!("built-in memory defaults must remain valid: {error}"),
+        }
     }
     /// Diagnostic name.
     pub fn name(&self) -> &str {

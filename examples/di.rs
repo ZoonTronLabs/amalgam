@@ -85,13 +85,13 @@ impl DefaultEntryOptionsProvider for KeyAwareOptionsProvider {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> amalgam::Result<()> {
     println!("== Pattern 1: one shared cache, injected into a service and cloned into tasks ==");
 
     // Composition root: build the cache once. This is the single instance every
     // consumer will share — the role a DI container's singleton registration
     // plays in FusionCache.
-    let cache: Cache<String> = Cache::builder().build();
+    let cache: Cache<String> = Cache::new();
 
     // Inject the SAME instance into a service (held by value) and keep a handle
     // here. `UserService` is wrapped in `Arc` to model a shared, injected
@@ -151,13 +151,13 @@ async fn main() {
         "sessions",
         Cache::builder()
             .default_options_provider(Arc::clone(&options_provider))
-            .build(),
+            .try_build()?,
     );
     registry.register(
         "config",
         Cache::builder()
             .default_options_provider(Arc::clone(&options_provider))
-            .build(),
+            .try_build()?,
     );
     println!(
         "registered {} named caches: \"sessions\", \"config\"",
@@ -207,4 +207,5 @@ async fn main() {
     println!("config[\"config:feature_x\"] -> {setting} (1 h freshness via options provider)");
 
     println!("OK: named caches are independent; the options provider drove per-key defaults.");
+    Ok(())
 }

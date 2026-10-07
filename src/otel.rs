@@ -240,7 +240,7 @@ pub fn try_init_otlp(service_name: &str, endpoint: &str) -> Result<OtelGuard, Ot
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let provider = amalgam::otel::otlp_meter_provider("service", "http://127.0.0.1:4317")?;
 /// let metrics = std::sync::Arc::new(amalgam::OtelMetricsPlugin::from_provider(&provider));
-/// let cache = amalgam::Cache::<u64>::builder().plugin(metrics).build();
+/// let cache = amalgam::Cache::<u64>::builder().plugin(metrics).try_build()?;
 /// cache.set("key", 1).with_receipt().await?.wait().await?;
 /// cache.shutdown().await?;
 /// tokio::task::spawn_blocking(move || provider.shutdown()).await??;

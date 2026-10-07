@@ -42,7 +42,7 @@ mod demo {
             .backplane(Arc::new(backplane) as Arc<dyn Backplane>)
             .distributed_locker(Arc::new(locker) as Arc<dyn DistributedLocker>)
             .instance_id("redis-example")
-            .build();
+            .try_build()?;
 
         let value = cache
             .get_or_set(

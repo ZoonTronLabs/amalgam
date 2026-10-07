@@ -98,7 +98,8 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         .serializer(Arc::new(JsonSerializer))
         .auto_recovery(recovery())
         .default_options(options())
-        .build();
+        .try_build()
+        .unwrap();
     writer
         .set("k", 1)
         .with_receipt()
@@ -119,9 +120,9 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         .auto_recovery(recovery())
         .default_options(options().with_enable_auto_clone(true));
     let reader = if bounded {
-        builder.max_capacity(4).build()
+        builder.max_capacity(4).try_build().unwrap()
     } else {
-        builder.build()
+        builder.try_build().unwrap()
     };
     reader
         .set("proof", 3)
@@ -252,7 +253,8 @@ async fn gap_during_storage_insertion(bounded: bool) {
         .serializer(Arc::new(JsonSerializer))
         .auto_recovery(recovery())
         .default_options(options())
-        .build();
+        .try_build()
+        .unwrap();
     writer
         .set(
             "k",
@@ -284,9 +286,9 @@ async fn gap_during_storage_insertion(bounded: bool) {
         .auto_recovery(recovery())
         .default_options(options().with_enable_auto_clone(true));
     let reader = if bounded {
-        builder.max_capacity(4).build()
+        builder.max_capacity(4).try_build().unwrap()
     } else {
-        builder.build()
+        builder.try_build().unwrap()
     };
     reader
         .set(

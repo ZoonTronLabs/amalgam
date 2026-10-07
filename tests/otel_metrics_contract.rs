@@ -142,7 +142,8 @@ async fn native_sdk_counts_all_warm_reads_even_when_broadcast_loses_events() {
         .events_capacity(1)
         .default_options(options())
         .plugin(plugin)
-        .build();
+        .try_build()
+        .unwrap();
     let mut stream = cache.events().subscribe_layers();
     cache
         .set("secret-key", 17)
@@ -210,7 +211,8 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
             .serializer(Arc::new(JsonSerializer))
             .default_options(options())
             .plugin(plugin.clone())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let a = build("secret-a");
     let b = build("secret-b");
@@ -264,7 +266,8 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             .plugin(Arc::new(
                 OtelMetricsPlugin::from_provider(&provider).with_tags(tags),
             ))
-            .build();
+            .try_build()
+            .unwrap();
         let tag = Tag::new("private-tag").unwrap();
         cache
             .set("key", 17)
@@ -313,7 +316,8 @@ async fn cache_name_budget_is_historical_shared_and_does_not_mix_named_series() 
         let cache = Cache::<u64>::builder()
             .name(name)
             .plugin(plugin.clone())
-            .build();
+            .try_build()
+            .unwrap();
         cache
             .set("private-key", 17)
             .with_receipt()
@@ -346,7 +350,8 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
         .name("factory")
         .clock(clock.clone())
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
-        .build();
+        .try_build()
+        .unwrap();
     cache
         .get_or_set(
             "failure",
@@ -451,7 +456,8 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
             .backplane(bp.clone())
             .default_options(options())
             .plugin(plugin.clone())
-            .build()
+            .try_build()
+            .unwrap()
     };
     let a = build("a");
     let b = build("b");
@@ -520,7 +526,8 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
         .clock(clock.clone())
         .default_options(opts)
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
-        .build();
+        .try_build()
+        .unwrap();
     cache
         .get_or_set::<_, _>(
             "key",
@@ -587,14 +594,16 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
         .serializer(Arc::new(JsonSerializer))
         .default_options(opts)
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
-        .build();
+        .try_build()
+        .unwrap();
     let b = Cache::<u64>::builder()
         .instance_id("b")
         .clock(clock.clone())
         .distributed(backend)
         .serializer(Arc::new(JsonSerializer))
         .default_options(options())
-        .build();
+        .try_build()
+        .unwrap();
     a.set("key", 17)
         .with_receipt()
         .await
@@ -656,7 +665,8 @@ async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_d
         .serializer(Arc::new(JsonSerializer))
         .distributed_circuit_breaker(Duration::from_secs(60))
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
-        .build();
+        .try_build()
+        .unwrap();
     assert!(matches!(
         cache.read("first", None).await,
         Err(Error::Transport(TransportError::Distributed { .. }))
