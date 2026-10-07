@@ -7,6 +7,15 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Track nested L2 shutdown work only after a pending poll. Ready phases keep
+  their exact token and checkpoint; shutdown still drains active callbacks and
+  pending registration without an idle gap.
+- Acquire an available built-in per-key mutex synchronously. Busy acquisition
+  retains Tokio FIFO waiting and never turns into a miss. Add ready-budget and
+  queued-waiter regressions; global cooperative scheduling remains enabled.
+- Record development performance tables and remaining L2 qualification in
+  `docs/PERFORMANCE.md`, including same-machine baseline comparison and the
+  separately identified Linux runner. Full parity and release remain open.
 - Measure matched in-memory L2 plus JSON reads in a separate process for both
   public read APIs. Official options bypass L1 reads while preserving
   hydration; conflicting L1/L2 values and checksums validate the fixture.

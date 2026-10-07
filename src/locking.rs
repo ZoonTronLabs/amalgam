@@ -174,14 +174,21 @@ impl KeyedLock {
     }
 
     pub(crate) async fn lock_shared(&self, key: Arc<str>) -> KeyGuard {
-        self.locks
-            .get_arc_with(key, || Mutex::new(()), Arc::clone)
-            .lock_owned()
-            .await
+        let mutex = self.locks.get_arc_with(key, || Mutex::new(()), Arc::clone);
+        Self::acquire_owned(mutex).await
+    }
+    async fn acquire_owned(mutex: Arc<Mutex<()>>) -> KeyGuard {
+        // Ready coordination does not need a suspended waiter or consume a
+        // scheduler budget. Tokio reserves permits for queued waiters, so a
+        // failed synchronous claim waits normally instead of bypassing them.
+        match Arc::clone(&mutex).try_lock_owned() {
+            Ok(guard) => guard,
+            Err(_) => mutex.lock_owned().await,
+        }
     }
     /// Acquires the lock for `key`, waiting if necessary.
     pub async fn lock(&self, key: &str) -> KeyGuard {
-        self.mutex_for(key).lock_owned().await
+        Self::acquire_owned(self.mutex_for(key)).await
     }
 
     /// Tries to acquire the lock for `key` without waiting.
@@ -203,8 +210,40 @@ impl Default for KeyedLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn free_key_acquisitions_never_suspend_for_an_exhausted_cooperative_budget() {
+        let locks = KeyedLock::new(64);
+        for _ in 0..512 {
+            let mut work = std::pin::pin!(locks.lock("ready-key"));
+            let initial =
+                std::future::poll_fn(|cx| std::task::Poll::Ready(work.as_mut().poll(cx))).await;
+            assert!(
+                initial.is_ready(),
+                "a free key required scheduler participation"
+            );
+            drop(initial);
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_acquisition_does_not_bypass_an_already_queued_waiter() {
+        let locks = KeyedLock::new(64);
+        let first = locks.lock("ordered-key").await;
+        let mut queued = std::pin::pin!(locks.lock("ordered-key"));
+        let initial =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx))).await;
+        assert!(initial.is_pending());
+        drop(first);
+        assert!(locks.try_lock("ordered-key").is_none());
+        let second = queued.await;
+        assert!(locks.try_lock("ordered-key").is_none());
+        drop(second);
+        assert!(locks.try_lock("ordered-key").is_some());
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn same_key_serializes() {
