@@ -7,6 +7,16 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Count and pin default cache-bound work for its first poll; create an owned
+  scope and shutdown subscription only after actual suspension. Transfer the
+  same pinned future before admission ends. Keep explicit caller and specialized
+  sources on their existing owned path. Cache-bound cancellation remains visible
+  during blocking callbacks; exported root/child tokens preserve cross-cache
+  shutdown without caller re-poll. Completion and panic preserve retirement
+  order. This removes five allocations from both local L2 fixtures.
+- Record exact-source 9872a5d Linux qualification: all 14 functional checks and
+  warm/cold/write budgets pass; native L2 remains unqualified. One fewer native
+  L2 allocation has no claimed timing gain in same-runner measurements.
 - Store suspended read/origin observers as typed execution handles instead of
   allocating a second boxed driver. Cache-owned work remains pinned and scoped.
   First-poll explicit cancellation propagates every terminal cause and retires

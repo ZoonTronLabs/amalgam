@@ -222,55 +222,58 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
             let worker_seed = self.worker_seed();
             let completion_token = source.token();
-            // The scope owns the observer too: a parked caller can be cancelled and
-            // finish its logical observation without polling its future again.
-            let execution = self.operation_scopes().execution(
-                async move {
-                    // A collector is needed only when startup can retire memory.
-                    // Keep an admitted collector through the complete operation.
-                    let readiness_worker = (worker_seed.inner.wait_for_initial_backplane_subscribe
-                        && !worker_seed
-                            .inner
-                            .subscription_admitted
-                            .load(Ordering::Acquire))
-                    .then(|| worker_seed.worker());
-                    if let Some(worker) = &readiness_worker {
-                        if let Err(error) = worker.await_readiness().await {
-                            observation.finish(OperationOutcome::from_error(&error));
-                            return Err(error);
-                        }
-                        worker
-                            .inner
-                            .subscription_admitted
-                            .store(true, Ordering::Release);
+            // Pin the observer and user work before admission transfers. The
+            // default path promotes to a registered scope only after Pending.
+            let scoped = self.operation_scopes();
+            let operation = async move {
+                // A collector is needed only when startup can retire memory.
+                // Keep an admitted collector through the complete operation.
+                let readiness_worker = (worker_seed.inner.wait_for_initial_backplane_subscribe
+                    && !worker_seed
+                        .inner
+                        .subscription_admitted
+                        .load(Ordering::Acquire))
+                .then(|| worker_seed.worker());
+                if let Some(worker) = &readiness_worker {
+                    if let Err(error) = worker.await_readiness().await {
+                        observation.finish(OperationOutcome::from_error(&error));
+                        return Err(error);
                     }
-                    let result = work.await;
-                    // Synchronous completion/destruction can close or explicitly
-                    // cancel this scope while it is polling. Attribute that reason
-                    // before finishing its single logical observation.
-                    let result = match completion_token.reason() {
-                        Some(reason) => Err(Error::OperationCancelled { reason }),
-                        None => result,
-                    };
-                    match result {
-                        Ok(result) => {
-                            if let Some(level) = result.level {
-                                observation.set_level(level);
-                            }
-                            observation.finish(result.outcome);
-                            Ok(result.value)
+                    worker
+                        .inner
+                        .subscription_admitted
+                        .store(true, Ordering::Release);
+                }
+                let result = work.await;
+                // Synchronous completion/destruction can close or explicitly
+                // cancel this scope while it is polling. Attribute that reason
+                // before finishing its single logical observation.
+                let result = match completion_token.reason() {
+                    Some(reason) => Err(Error::OperationCancelled { reason }),
+                    None => result,
+                };
+                match result {
+                    Ok(result) => {
+                        if let Some(level) = result.level {
+                            observation.set_level(level);
                         }
-                        Err(error) => {
-                            observation.finish(OperationOutcome::from_error(&error));
-                            Err(error)
-                        }
+                        observation.finish(result.outcome);
+                        Ok(result.value)
+                    }
+                    Err(error) => {
+                        observation.finish(OperationOutcome::from_error(&error));
+                        Err(error)
                     }
                 }
-                .instrument(span),
-                source,
-            );
-            // Registration owns the observer and all caller work before the ready
-            // path's permit is released, closing the transfer gap against shutdown.
+            }
+            .instrument(span);
+            let execution = if token.is_some() {
+                scoped.execution(operation, source)
+            } else {
+                scoped.ready_execution(operation, source)
+            };
+            // Admission or subscribed ownership covers the observer and all
+            // caller work before the ready path's permit is released.
             match admission {
                 ObservationAdmission::New => {}
                 ObservationAdmission::Inline(permit) => drop(permit),
@@ -948,7 +951,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         };
         let worker = self.worker();
         let key = self.lookup_key(key, full);
-        let source = CancellationSource::new();
+        let source = CancellationSource::for_cache(self.operation_scopes());
         let caller = source.token();
         let explicit = cancellation.clone();
         super::inline_cold::Start::Pending(self.execute_observed(
@@ -1377,7 +1380,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             permit,
         } = operation;
         let worker = self.worker();
-        let source = CancellationSource::new();
+        let source = CancellationSource::for_cache(self.operation_scopes());
         let cancellation = source.token();
         self.execute_observed(
             observation,
@@ -1532,7 +1535,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let worker = self.worker();
         let raw: Arc<str> = Arc::from(key);
         let full = worker.full_key(key);
-        let source = CancellationSource::new();
+        let source = CancellationSource::for_cache(self.operation_scopes());
         let cancellation = source.token();
         super::memory_inline::MutationStart::Pending(Box::pin(self.observed_using(
             CacheOperation::Set,
@@ -1672,7 +1675,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             KeyMutation::Remove => CacheOperation::Remove,
             KeyMutation::Expire(_) => CacheOperation::Expire,
         };
-        let source = CancellationSource::new();
+        let source = CancellationSource::for_cache(self.operation_scopes());
         let cancellation = source.token();
         self.observed_using(
             operation,
@@ -1815,7 +1818,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<FactoryCancellation>,
     ) -> Result<MutationReceipt> {
         let worker = self.worker();
-        let source = CancellationSource::new();
+        let source = CancellationSource::for_cache(self.operation_scopes());
         let cancellation = source.token();
         self.observed_using(
             operation,

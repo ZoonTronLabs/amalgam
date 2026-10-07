@@ -1,9 +1,11 @@
 //! A child phase borrows its cache-owned parent instead of owning a second work
 //! future. Every production caller runs inside Execution: that parent owns and
-//! drains the pinned future, including cancellation without another caller poll.
+//! drains the pinned future. A first-poll parent uses admission; a suspended
+//! parent is registered for cancellation without another caller poll.
+use super::CacheBinding;
 use super::{
-    CancelWork, CancellationRequest, CancellationSource, FactoryCancellation, LinkMode, Reason,
-    Request, RequestOwner, Scopes, lock,
+    CancelWork, CancellationRequest, CancellationSource, FactoryCancellation, Reason, Request,
+    RequestOwner, Scopes, lock,
 };
 use crate::error::{Error, Result};
 use std::future::Future;
@@ -16,6 +18,7 @@ use std::task::{Context, Poll, Waker};
 #[derive(Debug)]
 struct Control {
     request: Request,
+    binding: CacheBinding,
     checkpoint: AtomicBool,
     waker: std::sync::Mutex<Option<Waker>>,
 }
@@ -23,10 +26,17 @@ impl RequestOwner for Control {
     fn request(&self) -> &Request {
         &self.request
     }
+    fn cache_binding(&self) -> Option<&CacheBinding> {
+        Some(&self.binding)
+    }
+    fn track_shutdown(self: Arc<Self>) {
+        let erased: Arc<dyn CancelWork> = self.clone();
+        self.binding.subscribe(erased);
+    }
 }
 impl CancelWork for Control {
     fn cancel(&self, reason: Reason) {
-        if self.request.cancel_with(reason) == CancellationRequest::Cancelled {
+        if RequestOwner::cancel_with(self, reason) == CancellationRequest::Cancelled {
             let waker = lock(&self.waker).take();
             if let Some(waker) = waker {
                 waker.wake();
@@ -40,21 +50,23 @@ impl CancelWork for Control {
 
 /// Only a cache-owned parent may poll this phase. The borrow cannot be detached
 /// from that operation. Its parent is already counted through polling/Drop and
-/// already registered for shutdown; a second task token is unnecessary.
+/// subscribed for shutdown after suspension. An inherited cache-bound token
+/// reports shutdown during first-poll callbacks without a second task token.
 pub(crate) struct BorrowedPhase<'a> {
     registry: &'a Scopes,
     parent: &'a FactoryCancellation,
     control: Arc<Control>,
 }
 impl<'a> BorrowedPhase<'a> {
-    pub(crate) fn new(registry: &'a Scopes, parent: &'a FactoryCancellation) -> Self {
+    pub(crate) fn new(registry: &'a Arc<Scopes>, parent: &'a FactoryCancellation) -> Self {
         let control = Arc::new(Control {
             request: Request::new(),
+            binding: CacheBinding::new(Arc::clone(registry)),
             checkpoint: AtomicBool::new(false),
             waker: std::sync::Mutex::new(None),
         });
         let target: Arc<dyn CancelWork> = control.clone();
-        parent.link_work(target, LinkMode::Explicit);
+        parent.link_phase(target);
         Self {
             registry,
             parent,

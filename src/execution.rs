@@ -15,6 +15,12 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 
+mod cache_request;
+mod frame;
+#[cfg(test)]
+mod frame_tests;
+use cache_request::{CacheBinding, CacheRequest};
+use frame::{FirstPoll, InlineFrame};
 mod phase;
 pub(crate) use phase::{BorrowedPhase, ExecutionCheckpoint};
 
@@ -65,6 +71,15 @@ impl CancellationState {
 
 impl FactoryCancellation {
     pub(crate) fn link_work(&self, erased: Arc<dyn CancelWork>, mode: LinkMode) {
+        self.link(erased, mode);
+        Arc::clone(&self.request).track_shutdown();
+    }
+    // A nested phase is counted and retired by its parent. Only exported
+    // links need independent subscription for cross-cache shutdown delivery.
+    pub(super) fn link_phase(&self, erased: Arc<dyn CancelWork>) {
+        self.link(erased, LinkMode::Explicit);
+    }
+    fn link(&self, erased: Arc<dyn CancelWork>, mode: LinkMode) {
         {
             let mut listeners = self.request.request().listeners.lock();
             let count = listeners.len().min(4);
@@ -80,10 +95,7 @@ impl FactoryCancellation {
                 mode,
             });
         }
-        let reason = match CancellationState::load(&self.request.request().state) {
-            CancellationState::Active => None,
-            CancellationState::Cancelled(reason) => Some(reason),
-        };
+        let reason = self.reason();
         if let Some(reason) = reason
             && mode.accepts(reason)
         {
@@ -91,10 +103,7 @@ impl FactoryCancellation {
         }
     }
     pub(crate) fn reason(&self) -> Option<Reason> {
-        match CancellationState::load(&self.request.request().state) {
-            CancellationState::Active => None,
-            CancellationState::Cancelled(reason) => Some(reason),
-        }
+        self.request.terminal_reason()
     }
     /// Whether this execution scope has ended or was cancelled.
     pub fn is_cancelled(&self) -> bool {
@@ -121,7 +130,14 @@ impl FactoryCancellation {
             if let Some(reason) = self.reason() {
                 return reason;
             }
-            changed.await;
+            if let Some(binding) = self.request.cache_binding() {
+                tokio::select! {
+                    _ = &mut changed => {},
+                    _ = binding.registry.shutdown.cancelled() => {},
+                }
+            } else {
+                changed.await;
+            }
         }
     }
 }
@@ -149,6 +165,27 @@ pub(crate) struct Request {
 /// Cancellation can share the allocation of its owning flight.
 pub(crate) trait RequestOwner: std::fmt::Debug + Send + Sync + 'static {
     fn request(&self) -> &Request;
+    fn cache_binding(&self) -> Option<&CacheBinding> {
+        None
+    }
+    fn inline_root(&self, _registry: &Arc<Scopes>) -> bool {
+        false
+    }
+    fn track_shutdown(self: Arc<Self>) {}
+    fn promote(&self) {}
+    fn terminal_reason(&self) -> Option<Reason> {
+        CancellationState::load(&self.request().state)
+            .reason()
+            .or_else(|| self.cache_binding().and_then(CacheBinding::reason))
+    }
+    fn cancel_with(&self, reason: Reason) -> CancellationRequest {
+        let reason = self.terminal_reason().unwrap_or(reason);
+        let result = self.request().cancel_with(reason);
+        if let Some(binding) = self.cache_binding() {
+            binding.finish();
+        }
+        result
+    }
 }
 impl RequestOwner for Request {
     fn request(&self) -> &Request {
@@ -232,6 +269,9 @@ impl CancellationSource {
     pub(crate) fn from_owner(request: Arc<dyn RequestOwner>) -> Self {
         Self { request }
     }
+    pub(crate) fn for_cache(registry: Arc<Scopes>) -> Self {
+        Self::from_owner(Arc::new(CacheRequest::new(registry)))
+    }
     /// Obtains a read-only token.
     pub fn token(&self) -> FactoryCancellation {
         FactoryCancellation {
@@ -243,7 +283,7 @@ impl CancellationSource {
         self.cancel_with(Reason::CallerCancelled)
     }
     pub(crate) fn cancel_with(&self, reason: Reason) -> CancellationRequest {
-        self.request.request().cancel_with(reason)
+        self.request.cancel_with(reason)
     }
 }
 impl Default for CancellationSource {
@@ -392,19 +432,40 @@ impl Scopes {
         work: impl Future<Output = Result<T>> + Send + 'static,
         source: CancellationSource,
     ) -> Execution<T> {
+        Execution {
+            state: ExecutionState::Owned(self.subscribe_pinned(Box::pin(work), source, None)),
+        }
+    }
+    pub(crate) fn ready_execution<T: Send + 'static>(
+        self: &Arc<Self>,
+        work: impl Future<Output = Result<T>> + Send + 'static,
+        source: CancellationSource,
+    ) -> Execution<T> {
+        if source.request.inline_root(self) {
+            Execution {
+                state: ExecutionState::Inline(InlineFrame::new(self, work, source)),
+            }
+        } else {
+            self.execution(work, source)
+        }
+    }
+    fn subscribe_pinned<T: Send + 'static>(
+        self: &Arc<Self>,
+        work: Work<T>,
+        source: CancellationSource,
+        waker: Option<Waker>,
+    ) -> Arc<Scope<T>> {
+        source.request.promote();
         let scope = Arc::new(Scope {
-            state: Mutex::new(State::Pending(Box::pin(work))),
-            waker: Mutex::new(None),
+            state: Mutex::new(State::Pending(work)),
+            waker: Mutex::new(waker),
             source,
             registry: Arc::clone(self),
             tracking: parking_lot::Mutex::new(None),
         });
-        self.register_scope(scope)
-    }
-    fn register_scope<T: Send + 'static>(self: &Arc<Self>, scope: Arc<Scope<T>>) -> Execution<T> {
         let erased: Arc<dyn CancelWork> = scope.clone();
         self.register_work(erased, &scope.tracking);
-        Execution { scope }
+        scope
     }
     /// Registration is local to suspended work; normal completion removes it.
     pub(crate) fn register_work(
@@ -676,6 +737,7 @@ impl<T> Scope<T> {
 impl<T: Send + 'static> CancelWork for Scope<T> {
     fn cancel(&self, reason: Reason) {
         let _activity = self.registry.activity();
+        let reason = self.source.request.terminal_reason().unwrap_or(reason);
         let (pending, terminal, recorded) = {
             let mut state = lock(&self.state);
             match &mut *state {
@@ -713,16 +775,39 @@ impl<T: Send + 'static> CancelWork for Scope<T> {
     }
 }
 
+enum ExecutionState<T> {
+    Inline(InlineFrame<T>),
+    Owned(Arc<Scope<T>>),
+    Finished,
+}
 pub(crate) struct Execution<T: Send + 'static> {
-    scope: Arc<Scope<T>>,
+    state: ExecutionState<T>,
 }
 impl<T: Send + 'static> Execution<T> {
     pub(crate) fn cancel(&self, reason: Reason) {
-        self.scope.cancel(reason);
+        match &self.state {
+            ExecutionState::Inline(frame) => frame.cancel(reason),
+            ExecutionState::Owned(scope) => scope.cancel(reason),
+            ExecutionState::Finished => {}
+        }
     }
     pub(crate) fn link(&self, token: &FactoryCancellation, mode: LinkMode) {
-        let erased: Arc<dyn CancelWork> = self.scope.clone();
-        token.link_work(erased, mode);
+        match &self.state {
+            ExecutionState::Owned(scope) => {
+                let erased: Arc<dyn CancelWork> = scope.clone();
+                token.link_work(erased, mode);
+            }
+            ExecutionState::Inline(_) | ExecutionState::Finished => {
+                panic!("only an owned execution accepts an external cancellation link");
+            }
+        }
+    }
+    #[cfg(test)]
+    fn owned_scope(&self) -> &Arc<Scope<T>> {
+        let ExecutionState::Owned(scope) = &self.state else {
+            panic!("this contract uses an owned execution");
+        };
+        scope
     }
 }
 struct PollLease<T: Send + 'static>(Arc<Scope<T>>);
@@ -749,23 +834,17 @@ impl<T: Send + 'static> Drop for PollLease<T> {
     }
 }
 impl<T: Send + 'static> Execution<T> {
-    fn poll_work(
-        &mut self,
-        cx: &mut Context<'_>,
-        admit: impl FnOnce(&Arc<Scope<T>>),
-        suspended: impl FnOnce(&Arc<Scope<T>>),
-    ) -> Poll<Result<T>> {
-        let _activity = self.scope.registry.activity();
-        admit(&self.scope);
-        *lock(&self.scope.waker) = Some(cx.waker().clone());
-        let _lease = PollLease(Arc::clone(&self.scope));
+    fn poll_work(scope: &Arc<Scope<T>>, cx: &mut Context<'_>) -> Poll<Result<T>> {
+        let _activity = scope.registry.activity();
+        *lock(&scope.waker) = Some(cx.waker().clone());
+        let _lease = PollLease(Arc::clone(scope));
         let mut work = {
-            let mut state = lock(&self.scope.state);
+            let mut state = lock(&scope.state);
             match &*state {
                 State::Cancelled(reason) => {
                     let reason = *reason;
                     drop(state);
-                    self.scope.source.cancel_with(reason);
+                    scope.source.cancel_with(reason);
                     return Poll::Ready(Err(Error::OperationCancelled { reason }));
                 }
                 State::Completed => panic!("completed cache execution was polled again"),
@@ -780,17 +859,12 @@ impl<T: Send + 'static> Execution<T> {
         };
         let result = work.as_mut().poll(cx);
         let cancellation = {
-            let mut state = lock(&self.scope.state);
+            let mut state = lock(&scope.state);
             let cancellation = match &*state {
                 State::Polling { cancellation } => *cancellation,
                 _ => unreachable!("poll lease owns the state"),
             }
-            .or_else(|| {
-                self.scope
-                    .registry
-                    .is_closed()
-                    .then_some(Reason::CacheShutdown)
-            });
+            .or_else(|| scope.registry.is_closed().then_some(Reason::CacheShutdown));
             *state = match (&result, cancellation) {
                 (_, Some(reason)) => State::Cancelled(reason),
                 (Poll::Ready(_), None) => State::Completed,
@@ -802,11 +876,11 @@ impl<T: Send + 'static> Execution<T> {
                 drop(state);
                 let retirement = Retirement {
                     _work: work,
-                    _tracking: self.scope.tracking.lock().take(),
+                    _tracking: scope.tracking.lock().take(),
                 };
                 // The terminal scope state owns the reason. Publish it before
                 // user destruction or a result can expose completion to callers.
-                self.scope
+                scope
                     .source
                     .cancel_with(cancellation.unwrap_or(Reason::ScopeFinished));
                 drop(retirement);
@@ -814,15 +888,11 @@ impl<T: Send + 'static> Execution<T> {
             cancellation
         };
         if let Some(reason) = cancellation {
-            self.scope.registry.changed.notify_waiters();
+            scope.registry.changed.notify_waiters();
             return Poll::Ready(Err(Error::OperationCancelled { reason }));
         }
         if result.is_ready() {
-            self.scope.registry.changed.notify_waiters();
-        } else {
-            // Retain the polling activity until suspended work is subscribed.
-            // Shutdown cannot observe an idle gap between these two states.
-            suspended(&self.scope);
+            scope.registry.changed.notify_waiters();
         }
         result
     }
@@ -830,12 +900,33 @@ impl<T: Send + 'static> Execution<T> {
 impl<T: Send + 'static> Future for Execution<T> {
     type Output = Result<T>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().poll_work(cx, |_| {}, |_| {})
+        let this = self.get_mut();
+        if matches!(this.state, ExecutionState::Inline(_)) {
+            let ExecutionState::Inline(frame) =
+                std::mem::replace(&mut this.state, ExecutionState::Finished)
+            else {
+                unreachable!("inline state was matched");
+            };
+            return match frame.first_poll(cx) {
+                FirstPoll::Ready(result) => Poll::Ready(result),
+                FirstPoll::Suspended(scope) => {
+                    this.state = ExecutionState::Owned(scope);
+                    Poll::Pending
+                }
+            };
+        }
+        match &this.state {
+            ExecutionState::Owned(scope) => Self::poll_work(scope, cx),
+            ExecutionState::Inline(_) => unreachable!("first poll was handled"),
+            ExecutionState::Finished => panic!("completed cache execution was polled again"),
+        }
     }
 }
 impl<T: Send + 'static> Drop for Execution<T> {
     fn drop(&mut self) {
-        self.scope.cancel(self.scope.drop_reason());
+        if let ExecutionState::Owned(scope) = &self.state {
+            scope.cancel(scope.drop_reason());
+        }
     }
 }
 
@@ -1044,7 +1135,7 @@ mod close_drop_cause_tests {
             // Reach the interval after committing the terminal scope state but
             // before publishing its token. A later notification must preserve it.
             let pending = {
-                let mut current = lock(&execution.scope.state);
+                let mut current = lock(&execution.owned_scope().state);
                 std::mem::replace(&mut *current, state)
             };
             drop(pending);
@@ -1071,7 +1162,7 @@ mod close_drop_cause_tests {
             },
             CancellationSource::new(),
         );
-        let scope = execution.scope.clone();
+        let scope = execution.owned_scope().clone();
         let poller = std::thread::spawn(move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut execution = std::pin::pin!(execution);

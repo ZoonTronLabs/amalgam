@@ -181,15 +181,14 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 
 The developing 0.4 source has zero-allocation warm L1 reads and replacements.
 Seven local paired runs per API against FusionCache 2.9 pass L1, cold, write,
-L2 JSON and eight-core scaling budgets. Hybrid scalar coordination reuse and
-a typed execution observer remove repeated allocations; the latest observer
-step reduces local L2 `get_or_set` by 4.8% and one allocation. Its committed
-Linux qualification is pending. The latest completed Linux source, `5a20b78`,
-passed all 14 functional checks and warm/cold budgets, but L2 read/retrieval
-were 37.8%/46.7% slower than the reference on its EPYC runner. L1 writes were
-about 20% faster but missed the required 25% advantage. Native performance
-qualification, the final API and complete behavioral parity remain open.
-See [the measured tables and method](docs/PERFORMANCE.md) and
+L2 JSON and eight-core scaling budgets. Counted first-poll execution creates
+an owned scope only after a default operation suspends; it removes five L2
+allocations and improves local read/retrieval by 7.6%/2.8% in matched pairs.
+Its committed Linux qualification is pending. The latest completed Linux
+source, `9872a5d`, passed all 14 functional checks and warm/cold/write budgets,
+but L2 read/retrieval were 19.5%/24.6% slower than the reference on its Xeon
+runner. Native L2 qualification, the final API and complete behavioral parity
+remain open. See [the measured tables and method](docs/PERFORMANCE.md) and
 [release requirements](docs/ROADMAP.md) for source, runtime and machine boundaries.
 
 ## Features
