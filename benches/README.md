@@ -42,7 +42,7 @@ runs all thread counts and the same relative FusionCache budgets.
 FusionCache with at most six allocations. `--gate all` also requires replacement
 `set` at most three quarters of FusionCache with at most three allocations.
 `--gate report` records all measurements without enforcing speed ratios. CI
-currently enforces the hot milestone; later milestones promote the gate.
+enforces `--gate all` for both `read` and `get-or-set`.
 
 The report also includes `ready-costs.csv`, a diagnostic breakdown of clock,
 hash, counter and framework costs. Constant clocks isolate framework and
@@ -56,3 +56,17 @@ sixfold scaling. The hosted-runner floor is three quarters of available physical
 cores, capped at six; SMT siblings are not additional cores. Unavailable topology
 remains unverified. All relative FusionCache budgets and allocation limits apply
 regardless of topology.
+
+Run the scaling executable with `--metadata-costs` to diagnose plain, eager
+and tagged entry construction, owned metadata snapshots, logical expiration
+and replacement writes. This mode uses 100,000 warmup and three million measured operations
+per case and reports elapsed time and allocation counts. It does not substitute
+for the paired FusionCache gate. Entry lifetime math
+uses an explicit timestamp and zero jitter. Cache replacements use the default
+live clock, and raw request tag construction is included in the tagged case.
+Each case verifies its source metadata and the final cached value.
+
+The replacement diagnostic separately measures writes before and after an
+actual read of the same L1 key. The paired replacement fixture performs its
+value-verification read after its timed loop. Preserve that distinction when
+reporting a storage optimization that applies only before reader registration.

@@ -16,17 +16,30 @@ impl Timing {
         time: WriteTime,
         expiry: MemoryExpiry,
     ) -> Deadlines {
+        self.prepare_boundaries(
+            meta.logical_expiration(),
+            meta.physical_expiration(),
+            time,
+            expiry,
+        )
+    }
+    pub(super) fn prepare_boundaries(
+        &self,
+        logical: Timestamp,
+        physical: Timestamp,
+        time: WriteTime,
+        expiry: MemoryExpiry,
+    ) -> Deadlines {
         match self {
             Self::Interoperable => Deadlines::Interoperable(match expiry {
                 MemoryExpiry::ClockDriven => None,
-                MemoryExpiry::RealTime => time.physical_start().checked_add(
-                    meta.physical_expiration()
-                        .saturating_duration_since(time.now()),
-                ),
+                MemoryExpiry::RealTime => time
+                    .physical_start()
+                    .checked_add(physical.saturating_duration_since(time.now())),
             }),
             Self::Local(clock) => Deadlines::Local {
-                logical: clock.deadline(meta.logical_expiration()),
-                physical: clock.deadline(meta.physical_expiration()),
+                logical: clock.deadline(logical),
+                physical: clock.deadline(physical),
             },
         }
     }

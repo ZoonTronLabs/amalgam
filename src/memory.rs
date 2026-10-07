@@ -490,6 +490,40 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         drop(entry);
         self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
     }
+    /// A default standalone replacement need not create an owned envelope.
+    pub(crate) fn insert_plain_borrowed(
+        &self,
+        key: &str,
+        value: V,
+        metadata: crate::entry::PlainMetadata,
+        time: crate::time::local::WriteTime,
+    ) -> MemoryAdmission {
+        if self.observer.reclamation.is_deferred() || matches!(self.backend, Backend::Retained(_)) {
+            return self.insert_value_borrowed(key, metadata.into_fresh(value, Box::new([])), time);
+        }
+        let commit = if !time.now().is_before(metadata.physical()) {
+            self.invalidate_origin(key);
+            drop(value);
+            RetentionCommit::rejected(CapacityRejection::PhysicallyExpired, Vec::new())
+        } else {
+            let Backend::Unbounded(store) = &self.backend else {
+                unreachable!("plain insertion selected an unbounded backend");
+            };
+            store.insert_plain(
+                key,
+                value,
+                metadata,
+                time,
+                CapturePolicy {
+                    admission: self.capture_admission(),
+                    timing: self.observer.capture,
+                },
+            )
+        };
+        let key = StorageKey::Borrowed(key);
+        commit.retired.finish(&self.observer, &key);
+        self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
+    }
     fn finish_admission(
         &self,
         key: &StorageKey<'_>,

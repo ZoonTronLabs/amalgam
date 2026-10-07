@@ -142,21 +142,37 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             let time = self.inner.clock.write_time();
             let now = time.now();
             permit.status(token)?;
-            let entry = match (&resolved, &self.inner.default_fresh_plan) {
-                (None, Some(plan)) => plan.prepare(stored, now, tags),
-                _ => Entry::prepare_fresh_with_jitter(
-                    stored, opts, now, now, jitter, tags, None, None,
-                )?,
-            };
             let CacheMemory::Builtin(memory) = &self.inner.memory else {
                 unreachable!("inline write plan requires builtin L1");
             };
-            let local = if opts.skip_memory_write() {
-                memory.invalidate_origin(key);
-                drop(entry);
-                LocalEffect::Skipped
-            } else {
-                LocalEffect::Stored(memory.insert_value_borrowed(key, entry, time))
+            use crate::entry::DefaultFreshPlan;
+            let local = match (&resolved, &self.inner.default_fresh_plan) {
+                (None, DefaultFreshPlan::Plain(plan))
+                    if tags.is_empty() && !opts.skip_memory_write() =>
+                {
+                    LocalEffect::Stored(memory.insert_plain_borrowed(
+                        key,
+                        stored,
+                        plan.metadata(now),
+                        time,
+                    ))
+                }
+                selected => {
+                    let entry = match selected {
+                        (None, DefaultFreshPlan::Plain(plan)) => plan.prepare(stored, now, tags),
+                        (None, DefaultFreshPlan::Prepared(plan)) => plan.prepare(stored, now, tags),
+                        _ => Entry::prepare_fresh_with_jitter(
+                            stored, opts, now, now, jitter, tags, None, None,
+                        )?,
+                    };
+                    if opts.skip_memory_write() {
+                        memory.invalidate_origin(key);
+                        drop(entry);
+                        LocalEffect::Skipped
+                    } else {
+                        LocalEffect::Stored(memory.insert_value_borrowed(key, entry, time))
+                    }
+                }
             };
             self.inner.events.emit_lazy(|| CacheEvent::Set {
                 key: Arc::from(key),

@@ -7,7 +7,7 @@ The published registry package remains 0.3.1 until release qualification finishe
 | Priority | Work | Current state |
 |---|---|---|
 | Must | Shared-write-free warmed L1 reads, tag verdicts and incremental maintenance | Reader slots, borrowed observations and build-selected primitive copies implemented; zero warm allocations and read budgets qualified for both APIs on Linux |
-| Must | Ready factory and inline L1 writes; ownership only for suspended work | Inline commits, unobserved payload retirement and general/hybrid caller-drop ownership implemented; cold budget qualified on Linux; final write-budget qualification pending |
+| Must | Ready factory and inline L1 writes; ownership only for suspended work | Inline commits, unobserved payload retirement, default replacement lifetime facts and general/hybrid caller-drop ownership implemented; cold budget qualified on Linux; final write-budget qualification pending |
 | Must | Fail-safe, soft/hard timeouts, L2, backplane, eager, adaptive caching, tags and recovery | Existing contracts retained; finish the paired FC requirement matrix |
 | Must | FC defaults and explicit `strict()` | Availability defaults, early fencing validation and public default contracts implemented |
 | Must | Eight-operation API, overlays, string tags, `Option<V>`, provider/advanced modules | `set` and `get_or_set` are fluent and fallible; factory-value and remaining API migration open |

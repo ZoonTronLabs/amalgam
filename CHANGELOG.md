@@ -7,6 +7,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Carry only the value and lifetime boundaries through ordinary default L1
+  replacements. Construct the complete entry envelope for new slots, retained
+  aliases and actual capture; reset all metadata on unique reuse and destroy
+  replaced user values after storage coordination. Public metadata, tagged
+  entries, custom options and deferred reclamation preserve their contracts.
 - Retire only the replaced user value for unobserved, exclusively owned L1
   representations. User destruction still follows storage coordination;
   subscribed eviction values, retirement-time capture and retained snapshots

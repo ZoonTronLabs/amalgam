@@ -300,7 +300,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     default_runtime: ready::RuntimeRequirement,
     ready_plan: plain_ready::ReadyPlan,
     write_plan: memory_inline::WritePlan,
-    default_fresh_plan: Option<crate::entry::FreshPlan>,
+    default_fresh_plan: crate::entry::DefaultFreshPlan,
     default_copy: crate::serializers::DefaultValueCopy<V>,
     flights: Option<Arc<crate::single_flight::Flights<inline_cold::Value<V>>>>,
     origin_work: std::sync::OnceLock<crate::retained_origin::RetainedOrigins<OriginCompletion<V>>>,

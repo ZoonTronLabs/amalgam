@@ -1,4 +1,5 @@
 //! Independently locked unbounded storage; extraction precedes user reclamation.
+mod plain;
 use super::RetirementReason as Reason;
 use super::{
     Arc, CapacityRejection, CaptureAdmission, Entry, Expected, MemoryAdmission, MemoryExpiry,

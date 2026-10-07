@@ -713,9 +713,9 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             self.distributed_locker.is_some(),
         );
         let default_fresh_plan = if write_plan.is_inline() {
-            crate::entry::FreshPlan::for_options(&self.default_options)?
+            crate::entry::DefaultFreshPlan::for_options(&self.default_options)?
         } else {
-            None
+            crate::entry::DefaultFreshPlan::General
         };
         let default_copy = crate::serializers::DefaultValueCopy::validated(
             &self.default_options,

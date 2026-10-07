@@ -239,6 +239,10 @@ fn mutations(rt: &tokio::runtime::Runtime) {
     });
 }
 fn main() {
+    if std::env::args().any(|argument| argument == "--metadata-costs") {
+        metadata_costs();
+        return;
+    }
     if std::env::args().any(|argument| argument == "--costs") {
         ready_costs();
         return;
@@ -388,5 +392,137 @@ fn ready_costs() {
             native.read("cost", None).unwrap().into_value().unwrap()
         });
         native.shutdown().unwrap();
+    }
+}
+
+/// Separate enabled-feature costs from the default L1 performance budget.
+/// All cases exercise the public entry or cache APIs and verify their facts.
+#[derive(Clone, Copy)]
+enum MetadataCase {
+    Plain,
+    Eager,
+    Tagged,
+}
+impl MetadataCase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Eager => "eager",
+            Self::Tagged => "tagged",
+        }
+    }
+    fn options(self) -> EntryOptions {
+        let options = EntryOptions::new(Duration::from_secs(3600));
+        match self {
+            Self::Plain | Self::Tagged => options,
+            Self::Eager => options.with_eager_refresh(amalgam::EagerThreshold::new(0.5)),
+        }
+    }
+    fn tags(self, tag: &amalgam::Tag) -> Box<[amalgam::Tag]> {
+        match self {
+            Self::Plain | Self::Eager => Box::new([]),
+            Self::Tagged => Box::new([tag.clone()]),
+        }
+    }
+}
+fn metadata_cost(label: &str, mut operation: impl FnMut()) {
+    // Owned scalar snapshots otherwise take only a few milliseconds. Use a
+    // longer diagnostic sample without changing the paired workloads.
+    const METADATA_WARMUP: usize = 100_000;
+    const METADATA_OPERATIONS: usize = 3_000_000;
+    for _ in 0..METADATA_WARMUP {
+        operation();
+    }
+    begin_counting();
+    let began = Instant::now();
+    for _ in 0..METADATA_OPERATIONS {
+        operation();
+    }
+    let elapsed = began.elapsed();
+    let allocations = end_counting();
+    println!(
+        "{label},{METADATA_OPERATIONS},{:.3},{allocations}",
+        elapsed.as_nanos() as f64 / METADATA_OPERATIONS as f64
+    );
+}
+fn metadata_costs() {
+    use amalgam::entry::Entry;
+    let rt = runtime();
+    let now = amalgam::Timestamp::from_ticks(1_000_000_000);
+    let tag = amalgam::Tag::new("measurement-group").unwrap();
+    eprintln!(
+        "metadata_bytes={}",
+        std::mem::size_of::<amalgam::entry::Metadata>()
+    );
+    println!("scenario,operations,ns_per_op,allocations");
+    for case in [
+        MetadataCase::Plain,
+        MetadataCase::Eager,
+        MetadataCase::Tagged,
+    ] {
+        let options = case.options();
+        let fresh = || {
+            Entry::try_fresh_with_jitter(
+                7_u64,
+                &options,
+                now,
+                now,
+                amalgam::JitterSample::ZERO,
+                case.tags(&tag),
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let source = fresh();
+        assert_eq!(source.value(), &7);
+        assert_eq!(source.meta().created(), now);
+        match case {
+            MetadataCase::Plain => {
+                assert!(source.meta().tags().is_empty());
+                assert!(source.meta().eager_refresh_at().is_none());
+            }
+            MetadataCase::Eager => assert!(source.meta().eager_refresh_at().is_some()),
+            MetadataCase::Tagged => assert_eq!(source.meta().tags(), [tag.clone()]),
+        }
+        metadata_cost(&format!("entry_{}", case.label()), || {
+            drop(black_box(fresh()));
+        });
+        metadata_cost(&format!("snapshot_{}", case.label()), || {
+            drop(black_box(source.meta().clone()));
+        });
+        metadata_cost(&format!("expire_{}", case.label()), || {
+            drop(black_box(source.with_logical_expiration(now)));
+        });
+        let cache = Cache::builder().default_options(options).build();
+        rt.block_on(async {
+            let replacement = || async {
+                let request = cache.set("metadata-cost", 7_u64);
+                let request = match case {
+                    MetadataCase::Plain | MetadataCase::Eager => request,
+                    MetadataCase::Tagged => request.tags(["measurement-group"]),
+                };
+                request.await.unwrap();
+            };
+            let mut replace = || {
+                let mut operation = std::pin::pin!(replacement());
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                match std::future::Future::poll(operation.as_mut(), &mut context) {
+                    std::task::Poll::Ready(()) => {}
+                    std::task::Poll::Pending => panic!("standalone replacement must be ready"),
+                }
+            };
+            metadata_cost(&format!("set_{}", case.label()), &mut replace);
+            assert_eq!(
+                cache
+                    .read("metadata-cost", None)
+                    .await
+                    .unwrap()
+                    .into_value(),
+                Some(7)
+            );
+            metadata_cost(&format!("set_after_read_{}", case.label()), &mut replace);
+            cache.shutdown().await.unwrap();
+        });
     }
 }
