@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Select a bounded shard-local pool of scalar key-coordination controls only
+  for hybrid caches instead of rebuilding idle lanes and local mutexes on each
+  distributed read. Standalone L1 uses transient coordination. Pool
+  eviction and explicit maintenance preserve active holder/waiter identity and
+  FIFO acquisition; controls cannot retain user values. Standalone L1 hits and
+  inline writes keep their existing execution plans.
+- Keep untimed L2 allocation-stack probes in a separate benchmark executable,
+  preserving the original timed allocator and comparative workloads.
 - Represent local, cooperative and fenced coordination as closed participation
   states. Disabled distributed locking retains no lease cleanup task, event or
   key owners. Actual leases keep supervised release, loss detection and fencing;

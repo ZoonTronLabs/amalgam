@@ -641,11 +641,16 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             PluginContext::new(&*name, &*instance_id, events.clone())?,
             Vec::new(),
         )?;
+        let coordination = match &storage {
+            Storage::MemoryOnly => crate::locking::CoordinationPlan::Transient,
+            Storage::Hybrid { .. } => crate::locking::CoordinationPlan::Reuse,
+        };
         let locks = LocalLocks::new(
             self.memory_locker,
             Arc::clone(&name),
             Arc::clone(&instance_id),
             self.lock_shards,
+            coordination,
         );
         let marker_reads = match self.marker_read_policy {
             MarkerReadPolicy::DurableRequired => MarkerReads::DurableRequired,
@@ -731,7 +736,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             instance_id,
             memory,
             locks,
-            lanes: Lanes::new(),
+            lanes: Lanes::new(coordination),
             tags: TagRegistry::new(),
             events,
             clock,

@@ -93,3 +93,11 @@ timing ranges accompany the medians; it leaves the FusionCache gates intact.
 Use `--rust-target` only for an available cross target and identify emulated
 results as such. CI manual runs can select the optional `diagnostic_baseline`
 full commit SHA to collect native Linux before/after evidence on one runner.
+
+Allocation ownership can be inspected independently with
+`cargo +1.88.0 test --release --locked --bench l2_ownership -- --ignored --nocapture --test-threads=1`.
+The two ignored probes warm the same public L2 read and factory-retrieval cases,
+then capture allocation stacks for one untimed lookup. The conflicting L1/L2
+seeds and no-factory assertions remain. Tracing uses a separate executable and
+allocator; it cannot change the timed scaling counter. Counts include platform
+runtime bookkeeping and must be compared on the same compiler and platform.

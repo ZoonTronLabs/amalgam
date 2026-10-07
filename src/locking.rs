@@ -21,9 +21,63 @@ use parking_lot::Mutex as ShardMutex;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 const SLOT_SHARDS: usize = 64;
+const RETAINED_CONTROLS_PER_SHARD: usize = 16;
+
+/// Distributed coordination reuses scalar owners; standalone L1 keeps its
+/// transient single-flight path without bounded-pool maintenance per cold key.
+#[derive(Clone, Copy)]
+pub(crate) enum CoordinationPlan {
+    Transient,
+    Reuse,
+}
+impl CoordinationPlan {
+    pub(crate) fn slots<T: ScalarControl>(self) -> WeakSlots<T> {
+        match self {
+            Self::Transient => WeakSlots::new(),
+            Self::Reuse => WeakSlots::reusable(),
+        }
+    }
+}
+
+// Only these scalar controls may be destroyed under lookup coordination.
+// In particular, Flight<V> and user-value owners cannot select idle reuse.
+mod scalar {
+    pub trait Sealed {}
+    impl Sealed for tokio::sync::Mutex<()> {}
+    impl Sealed for crate::commit::KeyLane {}
+}
+pub(crate) trait ScalarControl: scalar::Sealed {}
+impl ScalarControl for Mutex<()> {}
+impl ScalarControl for crate::commit::KeyLane {}
+
+enum ControlRetention<T> {
+    Weak,
+    Reuse(VecDeque<Arc<T>>),
+}
+impl<T> ControlRetention<T> {
+    fn retain(&mut self, control: &Arc<T>) {
+        if let Self::Reuse(recent) = self {
+            if recent.len() == RETAINED_CONTROLS_PER_SHARD {
+                recent.pop_front();
+            }
+            recent.push_back(Arc::clone(control));
+        }
+    }
+    fn clean_idle(&mut self, budget: usize) {
+        if let Self::Reuse(recent) = self {
+            for _ in 0..budget.min(recent.len()) {
+                let control = recent.pop_front().expect("count bounds the live queue");
+                if Arc::strong_count(&control) > 1 {
+                    recent.push_back(control);
+                }
+            }
+        }
+    }
+}
 struct SlotShard<T> {
     entries: HashMap<Arc<str>, Weak<T>, RandomState>,
     sweep: VecDeque<Arc<str>>,
+    controls: ControlRetention<T>,
 }
 impl<T> SlotShard<T> {
     fn clean(&mut self, budget: usize) -> usize {
@@ -62,11 +116,24 @@ impl<T> WeakSlots<T> {
                     ShardMutex::new(SlotShard {
                         entries: HashMap::with_hasher(hash.clone()),
                         sweep: VecDeque::new(),
+                        controls: ControlRetention::Weak,
                     })
                 })
                 .collect(),
             hash,
         }
+    }
+    /// A bounded shard-local pool amortizes allocation of scalar coordination.
+    /// Active holders/waiters still own their identity even after pool eviction.
+    pub(crate) fn reusable() -> Self
+    where
+        T: ScalarControl,
+    {
+        let mut slots = Self::new();
+        for shard in slots.shards.iter_mut() {
+            shard.get_mut().controls = ControlRetention::Reuse(VecDeque::new());
+        }
+        slots
     }
     pub(crate) fn get(&self, key: &str, make: impl FnOnce() -> T) -> Arc<T> {
         self.get_with(key, make, Arc::clone)
@@ -98,7 +165,11 @@ impl<T> WeakSlots<T> {
         let hash = self.hash.hash_one(key);
         let mut shard = self.shards[hash as usize & (SLOT_SHARDS - 1)].lock();
         shard.clean(4);
-        let SlotShard { entries, sweep } = &mut *shard;
+        let SlotShard {
+            entries,
+            sweep,
+            controls,
+        } = &mut *shard;
         match entries
             .raw_entry_mut()
             .from_hash(hash, |stored| stored.as_ref() == key)
@@ -108,6 +179,7 @@ impl<T> WeakSlots<T> {
                 None => {
                     let value = Arc::new(make());
                     slot.insert(Arc::downgrade(&value));
+                    controls.retain(&value);
                     inspect(&value)
                 }
             },
@@ -116,6 +188,7 @@ impl<T> WeakSlots<T> {
                 let value = Arc::new(make());
                 sweep.push_back(Arc::clone(&key));
                 slot.insert_hashed_nocheck(hash, key, Arc::downgrade(&value));
+                controls.retain(&value);
                 inspect(&value)
             }
         }
@@ -131,6 +204,7 @@ impl<T> WeakSlots<T> {
                 break;
             }
             if let Some(mut shard) = shard.try_lock() {
+                shard.controls.clean_idle(remaining);
                 remaining -= shard.clean(remaining);
             }
         }
@@ -144,7 +218,7 @@ impl<T> std::fmt::Debug for WeakSlots<T> {
     }
 }
 
-/// Per-key async mutexes with weak, safely reclaimable lookup slots.
+/// Per-key async mutexes with safely reclaimable identity slots.
 #[derive(Debug)]
 pub struct KeyedLock {
     locks: WeakSlots<Mutex<()>>,
@@ -158,9 +232,12 @@ impl KeyedLock {
     /// Creates per-key locks. The legacy `shards` argument is retained for source
     /// compatibility; lookup sharding is selected by the map implementation.
     #[must_use]
-    pub fn new(_shards: usize) -> Self {
+    pub fn new(shards: usize) -> Self {
+        Self::with_plan(shards, CoordinationPlan::Transient)
+    }
+    pub(crate) fn with_plan(_shards: usize, plan: CoordinationPlan) -> Self {
         Self {
-            locks: WeakSlots::new(),
+            locks: plan.slots(),
         }
     }
 
@@ -269,6 +346,84 @@ mod tests {
         }
         // Never more than one holder of the same key at once.
         assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn scalar_controls_reuse_idle_identity_and_explicit_maintenance_reclaims_it() {
+        let slots = WeakSlots::<Mutex<()>>::reusable();
+        let first = slots.get("reused", || Mutex::new(()));
+        let identity = Arc::downgrade(&first);
+        drop(first);
+        let next = slots.get("reused", || panic!("an idle scalar control was rebuilt"));
+        assert!(Arc::ptr_eq(&identity.upgrade().unwrap(), &next));
+        drop(next);
+        slots.clean(1024);
+        assert!(identity.upgrade().is_none());
+        assert!(
+            slots
+                .shards
+                .iter()
+                .all(|shard| shard.lock().entries.is_empty())
+        );
+    }
+
+    #[test]
+    fn scalar_control_retention_is_bounded_per_shard() {
+        let slots = WeakSlots::<Mutex<()>>::reusable();
+        let identities: Vec<_> = (0..)
+            .map(|index| format!("bounded-{index}"))
+            .filter(|key| slots.hash.hash_one(key.as_str()) as usize & (SLOT_SHARDS - 1) == 0)
+            .take(RETAINED_CONTROLS_PER_SHARD + 1)
+            .map(|key| Arc::downgrade(&slots.get(&key, || Mutex::new(()))))
+            .collect();
+        assert!(identities[0].upgrade().is_none());
+        assert_eq!(
+            identities
+                .iter()
+                .filter(|identity| identity.upgrade().is_some())
+                .count(),
+            RETAINED_CONTROLS_PER_SHARD
+        );
+        let shard = slots.shards[0].lock();
+        let ControlRetention::Reuse(controls) = &shard.controls else {
+            panic!("scalar controls must select bounded reuse")
+        };
+        assert_eq!(controls.len(), RETAINED_CONTROLS_PER_SHARD);
+    }
+
+    #[tokio::test]
+    async fn pool_eviction_and_maintenance_preserve_holder_and_queued_waiter_identity() {
+        let locks = KeyedLock::with_plan(64, CoordinationPlan::Reuse);
+        let first = locks.lock("held").await;
+        let identity = Arc::downgrade(&locks.mutex_for("held"));
+        let mut queued = std::pin::pin!(locks.lock("held"));
+        let initial =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx))).await;
+        assert!(initial.is_pending());
+        let shard = locks.locks.hash.hash_one("held") as usize & (SLOT_SHARDS - 1);
+        for key in (0..)
+            .map(|index| format!("eviction-{index}"))
+            .filter(|key| {
+                locks.locks.hash.hash_one(key.as_str()) as usize & (SLOT_SHARDS - 1) == shard
+            })
+            .take(RETAINED_CONTROLS_PER_SHARD + 1)
+        {
+            drop(locks.mutex_for(&key));
+        }
+        locks.clean_idle(1024);
+        assert!(Arc::ptr_eq(
+            &identity.upgrade().unwrap(),
+            &locks.mutex_for("held")
+        ));
+        drop(first);
+        assert!(
+            locks.try_lock("held").is_none(),
+            "a queued waiter was bypassed"
+        );
+        let second = queued.await;
+        assert!(locks.try_lock("held").is_none());
+        drop(second);
+        assert!(locks.try_lock("held").is_some());
     }
 
     #[test]

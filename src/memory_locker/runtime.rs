@@ -33,6 +33,7 @@ impl LocalLocks {
         name: Arc<str>,
         instance_id: Arc<str>,
         shards: usize,
+        plan: crate::locking::CoordinationPlan,
     ) -> Self {
         match provider {
             Some(provider) => Self::Custom(Arc::new(ConfiguredLocker {
@@ -41,7 +42,7 @@ impl LocalLocks {
                 context: MemoryLockerContext { name, instance_id },
                 shutdown_started: AtomicBool::new(false),
             })),
-            None => Self::Builtin(Box::new(KeyedLock::new(shards))),
+            None => Self::Builtin(Box::new(KeyedLock::with_plan(shards, plan))),
         }
     }
     pub(crate) fn has_blocking_acquirer(&self) -> bool {

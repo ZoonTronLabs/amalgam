@@ -1,7 +1,7 @@
 //! Typed commit receipts and pinned per-key mutation ordering.
 use crate::error::{Error, Result};
 use crate::execution::lock;
-use crate::locking::WeakSlots;
+use crate::locking::{CoordinationPlan, WeakSlots};
 use crate::memory::MemoryAdmission;
 use crate::recovery::{OperationGeneration, RecoveryError, RecoveryFence};
 use crate::time::Timestamp;
@@ -244,9 +244,9 @@ pub(crate) struct Lanes {
     slots: WeakSlots<KeyLane>,
 }
 impl Lanes {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(plan: CoordinationPlan) -> Self {
         Self {
-            slots: WeakSlots::new(),
+            slots: plan.slots(),
         }
     }
     pub(crate) fn get(&self, key: &str) -> Arc<KeyLane> {

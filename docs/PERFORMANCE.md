@@ -7,9 +7,9 @@ API, the paired behavioral matrix and all final release gates.
 ## Local comparison, 2026-10-07
 
 Seven alternating process pairs per API on macOS 26.6.2 arm64, with 12 available
-physical cores and 12 logical CPUs. Rust 1.95.0; .NET SDK 10.0.300, runtime
+physical cores and 12 logical CPUs. Rust 1.88.0; .NET SDK 10.0.300, runtime
 10.0.8; released FusionCache 2.9.0, locked by `packages.lock.json`.
-The minimum compiler, Rust 1.88.0, is checked separately for contracts and lints.
+These measurements include the build-selected hybrid scalar-control pool.
 
 The workload uses `u64`, one hot key or one key per worker. Set and cold run in
 separate fresh processes with identical operation counts. L2 uses the in-memory
@@ -19,29 +19,74 @@ factory. Serialization, lookup and hydration remain inside the timed operation.
 
 | Operation | Amalgam ns/op | FusionCache ns/op | Qualification |
 |---|---:|---:|---|
-| Async L1 read, one worker | 38.504 | 298.852 | Pass |
-| Async L1 `get_or_set`, one worker | 43.519 | 341.502 | Pass |
-| Same key, eight workers, `get_or_set` | 5.798 | 79.277 | Pass |
-| Distinct keys, eight workers, `get_or_set` | 5.871 | 59.557 | Pass |
-| L1 replacement | 89.650 | 143.593 | Pass |
-| Cold factory | 931.533 | 2155.897 | Pass |
-| L2 plus JSON, read | 1527.862 | 1805.452 | Pass |
-| L2 plus JSON, `get_or_set` | 1836.406 | 1973.109 | Pass |
+| Async L1 read, one worker | 36.932 | 298.725 | Pass |
+| Async L1 `get_or_set`, one worker | 46.400 | 343.276 | Pass |
+| Same key, eight workers, read | 4.884 | 76.988 | Pass |
+| Distinct keys, eight workers, read | 4.915 | 51.061 | Pass |
+| Same key, eight workers, `get_or_set` | 6.175 | 81.447 | Pass |
+| Distinct keys, eight workers, `get_or_set` | 6.212 | 67.512 | Pass |
+| L1 replacement | 92.043 | 144.143 | Pass |
+| Cold factory | 994.764 | 2269.843 | Pass |
+| L2 plus JSON, read | 1445.370 | 1836.396 | Pass |
+| L2 plus JSON, `get_or_set` | 1793.913 | 1981.606 | Pass |
 
 Eight-worker ns/op is elapsed time divided by all completed operations; it is
 aggregate throughput, not the latency experienced by one caller. Distinct-key
-scaling is 7.441x for read and 7.416x for `get_or_set`, exceeding the 6x budget
+scaling is 7.576x for read and 7.436x for `get_or_set`, exceeding the 6x budget
 on this machine with at least eight physical cores. Warm hits and L1 replacement
-allocate zero; cold allocates 5.009 per operation; L2 read and factory retrieval
-allocate 23 and 24 respectively. All local budgets pass for both APIs.
+allocate zero; cold allocates 5.009 per operation; both L2 APIs allocate 20.
+All local budgets pass for both APIs.
 
-Read L2 ranges were 1523.020–1541.457 ns versus 1791.786–1813.829 ns.
-Factory-retrieval L2 ranges were 1825.253–1897.241 ns versus
-1948.193–1988.610 ns. The local comparison passes with non-overlapping L2 ranges.
+Read L2 ranges were 1431.613–1539.861 ns versus
+1804.936–1873.384 ns. Factory-retrieval L2 ranges were
+1769.917–1849.289 ns versus
+1962.235–2008.988 ns. Neither L2 pair overlaps.
 
 These are working-tree measurements. Reports record runtime source and binary
 hashes, including unrelated local edits. Exact committed Linux source and the
 final release API require their own qualification.
+
+## Build-selected scalar coordination reuse
+
+Idle local mutexes and mutation lanes previously lost their final strong owner
+on every distributed lookup. Untimed allocation stacks identify three repeated
+allocations in read-only L2 retrieval and four in factory retrieval.
+
+Only hybrid storage now selects a pool of at most 16 scalar controls per shard,
+across 64 shards. A sealed internal capability admits only `Mutex<()>` and
+`KeyLane`; the pool cannot retain user values or factory work. Holders and
+waiters retain the same weak-slot identity through pool eviction and explicit
+maintenance. Tokio FIFO acquisition and per-key ordering remain.
+
+Three counterbalanced pairs compare the candidate with
+`7c01404f664d91702de673d7ba603272203f4205` on Rust 1.88.0. Both builds use
+one original timed harness and the same unrelated local edits:
+
+| Operation | Baseline ns/op | Candidate ns/op | Interpretation |
+|---|---:|---:|---|
+| L2 plus JSON, read | 1511.814 | 1449.279 | 4.14% faster; 23→20 allocations |
+| L2 plus JSON, `get_or_set` | 1886.566 | 1775.102 | 5.91% faster; 24→20 allocations |
+| L1 replacement | 89.315 | 91.068 | 1.96% slower median; no gain claimed |
+| Cold factory | 967.295 | 987.970 | Overlapping ranges; no gain claimed |
+
+Both L2 before/after ranges are separate: read 1510.127–1520.528 versus
+1429.850–1461.361 ns, and factory retrieval 1854.037–1890.381 versus
+1763.131–1820.304 ns. Cold ranges overlap at 931.430–983.981 versus
+955.086–1002.952 ns, with the same 5.009 allocations. Some warm medians also
+vary, including a 4.56% higher eight-worker distinct-key factory-retrieval
+median with overlapping ranges. Unchanged timing for every L1 case is not claimed.
+
+An unconditional pool was rejected: its standalone cold median was 7.95% slower
+with separate ranges and extra allocations. Selecting the transient standalone
+plan at construction removes that pool's maintenance and allocation cost from L1.
+Untimed stack capture lives in a separate ignored benchmark executable; the
+timed allocator and original comparative workloads remain unchanged.
+
+All 702 default contracts/doctests, 84 x86 unit tests and strict all-target,
+all-feature MSRV clippy on ARM/x86 pass. Both ownership probes pass.
+The current per-key Tokio lane is still awaiting the target hybrid shard-queue
+migration. This step does not complete that requirement or general scope
+elimination. Exact-source Linux comparative qualification remains open.
 
 ## Previous architectural step: borrowed L2 work
 
@@ -102,10 +147,39 @@ unrelated local edits in both variants:
 Allocation counts are unchanged. The step enforces disabled-feature ownership
 and all local comparative budgets still pass; it is not reported as a timing
 improvement. Minimum-compiler default contracts and strict all-target/all-feature
-lints pass on ARM and x86. Exact-source native Linux results for this step are
-still required; the completed Linux run below precedes this change.
+lints pass on ARM and x86. Exact-source native Linux results are recorded below; the later bounded-control
+candidate still requires its own Linux qualification.
 
 ## Latest native Linux comparison
+
+The [CI run for 7c01404](https://github.com/ZoonTronLabs/amalgam/actions/runs/37617049677)
+completed with all 14 functional milestone jobs passing. The comparative and
+aggregate jobs failed only the L2 performance budget for both APIs.
+
+This runner was Intel Xeon Platinum 8370C with **two available physical cores
+and four logical CPUs**; Rust 1.88.0, .NET SDK 10.0.401/runtime 10.0.12 and
+locked FusionCache 2.9.0. Seven pairs ran per API. Eight worker threads on this
+runner do not establish eight-core scaling.
+
+| L2 plus JSON on 7c01404 | Amalgam ns/op | FusionCache ns/op | Result |
+|---|---:|---:|---|
+| Read | 3151.362 | 2569.427 | Fail: 22.65% slower |
+| `get_or_set` | 3758.472 | 2870.652 | Fail: 30.93% slower |
+
+Read ranges were 3109.537–3166.951 ns versus 2525.945–2615.289 ns;
+factory-retrieval ranges were 3729.865–3833.070 ns versus
+2830.052–2883.710 ns. Warm, cold and write budgets passed. L2 read/retrieval
+allocated 20/21; warm hits and writes allocated zero.
+
+A same-runner, three-pair comparison against 72f436c measured read
+3223.351→3136.218 ns (-2.70%) and factory retrieval
+3859.182→3784.180 ns (-1.94%). The latter falls within the two-percent
+interpretation threshold; no gain is claimed. Allocations were unchanged and
+set/cold ranges overlapped. This Xeon and the preceding EPYC runners differ;
+comparing their absolute values does not establish a code-induced regression.
+The newer bounded-control candidate requires its own exact-source Linux run.
+
+## Previous native source: borrowed L2 work
 
 The comparative portion of the [CI run for 72f436c](https://github.com/ZoonTronLabs/amalgam/actions/runs/37612542515)
 completed: all 14 functional milestone jobs passed, including live Redis,
@@ -156,7 +230,8 @@ export CARGO_INCREMENTAL=0
 export RUSTUP_TOOLCHAIN=1.88.0
 python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-read
 python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-get
-python3 benches/run-before-after.py --baseline fa6e0b257e6fc6b1ee3e73b8780fbdd187792d63 --output /tmp/amalgam-before-after
+python3 benches/run-before-after.py --baseline 7c01404f664d91702de673d7ba603272203f4205 --output /tmp/amalgam-before-after
+cargo +1.88.0 test --release --locked --bench l2_ownership -- --ignored --nocapture --test-threads=1
 ```
 
 CI enforces the same complete budgets for both APIs. Full package, consumer,
