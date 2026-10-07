@@ -57,6 +57,28 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
+## Focused measurement after API migration
+
+Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
+FC 2.9.0/.NET 10.0.8. The candidate uses the unified source requests, fallible
+writes and provider/advanced namespaces. The baseline is the recorded origin
+partition candidate above, before those API changes. All 48 warmup records
+settled. These timings cover L2/set/cold and do not qualify hot reads, scaling
+or release.
+
+| Operation | Before API ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
+|---|---:|---:|---:|---:|---:|---:|---|
+| L2 JSON read | 1162.1 | 1178.1 | 1177.5 | 1853.5 | **1.001** | 9 | **Fail: <=1.00** |
+| L2 JSON get_or_set | 1502.3 | 1475.4 | 1281.7 | 2034.6 | **1.151** | 9 | **Fail: <=1.00** |
+| L1 replacement | 90.6 | 92.3 | 112.2 | 142.4 | **0.823** | 0 | **Fail: <=0.75** |
+| Cold factory | 1102.6 | 1122.9 | 1789.3 | 1903.0 | 0.628 | 5.009 | <=1668 ns, <=6 allocations |
+
+L2 read is within measurement noise of FC, but its exact median ratio remains
+above the unchanged limit. Small before/after median changes do not establish
+an API speedup. L2 get_or_set and set still miss their required budgets; this
+checkpoint is not release qualified. See the
+[source identities, ranges and verdicts](benchmarks/2026-10-07-source-api.json).
+
 ## Focused L2 origin partition diagnostic
 
 Three counterbalanced comparisons on the same M4 Pro and frozen reference
