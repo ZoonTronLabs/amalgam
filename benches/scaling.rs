@@ -252,6 +252,12 @@ fn main() {
             println!("scenario,threads,operations,ns_per_op,allocations");
             mutations(&runtime());
         }
+        [mode, flag, api] if mode == "--l2" && flag == "--api" && api == "read" => {
+            distributed::<ReadHit>()
+        }
+        [mode, flag, api] if mode == "--l2" && flag == "--api" && api == "get-or-set" => {
+            distributed::<OriginHit>()
+        }
         [] => run::<ReadHit>(),
         [flag, value] if flag == "--api" && value == "read" => run::<ReadHit>(),
         [flag, value] if flag == "--api" && value == "get-or-set" => run::<OriginHit>(),
@@ -525,4 +531,57 @@ fn metadata_costs() {
             cache.shutdown().await.unwrap();
         });
     }
+}
+
+// Force L2 through public defaults. A different L1 seed proves that these
+// retrievals decode the distributed value rather than reuse the local hit.
+fn distributed<H: WarmHit>() {
+    let rt = runtime();
+    rt.block_on(async {
+        let options = EntryOptions::new(Duration::from_secs(3600)).with_skip_memory(true, false);
+        let cache = Cache::builder()
+            .default_options(options.clone())
+            .distributed(Arc::new(amalgam::InMemoryDistributedCache::new(Arc::new(
+                amalgam::SystemClock,
+            ))))
+            .serializer(Arc::new(amalgam::JsonSerializer))
+            .build();
+        cache
+            .try_set("l2-json", 7_u64)
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        cache
+            .try_set_full(
+                "l2-json",
+                11,
+                Some(options.with_skip_distributed(false, true)),
+                Box::new([]),
+            )
+            .await
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        for _ in 0..WARMUP {
+            assert_eq!(H::value(&cache, "l2-json").await, 7);
+        }
+        begin_counting();
+        let began = Instant::now();
+        let mut checksum = 0_u64;
+        for _ in 0..OPERATIONS {
+            checksum += black_box(H::value(&cache, "l2-json").await);
+        }
+        let elapsed = began.elapsed();
+        let allocations = end_counting();
+        assert_eq!(checksum, 7 * OPERATIONS as u64);
+        println!("scenario,threads,operations,ns_per_op,allocations");
+        println!(
+            "l2_json,1,{OPERATIONS},{:.3},{allocations}",
+            elapsed.as_nanos() as f64 / OPERATIONS as f64
+        );
+        cache.shutdown().await.unwrap();
+    });
 }

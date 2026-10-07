@@ -7,6 +7,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Measure matched in-memory L2 plus JSON reads in a separate process for both
+  public read APIs. Official options bypass L1 reads while preserving
+  hydration; conflicting L1/L2 values and checksums validate the fixture.
+  The complete CI gate requires both L2 measurements to match or beat
+  FusionCache; allocation samples remain visible in the report.
 - Add counterbalanced same-runner Rust diagnostics with frozen workloads,
   raw allocation samples and source identities. Manual CI runs can compare a
   local baseline commit without changing the comparative FusionCache gates.

@@ -14,7 +14,14 @@ operation in both libraries. Each mode applies the same allocation and ratio
 budgets, and its name is retained in the report. They also measure a native
 synchronous hit, replacement `set`, and a new-key immediately ready factory.
 Setup, keys, thread startup and warmup are outside timed loops.
-Warm reads and mutations run in separate fresh processes in both runtimes.
+Warm reads, mutations and distributed reads run in separate fresh processes
+in both runtimes. The distributed fixture uses an in-memory L2 and the
+standard JSON snapshot serializer, with public default options that skip
+L1 reads. L1 hydration remains enabled in both libraries. It seeds different
+L1/L2 values (11/7), checks every warmup result and validates the measured
+checksum. Cache construction, seeding and shutdown are outside measurement.
+Run either scaling executable with `--l2 --api read|get-or-set` for this
+fixture alone; the factory-retrieval fixture fails if its factory runs.
 The mutation process is identical for both selected read APIs: one million
 replacement writes and one hundred thousand new-key factories. Raw CSVs identify
 each process; scenario sets, operation counts and returned values are checked. Both cold
@@ -40,7 +47,9 @@ runs all thread counts and the same relative FusionCache budgets.
 
 `--gate cold` additionally requires the cold factory at most three quarters of
 FusionCache with at most six allocations. `--gate all` also requires replacement
-`set` at most three quarters of FusionCache with at most three allocations.
+`set` at most three quarters of FusionCache with at most three allocations,
+and in-memory L2 plus JSON at most the FusionCache cost. L2 allocations are
+reported separately; the zero-allocation limit applies to warmed L1 hits.
 `--gate report` records all measurements without enforcing speed ratios. CI
 enforces `--gate all` for both `read` and `get-or-set`.
 
@@ -73,8 +82,10 @@ reporting a storage optimization that applies only before reader registration.
 
 For a storage or execution change, run
 `python3 benches/run-before-after.py --baseline <local-commit> --output /absolute/path/outside/the/checkout`.
-This diagnostic requires identical dependency manifests and scaling workloads.
-It freezes both executables, restores the current source before measurement,
+This diagnostic requires identical dependency manifests and compiles the
+current frozen workloads against both source versions. It verifies identical
+harness fingerprints, freezes both executables, restores the current source
+before measurement,
 and alternates their order for at least three pairs on the same machine. It
 reports enabled metadata costs, writes before and after a read, cold factories
 and both read scaling APIs. Raw counts, allocations, source fingerprints and

@@ -41,6 +41,7 @@ def sources(root):
 HOT_SCENARIOS = {(kind, count) for kind in ["same", "distinct"] for count in [1, 2, 4, 8]}
 HOT_SCENARIOS.add(("sync", 1))
 MUTATION_SCENARIOS = {("set", 1), ("cold", 1)}
+DISTRIBUTED_SCENARIOS = {("l2_json", 1)}
 
 
 def measurements(output, allocation_column, expected):
@@ -129,6 +130,7 @@ def main():
     fixtures = [
         ("warm", ["--api", args.api], HOT_SCENARIOS),
         ("mutations", ["--mutations"], MUTATION_SCENARIOS),
+        ("distributed", ["--l2", "--api", args.api], DISTRIBUTED_SCENARIOS),
     ]
     identity = None
     for pair in range(args.pairs):
@@ -179,6 +181,7 @@ def main():
                 failures.append("cold: more than six allocations per operation")
         if args.gate == "all":
             limits[("set", 1)] = 0.75
+            limits[("l2_json", 1)] = 1.0
             if by_key[("set", 1)]["rust_allocations_per_op"] > 3:
                 failures.append("set: more than three allocations per operation")
         for key, limit in limits.items():
@@ -197,7 +200,7 @@ def main():
     if args.gate != "report" and scaling_limit is not None and scaling < scaling_limit:
         failures.append(f"distinct scaling: {scaling:.2f} below {scaling_limit:.2f} for {physical} available physical cores")
     report = {
-        "api": args.api, "fixture_processes": ["warm", "mutations"], "gate": args.gate, "pairs": args.pairs, "environment": {
+        "api": args.api, "fixture_processes": ["warm", "mutations", "distributed"], "gate": args.gate, "pairs": args.pairs, "environment": {
             "platform": platform.platform(), "available_cpus": cpu_count, "cpu_topology": topology,
             "rust": execute(["rustc", "--version", "--verbose"], root, env).stdout.strip(),
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),

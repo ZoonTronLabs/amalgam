@@ -85,7 +85,7 @@ def main():
     baseline_ref = execute(["git", "rev-parse", "--verify", "--end-of-options", f"{args.baseline}^{{commit}}"], root, env).decode().strip()
     # API/workload/dependency changes need their own matched fixture rather than
     # silently attributing a different benchmark to a storage change.
-    for relative in ["Cargo.toml", "Cargo.lock", "benches/scaling.rs"]:
+    for relative in ["Cargo.toml", "Cargo.lock"]:
         baseline = execute(["git", "show", f"{baseline_ref}:{relative}"], root, env)
         if baseline != (root / relative).read_bytes():
             raise SystemExit(f"Frozen workload/dependencies differ at {relative}")
@@ -121,11 +121,17 @@ def main():
                 path.unlink()
         if conflicts:
             raise SystemExit(f"Concurrent edits preserved; diagnostic stopped: {conflicts}")
+    # Both versions compile the current harness. It may gain a new scenario
+    # since the baseline commit; its exact bytes must still match both builds.
+    if baseline_identity["benches/scaling.rs"] != current_identity["benches/scaling.rs"]:
+        raise SystemExit("Different benchmark workloads between builds")
     current_binary = build("candidate", root, env, output, args)
     if source_identity(root) != current_identity:
         raise SystemExit("Source changed during candidate build")
     cases = {"metadata": ["--metadata-costs"], "mutations": ["--mutations"],
-             "read": ["--api", "read"], "get-or-set": ["--api", "get-or-set"]}
+             "read": ["--api", "read"], "get-or-set": ["--api", "get-or-set"],
+             "l2-read": ["--l2", "--api", "read"],
+             "l2-get-or-set": ["--l2", "--api", "get-or-set"]}
     samples = {case: {"baseline": [], "candidate": []} for case in cases}
     for pair in range(1, args.pairs + 1):
         order = [("baseline", baseline_binary), ("candidate", current_binary)]

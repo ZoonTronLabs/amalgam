@@ -84,6 +84,8 @@ internal static class Program
     public static Task Main(string[] args) => args switch
     {
         ["--mutations"] => RunMutations(),
+        ["--l2", "--api", "read"] => RunDistributed<ReadHit>(),
+        ["--l2", "--api", "get-or-set"] => RunDistributed<OriginHit>(),
         [] or ["--api", "read"] => Run<ReadHit>(),
         ["--api", "get-or-set"] => Run<OriginHit>(),
         _ => throw new ArgumentException("Expected --api read|get-or-set or --mutations"),
@@ -134,5 +136,47 @@ internal static class Program
                 throw new InvalidOperationException("Cold value mismatch");
         elapsed = Stopwatch.GetElapsedTime(began).TotalNanoseconds;
         Console.WriteLine(FormattableString.Invariant($"cold,1,{ColdOperations},{elapsed / ColdOperations:F3},{GC.GetAllocatedBytesForCurrentThread() - before}"));
+    }
+    private static FusionCache NewDistributed()
+    {
+        var cache = new FusionCache(new FusionCacheOptions
+        {
+            DefaultEntryOptions = new(TimeSpan.FromHours(1))
+            {
+                SkipMemoryCacheRead = true,
+            },
+            EnableAutoRecovery = false,
+        });
+        var distributed = new Microsoft.Extensions.Caching.Distributed.MemoryDistributedCache(
+            Microsoft.Extensions.Options.Options.Create(
+                new Microsoft.Extensions.Caching.Memory.MemoryDistributedCacheOptions()));
+        cache.SetupDistributedCache(distributed,
+            new ZiggyCreatures.Caching.Fusion.Serialization.SystemTextJson.FusionCacheSystemTextJsonSerializer());
+        return cache;
+    }
+    private static async Task RunDistributed<H>() where H : struct, IWarmHit
+    {
+        Identity();
+        using FusionCache cache = NewDistributed();
+        await cache.SetAsync("l2-json", 7L);
+        var localOnly = new FusionCacheEntryOptions(TimeSpan.FromHours(1))
+        {
+            SkipMemoryCacheRead = true,
+            SkipDistributedCacheWrite = true,
+        };
+        await cache.SetAsync("l2-json", 11L, localOnly);
+        for (int n = 0; n < Warmup; n++)
+            if (H.AsyncValue(cache, "l2-json") != 7)
+                throw new InvalidOperationException("Distributed warmup reused the wrong L1 value");
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        long began = Stopwatch.GetTimestamp();
+        long checksum = 0;
+        for (int n = 0; n < Operations; n++) checksum += H.AsyncValue(cache, "l2-json");
+        double elapsed = Stopwatch.GetElapsedTime(began).TotalNanoseconds;
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        if (checksum != 7L * Operations)
+            throw new InvalidOperationException("Distributed checksum mismatch");
+        Console.WriteLine("scenario,threads,operations,ns_per_op,allocated_bytes");
+        Console.WriteLine(FormattableString.Invariant($"l2_json,1,{Operations},{elapsed / Operations:F3},{allocated}"));
     }
 }
