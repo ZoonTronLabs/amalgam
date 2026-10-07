@@ -1,6 +1,6 @@
 use amalgam::{
-    Cache, Clock, EntryOptions, InMemoryDistributedCache, JsonSerializer, ManualClock, Tag,
-    TagError,
+    Cache, EntryOptions, Tag, TagError, provider::Clock, provider::InMemoryDistributedCache,
+    provider::JsonSerializer, provider::ManualClock,
 };
 use std::sync::Arc;
 use std::time::Duration;

@@ -8,7 +8,7 @@
 
 use crate::execution::{CancellationSource, FactoryCancellation};
 use crate::locking::{KeyGuard, KeyedLock};
-use crate::{FactoryCancellationReason as Reason, MarkerKind, Timeout};
+use crate::{FactoryCancellationReason as Reason, Timeout, advanced::MarkerKind};
 use async_trait::async_trait;
 use std::sync::Arc;
 

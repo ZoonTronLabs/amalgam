@@ -1,10 +1,11 @@
 //! Dynamic mutation policy is observable at both layers and explicit options win.
 
 use amalgam::{
-    Cache, Clock, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
-    DistributedSerializer, EffectOutcome, EntryOptions, Error, InMemoryDistributedCache,
-    JsonSerializer, KeyModifierMode, LocalEffect, ManualClock, RecoveryConfig, SkipReason,
-    Timestamp,
+    Cache, ConfigError, EntryOptions, Error, RecoveryConfig, Timestamp, advanced::EffectOutcome,
+    advanced::KeyModifierMode, advanced::LocalEffect, advanced::SkipReason, provider::Clock,
+    provider::DefaultEntryOptionsProvider, provider::DistributedCache,
+    provider::DistributedSerializer, provider::InMemoryDistributedCache, provider::JsonSerializer,
+    provider::ManualClock,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -166,7 +167,7 @@ async fn explicit_mutation_options_bypass_provider_and_apply_each_layer() {
                 cache
                     .expire("tenant:item")
                     .options(|_| options())
-                    .distributed_policy(amalgam::DistributedExpirePolicy::RetainStale)
+                    .distributed_policy(amalgam::advanced::DistributedExpirePolicy::RetainStale)
                     .with_receipt()
                     .await
             }

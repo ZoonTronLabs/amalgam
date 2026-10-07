@@ -1,5 +1,8 @@
 //! Ready hits preserve raw-key options, eager ownership and local-only startup.
-use amalgam::{Cache, DefaultEntryOptionsProvider, EagerThreshold, EntryOptions, ManualClock};
+use amalgam::{
+    Cache, EagerThreshold, EntryOptions, provider::DefaultEntryOptionsProvider,
+    provider::ManualClock,
+};
 use std::future::{Future, IntoFuture, poll_fn};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

@@ -22,8 +22,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use amalgam::{
-    Backplane, Cache, Clock, DistributedCache, DistributedSerializer, EntryOptions,
-    InMemoryDistributedCache, InProcessBackplane, JsonSerializer, SystemClock,
+    Cache, EntryOptions, provider::Backplane, provider::Clock, provider::DistributedCache,
+    provider::DistributedSerializer, provider::InMemoryDistributedCache,
+    provider::InProcessBackplane, provider::JsonSerializer, provider::SystemClock,
 };
 
 #[tokio::main]

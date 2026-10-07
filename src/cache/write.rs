@@ -47,8 +47,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if !matches!(
             &receipt,
             MutationReceipt::Completed(CommitReport {
-                local: LocalEffect::Stored(crate::MemoryAdmission::Rejected(
-                    crate::CapacityRejection::VersionChanged
+                local: LocalEffect::Stored(crate::provider::MemoryAdmission::Rejected(
+                    crate::provider::CapacityRejection::VersionChanged
                 )),
                 ..
             })
@@ -134,8 +134,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             origin.guard.proof()?;
             if !origin.started_at.is_current() {
                 return Ok(MutationReceipt::Completed(CommitReport {
-                    local: LocalEffect::Stored(crate::MemoryAdmission::Rejected(
-                        crate::CapacityRejection::VersionChanged,
+                    local: LocalEffect::Stored(crate::provider::MemoryAdmission::Rejected(
+                        crate::provider::CapacityRejection::VersionChanged,
                     )),
                     distributed: if matches!(self.inner.storage, Storage::MemoryOnly) {
                         EffectOutcome::NotConfigured

@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amalgam::time::{TICKS_PER_SECOND, duration_to_ticks, ticks_to_duration};
-use amalgam::{Clock, ClockTiming, ManualClock, SystemClock, Timestamp};
+use amalgam::{
+    Timestamp, provider::Clock, provider::ClockTiming, provider::ManualClock, provider::SystemClock,
+};
 
 #[test]
 fn representable_long_duration_roundtrips_without_nanosecond_truncation() {

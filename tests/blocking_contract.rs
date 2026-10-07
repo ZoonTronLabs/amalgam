@@ -1,4 +1,6 @@
 //! Caller-thread, deadline, cancellation, ownership and actual mutation evidence.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};

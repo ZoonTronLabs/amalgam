@@ -1,5 +1,7 @@
 //! Reader slots release values deterministically and keep optional cloners outside locks.
-use amalgam::{Cache, CloneError, EntryOptions, Error, FactoryCancellationReason, ValueCloner};
+use amalgam::{
+    Cache, CloneError, EntryOptions, Error, FactoryCancellationReason, provider::ValueCloner,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;

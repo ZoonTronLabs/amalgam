@@ -1,5 +1,7 @@
 #![cfg(feature = "redis")]
 //! Recovery through real Redis Lua failures, original lifetime and native TTL.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::redis_backend::RedisDistributedCache;
 use amalgam::*;
 use std::sync::Arc;

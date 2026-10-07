@@ -1,4 +1,5 @@
 //! Public progress and cancellation evidence for nested native factories.
+use amalgam::advanced::*;
 use amalgam::*;
 use std::num::NonZeroUsize;
 use std::sync::mpsc;

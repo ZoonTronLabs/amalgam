@@ -5,6 +5,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Public namespaces
+- Keep ordinary cache operations, options and typed errors in the root. Move
+  provider interfaces, implementations and capabilities to `provider`; move
+  explicit receipts, stronger policies and detailed observations to `advanced`.
+  Preserve type identity and behavior while updating examples and consumers.
+
 ### Canonical writes and maintenance
 - Remove the ineffective `lock_shards` builder setting and legacy shard
   argument to `KeyedLock::new`; per-key coordination keeps its existing behavior.

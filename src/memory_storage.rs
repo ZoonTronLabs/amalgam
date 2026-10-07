@@ -1,6 +1,8 @@
 //! Open, synchronous in-process storage for opaque cache-owned records.
 use crate::entry::Entry;
-use crate::{CapacityRejection, MemoryEvictionReason, MemoryUsage, Timestamp};
+use crate::{
+    Timestamp, advanced::MemoryEvictionReason, provider::CapacityRejection, provider::MemoryUsage,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -68,7 +70,7 @@ pub struct MemoryNamespace(Namespace);
 enum Namespace {
     Values(Arc<str>),
     LocalMarkers(Arc<str>),
-    DurableMarkers(crate::CacheScope),
+    DurableMarkers(crate::advanced::CacheScope),
 }
 /// Value and control authority occupy distinct generation domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +89,7 @@ impl MemoryNamespace {
     pub(crate) fn local_markers(prefix: Arc<str>) -> Self {
         Self(Namespace::LocalMarkers(prefix))
     }
-    pub(crate) fn durable_markers(scope: crate::CacheScope) -> Self {
+    pub(crate) fn durable_markers(scope: crate::advanced::CacheScope) -> Self {
         Self(Namespace::DurableMarkers(scope))
     }
     /// The exact configured prefix; no prefix is the empty namespace.
@@ -98,7 +100,7 @@ impl MemoryNamespace {
         }
     }
     /// The validated physical wire scope of durable observations, if applicable.
-    pub fn durable_scope(&self) -> Option<&crate::CacheScope> {
+    pub fn durable_scope(&self) -> Option<&crate::advanced::CacheScope> {
         match &self.0 {
             Namespace::DurableMarkers(scope) => Some(scope),
             Namespace::Values(_) | Namespace::LocalMarkers(_) => None,

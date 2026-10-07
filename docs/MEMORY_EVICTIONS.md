@@ -7,14 +7,14 @@ weak operational capability. They do not create another cache or own its public
 lifetime. These APIs are absent from the published registry 0.3.1.
 
 ```rust
-use amalgam::{Cache, MemoryEvictionReason};
+use amalgam::{Cache, advanced::MemoryEvictionReason};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cache = Cache::<String>::builder().try_build()?;
     let mut retired = cache.memory_evictions().subscribe();
-    cache.try_set("key", "original".to_owned()).await?.wait().await?;
-    cache.try_remove("key").await?.wait().await?;
+    cache.set("key", "original".to_owned()).with_receipt().await?.wait().await?;
+    cache.remove("key").with_receipt().await?.wait().await?;
     let event = retired.recv().await?;
     assert_eq!(event.key(), "key");
     assert_eq!(event.reason(), MemoryEvictionReason::Removed);

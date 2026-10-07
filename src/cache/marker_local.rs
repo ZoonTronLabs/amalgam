@@ -69,7 +69,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .locks
             .acquire(
                 &key,
-                crate::MemoryLockKind::Marker(kind.clone()),
+                crate::provider::MemoryLockKind::Marker(kind.clone()),
                 self.marker_lock_timeout(before),
                 cancellation,
                 self.memory_acquire_route(),
@@ -165,7 +165,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         let Some(local) = observations.locks.try_acquire(
             &observations.lock_key(kind),
-            crate::MemoryLockKind::Marker(kind.clone()),
+            crate::provider::MemoryLockKind::Marker(kind.clone()),
             cancellation,
         )?
         else {

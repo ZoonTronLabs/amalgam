@@ -4,7 +4,10 @@ use crate::cache::{
     ClearRequest, ExpireRequest, ReceiptInvalidationRequest, ReceiptSetRequest, RemoveRequest,
     SetRequest, TagInvalidationRequest,
 };
-use crate::{DistributedExpirePolicy, EntryOptions, FactoryCancellation, MutationReceipt, Result};
+use crate::{
+    EntryOptions, FactoryCancellation, Result, advanced::DistributedExpirePolicy,
+    advanced::MutationReceipt,
+};
 use std::future::IntoFuture;
 
 /// A lazy native mutation. Execute it explicitly after configuring the request.

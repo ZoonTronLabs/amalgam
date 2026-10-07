@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::Duration;
 
-use amalgam::{Clock, Events, MemoryLimits, MemoryStore, Timestamp};
+use amalgam::{Events, Timestamp, provider::Clock, provider::MemoryLimits, provider::MemoryStore};
 
 struct ReentrantClock {
     store: Mutex<Weak<MemoryStore<i32>>>,

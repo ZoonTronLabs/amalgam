@@ -1,5 +1,7 @@
 //! Original stored values, bounded cursors and producer reentrancy boundaries.
+use amalgam::advanced::*;
 use amalgam::entry::Entry;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};

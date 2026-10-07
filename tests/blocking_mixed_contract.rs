@@ -1,4 +1,5 @@
 //! Native and async handles must share values, coordination and final lifetime.
+use amalgam::advanced::*;
 use amalgam::*;
 use std::num::NonZeroUsize;
 use std::sync::{

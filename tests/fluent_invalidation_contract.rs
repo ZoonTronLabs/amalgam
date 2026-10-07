@@ -1,7 +1,7 @@
 //! API 0.4 invalidation requests remain lazy, typed and atomic on bad tag input.
 use amalgam::{
     BlockingCache, Cache, CancellationSource, ClearMode, EntryOptions, Error,
-    FactoryCancellationReason, ManualClock, MutationReceipt,
+    FactoryCancellationReason, advanced::MutationReceipt, provider::ManualClock,
 };
 use std::sync::Arc;
 use std::time::Duration;

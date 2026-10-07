@@ -61,7 +61,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         &self.inner.events
     }
     /// Original stored values retired from L1, with independent bounded cursors.
-    pub fn memory_evictions(&self) -> &crate::MemoryEvictions<V> {
+    pub fn memory_evictions(&self) -> &crate::advanced::MemoryEvictions<V> {
         self.inner.memory.evictions()
     }
     /// Starts a dynamic plugin session owned by its registration and this cache.
@@ -1355,8 +1355,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
     }
     /// Waits execution scopes, supervised effects, cleanup, recovery and plugins.
     pub async fn shutdown(&self) -> Result<ShutdownReport> {
-        self.check_plugin_drain(crate::DrainOperation::Shutdown)?;
-        super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::Shutdown)?;
+        self.check_plugin_drain(crate::advanced::DrainOperation::Shutdown)?;
+        super::blocking::check_drain(
+            &self.inner.scopes,
+            crate::advanced::DrainOperation::Shutdown,
+        )?;
         self.inner.shutdown().await
     }
     /// Runs maintenance, preserving an external L1 provider's typed failure.
@@ -1371,33 +1374,36 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         Ok(())
     }
     /// The supplied L1 provider, when one was explicitly configured.
-    pub fn memory_storage(&self) -> Option<&Arc<dyn crate::MemoryStorage<V>>> {
+    pub fn memory_storage(&self) -> Option<&Arc<dyn crate::provider::MemoryStorage<V>>> {
         self.inner.memory.provider()
     }
     /// The actual supplied secondary observation L1, when configured.
     pub fn marker_memory_storage(
         &self,
-    ) -> Option<&Arc<dyn crate::MemoryStorage<crate::MarkerObservation>>> {
+    ) -> Option<&Arc<dyn crate::provider::MemoryStorage<crate::advanced::MarkerObservation>>> {
         match &self.inner.marker_reads {
             MarkerReads::DurableRequired => None,
             MarkerReads::OptionsControlled(observations) => observations.memory.provider(),
         }
     }
     /// Actual observation count/weight; absent when independent reads are disabled.
-    pub fn marker_memory_usage(&self) -> Result<Option<crate::MemoryUsage>> {
+    pub fn marker_memory_usage(&self) -> Result<Option<crate::provider::MemoryUsage>> {
         match &self.inner.marker_reads {
             MarkerReads::DurableRequired => Ok(None),
             MarkerReads::OptionsControlled(observations) => observations.memory.usage().map(Some),
         }
     }
     /// Retained count/weight in the actual L1 keyspace, including shared users.
-    pub fn memory_usage(&self) -> Result<crate::MemoryUsage> {
+    pub fn memory_usage(&self) -> Result<crate::provider::MemoryUsage> {
         Ok(self.inner.memory.usage()?)
     }
     /// Waits currently scheduled effects and their cleanup without closing the cache.
     pub async fn flush_pending(&self) -> Result<()> {
-        self.check_plugin_drain(crate::DrainOperation::FlushPending)?;
-        super::blocking::check_drain(&self.inner.scopes, crate::DrainOperation::FlushPending)?;
+        self.check_plugin_drain(crate::advanced::DrainOperation::FlushPending)?;
+        super::blocking::check_drain(
+            &self.inner.scopes,
+            crate::advanced::DrainOperation::FlushPending,
+        )?;
         self.inner.tasks.flush().await;
         Ok(())
     }

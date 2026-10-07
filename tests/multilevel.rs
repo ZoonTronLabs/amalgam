@@ -9,8 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use amalgam::{
-    Backplane, Cache, Clock, DistributedCache, DistributedEntry, DistributedSerializer,
-    EntryOptions, Error, InMemoryDistributedCache, InProcessBackplane, JsonSerializer, ManualClock,
+    Cache, EntryOptions, Error, provider::Backplane, provider::Clock, provider::DistributedCache,
+    provider::DistributedEntry, provider::DistributedSerializer,
+    provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,
+    provider::ManualClock,
 };
 
 fn shared_l2(clock: Arc<dyn Clock>) -> Arc<dyn DistributedCache> {

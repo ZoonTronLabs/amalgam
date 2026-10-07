@@ -1,3 +1,5 @@
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::future::IntoFuture;
@@ -109,7 +111,7 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
         clock.advance(Duration::from_millis(1));
         cache
             .expire("value")
-            .distributed_policy(amalgam::DistributedExpirePolicy::RetainStale)
+            .distributed_policy(amalgam::advanced::DistributedExpirePolicy::RetainStale)
             .with_receipt()
             .await
             .unwrap()

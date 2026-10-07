@@ -1,6 +1,6 @@
 //! Additional L2 serializers behind feature flags.
 //!
-//! The default [`JsonSerializer`](crate::JsonSerializer) lives in
+//! The default [`JsonSerializer`](crate::provider::JsonSerializer) lives in
 //! [`crate::distributed`]; this module hosts alternative formats.
 
 mod value_copy;

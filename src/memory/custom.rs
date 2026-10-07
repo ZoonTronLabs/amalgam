@@ -6,9 +6,11 @@ use super::{
 use crate::entry::Entry;
 use crate::memory_storage::{MemoryStorageError, RecordInner};
 use crate::{
-    CapacityRejection, Clock, Events, EvictionCapture, MemoryCondition, MemoryEvictionReason,
-    MemoryEvictions, MemoryLimits, MemoryRecord, MemoryRetirement, MemoryStorage,
-    MemoryStorageEpoch, MemoryStorageWrite, MemoryUsage, Result, Timestamp,
+    Events, Result, Timestamp, advanced::EvictionCapture, advanced::MemoryEvictionReason,
+    advanced::MemoryEvictions, provider::CapacityRejection, provider::Clock,
+    provider::MemoryCondition, provider::MemoryLimits, provider::MemoryRecord,
+    provider::MemoryRetirement, provider::MemoryStorage, provider::MemoryStorageEpoch,
+    provider::MemoryStorageWrite, provider::MemoryUsage,
 };
 use std::sync::Arc;
 
@@ -50,7 +52,7 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
                 clock.shared(),
                 expiry,
                 capture,
-                crate::MemoryNamespace::new(prefix),
+                crate::provider::MemoryNamespace::new(prefix),
             ),
         }
     }
@@ -61,7 +63,7 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
         clock: Arc<dyn Clock>,
         expiry: MemoryExpiry,
         capture: EvictionCapture,
-        namespace: crate::MemoryNamespace,
+        namespace: crate::provider::MemoryNamespace,
     ) -> Result<Self> {
         match provider {
             None => Ok(Self::Builtin(
@@ -76,10 +78,10 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
                 if !epoch.same(&provider.epoch(&namespace)) {
                     return Err(crate::ConfigError::UnstableMemoryStorageEpoch.into());
                 }
-                if namespace.purpose() != crate::MemoryNamespacePurpose::Values
-                    && epoch.same(
-                        &provider.epoch(&crate::MemoryNamespace::new(Some(namespace.key_prefix()))),
-                    )
+                if namespace.purpose() != crate::provider::MemoryNamespacePurpose::Values
+                    && epoch.same(&provider.epoch(&crate::provider::MemoryNamespace::new(Some(
+                        namespace.key_prefix(),
+                    ))))
                 {
                     return Err(crate::ConfigError::AliasedMarkerMemoryStorageEpoch.into());
                 }
@@ -124,7 +126,7 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
     pub(crate) fn guard<G>(&self, guard: G) -> ReclamationGuard<G> {
         self.observer().guard(guard)
     }
-    pub(crate) fn component_read(&self, component: crate::ComponentRead) {
+    pub(crate) fn component_read(&self, component: crate::advanced::ComponentRead) {
         self.observer().component_read(component);
     }
     pub(crate) fn emit(&self, event: crate::CacheEvent) {
@@ -133,7 +135,7 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
     pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> crate::CacheEvent) {
         self.observer().emit_lazy(make);
     }
-    pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> crate::LayerEvent) {
+    pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> crate::advanced::LayerEvent) {
         self.observer().emit_layer_lazy(make);
     }
     #[inline]
@@ -220,7 +222,7 @@ impl<V: Clone + Send + Sync + 'static> CacheMemory<V> {
             Self::Supplied(store) => {
                 let entry = store.remove(key, None)?;
                 self.emit_layer_lazy(|| {
-                    crate::LayerEvent::Memory(crate::MemoryEvent::Remove {
+                    crate::advanced::LayerEvent::Memory(crate::advanced::MemoryEvent::Remove {
                         key: Arc::from(key),
                     })
                 });
@@ -287,7 +289,7 @@ pub(crate) enum MemoryInvalidation<'a, V: Clone + Send + Sync + 'static> {
     Builtin(&'a MemoryStore<V>),
     Supplied {
         store: &'a Supplied<V>,
-        barrier: crate::MemoryGeneration,
+        barrier: crate::provider::MemoryGeneration,
     },
 }
 impl<V: Clone + Send + Sync + 'static> MemoryInvalidation<'_, V> {
@@ -304,9 +306,9 @@ impl<V: Clone + Send + Sync + 'static> MemoryInvalidation<'_, V> {
 impl<V: Clone + Send + Sync + 'static> Supplied<V> {
     fn validate_record(&self, key: &str, record: &MemoryRecord<V>) -> StorageResult<()> {
         let violation = if record.key() != key {
-            Some(crate::MemoryRecordViolation::Key)
+            Some(crate::provider::MemoryRecordViolation::Key)
         } else if !record.inner.generation.epoch.same(&self.epoch) {
-            Some(crate::MemoryRecordViolation::Namespace)
+            Some(crate::provider::MemoryRecordViolation::Namespace)
         } else {
             None
         };
@@ -351,7 +353,8 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
     }
     #[inline(never)]
     fn get_at(&self, key: &str, now: Timestamp) -> StorageResult<Option<Entry<V>>> {
-        self.observer.component_read(crate::ComponentRead::Memory);
+        self.observer
+            .component_read(crate::advanced::ComponentRead::Memory);
         self.epoch.current()?;
         let Some(record) = self.provider.get(key)? else {
             return Ok(None);
@@ -369,7 +372,8 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
     }
     #[inline(never)]
     fn ready_at(&self, key: &str, now: Timestamp) -> StorageResult<Option<Entry<V>>> {
-        self.observer.component_read(crate::ComponentRead::Memory);
+        self.observer
+            .component_read(crate::advanced::ComponentRead::Memory);
         self.epoch.current()?;
         let Some(record) = self.provider.try_get(key)? else {
             return Ok(None);
@@ -386,7 +390,7 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
         self.retire_as(record, RetirementReason::Explicit);
         Ok(Some(entry))
     }
-    fn clear_before(&self, barrier: crate::MemoryGeneration) -> StorageResult<()> {
+    fn clear_before(&self, barrier: crate::provider::MemoryGeneration) -> StorageResult<()> {
         for record in self.provider.clear_before(&barrier)? {
             self.retire_as(record, RetirementReason::Explicit);
         }
@@ -483,9 +487,9 @@ impl<V: Clone + Send + Sync + 'static> Supplied<V> {
             }
             MemoryAdmission::Admitted | MemoryAdmission::Replaced => {
                 self.observer.emit_layer_lazy(|| {
-                    crate::LayerEvent::Memory(match event {
-                        MemoryWriteEvent::Set => crate::MemoryEvent::Set { key },
-                        MemoryWriteEvent::Expire => crate::MemoryEvent::Expire { key },
+                    crate::advanced::LayerEvent::Memory(match event {
+                        MemoryWriteEvent::Set => crate::advanced::MemoryEvent::Set { key },
+                        MemoryWriteEvent::Expire => crate::advanced::MemoryEvent::Expire { key },
                     })
                 })
             }

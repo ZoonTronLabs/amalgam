@@ -504,7 +504,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let acquiring = self.inner.locks.acquire(
             key,
-            crate::MemoryLockKind::Entry,
+            crate::provider::MemoryLockKind::Entry,
             timeout,
             cancellation,
             self.memory_acquire_route(),

@@ -1,4 +1,6 @@
 //! Public contracts for tag/clear population and immutable automatic recovery.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

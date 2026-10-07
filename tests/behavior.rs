@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use amalgam::{
-    Cache, CacheEvent, Clock, EagerThreshold, EntryOptions, Error, FactoryContext, ManualClock,
-    MaybeValue, Tag, Timeout,
+    Cache, CacheEvent, EagerThreshold, EntryOptions, Error, FactoryContext, Tag, Timeout,
+    advanced::MaybeValue, provider::Clock, provider::ManualClock,
 };
 
 fn build<V: Clone + Send + Sync + 'static>() -> (Cache<V>, Arc<ManualClock>) {
@@ -484,7 +484,7 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
     clock.advance(Duration::from_secs(1));
     assert!(matches!(
         cache.remove_by_tag("group").await,
-        Err(Error::Marker(amalgam::MarkerError::Unsupported))
+        Err(Error::Marker(amalgam::advanced::MarkerError::Unsupported))
     )); // The typed API exposes the error previously swallowed by the adapter.
     clock.advance(Duration::from_secs(1));
 

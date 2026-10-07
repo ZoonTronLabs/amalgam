@@ -1,3 +1,4 @@
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::{
     Arc,

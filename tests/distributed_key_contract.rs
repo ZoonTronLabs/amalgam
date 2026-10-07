@@ -1,7 +1,8 @@
 //! Physical data keys and reverse backplane decoding preserve every wire mode.
 use amalgam::{
-    Cache, DistributedCache, EntryOptions, InMemoryDistributedCache, InProcessBackplane,
-    JsonSerializer, KeyModifierMode, SystemClock,
+    Cache, EntryOptions, advanced::KeyModifierMode, provider::DistributedCache,
+    provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,
+    provider::SystemClock,
 };
 use std::sync::Arc;
 use std::time::{Duration, Instant};

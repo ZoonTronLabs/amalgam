@@ -5,8 +5,9 @@ use crate::commit::TaskResult;
 use crate::execution::{CancellationSource, LinkMode, Scopes};
 use crate::lifecycle::Tasks;
 use crate::{
-    BlockingMemoryLocker, Error, Events, FactoryCancellationReason as Reason, MemoryLock,
-    MemoryLockGuard, MemoryLockOutcome, MemoryLockRequest, MemoryLockerError, ShutdownTask,
+    Error, Events, FactoryCancellationReason as Reason, advanced::ShutdownTask,
+    provider::BlockingMemoryLocker, provider::MemoryLock, provider::MemoryLockGuard,
+    provider::MemoryLockOutcome, provider::MemoryLockRequest, provider::MemoryLockerError,
 };
 use std::sync::Arc;
 

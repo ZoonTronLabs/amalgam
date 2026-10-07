@@ -128,7 +128,7 @@ impl LocalLocks {
             }
             let locker = Arc::clone(locker);
             tasks.cleanup_task(
-                crate::ShutdownTask::MemoryLocker,
+                crate::advanced::ShutdownTask::MemoryLocker,
                 Arc::from("memory-locker:shutdown"),
                 events.clone(),
                 async move {

@@ -56,10 +56,7 @@ panics.
 
 ```rust
 use std::sync::Arc;
-use amalgam::{
-    BlockingCache, BlockingRuntime, Cache, CacheEvent, CachePlugin,
-    CachePluginContext, PluginCache, PluginError, PluginSession, PluginStage,
-};
+use amalgam::{BlockingCache, advanced::BlockingRuntime, Cache, CacheEvent, advanced::CachePlugin, advanced::CachePluginContext, advanced::PluginCache, PluginError, PluginSession, PluginStage};
 
 struct Seed { runtime: BlockingRuntime }
 struct Session { cache: PluginCache<String>, runtime: BlockingRuntime }
@@ -70,7 +67,7 @@ impl CachePlugin<String> for Seed {
         -> Result<Box<dyn PluginSession>, PluginError>
     {
         let cache = context.cache()?;
-        cache.blocking(self.runtime.clone()).try_set("status", "started".into())
+        cache.blocking(self.runtime.clone()).set("status", "started".into()).with_receipt().execute()
             .and_then(|receipt| receipt.wait().map(|_| ()))
             .map_err(|error| PluginError::from_source("seed", PluginStage::Start, error))?;
         Ok(Box::new(Session { cache, runtime: self.runtime.clone() }))
@@ -79,7 +76,7 @@ impl CachePlugin<String> for Seed {
 impl PluginSession for Session {
     fn on_event(&self, _: &CacheEvent) -> Result<(), PluginError> { Ok(()) }
     fn stop(&self) -> Result<(), PluginError> {
-        self.cache.blocking(self.runtime.clone()).try_set("status", "stopped".into())
+        self.cache.blocking(self.runtime.clone()).set("status", "stopped".into()).with_receipt().execute()
             .and_then(|receipt| receipt.wait().map(|_| ()))
             .map_err(|error| PluginError::from_source("seed", PluginStage::Stop, error))
     }

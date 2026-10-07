@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use amalgam::{
-    Cache, ClearMode, EntryOptions, InMemoryDistributedCache, JsonSerializer, SystemClock,
+    Cache, ClearMode, EntryOptions, source,
+    provider::{InMemoryDistributedCache, JsonSerializer, SystemClock},
 };
 
 #[tokio::main]
@@ -18,27 +19,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .try_build()
     };
     let first = build()?;
-    first.try_set("answer", 42).await?.wait().await?;
+    first.set("answer", 42).with_receipt().await?.wait().await?;
     assert_eq!(first.read("answer", None).await?.value(), Some(&42));
 
     let cold = build()?;
     assert_eq!(cold.read("answer", None).await?.value(), Some(&42));
-    cold.try_remove("answer").await?.wait().await?;
-    first.try_clear(ClearMode::Remove).await?.wait().await?;
+    cold.remove("answer").with_receipt().await?.wait().await?;
+    first.clear(ClearMode::Remove).with_receipt().await?.wait().await?;
     assert!(!first.read("answer", None).await?.has_value());
     first.shutdown().await?;
     cold.shutdown().await?;
 
     let native = amalgam::BlockingCache::<Option<u64>>::new()?;
-    let value = native.get_or_set_value_full_with_commit_cancellable(
-        "null",
-        None,
-        None,
-        Box::from([]),
-        amalgam::CancellationSource::new().token(),
-    )?;
+    let value = native.get_or_set("null", source::value(None))
+        .cancellation(amalgam::CancellationSource::new().token())
+        .with_receipt().execute()?;
     assert_eq!(value.value, None);
-    if let amalgam::BlockingCommitReceipt::Mutation(receipt) = value.commit {
+    if let amalgam::advanced::BlockingCommitReceipt::Mutation(receipt) = value.commit {
         receipt.wait()?;
     }
     let asynchronous = native.as_async().clone();

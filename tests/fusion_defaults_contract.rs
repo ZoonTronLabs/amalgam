@@ -1,4 +1,6 @@
 //! FusionCache-compatible availability defaults and explicit strict capabilities.
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
 use std::sync::Arc;

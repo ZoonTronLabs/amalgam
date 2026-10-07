@@ -587,7 +587,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             Backend::Retained(store) => {
                 let mut state = lock(store);
                 if state.generation == u64::MAX {
-                    return Err(crate::RecoveryError::GenerationExhausted.into());
+                    return Err(crate::advanced::RecoveryError::GenerationExhausted.into());
                 }
                 let (revision, captured) = state.origins.capture_from(key, revision)?;
                 (revision, captured, state.generation)

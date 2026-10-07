@@ -1,9 +1,13 @@
 #![cfg(feature = "redis")]
 //! Mandatory native acceptance in CI: TTL namespace, atomic maxima and ownership.
-use amalgam::redis_backend::{RedisDistributedCache, RedisDistributedLocker};
+use amalgam::advanced::*;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::Arc;
 use std::time::Duration;
+use {
+    amalgam::redis_backend::RedisDistributedCache, amalgam::redis_backend::RedisDistributedLocker,
+};
 mod support {
     pub mod redis_fixture;
 }

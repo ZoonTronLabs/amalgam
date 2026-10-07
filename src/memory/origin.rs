@@ -52,7 +52,7 @@ impl Origins {
         };
         let captured = revision.current();
         if captured == u64::MAX {
-            return Err(crate::RecoveryError::GenerationExhausted.into());
+            return Err(crate::advanced::RecoveryError::GenerationExhausted.into());
         }
         match self.active.get_mut(key.as_ref()) {
             Some(active) if active.revision.ptr_eq(&Arc::downgrade(&revision)) => {
@@ -204,7 +204,10 @@ impl<V> Expected<'_, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntryOptions, Events, ManualClock, MemoryLimits, MemoryStore, Timestamp};
+    use crate::{
+        EntryOptions, Events, Timestamp, provider::ManualClock, provider::MemoryLimits,
+        provider::MemoryStore,
+    };
     use std::time::Duration;
 
     fn store(bounded: bool) -> MemoryStore<u64> {
@@ -240,7 +243,9 @@ mod tests {
             let committed = store.apply_origin(late, &origin);
             assert_eq!(
                 store.finish_insert(committed),
-                super::super::MemoryAdmission::Rejected(crate::CapacityRejection::VersionChanged)
+                super::super::MemoryAdmission::Rejected(
+                    crate::provider::CapacityRejection::VersionChanged
+                )
             );
             assert_eq!(
                 *store
@@ -275,7 +280,7 @@ mod tests {
             assert_eq!(
                 store.finish_insert(store.apply_origin(write, &old)),
                 super::super::MemoryAdmission::Rejected(
-                    crate::CapacityRejection::PhysicallyExpired
+                    crate::provider::CapacityRejection::PhysicallyExpired
                 )
             );
             let write = store.prepare_insert(key, entry(3), now);
@@ -299,7 +304,9 @@ mod tests {
             let write = store.prepare_insert(key.clone(), entry(1), now);
             assert_eq!(
                 store.finish_insert(store.apply_borrowed_origin(write, &old)),
-                super::super::MemoryAdmission::Rejected(crate::CapacityRejection::VersionChanged)
+                super::super::MemoryAdmission::Rejected(
+                    crate::provider::CapacityRejection::VersionChanged
+                )
             );
             assert!(!store.skip_borrowed_origin(&key, &old));
             drop(old);
@@ -341,7 +348,7 @@ mod tests {
         assert!(matches!(
             origins.capture(&key),
             Err(crate::Error::Recovery(
-                crate::RecoveryError::GenerationExhausted
+                crate::advanced::RecoveryError::GenerationExhausted
             ))
         ));
     }

@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use amalgam::entry::Entry;
 use amalgam::{
-    Clock, EntryOptions, EntryWeight, Events, JitterSample, ManualClock, MemoryAdmission,
-    MemoryLimits, MemoryStore, Priority, Timestamp,
+    EntryOptions, EntryWeight, Events, Priority, Timestamp, provider::Clock,
+    provider::JitterSample, provider::ManualClock, provider::MemoryAdmission,
+    provider::MemoryLimits, provider::MemoryStore,
 };
 
 async fn visible(store: &MemoryStore<u64>, now: Timestamp) -> HashMap<String, u64> {

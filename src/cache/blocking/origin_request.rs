@@ -3,8 +3,8 @@ use super::{BlockingCache, BlockingCacheValue};
 use crate::cache::inline_cold::Start;
 use crate::cache::origin::{CacheOrigin, OriginKind};
 use crate::{
-    CacheValue, EntryOptions, FactoryCancellation, FactoryContext, FactoryError, FactoryProduct,
-    MaybeValue, Result, Tag,
+    EntryOptions, FactoryCancellation, FactoryContext, FactoryError, FactoryProduct, Result, Tag,
+    advanced::CacheValue, advanced::MaybeValue,
 };
 use std::future::{Future, ready};
 

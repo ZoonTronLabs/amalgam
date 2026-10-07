@@ -1,5 +1,5 @@
 //! API 0.4 factories return values and retain typed errors/adaptive metadata.
-use amalgam::{BlockingCache, Cache, EntryOptions, ManualClock, Tag};
+use amalgam::{BlockingCache, Cache, EntryOptions, Tag, provider::ManualClock};
 use std::convert::Infallible;
 use std::error::Error as _;
 use std::sync::Arc;

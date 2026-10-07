@@ -9,10 +9,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use amalgam::{
-    AutoRecoveryService, Backplane, BackplaneAction, BackplaneMessage, Cache, CacheEvent, Clock,
-    DistributedCache, DistributedEntry, DistributedSerializer, EntryOptions, Error, FactoryError,
-    InMemoryDistributedCache, InProcessBackplane, JsonSerializer, ManualClock, RecoveryAction,
-    RecoveryConfig, RecoveryExecutor, RecoveryItem, Result, Tag, Timeout, Timestamp,
+    Cache, CacheEvent, EntryOptions, Error, FactoryError, RecoveryConfig, Result, Tag, Timeout,
+    Timestamp, advanced::AutoRecoveryService, advanced::RecoveryAction, advanced::RecoveryItem,
+    provider::Backplane, provider::BackplaneAction, provider::BackplaneMessage, provider::Clock,
+    provider::DistributedCache, provider::DistributedEntry, provider::DistributedSerializer,
+    provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,
+    provider::ManualClock, provider::RecoveryExecutor,
 };
 use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
@@ -377,7 +379,7 @@ async fn audit_lagged_backplane_invalidates_possibly_stale_l1() {
     let backplane = Arc::new(InProcessBackplane::with_capacity(1));
     let cache: Cache<i32> = Cache::builder()
         .backplane(backplane.clone())
-        .reconciliation_policy(amalgam::ReconciliationPolicy::BackplaneContinuity)
+        .reconciliation_policy(amalgam::advanced::ReconciliationPolicy::BackplaneContinuity)
         .default_options(opts().with_skip_backplane_notifications(true))
         .auto_recovery(no_recovery())
         .build();
@@ -589,8 +591,8 @@ async fn audit_clear_respects_cache_key_prefix() {
         .unwrap()
         .unwrap();
     assert!(matches!(
-        amalgam::BackplaneCommand::from_message(control).unwrap(),
-        amalgam::BackplaneCommand::Marker(_)
+        amalgam::provider::BackplaneCommand::from_message(control).unwrap(),
+        amalgam::provider::BackplaneCommand::Marker(_)
     ));
     assert_eq!(
         beta.try_get("k", None).await.value(),
@@ -822,7 +824,10 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
         .with_receipt()
         .await
         .unwrap();
-    assert!(matches!(commit, amalgam::MutationReceipt::Scheduled(_)));
+    assert!(matches!(
+        commit,
+        amalgam::advanced::MutationReceipt::Scheduled(_)
+    ));
     tokio::time::timeout(Duration::from_secs(1), l2.started.notified())
         .await
         .unwrap();
@@ -845,7 +850,7 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
         tokio::task::yield_now().await;
     }
     let bytes = l2.inner.get("v2:k").await.unwrap().unwrap();
-    let stored: amalgam::DistributedSnapshot<i32> =
+    let stored: amalgam::provider::DistributedSnapshot<i32> =
         JsonSerializer.deserialize_snapshot(&bytes).unwrap();
     assert_eq!(
         stored.entry().value,
@@ -866,7 +871,7 @@ async fn audit_redis_backplane_roundtrips_arbitrary_public_instance_id() {
         return;
     };
     let channel = format!("amalgam:audit:source-id:{:016x}", fastrand::u64(..));
-    let backplane = amalgam::RedisBackplane::connect_with_channel(url, channel)
+    let backplane = amalgam::provider::RedisBackplane::connect_with_channel(url, channel)
         .await
         .unwrap();
     let mut receiver = backplane.subscribe();
@@ -887,11 +892,13 @@ async fn audit_redis_backplane_roundtrips_arbitrary_public_instance_id() {
 #[cfg(feature = "redis")]
 #[tokio::test]
 async fn audit_redis_lock_does_not_acquire_after_wait_deadline() {
-    use amalgam::DistributedLocker;
+    use amalgam::provider::DistributedLocker;
     let Some(url) = redis_fixture::redis_url() else {
         return;
     };
-    let locker = amalgam::RedisDistributedLocker::connect(url).await.unwrap();
+    let locker = amalgam::provider::RedisDistributedLocker::connect(url)
+        .await
+        .unwrap();
     let key = format!("amalgam:audit:deadline:{:016x}", fastrand::u64(..));
     let first = locker
         .acquire(&key, Duration::from_millis(15), Timeout::Infinite)

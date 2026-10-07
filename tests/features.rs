@@ -18,10 +18,12 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use amalgam::{
-    Backplane, Cache, CacheEvent, CacheRegistry, CircuitComponent, Clock,
-    DefaultEntryOptionsProvider, DistributedCache, DistributedLocker, DistributedSerializer,
-    EntryOptions, InMemoryDistributedCache, InMemoryDistributedLocker, InProcessBackplane,
-    JsonSerializer, ManualClock, Plugin, RecoveryConfig, Result, Tag,
+    Cache, CacheEvent, CacheRegistry, EntryOptions, Plugin, RecoveryConfig, Result, Tag,
+    advanced::CircuitComponent, provider::Backplane, provider::Clock,
+    provider::DefaultEntryOptionsProvider, provider::DistributedCache, provider::DistributedLocker,
+    provider::DistributedSerializer, provider::InMemoryDistributedCache,
+    provider::InMemoryDistributedLocker, provider::InProcessBackplane, provider::JsonSerializer,
+    provider::ManualClock,
 };
 
 // ---------------------------------------------------------------------------

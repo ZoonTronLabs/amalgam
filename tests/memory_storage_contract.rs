@@ -1,6 +1,8 @@
 //! External provider contracts, independent of the built-in memory algorithms.
+use amalgam::advanced::*;
 use amalgam::entry::Entry;
 use amalgam::locking::KeyedLock;
+use amalgam::provider::*;
 use amalgam::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};

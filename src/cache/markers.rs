@@ -111,10 +111,10 @@ impl MarkerProviderFault {
             Self::Protocol => MarkerReadFailure::Protocol,
         }
     }
-    fn write_outcome(self) -> crate::MarkerSnapshotWriteOutcome {
+    fn write_outcome(self) -> crate::advanced::MarkerSnapshotWriteOutcome {
         match self {
-            Self::Backend => crate::MarkerSnapshotWriteOutcome::BackendFailure,
-            Self::Protocol => crate::MarkerSnapshotWriteOutcome::ProtocolFailure,
+            Self::Backend => crate::advanced::MarkerSnapshotWriteOutcome::BackendFailure,
+            Self::Protocol => crate::advanced::MarkerSnapshotWriteOutcome::ProtocolFailure,
         }
     }
 }
@@ -284,7 +284,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .locks
             .acquire(
                 &key,
-                crate::MemoryLockKind::Marker(kind.clone()),
+                crate::provider::MemoryLockKind::Marker(kind.clone()),
                 self.marker_lock_timeout(before_lock),
                 cancellation,
                 self.memory_acquire_route(),
@@ -1122,14 +1122,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let (outcome, effect) = match result {
             Ok(renewal) => {
                 let (snapshot, outcome) = match renewal {
-                    MarkerSnapshotRenewal::Stored(snapshot) => {
-                        (Some(snapshot), crate::MarkerSnapshotWriteOutcome::Stored)
-                    }
-                    MarkerSnapshotRenewal::KeptNewer(snapshot) => {
-                        (Some(snapshot), crate::MarkerSnapshotWriteOutcome::KeptNewer)
-                    }
+                    MarkerSnapshotRenewal::Stored(snapshot) => (
+                        Some(snapshot),
+                        crate::advanced::MarkerSnapshotWriteOutcome::Stored,
+                    ),
+                    MarkerSnapshotRenewal::KeptNewer(snapshot) => (
+                        Some(snapshot),
+                        crate::advanced::MarkerSnapshotWriteOutcome::KeptNewer,
+                    ),
                     MarkerSnapshotRenewal::Expired => {
-                        (None, crate::MarkerSnapshotWriteOutcome::Expired)
+                        (None, crate::advanced::MarkerSnapshotWriteOutcome::Expired)
                     }
                 };
                 if let Some(snapshot) = snapshot {
