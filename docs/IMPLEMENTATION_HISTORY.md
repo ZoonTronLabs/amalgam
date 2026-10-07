@@ -396,3 +396,47 @@ explicit/specializedownership§6 и nativeL2 остаются Must. Публик
 GitHub release разрешены владельцем; API8/custom markers/FR01…22/RS1…6/nativeL2/final
 source/release gates остаются условиями. Один ADR, остальное в CHANGELOG и
 docs/PERFORMANCE.md.
+
+## 2026-10-07: rejected strong-only entry ownership experiment
+
+A controlled experiment replaced the private entry's std Arc with triomphe
+0.1.16, preserving snapshots and immediate retirement. Rust 1.88 strict clippy
+and all 739 checks passed. Three counterbalanced public-API comparisons found
+set 91.7 -> 88.6 ns (3.4%), L2 get_or_set 1474.1 -> 1474.4 ns, and unchanged
+allocation counts. Set still missed <=0.75x FC. L2 read differed by less than
+one percent and its ranges overlapped. The experiment was reverted; no new
+dependency or ready path is retained. Full frozen-source data is archived in
+`strong-entry-focused/report.json` among the local performance artifacts.
+
+
+## 2026-10-07 — L2 coordination ownership and CI documentation fixes
+
+An upgraded weak coordination owner is moved into its lock/fence consumer;
+identity reuse no longer rotates the idle sweep queue. Creation still performs
+bounded reclamation and explicit maintenance remains available. Only sealed
+scalar metadata can use these slots, so a cached user value cannot be destroyed
+under the coordination shard guard. Identity, FIFO admission and generation
+fences retain their contracts. This was chosen over sweeping on every reuse,
+which produces no new idle identity and adds queue writes.
+
+Pinned Rust 1.88 formatting, all-target/all-feature strict clippy and 739 default
+checks passed. Three counterbalanced frozen comparisons with default .NET PGO
+and separate TC=0 settled all 48 warmup records. L2 read 1163.188 -> 1116.352 ns
+(FC 1162.608); L2 get_or_set 1442.210 -> 1397.094 ns (FC 1273.457), nine allocations
+in both versions. Read and get_or_set ranges do not overlap. Set 90.638 -> 90.804
+ns is noise, FC 108.044; cold ranges overlap. L2 get_or_set and set budgets remain
+red. Report: docs/benchmarks/2026-10-07-l2-coordination-owned.json. Hot reads are
+frozen and no new dependency or unsafe boundary is introduced.
+
+CI 37671995620 exposes two stale documentation references: the builder link to
+removed remove_by_tags and the OpenTelemetry doctest's crate::FactoryError,
+which resolves to the external doctest crate. The link was fixed and strict
+all-feature rustdoc passed locally. The OpenTelemetry example now uses the
+current plain factory Result and Cache::new. These are documentation repairs;
+runtime contracts are not weakened. Main merge and publication stay prohibited
+until mandatory qualification passes.
+
+After the example repair, all-feature Rust 1.88 tests passed: 804 checks, including
+nine doctests. Strict all-target/all-feature clippy and all-feature rustdoc with
+warnings denied passed on the same working source. Live Redis qualification
+remains a separate mandatory CI job.

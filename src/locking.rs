@@ -79,6 +79,35 @@ struct SlotShard<T> {
     sweep: VecDeque<Arc<str>>,
     controls: ControlRetention<T>,
 }
+impl<T: ScalarControl> SlotShard<T> {
+    fn create(
+        &mut self,
+        hash: u64,
+        key: &str,
+        owned_key: impl FnOnce() -> Arc<str>,
+        make: impl FnOnce() -> T,
+    ) -> Arc<T> {
+        let control = Arc::new(make());
+        match self
+            .entries
+            .raw_entry_mut()
+            .from_hash(hash, |stored| stored.as_ref() == key)
+        {
+            RawEntryMut::Occupied(mut slot) => {
+                // The same shard guard observed this weak owner as dead.
+                // A zero strong count cannot regain a live holder or waiter.
+                slot.insert(Arc::downgrade(&control));
+            }
+            RawEntryMut::Vacant(slot) => {
+                let key = owned_key();
+                self.sweep.push_back(Arc::clone(&key));
+                slot.insert_hashed_nocheck(hash, key, Arc::downgrade(&control));
+            }
+        }
+        self.controls.retain(&control);
+        control
+    }
+}
 impl<T> SlotShard<T> {
     fn clean(&mut self, budget: usize) -> usize {
         let count = budget.min(self.sweep.len());
@@ -100,13 +129,13 @@ impl<T> SlotShard<T> {
 
 /// Weak identity slots, with local bounded reclamation in the same shard.
 /// No lookup writes a process-wide counter or locks a separate sweep queue.
-pub(crate) struct WeakSlots<T> {
+pub(crate) struct WeakSlots<T: ScalarControl> {
     // Only explicit maintenance advances this cursor, never a lookup.
     maintenance: AtomicUsize,
     hash: RandomState,
     shards: Box<[ShardMutex<SlotShard<T>>]>,
 }
-impl<T> WeakSlots<T> {
+impl<T: ScalarControl> WeakSlots<T> {
     pub(crate) fn new() -> Self {
         let hash = RandomState::new();
         Self {
@@ -136,13 +165,13 @@ impl<T> WeakSlots<T> {
         slots
     }
     pub(crate) fn get(&self, key: &str, make: impl FnOnce() -> T) -> Arc<T> {
-        self.get_with(key, make, Arc::clone)
+        self.get_with(key, make, std::convert::identity)
     }
     pub(crate) fn get_with<R>(
         &self,
         key: &str,
         make: impl FnOnce() -> T,
-        inspect: impl FnOnce(&Arc<T>) -> R,
+        inspect: impl FnOnce(Arc<T>) -> R,
     ) -> R {
         self.lookup(key, || Arc::from(key), make, inspect)
     }
@@ -150,7 +179,7 @@ impl<T> WeakSlots<T> {
         &self,
         key: Arc<str>,
         make: impl FnOnce() -> T,
-        inspect: impl FnOnce(&Arc<T>) -> R,
+        inspect: impl FnOnce(Arc<T>) -> R,
     ) -> R {
         // A supplied key's allocation is reused only for a new lookup slot.
         self.lookup(key.as_ref(), || Arc::clone(&key), make, inspect)
@@ -160,38 +189,22 @@ impl<T> WeakSlots<T> {
         key: &str,
         owned_key: impl FnOnce() -> Arc<str>,
         make: impl FnOnce() -> T,
-        inspect: impl FnOnce(&Arc<T>) -> R,
+        inspect: impl FnOnce(Arc<T>) -> R,
     ) -> R {
         let hash = self.hash.hash_one(key);
         let mut shard = self.shards[hash as usize & (SLOT_SHARDS - 1)].lock();
-        shard.clean(4);
-        let SlotShard {
-            entries,
-            sweep,
-            controls,
-        } = &mut *shard;
-        match entries
-            .raw_entry_mut()
+        if let Some(control) = shard
+            .entries
+            .raw_entry()
             .from_hash(hash, |stored| stored.as_ref() == key)
+            .and_then(|(_, control)| control.upgrade())
         {
-            RawEntryMut::Occupied(mut slot) => match slot.get().upgrade() {
-                Some(value) => inspect(&value),
-                None => {
-                    let value = Arc::new(make());
-                    slot.insert(Arc::downgrade(&value));
-                    controls.retain(&value);
-                    inspect(&value)
-                }
-            },
-            RawEntryMut::Vacant(slot) => {
-                let key = owned_key();
-                let value = Arc::new(make());
-                sweep.push_back(Arc::clone(&key));
-                slot.insert_hashed_nocheck(hash, key, Arc::downgrade(&value));
-                controls.retain(&value);
-                inspect(&value)
-            }
+            // Move the upgraded owner to its consumer. Reusing an identity
+            // creates no idle slot and needs neither a sweep nor another clone.
+            return inspect(control);
         }
+        shard.clean(4);
+        inspect(shard.create(hash, key, owned_key, make))
     }
     pub(crate) fn clean(&self, budget: usize) {
         // Maintenance is infrequent. A complete pass respects the caller's
@@ -210,7 +223,7 @@ impl<T> WeakSlots<T> {
         }
     }
 }
-impl<T> std::fmt::Debug for WeakSlots<T> {
+impl<T: ScalarControl> std::fmt::Debug for WeakSlots<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WeakSlots")
             .field("shards", &SLOT_SHARDS)
@@ -250,7 +263,9 @@ impl KeyedLock {
     }
 
     pub(crate) async fn lock_shared(&self, key: Arc<str>) -> KeyGuard {
-        let mutex = self.locks.get_arc_with(key, || Mutex::new(()), Arc::clone);
+        let mutex = self
+            .locks
+            .get_arc_with(key, || Mutex::new(()), std::convert::identity);
         Self::acquire_owned(mutex).await
     }
     async fn acquire_owned(mutex: Arc<Mutex<()>>) -> KeyGuard {

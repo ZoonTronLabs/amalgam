@@ -57,6 +57,29 @@ one caller's latency. Eight-thread measurements on a two-core hosted runner
 cannot demonstrate eight-core scaling. Qualification requires at least eight
 physical cores for the sixfold scaling criterion.
 
+## Focused L2 coordination ownership diagnostic
+
+Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
+FC 2.9.0/.NET 10.0.8. The candidate moves upgraded coordination owners into
+lock/fence consumers and sweeps idle identities only when creating an identity
+or running explicit maintenance. Existing holders, waiters and generation
+checks retain their identities. The baseline is the source API checkpoint below.
+All 48 warmup records settled. Hot reads are unchanged and not measured here.
+
+| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
+|---|---:|---:|---:|---:|---:|---:|---|
+| L2 JSON read | 1163.2 | 1116.4 | 1162.6 | 1821.0 | 0.960 | 9 | <=1.00 |
+| L2 JSON get_or_set | 1442.2 | 1397.1 | 1273.5 | 1961.6 | **1.097** | 9 | **Fail: <=1.00** |
+| L1 replacement | 90.6 | 90.8 | 108.0 | 142.1 | **0.840** | 0 | **Fail: <=0.75** |
+| Cold factory | 1113.8 | 1079.9 | 1592.7 | 2168.9 | 0.678 | 5.009 | <=1668 ns, <=6 allocations |
+
+Read and get_or_set medians improve 4.0% and 3.1%; their before/after ranges do
+not overlap in this comparison. Allocation counts are unchanged. Set differs by
+less than one percent; cold ranges overlap, so neither establishes an improvement.
+The focused read budget passes, but L2 get_or_set and set still fail. This is not
+full scaling or release qualification. See the
+[source identities, ranges and all warmup windows](benchmarks/2026-10-07-l2-coordination-owned.json).
+
 ## Focused measurement after API migration
 
 Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
