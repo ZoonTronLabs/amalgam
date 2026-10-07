@@ -180,9 +180,9 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 ## Development performance
 
 The developing 0.4 source has zero-allocation warm L1 reads and replacements.
-Seven local paired runs against FusionCache 2.9 pass L1, cold, write and
-eight-core scaling budgets; L2 `get_or_set` remains about 5% slower locally.
-Linux qualification and complete behavioral parity remain open. See
+Seven local paired runs against FusionCache 2.9 pass L1, cold, write, L2 JSON
+and eight-core scaling budgets. Exact-source Linux qualification and complete
+behavioral parity remain open. See
 [the measured tables and method](docs/PERFORMANCE.md) and
 [release requirements](docs/ROADMAP.md) for source, runtime and machine boundaries.
 

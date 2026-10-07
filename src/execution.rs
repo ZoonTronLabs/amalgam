@@ -15,6 +15,9 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 
+mod phase;
+pub(crate) use phase::{BorrowedPhase, ExecutionCheckpoint};
+
 /// Read-only cancellation state carried into owned cache work and origin factories.
 #[derive(Clone, Debug)]
 pub struct FactoryCancellation {
@@ -27,6 +30,12 @@ enum CancellationState {
 }
 
 impl CancellationState {
+    fn reason(self) -> Option<Reason> {
+        match self {
+            Self::Active => None,
+            Self::Cancelled(reason) => Some(reason),
+        }
+    }
     fn load(state: &AtomicU8) -> Self {
         match state.load(Ordering::Acquire) {
             0 => Self::Active,
@@ -388,36 +397,9 @@ impl Scopes {
             waker: Mutex::new(None),
             source,
             registry: Arc::clone(self),
-            checkpoint: AtomicBool::new(false),
             tracking: parking_lot::Mutex::new(None),
         });
         self.register_scope(scope)
-    }
-    /// Poll a nested phase before subscribing it for shutdown. Its first poll
-    /// remains counted through callbacks and registration; only suspended work
-    /// needs a shutdown waiter/task token. The weak checkpoint still shares the
-    /// phase allocation and never owns its parent.
-    pub(crate) fn execution_with_checkpoint<T: Send + 'static, F>(
-        self: &Arc<Self>,
-        work: impl FnOnce(ExecutionCheckpoint<T>) -> F,
-        source: CancellationSource,
-    ) -> FirstPollExecution<T>
-    where
-        F: Future<Output = Result<T>> + Send + 'static,
-    {
-        let scope = Arc::new_cyclic(|scope| Scope {
-            state: Mutex::new(State::Pending(Box::pin(work(ExecutionCheckpoint {
-                scope: scope.clone(),
-            })))),
-            waker: Mutex::new(None),
-            source,
-            registry: Arc::clone(self),
-            checkpoint: AtomicBool::new(false),
-            tracking: parking_lot::Mutex::new(None),
-        });
-        FirstPollExecution {
-            execution: Execution { scope },
-        }
     }
     fn register_scope<T: Send + 'static>(self: &Arc<Self>, scope: Arc<Scope<T>>) -> Execution<T> {
         let erased: Arc<dyn CancelWork> = scope.clone();
@@ -680,19 +662,7 @@ struct Scope<T> {
     waker: Mutex<Option<Waker>>,
     source: CancellationSource,
     registry: Arc<Scopes>,
-    checkpoint: AtomicBool,
     tracking: parking_lot::Mutex<Option<TrackedCancellation>>,
-}
-/// Work observes progress without owning its parent or creating a strong cycle.
-pub(crate) struct ExecutionCheckpoint<T> {
-    scope: Weak<Scope<T>>,
-}
-impl<T> ExecutionCheckpoint<T> {
-    pub(crate) fn record(&self) {
-        if let Some(scope) = self.scope.upgrade() {
-            scope.checkpoint.store(true, Ordering::Release);
-        }
-    }
 }
 impl<T> Scope<T> {
     fn drop_reason(&self) -> Reason {
@@ -747,9 +717,6 @@ pub(crate) struct Execution<T: Send + 'static> {
     scope: Arc<Scope<T>>,
 }
 impl<T: Send + 'static> Execution<T> {
-    pub(crate) fn checkpoint_reached(&self) -> bool {
-        self.scope.checkpoint.load(Ordering::Acquire)
-    }
     pub(crate) fn cancel(&self, reason: Reason) {
         self.scope.cancel(reason);
     }
@@ -864,36 +831,6 @@ impl<T: Send + 'static> Future for Execution<T> {
     type Output = Result<T>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll_work(cx, |_| {}, |_| {})
-    }
-}
-/// Nested work owns its state and exact cancellation token immediately, but
-/// receives shutdown tracking only when it actually suspends.
-pub(crate) struct FirstPollExecution<T: Send + 'static> {
-    execution: Execution<T>,
-}
-impl<T: Send + 'static> std::ops::Deref for FirstPollExecution<T> {
-    type Target = Execution<T>;
-    fn deref(&self) -> &Self::Target {
-        &self.execution
-    }
-}
-impl<T: Send + 'static> Future for FirstPollExecution<T> {
-    type Output = Result<T>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().execution.poll_work(
-            cx,
-            |scope| {
-                // An unregistered phase still rejects close before invoking
-                // user code. Existing terminal cancellation keeps precedence.
-                if scope.registry.is_closed() {
-                    scope.cancel(Reason::CacheShutdown);
-                }
-            },
-            |scope| {
-                let erased: Arc<dyn CancelWork> = scope.clone();
-                scope.registry.register_work(erased, &scope.tracking);
-            },
-        )
     }
 }
 impl<T: Send + 'static> Drop for Execution<T> {
@@ -1313,129 +1250,5 @@ mod tracker_contract_tests {
                 .is_ready()
         );
         drop((first, second));
-    }
-}
-
-#[cfg(test)]
-mod first_poll_phase_tests {
-    use super::*;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    struct ObserveDrop {
-        token: FactoryCancellation,
-        observed: mpsc::Sender<Option<Reason>>,
-    }
-    impl Drop for ObserveDrop {
-        fn drop(&mut self) {
-            self.observed.send(self.token.reason()).unwrap();
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn close_drains_a_ready_phase_while_its_first_callback_is_running() {
-        let scopes = Scopes::new();
-        let source = CancellationSource::new();
-        let token = source.token();
-        let (entered, entry) = tokio::sync::oneshot::channel();
-        let (release, released) = mpsc::channel();
-        let work = scopes.execution_with_checkpoint(
-            |_| async move {
-                entered.send(()).unwrap();
-                released.recv_timeout(Duration::from_secs(5)).unwrap();
-                Ok(7_u64)
-            },
-            source,
-        );
-        let result = tokio::spawn(work);
-        entry.await.unwrap();
-        scopes.close();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(10), scopes.drained())
-                .await
-                .is_err()
-        );
-        release.send(()).unwrap();
-        assert!(matches!(
-            result.await.unwrap(),
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
-        assert_eq!(token.reason(), Some(Reason::CacheShutdown));
-        tokio::time::timeout(Duration::from_secs(1), scopes.drained())
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn suspended_phase_is_cancelled_and_dropped_with_shutdown_before_drain() {
-        let scopes = Scopes::new();
-        let source = CancellationSource::new();
-        let token = source.token();
-        let (observed, observation) = mpsc::channel();
-        let owned = ObserveDrop {
-            token: token.clone(),
-            observed,
-        };
-        let mut work = scopes.execution_with_checkpoint(
-            |_| async move {
-                let _owned = owned;
-                std::future::pending::<Result<()>>().await
-            },
-            source,
-        );
-        let initial = std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut work).poll(cx))).await;
-        assert!(initial.is_pending());
-        scopes.close();
-        assert_eq!(
-            observation.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(Reason::CacheShutdown)
-        );
-        assert!(matches!(
-            work.await,
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
-        assert_eq!(token.reason(), Some(Reason::CacheShutdown));
-        tokio::time::timeout(Duration::from_secs(1), scopes.drained())
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn closed_phase_never_polls_user_work_and_publishes_cause_before_drop() {
-        let scopes = Scopes::new();
-        let source = CancellationSource::new();
-        let token = source.token();
-        let runs = Arc::new(AtomicUsize::new(0));
-        let work_runs = runs.clone();
-        let (observed, observation) = mpsc::channel();
-        let owned = ObserveDrop { token, observed };
-        let work = scopes.execution_with_checkpoint(
-            |_| async move {
-                let _owned = owned;
-                work_runs.fetch_add(1, Ordering::Relaxed);
-                Ok(7_u64)
-            },
-            source,
-        );
-        scopes.close();
-        assert!(matches!(
-            work.await,
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
-        assert_eq!(runs.load(Ordering::Relaxed), 0);
-        assert_eq!(
-            observation.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(Reason::CacheShutdown)
-        );
-        tokio::time::timeout(Duration::from_secs(1), scopes.drained())
-            .await
-            .unwrap();
     }
 }

@@ -7,9 +7,11 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- Track nested L2 shutdown work only after a pending poll. Ready phases keep
-  their exact token and checkpoint; shutdown still drains active callbacks and
-  pending registration without an idle gap.
+- Borrow nested L2 work from its existing cache-owned parent instead of owning
+  a second boxed future and shutdown registration. Independent phase tokens,
+  deadlines and progress checkpoints remain; parent shutdown drains pending
+  work without another caller poll and publishes cancellation before retiring
+  cache-controlled user futures.
 - Acquire an available built-in per-key mutex synchronously. Busy acquisition
   retains Tokio FIFO waiting and never turns into a miss. Add ready-budget and
   queued-waiter regressions; global cooperative scheduling remains enabled.

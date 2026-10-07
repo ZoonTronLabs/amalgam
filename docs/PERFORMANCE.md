@@ -1,8 +1,8 @@
 # Development performance qualification
 
-These measurements describe the developing 0.4 source, not the published 0.3.1
-package. Release qualification is still open: L2 factory retrieval, the final
-API, the paired behavioral matrix and the final release gates must pass.
+These measurements describe the developing 0.4 source. The published package
+remains 0.3.1. Release qualification requires native Linux budgets, the final
+API, the paired behavioral matrix and all final release gates.
 
 ## Local comparison, 2026-10-07
 
@@ -18,67 +18,84 @@ factory. Serialization, lookup and hydration remain inside the timed operation.
 
 | Operation | Amalgam ns/op | FusionCache ns/op | Qualification |
 |---|---:|---:|---|
-| Async L1 read, one worker | 35.444 | 290.778 | Pass |
-| Async L1 `get_or_set`, one worker | 44.470 | 341.938 | Pass |
-| Same key, eight workers, `get_or_set` | 5.959 | 82.892 | Pass |
-| Distinct keys, eight workers, `get_or_set` | 6.130 | 59.230 | Pass |
-| L1 replacement | 91.576 | 143.340 | Pass |
-| Cold factory | 946.778 | 2065.757 | Pass |
-| L2 plus JSON, read | 1695.746 | 1762.752 | Pass |
-| L2 plus JSON, `get_or_set` | 2055.380 | 1954.917 | **Fail: 5.14% slower** |
+| Async L1 read, one worker | 36.151 | 289.737 | Pass |
+| Async L1 `get_or_set`, one worker | 46.369 | 336.520 | Pass |
+| Same key, eight workers, `get_or_set` | 6.314 | 79.585 | Pass |
+| Distinct keys, eight workers, `get_or_set` | 6.403 | 59.953 | Pass |
+| L1 replacement | 92.180 | 142.242 | Pass |
+| Cold factory | 935.510 | 2065.205 | Pass |
+| L2 plus JSON, read | 1470.772 | 1753.618 | Pass |
+| L2 plus JSON, `get_or_set` | 1848.484 | 1946.456 | Pass |
 
 Eight-worker ns/op is elapsed time divided by all completed operations; it is
 aggregate throughput, not the latency experienced by one caller. Distinct-key
-scaling is 7.375x for read and 7.350x for `get_or_set`, exceeding the 6x budget
+scaling is 7.403x for read and 7.355x for `get_or_set`, exceeding the 6x budget
 on this machine with at least eight physical cores. Warm hits and L1 replacement
 allocate zero; cold allocates 5.009 per operation; L2 read and factory retrieval
-allocate 26 and 27 respectively.
+allocate 23 and 24 respectively. All local budgets pass for both APIs.
 
-Read L2 ranges were 1649.178–1702.142 ns versus 1752.140–1802.557 ns.
-Factory-retrieval L2 ranges were 2041.094–2112.747 ns versus
-1932.344–1985.676 ns. The failing L2 result is not treated as measurement noise.
+Read L2 ranges were 1427.245–1491.179 ns versus 1721.212–1822.333 ns.
+Factory-retrieval L2 ranges were 1824.488–1901.733 ns versus
+1918.939–1974.268 ns. These improvements do not depend on overlapping ranges.
 
-These are working-tree measurements. Reports record every runtime source and
-binary hash, including unrelated local edits. Exact committed Linux source and
-the final release API require their own qualification; this table is not that
-final qualification.
+These are working-tree measurements. Reports record runtime source and binary
+hashes, including unrelated local edits. Exact committed Linux source and the
+final release API require their own qualification.
 
 ## Same-machine change comparison
 
 Three counterbalanced pairs compile one frozen current harness against both
-the `dd50b41571af2529cf6e8d3c7bcffd590fa66962` source and the candidate.
+the `fa6e0b257e6fc6b1ee3e73b8780fbdd187792d63` source and the candidate.
 Dependencies and actual harness bytes match; input source hashes are recorded.
 
 | Operation | Baseline ns/op | Candidate ns/op | Change |
 |---|---:|---:|---:|
-| L2 plus JSON, read | 1791.559 | 1699.814 | -5.12% |
-| L2 plus JSON, `get_or_set` | 2219.264 | 2047.436 | -7.74% |
-| Cold factory | 1095.964 | 944.227 | -13.85% |
-| L1 replacement | 90.455 | 90.564 | No measured gain |
+| L2 plus JSON, read | 1686.317 | 1499.558 | -11.08% |
+| L2 plus JSON, `get_or_set` | 2065.743 | 1816.523 | -12.06% |
+| Cold factory | 942.965 | 937.262 | No measured gain |
+| L1 replacement | 90.796 | 90.314 | No measured gain |
 
-Nested L2 phases retain their exact cancellation token, checkpoint and counted
-polling, but register shutdown waiters and task tracking only when they suspend.
-Available built-in per-key mutexes are acquired synchronously; contention still
+A nested L2 phase borrows its work, key and worker from the existing cache-owned
+parent. It retains an independent cancellation token and checkpoint, but no
+second boxed future, owned worker or shutdown task registration. Its parent
+already owns and drains that entire pinned frame, including pending work when
+no caller polls again. Phase cancellation is published before cache-controlled
+future destruction. Soft/hard L2 deadlines remain independent of the origin.
+This removes three further L2 allocations compared with the previous pipeline.
+
+The same comparison recorded a 3–6% slowdown in some warm scenarios. A further
+seven-pair comparison kept unrelated `cache.rs` editor changes identical in
+both builds. L2 medians still improved by 8.68% and 10.38%, with the same three
+fewer allocations. Warm one-worker medians were about 5% slower, with a larger
+change in distinct-key factory retrieval and broad overlapping ranges at eight
+workers. Thus these results do not claim unchanged warm timing or a gain in
+set/cold. All comparative local budgets still pass; the architectural step is
+judged against those budgets rather than a microbenchmark percentage gate.
+Native Linux gain and final release qualification remain open.
+
+An available built-in per-key mutex is acquired synchronously; contention still
 waits through Tokio's ordinary FIFO acquisition. Busy coordination never becomes
-a cache miss. This removes two L2 allocations and avoids scheduler participation
-for an otherwise ready operation. Cooperative scheduling is not disabled globally.
+a cache miss. Cooperative scheduling remains enabled globally.
 
 ## Last completed Linux qualification
 
-The [CI run for dd50](https://github.com/ZoonTronLabs/amalgam/actions/runs/37603067620)
+The [CI run for fa6](https://github.com/ZoonTronLabs/amalgam/actions/runs/37608572833)
 completed with 14 functional gates passing and the comparative gate failing.
 Its CPU was AMD EPYC 9V74 with **two available physical cores and four logical
 CPUs**. It is a different machine from the local table, and eight worker threads
-here do not establish eight-core scaling.
+here do not establish eight-core scaling. This run precedes the borrowed phase.
 
-| L2 plus JSON on dd50 | Amalgam ns/op | FusionCache ns/op | Result |
+| L2 plus JSON on fa6 | Amalgam ns/op | FusionCache ns/op | Result |
 |---|---:|---:|---|
-| Read | 3170.937 | 2670.806 | Fail: 18.73% slower |
-| `get_or_set` | 4020.895 | 3052.316 | Fail: 31.73% slower |
+| Read | 2405.747 | 2072.508 | Fail: 16.08% slower |
+| `get_or_set` | 3058.638 | 2294.267 | Fail: 33.32% slower |
 
-The remaining warm, cold and write budgets passed on that runner. The new runtime
-changes require a native Linux comparison against the same baseline on the same
-runner; an FC pass on a different CPU is not proof of an improvement.
+Warm, cold and write budgets passed on that runner. Its separate, same-runner
+three-pair comparison against the preceding source measured L2 `get_or_set`
+3236.144→3091.064 ns (-4.48%) and cold 2226.956→2166.386 ns (-2.72%).
+L2 read changed 2457.516→2493.483 ns with overlapping ranges; no read gain is
+claimed. Absolute results from separate CI runs cannot establish a change gain.
+The borrowed phase needs its own native comparative and before/after results.
 
 ## Reproduce
 
@@ -92,7 +109,7 @@ export CARGO_INCREMENTAL=0
 export RUSTUP_TOOLCHAIN=1.88.0
 python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-read
 python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-get
-python3 benches/run-before-after.py --baseline dd50b41571af2529cf6e8d3c7bcffd590fa66962 --output /tmp/amalgam-before-after
+python3 benches/run-before-after.py --baseline fa6e0b257e6fc6b1ee3e73b8780fbdd187792d63 --output /tmp/amalgam-before-after
 ```
 
 CI enforces the same complete budgets for both APIs. Full package, consumer,

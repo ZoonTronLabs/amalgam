@@ -1,19 +1,19 @@
 //! Value reads, same-key origin work, fail-safe and eager refresh.
 use super::{
-    AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CancellationSource,
-    CircuitComponent, CommitReceipt, DistributedEvent, DistributedLease, DistributedLookup,
-    Duration, Entry, EntryOptions, Error, Execution, ExecutionCheckpoint, FactoryCancellation,
-    FactoryContext, FallbackAvailability, FlightGuard, HitKind, HydrationFence, HydrationOutcome,
-    Instrument, L1Read, L2ReadPolicy, LayerEvent, LeaseError, LeasePolicy, LinkMode,
-    LocalParticipation, LockOutcome, LookupKey, MarkerReadPolicy, MaybeValue, MemoryEvent,
-    Observed, OperationOutcome, Ordering, OriginCompletion, OriginKind, ReadStale, Reason, Result,
-    ShutdownTask, SkipReason, Storage, Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised,
-    bounded, component_span, lease_lost, newer_of,
+    AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CircuitComponent,
+    CommitReceipt, DistributedEvent, DistributedLease, DistributedLookup, Duration, Entry,
+    EntryOptions, Error, Execution, ExecutionCheckpoint, FactoryCancellation, FactoryContext,
+    FallbackAvailability, FlightGuard, HitKind, HydrationFence, HydrationOutcome, Instrument,
+    L1Read, L2ReadPolicy, LayerEvent, LeaseError, LeasePolicy, LocalParticipation, LockOutcome,
+    LookupKey, MarkerReadPolicy, MaybeValue, MemoryEvent, Observed, OperationOutcome, Ordering,
+    OriginCompletion, OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage,
+    Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded, component_span,
+    lease_lost, newer_of,
 };
 
-// Physical completion remains visible after a later marker timeout. The weak
-// checkpoint shares the existing owned scope and never creates a strong cycle.
-type DistributedCheckpoint<V> = ExecutionCheckpoint<Option<DistributedLookup<V>>>;
+// Physical completion remains visible after a later marker timeout. The
+// checkpoint borrows the child phase; the owned parent retains the whole frame.
+type DistributedCheckpoint<'a, V> = ExecutionCheckpoint<'a, Option<DistributedLookup<V>>>;
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn read_l1(
@@ -99,22 +99,17 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let timeout = opts
             .appropriate_distributed_timeout(matches!(fallback, FallbackAvailability::Available));
         let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
-        let source = CancellationSource::new();
-        let phase_cancellation = source.token();
-        let worker = self.clone();
-        let phase_key = Arc::clone(key);
-        let mut execution = self.scopes().execution_with_checkpoint(
-            move |checkpoint| {
-                async move {
-                    worker
-                        .fetch_l2(&phase_key, &phase_cancellation, &checkpoint)
-                        .await
-                }
+        let phase = crate::execution::BorrowedPhase::new(self.scopes(), cancellation);
+        let phase_cancellation = phase.token();
+        let checkpoint = phase.checkpoint();
+        let mut work = std::pin::pin!(
+            self.fetch_l2(key, &phase_cancellation, &checkpoint)
                 .instrument(span)
-            },
-            source,
         );
-        execution.link(cancellation, LinkMode::Explicit);
+        // This is declared after pinned work: cancellation/panic publishes its
+        // exact phase reason before codec destruction. The existing parent
+        // Execution owns this entire frame, including pending shutdown cleanup.
+        let _retirement = phase.retirement();
         let soft = opts.is_fail_safe_enabled()
             && matches!(fallback, FallbackAvailability::Available)
             && timeout == opts.distributed_soft_timeout()
@@ -123,10 +118,15 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         // one read. A marker provider cannot escape the caller's chosen budget.
         // Borrow execution through the deadline wrapper so we publish the exact
         // phase reason before dropping its codec, independently of the caller.
-        let result = match bounded(timeout, &mut execution).await {
+        let result = match bounded(
+            timeout,
+            std::future::poll_fn(|cx| phase.poll(cx, work.as_mut())),
+        )
+        .await
+        {
             Ok(Some(result)) => result,
             Ok(None) => {
-                execution.cancel(if soft {
+                phase.cancel(if soft {
                     Reason::SoftTimeout
                 } else {
                     Reason::HardTimeout
@@ -147,7 +147,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         match result {
             Ok(value) => {
-                if value.is_none() && !execution.checkpoint_reached() {
+                if value.is_none() && !phase.checkpoint_reached() {
                     self.distributed_miss(key);
                 }
                 if let Some(entry) = &value {
@@ -162,7 +162,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     Err(error)
                 } else {
                     tracing::warn!(%error,key=%key,"distributed read degraded to miss");
-                    if !execution.checkpoint_reached() {
+                    if !phase.checkpoint_reached() {
                         self.distributed_miss(key);
                     }
                     Ok(None)
@@ -181,7 +181,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         key: &Arc<str>,
         cancellation: &FactoryCancellation,
-        observation: &DistributedCheckpoint<V>,
+        observation: &DistributedCheckpoint<'_, V>,
     ) -> Result<Option<DistributedLookup<V>>> {
         let Storage::Hybrid {
             backend,
