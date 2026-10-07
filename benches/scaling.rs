@@ -483,7 +483,7 @@ fn metadata_costs() {
                 assert!(source.meta().eager_refresh_at().is_none());
             }
             MetadataCase::Eager => assert!(source.meta().eager_refresh_at().is_some()),
-            MetadataCase::Tagged => assert_eq!(source.meta().tags(), [tag.clone()]),
+            MetadataCase::Tagged => assert_eq!(source.meta().tags(), std::slice::from_ref(&tag)),
         }
         metadata_cost(&format!("entry_{}", case.label()), || {
             drop(black_box(fresh()));
