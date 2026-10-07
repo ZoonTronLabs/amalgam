@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use amalgam::{
-    Cache, ClearMode, EntryOptions, source,
+    Cache, ClearMode, EntryOptions,
     provider::{InMemoryDistributedCache, JsonSerializer, SystemClock},
+    source,
 };
 
 #[tokio::main]
@@ -25,15 +26,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cold = build()?;
     assert_eq!(cold.read("answer", None).await?.value(), Some(&42));
     cold.remove("answer").with_receipt().await?.wait().await?;
-    first.clear(ClearMode::Remove).with_receipt().await?.wait().await?;
+    first
+        .clear(ClearMode::Remove)
+        .with_receipt()
+        .await?
+        .wait()
+        .await?;
     assert!(!first.read("answer", None).await?.has_value());
     first.shutdown().await?;
     cold.shutdown().await?;
 
     let native = amalgam::BlockingCache::<Option<u64>>::new()?;
-    let value = native.get_or_set("null", source::value(None))
+    let value = native
+        .get_or_set("null", source::value(None))
         .cancellation(amalgam::CancellationSource::new().token())
-        .with_receipt().execute()?;
+        .with_receipt()
+        .execute()?;
     assert_eq!(value.value, None);
     if let amalgam::advanced::BlockingCommitReceipt::Mutation(receipt) = value.commit {
         receipt.wait()?;
