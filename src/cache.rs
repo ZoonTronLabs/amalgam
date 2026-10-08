@@ -8,6 +8,7 @@ mod builder;
 mod clock;
 mod distributed_key;
 mod get_request;
+mod immediate_read;
 mod inline_cold;
 pub use get_request::{GetOrSetFuture, GetOrSetRequest, ReceiptGetOrSetRequest};
 mod invalidation_request;
@@ -313,6 +314,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     default_options: EntryOptions,
     default_runtime: ready::RuntimeRequirement,
     ready_plan: plain_ready::ReadyPlan,
+    distributed_read_plan: immediate_read::DistributedReadPlan,
     write_plan: memory_inline::WritePlan,
     default_fresh_plan: crate::entry::DefaultFreshPlan,
     default_copy: crate::serializers::DefaultValueCopy<V>,

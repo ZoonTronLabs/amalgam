@@ -175,7 +175,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             },
         }
     }
-    fn lookup_key(&self, raw: &str, full: Arc<str>) -> LookupKey {
+    pub(super) fn lookup_key(&self, raw: &str, full: Arc<str>) -> LookupKey {
         let raw = if self.inner.key_prefix.as_deref().is_none_or(str::is_empty) {
             Arc::clone(&full)
         } else {
@@ -987,13 +987,29 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 key: full,
                 permit,
                 resolved,
-            } => self.pending_read(ReadOperation {
-                key: self.lookup_key(key, Arc::from(full.as_ref())),
-                options: resolved.or(options),
-                cancellation: token,
-                observation: observation.into_owned(),
-                permit,
-            }),
+            } => {
+                let options = resolved.or(options);
+                let observation = match self.immediate_read(
+                    key,
+                    &full,
+                    options.as_deref(),
+                    token.as_ref(),
+                    &permit,
+                    observation,
+                ) {
+                    super::immediate_read::InlineRead::Completed(result) => {
+                        return ReadStart::Ready(result);
+                    }
+                    super::immediate_read::InlineRead::Deferred(observation) => observation,
+                };
+                self.pending_read(ReadOperation {
+                    key: self.lookup_key(key, Arc::from(full.as_ref())),
+                    options,
+                    cancellation: token,
+                    observation: observation.into_owned(),
+                    permit,
+                })
+            }
         }
     }
     #[cold]

@@ -1343,7 +1343,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 kinds.extend(tags.iter().cloned().map(MarkerKind::Tag));
                 std::borrow::Cow::Owned(kinds)
             };
-            for marker in store.read_many(&self.inner.scope, &kinds).await? {
+            let markers = match store.read_many_immediate(&self.inner.scope, &kinds) {
+                crate::distributed::ImmediateRead::Completed(markers) => markers?,
+                crate::distributed::ImmediateRead::Deferred => {
+                    store.read_many(&self.inner.scope, &kinds).await?
+                }
+            };
+            for marker in markers {
                 self.apply_marker(marker);
             }
         }
