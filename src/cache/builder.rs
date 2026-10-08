@@ -762,6 +762,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             && matches!(locks, LocalLocks::Builtin(_))
             && matches!(marker_reads, MarkerReads::DurableRequired))
         .then(crate::single_flight::Flights::new);
+        let scopes = Scopes::new();
+        let inline_cancellation = super::CancellationSource::for_cache(Arc::clone(&scopes)).token();
         let inner = Arc::new_cyclic(|owner| CacheInner {
             owner: owner.clone(),
             name,
@@ -808,7 +810,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             wait_for_initial_backplane_subscribe: self.wait_for_initial_backplane_subscribe,
             cloner,
             jitter: crate::options::JitterPlan::select(self.jitter),
-            scopes: Scopes::new(),
+            scopes,
+            inline_cancellation,
             tasks: Tasks::new(),
             epoch: Arc::new(AtomicU64::new(0)),
             maintenance: AtomicBool::new(false),
