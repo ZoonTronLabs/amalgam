@@ -321,8 +321,43 @@ fn unframe_snapshot(bytes: &[u8]) -> Result<Option<(SnapshotHeader, &[u8])>> {
         .checked_add(length)
         .filter(|end| *end <= bytes.len())
         .ok_or_else(|| Error::Deserialization("truncated snapshot header".into()))?;
-    let header = serde_json::from_slice(&bytes[13..end]).map_err(Error::deserialization)?;
+    let header = match canonical_header(&bytes[13..end]) {
+        Some(header) => header,
+        None => serde_json::from_slice(&bytes[13..end]).map_err(Error::deserialization)?,
+    };
     Ok(Some((header, &bytes[end..])))
+}
+
+/// Decodes the exact header bytes this crate writes for unspecified retention
+/// without serde's buffered internally tagged enum path. Every other header,
+/// valid or not, keeps the general decoder and its exact errors.
+fn canonical_header(header: &[u8]) -> Option<SnapshotHeader> {
+    let rest = header.strip_prefix(br#"{"inserted_ticks":"#)?;
+    let (inserted_ticks, rest) = canonical_i64(rest)?;
+    (rest == br#","retention":{"kind":"Unspecified"}}"#).then_some(SnapshotHeader {
+        inserted_ticks,
+        retention: WireRetention::Unspecified,
+    })
+}
+
+/// A JSON integer without leading zeros that fits in `i64`; anything else
+/// (fractions, exponents, overflow, `i64::MIN`) falls back to serde.
+fn canonical_i64(bytes: &[u8]) -> Option<(i64, &[u8])> {
+    let (negative, digits) = match bytes.split_first()? {
+        (b'-', rest) => (true, rest),
+        _ => (false, bytes),
+    };
+    let length = digits.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    if length == 0 || (length > 1 && digits[0] == b'0') {
+        return None;
+    }
+    let mut magnitude = 0_i64;
+    for digit in &digits[..length] {
+        magnitude = magnitude
+            .checked_mul(10)?
+            .checked_add(i64::from(digit - b'0'))?;
+    }
+    Some((if negative { -magnitude } else { magnitude }, &digits[length..]))
 }
 
 fn priority_byte(priority: Priority) -> u8 {

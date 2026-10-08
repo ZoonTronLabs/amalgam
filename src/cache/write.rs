@@ -212,7 +212,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 source_id: Arc::clone(&self.inner.instance_id),
                 timestamp,
                 action,
-                key: Arc::from(self.inner.l2_key(key)),
+                key: Arc::from(&*self.inner.l2_key(key)),
             }))
         }
     }

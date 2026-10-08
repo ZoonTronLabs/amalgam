@@ -60,6 +60,13 @@ impl CircuitBreaker {
         !matches!(self.check(now), CircuitCheck::Open { .. })
     }
 
+    /// `true` when admission is certain without a clock sample: the breaker is
+    /// disabled or currently closed. An open breaker still needs [`check`](Self::check).
+    #[must_use]
+    pub fn is_closed_without_clock(&self) -> bool {
+        self.is_disabled() || self.reopen_at.load(Ordering::Acquire) == CLOSED
+    }
+
     /// Checks admission and reports the single winning cooldown transition.
     pub fn check(&self, now: Timestamp) -> CircuitCheck {
         if self.is_disabled() {
@@ -108,6 +115,11 @@ impl CircuitBreaker {
     /// Forces the breaker closed (e.g. after a successful operation or a received
     /// backplane message). Returns `true` if it transitioned from open to closed.
     pub fn close(&self) -> bool {
+        // Successful operations close an already closed breaker on every call;
+        // skip the shared write in that common case.
+        if self.reopen_at.load(Ordering::Acquire) == CLOSED {
+            return false;
+        }
         let previous = self.reopen_at.swap(CLOSED, Ordering::AcqRel);
         previous != CLOSED
     }

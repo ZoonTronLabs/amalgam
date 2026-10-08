@@ -329,8 +329,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let snapshot = serializer
             .decode(&bytes, self.inner.serialization_mode, cancellation)
             .await?;
-        let source = snapshot.try_into_cache_entry(self.inner.clock.now())?;
         let now = self.inner.clock.now();
+        let source = snapshot.try_into_cache_entry(now)?;
         observation.record();
         if source.is_physically_expired(now) {
             self.distributed_miss(key);
