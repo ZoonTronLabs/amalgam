@@ -1,9 +1,17 @@
 //! Private reader slots with a single writer admission gate.
 //!
-//! Readers publish a padded count, cross a SeqCst fence, then check the writer
-//! gate. A writer closes the gate, crosses a SeqCst fence, then scans counts.
-//! The fence order prevents both sides from overlooking each other: either the
-//! writer observes the reservation or the reader observes the closed gate.
+//! Readers publish a padded count, then check the writer gate. A writer closes
+//! the gate, then scans the published counts. Every access in these Dekker
+//! handshakes (count publication, gate store and load, bitmap of used slots,
+//! waiter interest) is SeqCst, so the single total order of SeqCst operations
+//! prevents both sides from overlooking each other: either the writer observes
+//! the reservation or the reader observes the closed gate. A standalone fence
+//! is not needed. That matters on x86, where `fence(SeqCst)` is an `mfence`:
+//! ~21 ns per admission on a Zen 4 CI runner, against ~3 ns for the `xchg` of
+//! a SeqCst publication. On AArch64 the accesses become `swpal`/`stlr`/`ldar`,
+//! as cheap as the fenced form. Loom models SeqCst accesses as AcqRel, so under
+//! `cfg(loom)` the former SeqCst fences stay and the model checks the fenced
+//! handshake, which these SeqCst accesses only strengthen.
 //! Release/Acquire count handoff orders completed reads before mutable access;
 //! Release/Acquire gate handoff orders completed writes before admitted reads.
 //!
@@ -28,7 +36,7 @@ use std::ops::{Deref, DerefMut};
 #[cfg(not(loom))]
 use std::sync::OnceLock;
 #[cfg(not(loom))]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(not(loom))]
 static NEXT_READER: AtomicUsize = AtomicUsize::new(0);
@@ -173,7 +181,7 @@ impl<T> ReaderSlots<T> {
             let width = usize::BITS as usize;
             self.slots[index / width * width]
                 .initialized
-                .fetch_or(1 << (index % width), Ordering::Release);
+                .fetch_or(1 << (index % width), Ordering::SeqCst);
         }
         let local = owner == identity
             || owner == 0
@@ -184,11 +192,13 @@ impl<T> ReaderSlots<T> {
         if local {
             let count = slot.local.load(Ordering::Relaxed);
             let next = count.checked_add(1).expect("reader reservation exhausted");
-            slot.local.store(next, Ordering::Release);
+            // Only the owner writes `local`; the SeqCst swap is the publication
+            // half of the admission handshake.
+            slot.local.swap(next, Ordering::SeqCst);
             Reservation::Local(slot)
         } else {
             slot.shared
-                .fetch_update(Ordering::Release, Ordering::Relaxed, |count| {
+                .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |count| {
                     count.checked_add(1)
                 })
                 .expect("shared reader reservations exhausted");
@@ -200,8 +210,9 @@ impl<T> ReaderSlots<T> {
             let reservation = ReservationGuard {
                 reservation: self.reserve(),
             };
+            #[cfg(loom)]
             fence(Ordering::SeqCst);
-            if !self.writer.load(Ordering::Acquire) {
+            if !self.writer.load(Ordering::SeqCst) {
                 return ReadGuard {
                     lock: self,
                     #[cfg(loom)]
@@ -216,13 +227,15 @@ impl<T> ReaderSlots<T> {
     }
     fn wait_for_writer(&self) {
         // Waiting interest is published before checking the gate. A writer's
-        // gate clear and interest check cross the same SeqCst fence. Its notification takes
-        // this mutex, so it cannot pass the check-to-park registration window.
-        self.waiting.fetch_add(1, Ordering::Release);
+        // gate clear and interest check are the other SeqCst half of this
+        // handshake. Its notification takes this mutex, so it cannot pass the
+        // check-to-park registration window.
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        #[cfg(loom)]
         fence(Ordering::SeqCst);
         {
             let mut wait = lock(&self.waiters);
-            while self.writer.load(Ordering::Acquire) {
+            while self.writer.load(Ordering::SeqCst) {
                 #[cfg(not(loom))]
                 self.changed.wait(&mut wait);
                 #[cfg(loom)]
@@ -237,11 +250,10 @@ impl<T> ReaderSlots<T> {
         // A sparse bitmap visits only slots that have actually been used,
         // regardless of the process-wide reader index or available core count.
         self.slots.chunks(usize::BITS as usize).all(|group| {
-            let mut used = group[0].initialized.load(Ordering::Acquire);
+            let mut used = group[0].initialized.load(Ordering::SeqCst);
             while used != 0 {
                 let slot = &group[used.trailing_zeros() as usize];
-                if slot.local.load(Ordering::Acquire) != 0
-                    || slot.shared.load(Ordering::Acquire) != 0
+                if slot.local.load(Ordering::SeqCst) != 0 || slot.shared.load(Ordering::SeqCst) != 0
                 {
                     return false;
                 }
@@ -332,7 +344,8 @@ struct WriterHold<'a, T> {
 }
 impl<'a, T> WriterHold<'a, T> {
     fn new(lock: &'a ReaderSlots<T>, serial: MutexGuard<'a, ()>) -> Self {
-        lock.writer.store(true, Ordering::Release);
+        lock.writer.store(true, Ordering::SeqCst);
+        #[cfg(loom)]
         fence(Ordering::SeqCst);
         Self {
             lock,
@@ -342,9 +355,10 @@ impl<'a, T> WriterHold<'a, T> {
 }
 impl<T> Drop for WriterHold<'_, T> {
     fn drop(&mut self) {
-        self.lock.writer.store(false, Ordering::Release);
+        self.lock.writer.store(false, Ordering::SeqCst);
+        #[cfg(loom)]
         fence(Ordering::SeqCst);
-        if self.lock.waiting.load(Ordering::Acquire) != 0 {
+        if self.lock.waiting.load(Ordering::SeqCst) != 0 {
             let _wait = lock(&self.lock.waiters);
             self.lock.changed.notify_all();
         }
