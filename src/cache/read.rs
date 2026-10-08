@@ -540,7 +540,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let (entry, level) = stale.into_parts();
             return self.read_hit(key, entry, &opts, HitKind::Stale, level);
         }
-        self.emit(CacheEvent::Miss { key });
+        self.emit_outcome(|| CacheEvent::Miss { key });
         Ok(Observed::new(None, OperationOutcome::Miss, None))
     }
     fn read_hit(
@@ -552,7 +552,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         level: CacheLevel,
     ) -> Result<Observed<Option<V>>> {
         let value = self.copy(entry.value(), opts)?;
-        self.emit(CacheEvent::Hit {
+        self.emit_outcome(|| CacheEvent::Hit {
             key,
             stale: kind.is_stale(),
         });
@@ -566,7 +566,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         level: CacheLevel,
     ) -> Result<Observed<CacheValue<V>>> {
         let value = self.copy(entry.value(), opts)?;
-        self.emit(CacheEvent::Hit { key, stale: false });
+        self.emit_outcome(|| CacheEvent::Hit { key, stale: false });
         Ok(Observed::new(
             CacheValue {
                 value,
@@ -774,7 +774,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 L1Read::Miss => {}
             }
         }
-        self.emit(CacheEvent::Miss {
+        self.emit_outcome(|| CacheEvent::Miss {
             key: Arc::clone(key),
         });
         let guard = match lock {
