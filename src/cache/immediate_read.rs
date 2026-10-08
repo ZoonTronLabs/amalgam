@@ -98,11 +98,18 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
         let worker = self.worker();
         let key = self.lookup_key(raw, Arc::from(full));
-        let source = CancellationSource::for_cache(self.operation_scopes());
-        let cancellation = source.token();
+        let scoped;
+        let cancellation = match self.callback_free_scopes() {
+            Some(_) => &self.inner.inline_cancellation,
+            // A plugin view operates in its own registry, which may outlive close.
+            None => {
+                scoped = CancellationSource::for_cache(self.operation_scopes()).token();
+                &scoped
+            }
+        };
         let span = observation.span();
         let _entered = span.enter();
-        let read = worker.read(key, options.cloned().map(Box::new), &cancellation);
+        let read = worker.read(key, options.cloned().map(Box::new), cancellation);
         let mut read = std::pin::pin!(read);
         let Poll::Ready(result) = read.as_mut().poll(&mut Context::from_waker(Waker::noop()))
         else {
@@ -185,9 +192,15 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
         let worker = self.worker();
         let key = self.lookup_key(raw, Arc::from(full));
-        let source = CancellationSource::for_cache(self.operation_scopes());
-        let caller = source.token();
-        let Ok(Some(guard)) = worker.try_origin_guard(&key.full, &caller) else {
+        let scoped;
+        let lookup_cancellation = match self.callback_free_scopes() {
+            Some(_) => &self.inner.inline_cancellation,
+            None => {
+                scoped = CancellationSource::for_cache(self.operation_scopes()).token();
+                &scoped
+            }
+        };
+        let Ok(Some(guard)) = worker.try_origin_guard(&key.full, lookup_cancellation) else {
             return deferred(observation, permit, origin, tags, fallback);
         };
         let Ok(opts) = worker.resolve_lookup_options(&key.raw, options.cloned().map(Box::new))
@@ -202,7 +215,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 opts,
                 O::KIND,
                 fallback.is_some(),
-                &caller,
+                lookup_cancellation,
                 OriginLock::Held(guard),
             );
             let mut lookup = std::pin::pin!(lookup);
@@ -225,6 +238,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 stale,
                 guard,
             }) => {
+                // Only a confirmed miss runs work which can outlive this call.
+                let source = CancellationSource::for_cache(self.operation_scopes());
+                let caller = source.token();
                 let miss = OriginMiss {
                     key,
                     origin,
@@ -261,7 +277,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
         };
         drop(entered);
-        let result = match caller.reason() {
+        let result = match lookup_cancellation.reason() {
             Some(reason) => Err(Error::OperationCancelled { reason }),
             None => result,
         }

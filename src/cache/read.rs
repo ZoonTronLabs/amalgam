@@ -7,7 +7,8 @@ use super::{
     LayerEvent, LeaseError, LeasePolicy, LocalParticipation, LockOutcome, LookupKey,
     MarkerReadPolicy, MemoryEvent, Observed, OperationOutcome, Ordering, OriginCompletion,
     OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict,
-    Timeout, Worker, acquire_owned_supervised, bounded, component_span, lease_lost, newer_of,
+    Timeout, Timestamp, Worker, acquire_owned_supervised, bounded, component_span, lease_lost,
+    newer_of,
 };
 
 // Physical completion remains visible after a later marker timeout. The
@@ -276,11 +277,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let completed = std::sync::atomic::AtomicBool::new(false);
         let checkpoint = DistributedCheckpoint::borrowing(&completed);
         let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
-        let mut work = std::pin::pin!(
-            self.fetch_l2(key, cancellation, &checkpoint)
-                .instrument(span)
-        );
-        let result = bounded(timeout, work.as_mut()).await;
+        // A disabled span records nothing; skip entering it on every poll.
+        // Each branch pins its future where it is built, without a move.
+        let result = if span.is_disabled() {
+            let mut work = std::pin::pin!(self.fetch_l2(key, cancellation, &checkpoint));
+            bounded(timeout, work.as_mut()).await
+        } else {
+            let mut work = std::pin::pin!(
+                self.fetch_l2(key, cancellation, &checkpoint)
+                    .instrument(span)
+            );
+            bounded(timeout, work.as_mut()).await
+        };
         (
             L2ReadBudget::from_bounded(result),
             completed.load(Ordering::Acquire),
@@ -341,7 +349,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(None);
         };
         cancellation.check()?;
-        let hydration = self.hydration_fence(key).await?;
+        let fenced_at = self.inner.clock.now();
+        let hydration = self.hydration_fence(key, fenced_at).await?;
         self.memory
             .component_read(crate::events::ComponentRead::Distributed);
         let physical = self.inner.l2_key(key);
@@ -369,7 +378,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let snapshot = serializer
             .decode(&bytes, self.inner.serialization_mode, cancellation)
             .await?;
-        let now = self.inner.clock.now();
+        // The immediate plan awaits nothing between the fence and decoding,
+        // so one sample serves both; awaited providers are sampled again.
+        let now = match self.inner.distributed_read_plan {
+            super::immediate_read::DistributedReadPlan::Immediate => fenced_at,
+            super::immediate_read::DistributedReadPlan::Owned => self.inner.clock.now(),
+        };
         let source = snapshot.try_into_cache_entry(now)?;
         observation.record();
         if source.is_physically_expired(now) {
@@ -389,9 +403,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         Ok(Some(DistributedLookup {
             entry: source,
             hydration,
+            observed_at: now,
         }))
     }
-    async fn hydration_fence(&self, key: &str) -> Result<HydrationFence<V>> {
+    async fn hydration_fence(&self, key: &str, now: Timestamp) -> Result<HydrationFence<V>> {
         let lane = self.inner.lanes.get(key);
         let fence = {
             let Some(_guard) = lane.try_lock() else {
@@ -402,7 +417,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let _guard = self.memory.guard(_guard);
             lane.snapshot(&self.inner.epoch)
         };
-        let observed = self.memory.get_at(key, self.inner.clock.now()).await?;
+        let observed = self.memory.get_at(key, now).await?;
         Ok(HydrationFence::Stable { fence, observed })
     }
     async fn hydrate(
@@ -497,7 +512,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 verdict => {
                     self.hydrate(&key, &entry, &opts).await?.observe();
                     if verdict == TagVerdict::Valid
-                        && entry.entry.freshness(self.inner.clock.now()).is_fresh()
+                        && entry.entry.freshness(entry.observed_at).is_fresh()
                     {
                         return self.read_hit(
                             key,
@@ -810,7 +825,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             if verdict != TagVerdict::Remove {
                 self.hydrate(key, &entry, &opts).await?.observe();
                 if verdict == TagVerdict::Valid
-                    && entry.entry.freshness(self.inner.clock.now()).is_fresh()
+                    && entry.entry.freshness(entry.observed_at).is_fresh()
                 {
                     return self
                         .served(

@@ -345,6 +345,10 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     cloner: Option<Arc<dyn ValueCloner<V>>>,
     jitter: crate::options::JitterPlan,
     scopes: Arc<Scopes>,
+    // Read-only cancellation view shared by inline attempts of the public
+    // registry: it reports cache shutdown and is never cancelled, linked or
+    // handed to user code. Plugin views keep per-operation sources.
+    inline_cancellation: FactoryCancellation,
     tasks: Arc<Tasks>,
     epoch: Arc<AtomicU64>,
     maintenance: AtomicBool,
@@ -385,6 +389,8 @@ enum HydrationFence<V> {
 struct DistributedLookup<V> {
     entry: Entry<V>,
     hydration: HydrationFence<V>,
+    // When the snapshot was validated; later freshness checks reuse it.
+    observed_at: Timestamp,
 }
 enum HydrationOutcome {
     Evaluated(MemoryAdmission),

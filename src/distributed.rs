@@ -351,19 +351,34 @@ fn canonical_i64(bytes: &[u8]) -> Option<(i64, &[u8])> {
         .iter()
         .take_while(|byte| byte.is_ascii_digit())
         .count();
-    if length == 0 || (length > 1 && digits[0] == b'0') {
+    // Nineteen digits always fit u64; a longer literal overflows i64 anyway.
+    if length == 0 || length > 19 || (length > 1 && digits[0] == b'0') {
         return None;
     }
-    let mut magnitude = 0_i64;
-    for digit in &digits[..length] {
-        magnitude = magnitude
-            .checked_mul(10)?
-            .checked_add(i64::from(digit - b'0'))?;
+    let (number, rest) = digits.split_at(length);
+    let magnitude = i64::try_from(decimal(number)?).ok()?;
+    Some((if negative { -magnitude } else { magnitude }, rest))
+}
+
+/// The exact value of at most nineteen ASCII digits, eight per step.
+fn decimal(digits: &[u8]) -> Option<u64> {
+    let mut chunks = digits.chunks_exact(8);
+    let mut value = 0_u64;
+    for chunk in &mut chunks {
+        value = value * 100_000_000 + eight_digits(<[u8; 8]>::try_from(chunk).ok()?);
     }
-    Some((
-        if negative { -magnitude } else { magnitude },
-        &digits[length..],
-    ))
+    for digit in chunks.remainder() {
+        value = value * 10 + u64::from(digit - b'0');
+    }
+    Some(value)
+}
+
+/// Combines eight ASCII digits pairwise in one register: lanes never carry.
+fn eight_digits(chunk: [u8; 8]) -> u64 {
+    let mut word = u64::from_le_bytes(chunk) - 0x3030_3030_3030_3030;
+    word = (word * 10 + (word >> 8)) & 0x00FF_00FF_00FF_00FF;
+    word = (word * 100 + (word >> 16)) & 0x0000_FFFF_0000_FFFF;
+    (word * 10_000 + (word >> 32)) & 0xFFFF_FFFF
 }
 
 fn priority_byte(priority: Priority) -> u8 {
@@ -1367,6 +1382,50 @@ mod tests {
 
     fn general(bytes: &[u8]) -> serde_json::Result<DistributedEntry<String>> {
         serde_json::from_slice(bytes)
+    }
+
+    #[test]
+    fn canonical_integers_match_std_parsing() {
+        let mut samples = vec![
+            "0".to_owned(),
+            "7".to_owned(),
+            "12345678".to_owned(),
+            "123456789".to_owned(),
+            "9999999999999999".to_owned(),
+            "638000000000000000".to_owned(),
+            i64::MAX.to_string(),
+            (i64::MIN + 1).to_string(),
+        ];
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        for _ in 0..2000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let value = (seed >> (seed % 63)) as i64 * if seed & 1 == 0 { 1 } else { -1 };
+            samples.push(value.to_string());
+        }
+        for text in samples {
+            let input = format!("{text},");
+            let parsed = canonical_i64(input.as_bytes());
+            assert_eq!(
+                parsed,
+                Some((text.parse::<i64>().unwrap(), &b","[..])),
+                "{text}"
+            );
+        }
+        // i64::MIN and anything longer or non-canonical defer to serde_json.
+        for (text, expected) in [
+            ("", None),
+            ("-", None),
+            ("01", None),
+            ("-0", Some(0)),
+            ("9223372036854775808", None),
+            ("-9223372036854775808", None),
+            ("12345678901234567890", None),
+        ] {
+            let parsed = canonical_i64(text.as_bytes()).map(|(value, _)| value);
+            assert_eq!(parsed, expected, "{text}");
+        }
     }
 
     #[test]
