@@ -13,7 +13,7 @@
 
 A Rust hybrid cache with async operations, inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
-The published package is **0.3.1**; **0.4 is under development** in this checkout. The outage-policy section describes the new source defaults. Install the published crate from crates.io:
+Version **0.4.0** is published on crates.io with the eight-operation API documented below. The outage-policy section describes its defaults. Install the crate:
 
 ```toml
 [dependencies]
@@ -22,10 +22,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 The published package is `amalgam-cache`; the Rust library is imported as `amalgam`.
-Unreleased additions and the still-open full functionality inventory are tracked
+The release scope and still-open full functionality inventory are tracked
 in [FULL_CONTRACT.md](docs/FULL_CONTRACT.md) and the [changelog](CHANGELOG.md).
 
-## Basic use (developing 0.4 source)
+## Basic use
 
 ```rust
 use amalgam::Cache;
@@ -205,9 +205,9 @@ Recovery defaults to enabled for a configured distributed provider, with a 5-sec
 
 Transport failures trip the corresponding circuit breaker; codec or value-copy failures do not declare every key's transport unhealthy. Default breaker duration is zero, meaning disabled. Read I/O budgets and provider lifecycle budgets are distinct from the intentionally unbounded default cache write/remove contract.
 
-Unreleased `CachePlugin<V>` adds operational access to the same cache through a weak typed context. Start, event handlers and Stop can read, compute and mutate; views do not keep the application lifecycle alive. See [plugin cache operations](docs/PLUGIN_CACHE.md) for lifetime and teardown boundaries.
+`CachePlugin<V>` adds operational access to the same cache through a weak typed context. Start, event handlers and Stop can read, compute and mutate; views do not keep the application lifecycle alive. See [plugin cache operations](docs/PLUGIN_CACHE.md) for lifetime and teardown boundaries.
 
-Unreleased `subscribe_layers()` exposes typed memory, distributed and backplane facts independently of logical outcomes. Full peer payloads, physical hit eligibility and typed read-deadline behavior are documented in [component events](docs/LAYER_EVENTS.md). Original-value eviction and handler policy remain open.
+`subscribe_layers()` exposes typed memory, distributed and backplane facts independently of logical outcomes. Full peer payloads, physical hit eligibility and typed read-deadline behavior are documented in [component events](docs/LAYER_EVENTS.md). Original-value eviction and handler policy remain open.
 
 Each cache has its own plugin sessions, including when a plugin object is shared. Dynamic registration detaches and stops exactly once. One event hub reports reads, misses, admission, eviction, origins, distributed effects and operation outcomes. Use the resilient event subscription when a slow observer must recover from broadcast lag.
 
@@ -215,14 +215,14 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 
 ## Development performance
 
-The preparing 0.4 source has zero-allocation warm L1 reads and replacements.
+The 0.4 source has zero-allocation warm L1 reads and replacements.
 The FC comparison uses default .NET tiering/Dynamic PGO after settled warmup;
 TC=0 is a separate diagnostic. Known L2 get_or_set, set and Linux hot-read
 budgets remain unclosed. Further optimization is deferred to 0.4.x.
 
 FC results are informational in CI. The blocking performance check compares
 matched workloads against the actual published 0.3.1 package. The eight-operation
-API and [FR/RS status matrix](docs/PARITY.md) are prepared; full paired behavioral
+API and [FR/RS status matrix](docs/PARITY.md) are documented; full paired behavioral
 qualification and custom L2 markers remain explicit Gaps. See
 [tables and measurement method](docs/PERFORMANCE.md) and
 [release requirements](docs/ROADMAP.md).

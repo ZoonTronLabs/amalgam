@@ -1,8 +1,8 @@
 # Migration from 0.3 to 0.4
 
-Version 0.4 is under development and has not been published. This guide is being
-updated for the complete eight-operation API; publication still requires the
-owner-approved release steps and final qualification.
+Version **0.4.0** is published on crates.io. This guide describes its breaking
+changes from 0.3 and the complete eight-operation API. Behavioral differences
+and remaining qualification gaps are documented in [PARITY.md](PARITY.md).
 
 ## Construction
 
