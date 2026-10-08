@@ -17,7 +17,7 @@ The published package is **0.3.1**; **0.4 is under development** in this checkou
 
 ```toml
 [dependencies]
-amalgam = { package = "amalgam-cache", version = "0.3" }
+amalgam = { package = "amalgam-cache", version = "0.4" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

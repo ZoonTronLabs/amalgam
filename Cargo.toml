@@ -2,7 +2,7 @@
 # `amalgam` is taken on crates.io, so the published crate is `amalgam-cache`.
 # The library is still imported as `use amalgam::...` (see `[lib]` below).
 name = "amalgam-cache"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 description = "An async Rust hybrid cache with fail-safe, per-key stampede protection, distributed invalidation and observable background work."
