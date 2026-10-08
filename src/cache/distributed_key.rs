@@ -1,4 +1,5 @@
 //! Build-selected data-key encoding preserves the configured wire namespace.
+use super::physical_key::PhysicalKey;
 use crate::options::KeyModifierMode;
 use std::sync::Arc;
 
@@ -31,54 +32,9 @@ impl DistributedKey {
     }
 }
 
-const INLINE_KEY: usize = 64;
-
-/// A physical L2 key. Ordinary keys are joined inline instead of allocating a
-/// `String` for every distributed access; long keys keep the heap form.
-pub(super) enum PhysicalKey<'a> {
-    Borrowed(&'a str),
-    Inline {
-        length: usize,
-        bytes: [u8; INLINE_KEY],
-    },
-    Owned(String),
-}
-impl PhysicalKey<'_> {
-    fn joined(first: &str, second: &str) -> Self {
-        let length = first.len() + second.len();
-        if length > INLINE_KEY {
-            let mut physical = String::with_capacity(length);
-            physical.push_str(first);
-            physical.push_str(second);
-            return Self::Owned(physical);
-        }
-        let mut bytes = [0_u8; INLINE_KEY];
-        bytes[..first.len()].copy_from_slice(first.as_bytes());
-        bytes[first.len()..length].copy_from_slice(second.as_bytes());
-        Self::Inline { length, bytes }
-    }
-}
-impl std::ops::Deref for PhysicalKey<'_> {
-    type Target = str;
-    fn deref(&self) -> &str {
-        match self {
-            Self::Borrowed(key) => key,
-            Self::Inline { length, bytes } => match std::str::from_utf8(&bytes[..*length]) {
-                Ok(key) => key,
-                Err(_) => unreachable!("an inline key joins two complete UTF-8 strings"),
-            },
-            Self::Owned(key) => key,
-        }
-    }
-}
-impl std::fmt::Display for PhysicalKey<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::physical_key::INLINE_KEY;
     use super::*;
 
     #[test]

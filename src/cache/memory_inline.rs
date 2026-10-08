@@ -77,15 +77,20 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         token: Option<&FactoryCancellation>,
     ) -> Result<LocalEffect> {
         let permit = self.inline();
-        let key = match &self.inner.key_prefix {
-            Some(prefix) => std::borrow::Cow::Owned(format!("{prefix}{raw}")),
-            None => std::borrow::Cow::Borrowed(raw),
+        // Storage borrows the key and owns a copy only for a new entry.
+        let joined;
+        let key: &str = match super::KeyParts::new(self.inner.key_prefix.as_ref(), raw).prefix() {
+            None => raw,
+            Some(prefix) => {
+                joined = super::PhysicalKey::joined(prefix, raw);
+                &joined
+            }
         };
         if self.inner.events.is_quiet()
             && tracing::level_filters::LevelFilter::current() < tracing::Level::DEBUG
         {
             let observation = super::QuietObservation::new(&self.inner.events, CacheOperation::Set);
-            let result = self.inline_set_value(raw, &key, value, options, tags, token, &permit);
+            let result = self.inline_set_value(raw, key, value, options, tags, token, &permit);
             observation.finish(set_outcome(&result), None);
             return result;
         }
@@ -94,9 +99,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             &self.inner.name,
             &self.inner.instance_id,
             CacheOperation::Set,
-            Some(&key),
+            Some(key),
         );
-        let result = self.inline_set_value(raw, &key, value, options, tags, token, &permit);
+        let result = self.inline_set_value(raw, key, value, options, tags, token, &permit);
         observation.finish(set_outcome(&result));
         result
     }

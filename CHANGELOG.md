@@ -29,6 +29,14 @@ on [Keep a Changelog](https://keepachangelog.com/).
   events are built only for an actual observer. Small hot-path helpers are
   `#[inline]` for consumers without LTO, and the reference providers hash with
   ahash.
+- Caches with a `key_prefix` no longer allocate the joined key on every L1 read
+  or local write. The joined key is assembled on the stack for the probe and
+  owned only when work outlives the call; L1 and L2 share one physical-key type.
+  M4, `Arc<Vec<_>>` values, medians of three alternating runs: prefixed
+  `try_get` 144–149 → 113–114 ns and `get_or_set` 168–170 → 133 ns
+  (memory-only and hybrid alike); prefixed `set` of `u64` 129 → 88 ns.
+  Unprefixed paths are unchanged within ±2%. `amalgam` itself
+  advises a prefix for shared distributed caches, so this is the common shape.
 - Same-runner Linux CI (EPYC 7763), main versus this work: L2 read 2338 → 1012 ns,
   L2 get_or_set 2898 → 1245 ns, allocations 8 → 3 per operation. See
   [PERFORMANCE](docs/PERFORMANCE.md) for the FusionCache comparison.

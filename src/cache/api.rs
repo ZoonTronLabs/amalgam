@@ -293,16 +293,23 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         mode: LookupMode,
     ) -> LookupStart<'a, V> {
         let permit = self.inline();
-        let key = match &self.inner.key_prefix {
-            Some(prefix) => Cow::Owned(format!("{prefix}{raw}")),
-            None => Cow::Borrowed(raw),
+        // A ready hit needs the physical key only for the L1 probe; it is
+        // assembled without allocation and owned only if work outlives the call.
+        let parts = super::KeyParts::new(self.inner.key_prefix.as_ref(), raw);
+        let joined;
+        let full: &str = match parts.prefix() {
+            None => raw,
+            Some(prefix) => {
+                joined = super::PhysicalKey::joined(prefix, raw);
+                &joined
+            }
         };
         let observation = ReadyObservation::new(
             &self.inner.events,
             &self.inner.name,
             &self.inner.instance_id,
             operation,
-            Some(&key),
+            Some(full),
         );
         let span = observation.span();
         let _entered = span.enter();
@@ -319,19 +326,22 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             None
         };
         let result = permit.admit().and_then(|()| {
-            self.ready_value(&key, resolved.as_ref().or(options), token, mode, &permit)
+            self.ready_value(full, resolved.as_ref().or(options), token, mode, &permit)
         });
         match result {
             Ok(None) => LookupStart::Owned {
                 observation,
-                key,
+                key: match parts.prefix() {
+                    None => Cow::Borrowed(raw),
+                    Some(_) => Cow::Owned(full.to_owned()),
+                },
                 permit,
                 resolved: resolved.map(Box::new),
             },
             Ok(Some(hit)) => LookupStart::Ready(ReadyLookup {
                 result: Ok(ReadyValue {
                     value: hit.value,
-                    key,
+                    key: parts,
                     refresh: hit.refresh,
                 }),
                 observation,
@@ -585,7 +595,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             Ok(Some(hit)) => LookupStart::Ready(ReadyLookup {
                 result: Ok(ReadyValue {
                     value: hit.value,
-                    key: Cow::Borrowed(key),
+                    key: super::KeyParts::new(None, key),
                     refresh: hit.refresh,
                 }),
                 observation,
@@ -750,7 +760,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                         self.worker().eager(
                             LookupKey {
                                 raw: Arc::from(raw),
-                                full: Arc::from(hit.key.as_ref()),
+                                full: hit.key.to_shared(),
                             },
                             options,
                             current,

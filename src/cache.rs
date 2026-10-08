@@ -26,6 +26,8 @@ pub use set_request::{ReceiptSetFuture, ReceiptSetRequest, SetFuture, SetRequest
 mod callback_free;
 mod observed_execution;
 pub(crate) mod origin;
+mod physical_key;
+use physical_key::{KeyParts, PhysicalKey};
 mod plain_ready;
 mod plugin;
 mod read;
@@ -482,7 +484,7 @@ enum LookupMode {
 }
 struct ReadyValue<'key, V> {
     value: V,
-    key: Cow<'key, str>,
+    key: KeyParts<'key>,
     refresh: ReadyRefresh<V>,
 }
 enum ReadyRefresh<V> {
@@ -553,7 +555,7 @@ impl<V> ReadyLookup<'_, V> {
         }
         .and_then(|ready| {
             events.emit_lazy(|| CacheEvent::Hit {
-                key: Arc::from(ready.key.as_ref()),
+                key: ready.key.to_shared(),
                 stale: false,
             });
             permit.status(token)?;
@@ -1031,7 +1033,7 @@ fn newer_of<V: Clone>(existing: Option<Entry<V>>, candidate: Entry<V>) -> Entry<
 }
 
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
-    fn l2_key<'a>(&self, key: &'a str) -> distributed_key::PhysicalKey<'a> {
+    fn l2_key<'a>(&self, key: &'a str) -> PhysicalKey<'a> {
         self.distributed_key.physical(key)
     }
     fn logical_key(&self, physical: &str) -> Option<Arc<str>> {
