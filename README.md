@@ -25,24 +25,51 @@ The published package is `amalgam-cache`; the Rust library is imported as `amalg
 The release scope and still-open full functionality inventory are tracked
 in [FULL_CONTRACT.md](docs/FULL_CONTRACT.md) and the [changelog](CHANGELOG.md).
 
-## Unreleased: faster than FusionCache 2.9 on every compared workload
+## Amalgam vs FusionCache 2.9
 
-Warm L2 reads over immediate providers now complete inline, Redis cold reads
-take one round trip, and hot helpers inline across crates. Same fixtures and
-FC 2.9.0 reference with Dynamic PGO; ratios are **Amalgam / FC time**:
+Time per operation, one worker — **lower is better**. Both libraries run the
+same workload on the same machine in alternating processes. FusionCache 2.9.0
+uses normal .NET tiered compilation with Dynamic PGO after a settled warmup;
+Amalgam is built with the default release profile (no LTO). "Through L2" uses
+an in-memory distributed cache with the JSON serializer and skips L1 reads.
 
-| Workload / 1 worker | Linux CI, EPYC 9V74 (read / get_or_set) | M4 Pro (read / get_or_set) |
-|---|---:|---:|
-| Warm L1 hit | 0.725 / 0.564 | 0.197 / 0.190 |
-| Native hit | 0.695 / 0.624 | 0.207 / 0.145 |
-| Replacement set | 0.854 / 0.865 | 0.676 / 0.721 |
-| L2 JSON | 0.609 / 0.681 | 0.349 / 0.386 |
-| Cold factory (Linux diagnostic) | 0.700 / 0.659 | 0.592 / 0.570 |
+**Linux** — GitHub CI runner, AMD EPYC 9V74 ([run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37793789026))
 
-On one EPYC 7763 runner, L2 read fell from 2338 to 1012 ns and L2 get_or_set
-from 2898 to 1245 ns at an intermediate commit, with three allocations instead
-of eight. A local Valkey cold read went from 386 to 200 µs. Linux one-worker hit
-(≤0.50×) and set (≤0.75×) budgets remain open. [Full tables](docs/PERFORMANCE.md).
+| Operation | Amalgam | FusionCache 2.9 | Amalgam is |
+|---|---:|---:|:---|
+| `try_get`, value in memory | 112 ns | 155 ns | **1.4× faster** |
+| `get_or_set`, value in memory | 109 ns | 193 ns | **1.8× faster** |
+| Synchronous `try_get` | 77 ns | 111 ns | **1.4× faster** |
+| Synchronous `get_or_set` | 90 ns | 144 ns | **1.6× faster** |
+| `set` (replace a value) | 188 ns | 220 ns | **1.2× faster** |
+| `try_get` through L2 | 715 ns | 1,176 ns | **1.6× faster** |
+| `get_or_set` through L2 | 946 ns | 1,388 ns | **1.5× faster** |
+| Cold `get_or_set` (runs the factory) ¹ | 2,402 ns | 3,430 ns | **1.4× faster** |
+
+**macOS** — Apple M4 Pro, local
+
+| Operation | Amalgam | FusionCache 2.9 | Amalgam is |
+|---|---:|---:|:---|
+| `try_get`, value in memory | 39 ns | 199 ns | **5.1× faster** |
+| `get_or_set`, value in memory | 43 ns | 226 ns | **5.3× faster** |
+| Synchronous `try_get` | 37 ns | 180 ns | **4.8× faster** |
+| Synchronous `get_or_set` | 30 ns | 205 ns | **6.9× faster** |
+| `set` (replace a value) | 78 ns | 115 ns | **1.5× faster** |
+| `try_get` through L2 | 414 ns | 1,188 ns | **2.9× faster** |
+| `get_or_set` through L2 | 518 ns | 1,343 ns | **2.6× faster** |
+| Cold `get_or_set` (runs the factory) | 1,048 ns | 1,769 ns | **1.7× faster** |
+| `try_get`, 8 workers on distinct keys ² | 5.4 ns | 38.0 ns | **7.0× faster** |
+
+¹ FusionCache's cold warmup did not settle on the Linux runner; treat this row
+as diagnostic. ² Aggregate elapsed time divided by completed operations.
+
+Warm memory hits and `set` allocate nothing; an L2 read allocates three times.
+With Redis, a cold L2 read under the default durable-marker policy is one round
+trip (pipelined GET and HMGET): on a local Valkey it fell from 386 µs to 200 µs.
+These are cache microbenchmarks, not whole-application speedups. CPU models of
+hosted runners vary between runs, so compare numbers only within one run. Ranges,
+allocation counts, the same-runner improvement over 0.4.1 and open budgets are in
+[PERFORMANCE](docs/PERFORMANCE.md).
 
 ## 0.4.0 implementation and measured results
 
@@ -82,30 +109,13 @@ latency. These are cache microbenchmarks, not whole-application speedups.
 The regression fixture is separate from the FC fixture below; their ns/op
 values must not be mixed. [Full values, source identities and method](docs/PERFORMANCE.md#published-031-regression-guard--final-m4-source).
 
-### Compared with FusionCache 2.9.0
+### Compared with FusionCache 2.9.0 at 0.4.0
 
-Ratios are **Amalgam / FC time**, with normal .NET tiering/Dynamic PGO after
-warmup. M4 is the completed-read checkpoint before the final exhaustive-state
-review; Linux measures the final Rust source. Their source identities differ.
-
-| Workload / 1 worker | M4 Pro checkpoint | Linux final source |
-|---|---:|---:|
-| Warm L1 read | 0.205 | 0.646 |
-| Native L1 read | 0.174 | 0.621 |
-| Replacement set / read fixture | 0.758 | 0.879 |
-| L2 JSON read | 0.883 | 1.379 |
-| Warm L1 get_or_set | 0.187 | 0.555 |
-| Native L1 get_or_set | 0.232 | 0.679 |
-| Replacement set / get_or_set fixture | 0.788 | 0.875 |
-| L2 JSON get_or_set | 1.081 | 1.562 |
-
-A second Linux run of the same source measured L2 read 1.475, L2 get_or_set
-1.527 and set 0.884–0.897. The first run stays visible alongside that repeat.
-M4 read scaling was 5.07x against a 6x target; the Linux runner has only two
-available physical cores. Linux FC cold-factory warmups did not settle and
-are diagnostic only. Set, L2 get_or_set, Linux hot-hit and scaling budgets
-remain open and are deferred to 0.4.x. FC checks are informational.
-[Complete performance tables and limitations](docs/PERFORMANCE.md).
+At 0.4.0, Amalgam was faster than FusionCache for memory hits, `set` and cold
+factories, but slower through L2 on Linux (1.38× FC time for `try_get`, 1.56× for
+`get_or_set`). The unreleased work above closes that gap. The 0.4.0 tables,
+budgets and limitations remain in
+[PERFORMANCE](docs/PERFORMANCE.md#040-measurements-history).
 
 ## Basic use
 
