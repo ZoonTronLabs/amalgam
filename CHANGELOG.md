@@ -5,6 +5,18 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-10-08
+
+### Documentation
+
+- Put the measured 0.4.0/0.3.1 regression and FusionCache comparison tables
+  directly in the README, with separate M4/Linux sources and explicit limits.
+- Correct stale publication status in linked guides and identify historical
+  0.3 audit timings separately from current release evidence.
+- Preserve failed FC budgets, the second Linux run and the qualification Gaps.
+- Rust implementation, dependencies, API and runtime behavior are unchanged
+  from 0.4.0. This patch updates the packaged documentation on crates.io.
+
 ## [0.4.0] — 2026-10-08
 
 ### Breaking API changes
