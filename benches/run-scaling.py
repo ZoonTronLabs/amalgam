@@ -73,6 +73,18 @@ def default_jit_environment(inherited):
     return {key: value for key, value in inherited.items() if key not in removed}, removed
 
 
+def reference_environment(base):
+    # FusionCache 2.9 compares keys culture-sensitively on hits and L2 reads, so
+    # the process culture would otherwise set the reference cost: under ru-RU the
+    # ICU collation made an M4 hit ~2.4x slower than under en-US. Measure the
+    # culture services usually run with: invariant globalization.
+    removed = sorted(key for key in base
+                     if key.startswith(("DOTNET_SYSTEM_GLOBALIZATION_", "LC_", "LANG")))
+    reference = {key: value for key, value in base.items() if key not in removed}
+    reference["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
+    return reference, removed
+
+
 def warmup_records(stderr, fixture):
     records = [json.loads(line.removeprefix("warmup "))
                for line in stderr.splitlines() if line.startswith("warmup ")]
@@ -161,8 +173,9 @@ def main():
     warmups = {label: [] for label in records}
     commands = {"rust": [str(binary)], "fusion": ["dotnet", str(reference)],
                 "fusion_no_tiering": ["dotnet", str(reference)]}
-    environments = {"rust": env, "fusion": env,
-                    "fusion_no_tiering": dict(env, DOTNET_TieredCompilation="0")}
+    reference_env, removed_locale_overrides = reference_environment(env)
+    environments = {"rust": env, "fusion": reference_env,
+                    "fusion_no_tiering": dict(reference_env, DOTNET_TieredCompilation="0")}
     fixtures = [
         ("warm", ["--api", args.api], HOT_SCENARIOS),
         ("mutations", ["--mutations"], MUTATION_SCENARIOS),
@@ -191,9 +204,11 @@ def main():
                 settling[fixture] = warmup_records(result.stderr, fixture)
                 if label != "rust":
                     lines = result.stderr.strip().splitlines()
-                    if len(lines) < 3 or not lines[0].startswith("2.9.0+"):
+                    if len(lines) < 4 or not lines[0].startswith("2.9.0+"):
                         raise SystemExit("The reference is not the released FusionCache 2.9.0 package")
-                    current = lines[:3]
+                    if lines[3] != "culture=invariant":
+                        raise SystemExit(f"The reference must run with the invariant culture, got {lines[3]}")
+                    current = lines[:4]
                     if identity is not None and current != identity:
                         raise SystemExit("The reference package or runtime changed during measurement")
                     identity = current
@@ -262,6 +277,8 @@ def main():
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),
             "dotnet_tiered_compilation": "default", "fusion_identity": identity,
             "removed_jit_override_names": removed_jit_overrides,
+            "dotnet_globalization": "invariant (DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1)",
+            "removed_locale_override_names": removed_locale_overrides,
             "fusion_modes": {"fusion": "runtime defaults; gate reference",
                              "fusion_no_tiering": "DOTNET_TieredCompilation=0; diagnostic only"},
         }, "sources_sha256": frozen, "binaries_sha256": {"rust": digest(binary), "fusion_fixture": digest(reference)},

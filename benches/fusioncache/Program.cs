@@ -119,6 +119,9 @@ internal static class Program
         Console.Error.WriteLine(library.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
         Console.Error.WriteLine(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(library.Location))).ToLowerInvariant());
         Console.Error.WriteLine(System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
+        // FusionCache key checks are culture-sensitive; the harness pins the culture.
+        string culture = System.Globalization.CultureInfo.CurrentCulture.Name;
+        Console.Error.WriteLine("culture=" + (culture.Length == 0 ? "invariant" : culture));
     }
     private static async Task RunMutations()
     {

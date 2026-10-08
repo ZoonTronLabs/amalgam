@@ -41,6 +41,17 @@ on [Keep a Changelog](https://keepachangelog.com/).
   L2 get_or_set 2898 → 1245 ns, allocations 8 → 3 per operation. See
   [PERFORMANCE](docs/PERFORMANCE.md) for the FusionCache comparison.
 
+### Benchmark methodology
+
+- The FusionCache reference now runs with invariant globalization
+  (`DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`); inherited locale variables are
+  removed and the culture is verified and recorded in `report.json`.
+  FusionCache 2.9 compares keys culture-sensitively on hits and L2 reads, so the
+  process culture changed the reference cost: on the M4 with a ru-RU user
+  locale an FC hit cost ~200 ns instead of ~84 ns, and an L2 read ~1206 ns
+  instead of ~677 ns. Earlier M4 hit and L2 ratios in PERFORMANCE overstate
+  Amalgam's lead accordingly; set and cold rows are unaffected.
+
 ### Provider API additions
 
 - `ReadCompletion`, `ImmediateRead`, `MarkedRead`; `DistributedCache::read_completion`,
