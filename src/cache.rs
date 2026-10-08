@@ -315,6 +315,7 @@ struct CacheInner<V: Clone + Send + Sync + 'static> {
     default_runtime: ready::RuntimeRequirement,
     ready_plan: plain_ready::ReadyPlan,
     distributed_read_plan: immediate_read::DistributedReadPlan,
+    marker_prefetch: markers::MarkerPrefetch,
     write_plan: memory_inline::WritePlan,
     default_fresh_plan: crate::entry::DefaultFreshPlan,
     default_copy: crate::serializers::DefaultValueCopy<V>,

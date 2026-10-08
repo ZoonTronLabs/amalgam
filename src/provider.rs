@@ -11,8 +11,8 @@ pub use crate::distributed::{
     AsyncDistributedSerializer, DistributedBytes, DistributedCache, DistributedEntry,
     DistributedSerializer, DistributedSnapshot, FencedWriteSupport, ImmediateRead,
     InMemoryDistributedCache, InMemoryInvalidationStore, InvalidationStore, JsonSerializer,
-    LeasedMutation, LeasedWriteOutcome, MarkerReadError, ReadCompletion, SerializationMode,
-    SnapshotRetention,
+    LeasedMutation, LeasedWriteOutcome, MarkedRead, MarkerReadError, ReadCompletion,
+    SerializationMode, SnapshotRetention,
 };
 pub use crate::distributed_lock::{
     AcquisitionPolicy, DistributedLease, DistributedLocker, InMemoryDistributedLocker, LeaseError,

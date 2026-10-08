@@ -98,8 +98,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             | PendingMutation::Notify(_)
             | PendingMutation::ColdExpire { .. } => None,
         };
-        self.reconcile_markers(source.as_ref().map_or(&[], |entry| entry.meta().tags()))
-            .await?;
+        self.reconcile_markers(
+            source.as_ref().map_or(&[], |entry| entry.meta().tags()),
+            None,
+        )
+        .await?;
         if source
             .as_ref()
             .is_some_and(|source| self.tags(source) != TagVerdict::Valid)

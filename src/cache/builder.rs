@@ -563,6 +563,8 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             Arc::clone(&self.distributed_wire_version),
             self.distributed_key_modifier_mode,
         )?;
+        // Only a value provider's own marker store can share its round trips.
+        let provider_markers = self.invalidation_store.is_none();
         let marker_provider = self.invalidation_store.or_else(|| {
             self.distributed
                 .as_ref()
@@ -732,6 +734,15 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             &memory,
             self.backplane.is_some(),
         );
+        let marker_prefetch = if provider_markers
+            && !self.disable_tagging
+            && matches!(markers, MarkerAccess::Durable(_))
+            && matches!(marker_reads, MarkerReads::DurableRequired)
+        {
+            super::markers::MarkerPrefetch::WithValue
+        } else {
+            super::markers::MarkerPrefetch::Separate
+        };
         let write_plan = super::memory_inline::WritePlan::select(
             &storage,
             &memory,
@@ -765,6 +776,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             default_runtime,
             ready_plan,
             distributed_read_plan,
+            marker_prefetch,
             write_plan,
             default_fresh_plan,
             default_copy,

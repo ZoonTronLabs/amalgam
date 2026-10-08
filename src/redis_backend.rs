@@ -404,22 +404,29 @@ impl InvalidationStore for RedisInvalidationStore {
         .await
         .map_err(MarkerError::backend)?
         .map_err(MarkerError::backend)?;
-        if response.len() != kinds.len() {
-            return Err(MarkerError::Protocol {
-                detail: "invalid marker batch response".into(),
-            });
-        }
-        kinds
-            .iter()
-            .zip(response)
-            .filter_map(|(kind, response)| {
-                response.map(|encoded| {
-                    MarkerVersion::from_ordered_hex(&encoded)
-                        .map(|version| StoredMarker::new(kind.clone(), version))
-                })
-            })
-            .collect()
+        decode_marker_batch(kinds, response)
     }
+}
+
+fn decode_marker_batch(
+    kinds: &[MarkerKind],
+    response: Vec<Option<String>>,
+) -> std::result::Result<Box<[StoredMarker]>, MarkerError> {
+    if response.len() != kinds.len() {
+        return Err(MarkerError::Protocol {
+            detail: "invalid marker batch response".into(),
+        });
+    }
+    kinds
+        .iter()
+        .zip(response)
+        .filter_map(|(kind, response)| {
+            response.map(|encoded| {
+                MarkerVersion::from_ordered_hex(&encoded)
+                    .map(|version| StoredMarker::new(kind.clone(), version))
+            })
+        })
+        .collect()
 }
 
 impl RedisInvalidationStore {
@@ -602,6 +609,44 @@ impl DistributedCache for RedisDistributedCache {
             .await
             .map(|value| value.map(Into::into))
             .map_err(distributed_err)
+    }
+
+    /// One pipelined round trip: GET, then HMGET of the requested markers.
+    /// Redis executes one connection's commands in order, so the markers are
+    /// read after the value, as the separate durable read would observe them.
+    async fn get_marked(
+        &self,
+        key: &str,
+        scope: &CacheScope,
+        kinds: &[MarkerKind],
+    ) -> Result<crate::distributed::MarkedRead> {
+        if kinds.is_empty() {
+            return Ok(match self.get(key).await? {
+                Some(bytes) => crate::distributed::MarkedRead::Value {
+                    bytes,
+                    prefetched: None,
+                },
+                None => crate::distributed::MarkedRead::Miss,
+            });
+        }
+        let mut connection = self.manager.clone();
+        let mut pipeline = redis::pipe();
+        pipeline.cmd("GET").arg(value_key(key));
+        let markers = pipeline.cmd("HMGET").arg(marker_key(scope));
+        for kind in kinds {
+            markers.arg(marker_field(kind));
+        }
+        let (bytes, response) = pipeline
+            .query_async::<(Option<Vec<u8>>, Vec<Option<String>>)>(&mut connection)
+            .await
+            .map_err(distributed_err)?;
+        Ok(match bytes {
+            Some(bytes) => crate::distributed::MarkedRead::Value {
+                bytes: bytes.into(),
+                prefetched: Some(decode_marker_batch(kinds, response)),
+            },
+            None => crate::distributed::MarkedRead::Miss,
+        })
     }
 
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {

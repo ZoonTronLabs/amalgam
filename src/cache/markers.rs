@@ -118,6 +118,21 @@ impl MarkerProviderFault {
         }
     }
 }
+
+/// Durable clear markers every cold read reconciles, in reading order.
+pub(super) const CLEAR_MARKERS: [MarkerKind; 2] =
+    [MarkerKind::ClearRemove, MarkerKind::ClearExpire];
+
+/// Whether a cold value read prefetches clear markers with the value.
+#[derive(Clone, Copy)]
+pub(super) enum MarkerPrefetch {
+    /// Markers are read after decoding, through the marker store.
+    Separate,
+    /// The value provider owns the durable marker store and may read clear
+    /// markers with the value in one round trip; only tag markers remain.
+    WithValue,
+}
+
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     fn marker_clear_shortcut(&self) -> bool {
         self.inner.marker_clear_shortcut()
@@ -1329,19 +1344,38 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         }
     }
-    pub(super) async fn reconcile_markers(&self, tags: &[Tag]) -> Result<()> {
+    /// Applies durable clear and tag markers for a decoded cold read. Clear
+    /// markers prefetched with the value leave only the entry's tags to read.
+    pub(super) async fn reconcile_markers(
+        &self,
+        tags: &[Tag],
+        prefetched: Option<std::result::Result<Box<[StoredMarker]>, MarkerError>>,
+    ) -> Result<()> {
         if self.inner.disable_tagging {
             return Ok(());
         }
         if let MarkerAccess::Durable(store) = &self.inner.markers {
-            let clear = [MarkerKind::ClearRemove, MarkerKind::ClearExpire];
-            let kinds = if tags.is_empty() {
-                std::borrow::Cow::Borrowed(&clear[..])
-            } else {
-                let mut kinds = Vec::with_capacity(tags.len() + clear.len());
-                kinds.extend(clear);
-                kinds.extend(tags.iter().cloned().map(MarkerKind::Tag));
-                std::borrow::Cow::Owned(kinds)
+            let clear_read = match prefetched {
+                Some(markers) => {
+                    for marker in markers? {
+                        self.apply_marker(marker);
+                    }
+                    true
+                }
+                None => false,
+            };
+            let kinds = match (clear_read, tags.is_empty()) {
+                (true, true) => return Ok(()),
+                (false, true) => std::borrow::Cow::Borrowed(&CLEAR_MARKERS[..]),
+                (true, false) => {
+                    std::borrow::Cow::Owned(tags.iter().cloned().map(MarkerKind::Tag).collect())
+                }
+                (false, false) => {
+                    let mut kinds = Vec::with_capacity(tags.len() + CLEAR_MARKERS.len());
+                    kinds.extend(CLEAR_MARKERS);
+                    kinds.extend(tags.iter().cloned().map(MarkerKind::Tag));
+                    std::borrow::Cow::Owned(kinds)
+                }
             };
             let markers = match store.read_many_immediate(&self.inner.scope, &kinds) {
                 crate::distributed::ImmediateRead::Completed(markers) => markers?,

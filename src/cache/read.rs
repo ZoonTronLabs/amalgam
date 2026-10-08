@@ -345,9 +345,20 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         self.memory
             .component_read(crate::events::ComponentRead::Distributed);
         let physical = self.inner.l2_key(key);
-        let bytes = match backend.get_immediate(&physical) {
-            crate::distributed::ImmediateRead::Completed(bytes) => bytes?,
-            crate::distributed::ImmediateRead::Deferred => backend.get(&physical).await?,
+        let (bytes, prefetched) = match backend.get_immediate(&physical) {
+            crate::distributed::ImmediateRead::Completed(bytes) => (bytes?, None),
+            crate::distributed::ImmediateRead::Deferred => match self.inner.marker_prefetch {
+                super::markers::MarkerPrefetch::Separate => (backend.get(&physical).await?, None),
+                super::markers::MarkerPrefetch::WithValue => match backend
+                    .get_marked(&physical, &self.inner.scope, &super::markers::CLEAR_MARKERS)
+                    .await?
+                {
+                    crate::distributed::MarkedRead::Miss => (None, None),
+                    crate::distributed::MarkedRead::Value { bytes, prefetched } => {
+                        (Some(bytes), prefetched)
+                    }
+                },
+            },
         };
         self.close_circuit(CircuitComponent::Distributed);
         let Some(bytes) = bytes else {
@@ -372,7 +383,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             })
         });
         if self.inner.marker_reads.policy() == MarkerReadPolicy::DurableRequired {
-            self.reconcile_markers(source.meta().tags()).await?;
+            self.reconcile_markers(source.meta().tags(), prefetched)
+                .await?;
         }
         Ok(Some(DistributedLookup {
             entry: source,
