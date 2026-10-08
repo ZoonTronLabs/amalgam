@@ -34,21 +34,46 @@ impl<V> L2ReadBudget<V> {
 // Only a confirmed lookup miss transfers the flight guard into origin work.
 // Keeping this continuation behind its own pin avoids reserving the retained
 // factory/timeout/store state in every successful hybrid lookup frame.
-struct OriginMiss<V, O> {
-    key: LookupKey,
-    origin: O,
-    options: EntryOptions,
-    tags: Box<[Tag]>,
-    stale: Option<Entry<V>>,
-    default: Option<V>,
-    caller: super::origin::OriginCaller,
-    guard: FlightGuard,
+pub(super) struct OriginMiss<V, O> {
+    pub(super) key: LookupKey,
+    pub(super) origin: O,
+    pub(super) options: EntryOptions,
+    pub(super) tags: Box<[Tag]>,
+    pub(super) stale: Option<Entry<V>>,
+    pub(super) default: Option<V>,
+    pub(super) caller: super::origin::OriginCaller,
+    pub(super) guard: FlightGuard,
+}
+
+/// How an origin lookup obtains same-key ownership.
+pub(super) enum OriginLock {
+    /// Acquire after the first L1 check, waiting as configured.
+    Acquire,
+    /// Ownership the caller already holds.
+    Held(FlightGuard),
+}
+
+/// The outcome of a lookup that may still need the caller's origin.
+pub(super) enum OriginLookup<'a, V> {
+    /// A value was served without the origin.
+    Served(Observed<CacheValue<V>>),
+    /// A fresh L1 value is due for eager refresh with the caller's origin.
+    Refresh {
+        options: LookupOptions<'a>,
+        current: Entry<V>,
+    },
+    /// A confirmed miss: the origin runs under the held ownership.
+    Origin {
+        options: LookupOptions<'a>,
+        stale: Option<Entry<V>>,
+        guard: FlightGuard,
+    },
 }
 
 // Cache defaults are immutable and validated at construction. A lookup borrows
 // them; only a real origin miss materializes its adaptive factory options.
 // Overrides keep their existing allocation and validation boundary.
-enum LookupOptions<'a> {
+pub(super) enum LookupOptions<'a> {
     Defaults(&'a EntryOptions),
     Selected(Box<EntryOptions>),
 }
@@ -62,7 +87,7 @@ impl std::ops::Deref for LookupOptions<'_> {
     }
 }
 impl LookupOptions<'_> {
-    fn into_owned(self) -> EntryOptions {
+    pub(super) fn into_owned(self) -> EntryOptions {
         match self {
             Self::Defaults(options) => options.clone(),
             Self::Selected(options) => *options,
@@ -71,7 +96,7 @@ impl LookupOptions<'_> {
 }
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
-    fn resolve_lookup_options(
+    pub(super) fn resolve_lookup_options(
         &self,
         key: &str,
         options: Option<Box<EntryOptions>>,
@@ -619,61 +644,137 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         default: Option<V>,
         caller: super::origin::OriginCaller,
     ) -> Result<Observed<CacheValue<V>>> {
-        let super::origin::OriginCaller {
-            operation: caller,
-            explicit,
-        } = caller;
         let opts = self.resolve_lookup_options(&key.raw, options)?;
-        let raw_key = key.raw;
-        let key = key.full;
+        let lookup = self
+            .lookup_origin(
+                &key,
+                opts,
+                O::KIND,
+                default.is_some(),
+                &caller.operation,
+                OriginLock::Acquire,
+            )
+            .await?;
+        self.continue_origin(key, origin, tags, default, caller, lookup)
+            .await
+    }
+    /// Finishes a lookup with the caller's origin inputs. Only a confirmed miss
+    /// invokes the origin; an eager refresh is scheduled before the served hit.
+    pub(super) async fn continue_origin<O: CacheOrigin<V>>(
+        &self,
+        key: LookupKey,
+        origin: O,
+        tags: Box<[Tag]>,
+        default: Option<V>,
+        caller: super::origin::OriginCaller,
+        lookup: OriginLookup<'_, V>,
+    ) -> Result<Observed<CacheValue<V>>> {
+        match lookup {
+            OriginLookup::Served(observed) => Ok(observed),
+            OriginLookup::Refresh { options, current } => {
+                self.refresh_and_serve(key, origin, tags, &options, current)
+            }
+            OriginLookup::Origin {
+                options,
+                stale,
+                guard,
+            } => {
+                Box::pin(self.compute_origin(OriginMiss {
+                    key,
+                    origin,
+                    options: options.into_owned(),
+                    tags,
+                    stale,
+                    default,
+                    caller,
+                    guard,
+                }))
+                .await
+            }
+        }
+    }
+    /// Schedules eager refresh with the caller's origin, then serves the value.
+    pub(super) fn refresh_and_serve<O: CacheOrigin<V>>(
+        &self,
+        key: LookupKey,
+        origin: O,
+        tags: Box<[Tag]>,
+        options: &EntryOptions,
+        current: Entry<V>,
+    ) -> Result<Observed<CacheValue<V>>> {
+        self.eager(
+            LookupKey {
+                raw: key.raw,
+                full: Arc::clone(&key.full),
+            },
+            options.clone(),
+            current.clone(),
+            tags,
+            origin,
+        );
+        self.served(key.full, &current, options, CacheLevel::Memory)
+    }
+    /// Everything before an origin runs: L1, same-key ownership and L2. It
+    /// never touches origin inputs, so an inline attempt can return them.
+    pub(super) async fn lookup_origin<'a>(
+        &'a self,
+        key: &LookupKey,
+        opts: LookupOptions<'a>,
+        kind: OriginKind,
+        default: bool,
+        caller: &FactoryCancellation,
+        lock: OriginLock,
+    ) -> Result<OriginLookup<'a, V>> {
+        let key = &key.full;
         self.ensure_health()?;
         let mut stale = None;
         if !opts.skip_memory_read() {
-            match self.read_l1(&key, &caller).await? {
+            match self.read_l1(key, caller).await? {
                 L1Read::Fresh(entry) => {
-                    if matches!(O::KIND, OriginKind::Factory)
+                    if matches!(kind, OriginKind::Factory)
                         && entry.should_eager_refresh(self.inner.clock.now())
                     {
-                        self.eager(
-                            LookupKey {
-                                raw: raw_key,
-                                full: Arc::clone(&key),
-                            },
-                            opts.clone(),
-                            entry.clone(),
-                            tags,
-                            origin,
-                        );
+                        return Ok(OriginLookup::Refresh {
+                            options: opts,
+                            current: entry,
+                        });
                     }
-                    return self.served(key, &entry, &opts, CacheLevel::Memory);
+                    return self
+                        .served(Arc::clone(key), &entry, &opts, CacheLevel::Memory)
+                        .map(OriginLookup::Served);
                 }
                 L1Read::Stale(entry) => stale = Some(entry),
                 L1Read::Miss => {}
             }
         }
         self.emit(CacheEvent::Miss {
-            key: Arc::clone(&key),
+            key: Arc::clone(key),
         });
-        let guard = match self
-            .acquire_lock(&key, &opts, stale.as_ref(), &caller)
-            .await?
-        {
-            LockOutcome::Acquired(guard) | LockOutcome::UnlockedAfterTimeout(guard) => guard,
-            LockOutcome::Served(value) => {
-                return Ok(Observed::new(
-                    CacheValue {
-                        value,
-                        commit: CommitReceipt::Unchanged,
-                    },
-                    OperationOutcome::StaleHit,
-                    Some(CacheLevel::Memory),
-                ));
-            }
+        let guard = match lock {
+            OriginLock::Held(guard) => guard,
+            OriginLock::Acquire => match self
+                .acquire_lock(key, &opts, stale.as_ref(), caller)
+                .await?
+            {
+                LockOutcome::Acquired(guard) | LockOutcome::UnlockedAfterTimeout(guard) => guard,
+                LockOutcome::Served(value) => {
+                    return Ok(OriginLookup::Served(Observed::new(
+                        CacheValue {
+                            value,
+                            commit: CommitReceipt::Unchanged,
+                        },
+                        OperationOutcome::StaleHit,
+                        Some(CacheLevel::Memory),
+                    )));
+                }
+            },
         };
         if !opts.skip_memory_read() {
-            match self.read_l1(&key, &caller).await? {
+            match self.read_l1(key, caller).await? {
                 L1Read::Fresh(entry) => {
-                    return self.served(key, &entry, &opts, CacheLevel::Memory);
+                    return self
+                        .served(Arc::clone(key), &entry, &opts, CacheLevel::Memory)
+                        .map(OriginLookup::Served);
                 }
                 L1Read::Stale(entry) => stale = Some(entry),
                 L1Read::Miss => {}
@@ -682,47 +783,61 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if !(stale.is_some() && opts.skip_distributed_read_when_stale())
             && let Some(entry) = self
                 .read_l2(
-                    &key,
+                    key,
                     &opts,
-                    if stale.is_some() || default.is_some() {
+                    if stale.is_some() || default {
                         FallbackAvailability::Available
                     } else {
                         FallbackAvailability::Unavailable
                     },
-                    &caller,
+                    caller,
                 )
                 .await?
         {
             let verdict = self.tags(&entry.entry);
             if verdict != TagVerdict::Remove {
-                self.hydrate(&key, &entry, &opts).await?.observe();
+                self.hydrate(key, &entry, &opts).await?.observe();
                 if verdict == TagVerdict::Valid
                     && entry.entry.freshness(self.inner.clock.now()).is_fresh()
                 {
-                    return self.served(key, &entry.entry, &opts, CacheLevel::Distributed);
+                    return self
+                        .served(
+                            Arc::clone(key),
+                            &entry.entry,
+                            &opts,
+                            CacheLevel::Distributed,
+                        )
+                        .map(OriginLookup::Served);
                 }
                 stale = Some(newer_of(stale, entry.entry));
             }
         }
-        Box::pin(self.compute_origin(OriginMiss {
-            key: LookupKey {
-                raw: raw_key,
-                full: key,
-            },
-            origin,
-            options: opts.into_owned(),
-            tags,
+        Ok(OriginLookup::Origin {
+            options: opts,
             stale,
-            default,
-            caller: super::origin::OriginCaller {
-                operation: caller,
-                explicit,
-            },
             guard,
-        }))
-        .await
+        })
     }
-    async fn compute_origin<O: CacheOrigin<V>>(
+    /// Same-key ownership for an inline origin lookup, only when free now.
+    pub(super) fn try_origin_guard(
+        &self,
+        key: &Arc<str>,
+        caller: &FactoryCancellation,
+    ) -> Result<Option<FlightGuard>> {
+        Ok(self
+            .inner
+            .locks
+            .try_acquire(key, crate::provider::MemoryLockKind::Entry, caller)?
+            .map(|local| {
+                self.flight_guard(
+                    key,
+                    LocalParticipation::Held(self.memory.guard(local)),
+                    None,
+                    self.inner.lease_policy,
+                )
+            }))
+    }
+    pub(super) async fn compute_origin<O: CacheOrigin<V>>(
         &self,
         miss: OriginMiss<V, O>,
     ) -> Result<Observed<CacheValue<V>>> {

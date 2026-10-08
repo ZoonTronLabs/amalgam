@@ -37,7 +37,10 @@ const INLINE_KEY: usize = 64;
 /// `String` for every distributed access; long keys keep the heap form.
 pub(super) enum PhysicalKey<'a> {
     Borrowed(&'a str),
-    Inline { length: usize, bytes: [u8; INLINE_KEY] },
+    Inline {
+        length: usize,
+        bytes: [u8; INLINE_KEY],
+    },
     Owned(String),
 }
 impl PhysicalKey<'_> {
