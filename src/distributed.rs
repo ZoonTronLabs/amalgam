@@ -356,21 +356,21 @@ fn canonical_i64(bytes: &[u8]) -> Option<(i64, &[u8])> {
         return None;
     }
     let (number, rest) = digits.split_at(length);
-    let magnitude = i64::try_from(decimal(number)?).ok()?;
+    let magnitude = i64::try_from(decimal(number)).ok()?;
     Some((if negative { -magnitude } else { magnitude }, rest))
 }
 
 /// The exact value of at most nineteen ASCII digits, eight per step.
-fn decimal(digits: &[u8]) -> Option<u64> {
-    let mut chunks = digits.chunks_exact(8);
+fn decimal(digits: &[u8]) -> u64 {
+    let (chunks, rest) = digits.as_chunks::<8>();
     let mut value = 0_u64;
-    for chunk in &mut chunks {
-        value = value * 100_000_000 + eight_digits(<[u8; 8]>::try_from(chunk).ok()?);
+    for chunk in chunks {
+        value = value * 100_000_000 + eight_digits(*chunk);
     }
-    for digit in chunks.remainder() {
+    for digit in rest {
         value = value * 10 + u64::from(digit - b'0');
     }
-    Some(value)
+    value
 }
 
 /// Combines eight ASCII digits pairwise in one register: lanes never carry.
@@ -991,11 +991,14 @@ pub trait InvalidationStore: Send + Sync {
     }
 }
 
+type ScopeMarkers = HashMap<CacheScope, MarkerState, ahash::RandomState>;
+type MarkerSnapshots = HashMap<(CacheScope, MarkerKind), MarkerSnapshot, ahash::RandomState>;
+
 /// Reference durable maxima, independent from the ordinary value-key map.
 #[derive(Clone)]
 pub struct InMemoryInvalidationStore {
-    scopes: Arc<Mutex<HashMap<CacheScope, MarkerState>>>,
-    snapshots: Arc<Mutex<HashMap<(CacheScope, MarkerKind), MarkerSnapshot>>>,
+    scopes: Arc<Mutex<ScopeMarkers>>,
+    snapshots: Arc<Mutex<MarkerSnapshots>>,
     limits: MarkerStoreLimits,
     snapshot_limits: MarkerSnapshotLimits,
 }
@@ -1014,8 +1017,8 @@ impl InMemoryInvalidationStore {
         snapshot_limits: MarkerSnapshotLimits,
     ) -> Self {
         Self {
-            scopes: Arc::new(Mutex::new(HashMap::new())),
-            snapshots: Arc::new(Mutex::new(HashMap::new())),
+            scopes: Arc::new(Mutex::new(HashMap::default())),
+            snapshots: Arc::new(Mutex::new(HashMap::default())),
             limits,
             snapshot_limits,
         }
@@ -1229,7 +1232,7 @@ impl InMemoryInvalidationStore {
 /// `Arc`) to simulate several nodes pointing at the same L2 within one process.
 #[derive(Clone)]
 pub struct InMemoryDistributedCache {
-    map: Arc<DashMap<String, StoredBytes>>,
+    map: Arc<DashMap<String, StoredBytes, ahash::RandomState>>,
     clock: Arc<dyn Clock>,
     invalidation: Arc<InMemoryInvalidationStore>,
 }
@@ -1245,7 +1248,7 @@ impl InMemoryDistributedCache {
     #[must_use]
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
-            map: Arc::new(DashMap::new()),
+            map: Arc::new(DashMap::default()),
             clock,
             invalidation: Arc::new(InMemoryInvalidationStore::default()),
         }
