@@ -25,6 +25,25 @@ The published package is `amalgam-cache`; the Rust library is imported as `amalg
 The release scope and still-open full functionality inventory are tracked
 in [FULL_CONTRACT.md](docs/FULL_CONTRACT.md) and the [changelog](CHANGELOG.md).
 
+## Unreleased: faster than FusionCache 2.9 on every compared workload
+
+Warm L2 reads over immediate providers now complete inline, Redis cold reads
+take one round trip, and hot helpers inline across crates. Same fixtures and
+FC 2.9.0 reference with Dynamic PGO; ratios are **Amalgam / FC time**:
+
+| Workload / 1 worker | Linux CI, EPYC 9V74 (read / get_or_set) | M4 Pro (read / get_or_set) |
+|---|---:|---:|
+| Warm L1 hit | 0.725 / 0.564 | 0.197 / 0.190 |
+| Native hit | 0.695 / 0.624 | 0.207 / 0.145 |
+| Replacement set | 0.854 / 0.865 | 0.676 / 0.721 |
+| L2 JSON | 0.609 / 0.681 | 0.349 / 0.386 |
+| Cold factory (Linux diagnostic) | 0.700 / 0.659 | 0.592 / 0.570 |
+
+On one EPYC 7763 runner, L2 read fell from 2338 to 1012 ns and L2 get_or_set
+from 2898 to 1245 ns at an intermediate commit, with three allocations instead
+of eight. A local Valkey cold read went from 386 to 200 µs. Linux one-worker hit
+(≤0.50×) and set (≤0.75×) budgets remain open. [Full tables](docs/PERFORMANCE.md).
+
 ## 0.4.0 implementation and measured results
 
 The release completes eight lazy fluent operations: `get_or_set`, `try_get`,
@@ -200,6 +219,15 @@ its received buffer. Snapshots survive replacement, removal and expiration.
 Custom providers must update their get signature; see
 [the provider migration](docs/MIGRATION_0_4.md#immutable-l2-provider-bytes).
 
+Providers can also declare `provider::ReadCompletion::Immediate` and answer
+`get_immediate` / `read_many_immediate` from in-process state. A cache whose
+value and durable-marker providers are immediate, with a synchronous codec and
+built-in L1, completes warm L2 reads inline on the caller's first poll; the
+reference in-memory providers do this. A value provider which owns its marker
+store can implement `get_marked` to read clear markers with the value in one
+round trip; Redis pipelines GET and HMGET. All three methods have defaults, so
+existing providers keep their behavior.
+
 ## Freshness, origin work and cancellation
 
 Entries have independent logical freshness and physical fail-safe retention. Fail-safe can serve a captured stale value after an ordinary origin failure or timeout, within its physical lifetime. Cancellation stays a cancellation and bypasses fail-safe.
@@ -221,7 +249,9 @@ An explicit caller token and `FactoryContext` cancellation state identify cancel
 
 L2 backends, serializers, backplanes, lockers and copy strategies are open traits. [Custom local coordination](docs/MEMORY_LOCKER.md) adds an owned `MemoryLocker` provider for values and secondary markers, with optional distinct native acquisition through `BlockingMemoryLocker`; [supplied L1 storage](docs/MEMORY_STORAGE.md) provides the actual value store with typed failures and atomic conditional admission. JSON and reference in-memory providers are available by default; Redis, MessagePack and Postcard are optional. L1 and L2 freshness/retention are configured separately. Hydration caps local deadlines by the remaining source lifetime.
 
-Warm healthy L1 reads stay local. Cold L2 reads reconcile tag/clear markers. Atomic guarantees require an atomic invalidation provider; ordinary byte-store I/O retains its weaker contract. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Version 0.4.0 includes [independent marker reads](docs/MARKER_READS.md); arbitrary custom L2 marker parity remains an explicit [Gap](docs/PARITY.md). These reads use separate tag defaults, budgets and observation limits.
+Warm healthy L1 reads stay local. Cold L2 reads reconcile tag/clear markers;
+when the value provider owns the durable markers, untagged cold reads fetch the
+clear markers with the value in one round trip. Atomic guarantees require an atomic invalidation provider; ordinary byte-store I/O retains its weaker contract. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Version 0.4.0 includes [independent marker reads](docs/MARKER_READS.md); arbitrary custom L2 marker parity remains an explicit [Gap](docs/PARITY.md). These reads use separate tag defaults, budgets and observation limits.
 
 [Expiring marker snapshots](docs/MARKER_SNAPSHOTS.md) add independent remote lifetimes and nonzero read repair through an optional atomic provider capability. Snapshot expiry preserves the durable invalidation fact; this addition does not close the remaining marker eager/locker/recovery contract.
 

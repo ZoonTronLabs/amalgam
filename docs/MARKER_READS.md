@@ -8,6 +8,12 @@ without an atomic invalidation provider automatically selects
 `OptionsControlled`; explicit `DurableRequired` is rejected during construction
 when tagging is enabled.
 
+When the value provider supplies its own atomic store (for example Redis),
+`DurableRequired` reads the clear markers with the value through
+`DistributedCache::get_marked`, in one backend round trip and still after the
+value; an entry's tag markers follow in a second read only when it has tags.
+A separately configured `invalidation_store` keeps the sequential reads.
+
 `MarkerReadPolicy::OptionsControlled` explicitly selects independent secondary
 checks. They use `tags_default_options`, bypass the ordinary value-options
 provider and run after the value read/decode deadline. Each marker has its own
