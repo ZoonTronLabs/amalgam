@@ -878,6 +878,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         self.memory.emit(event);
     }
+    /// Builds an outcome event only when an observer can receive it. Use for
+    /// events without component facts; `emit` derives those from the event.
+    fn emit_outcome(&self, make: impl FnOnce() -> CacheEvent) {
+        self.memory.emit_lazy(make);
+    }
     fn tags(&self, entry: &Entry<V>) -> TagVerdict {
         self.inner.tags(entry)
     }
