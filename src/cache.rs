@@ -877,6 +877,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             CircuitComponent::Distributed => &self.inner.circuit_l2,
             CircuitComponent::Backplane => &self.inner.circuit_backplane,
         };
+        if circuit.is_closed_without_clock() {
+            return true;
+        }
         match circuit.check(self.inner.clock.now()) {
             CircuitCheck::Open { .. } => false,
             CircuitCheck::Closed => true,
@@ -1014,7 +1017,7 @@ fn newer_of<V: Clone>(existing: Option<Entry<V>>, candidate: Entry<V>) -> Entry<
 }
 
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
-    fn l2_key<'a>(&self, key: &'a str) -> Cow<'a, str> {
+    fn l2_key<'a>(&self, key: &'a str) -> distributed_key::PhysicalKey<'a> {
         self.distributed_key.physical(key)
     }
     fn logical_key(&self, physical: &str) -> Option<Arc<str>> {

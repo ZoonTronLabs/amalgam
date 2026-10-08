@@ -112,8 +112,10 @@ impl LifetimeSpan {
 }
 
 fn duration_ticks_wide(duration: Duration) -> i128 {
-    // Duration's full u64-second range fits in i128 at 100ns precision.
-    (duration.as_nanos() / NANOS_PER_TICK as u128) as i128
+    // Duration's full u64-second range fits in i128 at 100ns precision. A second
+    // is a whole number of ticks, so splitting avoids a 128-bit division.
+    i128::from(duration.as_secs()) * i128::from(TICKS_PER_SECOND)
+        + i128::from(duration.subsec_nanos() / NANOS_PER_TICK as u32)
 }
 
 fn unsigned_ticks_to_duration(ticks: u64) -> Duration {
