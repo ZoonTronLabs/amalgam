@@ -5,434 +5,59 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Ordinary marker compatibility
-- Support tag/clear over a byte-only L2 without pretending it implements atomic
-  invalidation. Keep exact revisions, independent secondary reads and physical
-  marker TTL; ordinary recovery keeps the captured revision and write policy while
-  recomputing physical TTL, matching FC. Atomic snapshot recovery retains its
-  original deadline.
-  Reject unavailable durable/strict marker guarantees during construction.
-- Emit configuration advice once at construction for shared named caches without
-  a prefix, a backplane or distributed locker without L2, and ordinary marker
-  writes with weaker concurrent-write/TTL guarantees.
+## [0.4.0] — 2026-10-08
 
-### Configured construction
-- Extend public initial-subscription contracts: acknowledge once before L2 work,
-  preserve admitted availability after later gaps/stops, and preserve an initial
-  stopped-subscription error without executing the factory.
-- Remove the public panicking `CacheBuilder::build` alias. Configured construction
-  uses `try_build` and preserves typed configuration, provider, plugin and runtime
-  errors. Keep `Cache::new` for fixed valid memory-only defaults; update examples
-  and migration guidance.
+### Breaking API changes
 
-### Public namespaces
-- Keep ordinary cache operations, options and typed errors in the root. Move
-  provider interfaces, implementations and capabilities to `provider`; move
-  explicit receipts, stronger policies and detailed observations to `advanced`.
-  Preserve type identity and behavior while updating examples and consumers.
+- Complete the lazy eight-operation facade: `get_or_set`, `try_get`,
+  `get_or_default`, `set`, `remove`, `expire`, `remove_by_tag` and `clear`.
+  `try_get` returns `Result<Option<V>>`; `get_or_default` returns `Result<V>`;
+  mutations return `Result<()>`. Configure options, cancellation, tags and
+  opt-in commit receipts fluently. Native callers use `execute()`.
+- Remove legacy read/mutation overloads, error-discarding adapters and
+  `MaybeValue`. Factories return ordinary `Result<V, E>`; `source::factory`
+  preserves context inference and `source::value` supplies a constant origin.
+  Use `try_build()` for fallible configured construction.
+- Keep ordinary operations/options/errors in the root, provider contracts in
+  `provider`, and opt-in receipts/stronger policies in `advanced`. Custom L2
+  reads return immutable owned `DistributedBytes`; write inputs and snapshot
+  wire formats retain their existing contracts.
 
-### Canonical writes and maintenance
-- Remove the ineffective `lock_shards` builder setting and legacy shard
-  argument to `KeyedLock::new`; per-key coordination keeps its existing behavior.
-- Remove the duplicate set overloads and the remaining set adapter that
-  discarded errors. The lazy `set` request provides options, string tags,
-  explicit cancellation and optional actual commit receipts on both facades.
-- Return typed provider failures from `run_pending_tasks` and remove its
-  separate try-prefixed alias. Maintenance remains distinct from waiting
-  for scheduled commit completion.
+### Availability and lifecycle
 
-### Fluent invalidation API
-- Make remove, expire, tag invalidation and clear lazy requests with typed unit
-  results. Commit receipts are an explicit choice; native mutation requests use
-  `execute()` and share the same engine. Remove the duplicate invalidation
-  overloads and legacy adapters that discarded errors.
-- Preserve separate entry and marker defaults when editing request options.
-  Reject a tag batch before any invalidation when one string is invalid.
-  Disabled tagging now exposes the existing unsupported-operation error instead
-  of losing it in the legacy adapter; cached contents remain unchanged.
-
-### Factory API and distributed execution
-- Return immutable owned `DistributedBytes` from L2 provider gets. Share stored
-  serialized bytes in the in-memory backend and adopt Redis-owned buffers without
-  an extra copy. Preserve returned snapshots across replacement, removal and
-  expiration; document the custom-provider signature migration. Set inputs and
-  snapshot wire formats keep their existing contracts.
-- Add public scalar L2 contracts for original source versus local expiration,
-  source fail-safe after local expiration and per-call auto-clone overrides.
-  Reject scalar envelope adoption without a demonstrated gain on the required
-  L2 workload; keep the existing copy/ownership behavior.
-- Attach persisted L2 size/priority before creating shared entry ownership.
-  Avoid an extra ordinary value clone and shared allocation inside cache reads,
-  preserving the selected copier, source/local lifetime limits, tags and public
-  snapshot-helper clone behavior.
-- Protect async value-only completion with public contracts for original provider
-  causes reentering shutdown, caller retirement of explicit receipts, and a truly
-  pending background L2 write surviving without a requested receipt.
-- Return the selected native output directly on ready retrieval. Value-only
-  hits avoid a receipt envelope; opt-in receipts retain mutation/unchanged
-  evidence. Preserve completion ownership for genuinely pending L2 writes and
-  cancellation when an unused supplied value closes the cache during Drop.
-- Borrow immutable default options through L2 lookup; create independently
-  mutable adaptive options only on a confirmed factory miss. Preserve original
-  explicit/provider option boxes, validation and per-execution runtime checks,
-  with unchanged lock/recheck, cancellation and guard ownership.
-- Prepare local hydration metadata before the selected value copy. Populate L1
-  directly from the decoded value rather than cloning it into a temporary entry
-  and replacing that copy. Preserve the public hydration helper, original
-  lifetime limits and continuity fencing; auto-clone uses the supplied cloner.
-- Move upgraded L2 coordination owners directly into their consumers. Reusing a
-  live identity does not sweep the idle queue; bounded cleanup runs on identity
-  creation and explicit maintenance. Retain holder/waiter identity and generation
-  fencing while limiting reuse to scalar metadata.
-- Unify factory and supplied-value retrieval under `get_or_set`. Remove separate
-  options, cancellation and commit overloads; configure the lazy request instead.
-  `source::factory` retains callback type inference without runtime ownership;
-  `source::value` preserves constant-source timeouts, events and eager behavior.
-  Native retrieval executes explicitly while keeping ordinary factories on the
-  caller thread. Optional fail-safe values use `Option<V>`.
-- Partition hybrid origin ownership after a confirmed L1/L2 miss. A successful
-  L2 lookup retains no factory timeout state; an actual origin keeps the same
-  coordination guard, cancellation, stable pinning and commit lifecycle.
-- Accept ordinary `Result<V, E>` factory output with any thread-safe error type.
-  Preserve the concrete source error at the cache boundary. Conditional values,
-  adaptive options and tags remain scoped to the originating factory request.
-- Publish adaptive factory metadata only when it is used; a plain value factory
-  does not allocate another metadata owner. Preserve cancellation, stable pinning
-  and retirement order for suspended work.
-- Borrow the existing parent budget for L2 reads with synchronous serializers.
-  Keep the same provider, decode, marker-validation and hydration work inside
-  the read deadline. Asynchronous serializers retain their independent phase
-  cancellation token and precise timeout reason.
-- Select distributed physical key encoding at construction. Preserve namespace
-  bytes while avoiding repeated formatting and borrowing unmodified keys.
-  Keep required clear-marker validation in a stack batch for untagged reads;
-  tagged entries retain the complete batch and existing read deadline.
-
-
-### ReaderSlots safety and simplification
-- Reduce ready selection to the general counted path and a build-proven primitive
-  path; remove the separate x86 admission branch and its unused helpers.
-- Instrument the exact production ReaderSlots module with cfg(loom), including
-  tracked value access for the full guard lifetime. Bounded models cover
-  first use, collisions, writer competition, nested reads and parking wakeups.
-  Remove the copied admission model; add mandatory Loom, Miri and TSan CI jobs.
-- Miri checks actual native guard borrowing and overlapping readers without
-  disabling UB/race checks. Native parking stress remains covered by TSan and
-  Loom; its Miri case explicitly records the released parking dependency's
-  upstream Linux futex ABI limitation.
-- Preserve post-admission logical freshness in both ready plans; waiting for
-  a writer cannot return an entry that expired during that wait as fresh.
-
-### Benchmark methodology correction
-- Record complete warmed 1/2/4/8 and native diagnostics, including before/after
-  regressions even when an FC budget passes. Keep instrumented CPU attribution
-  separate from timed qualification.
-- Gate against released FusionCache 2.9 with default .NET tiering/Dynamic PGO;
-  publish the TC=0 reference separately rather than using it to qualify release.
-- Replace fixed short warmup with identical three-second minimum settling in
-  both runtimes; record windows and reject unsettled qualification. Cold warmup
-  uses bounded batches of fresh entries instead of an ever-growing cache.
-- Withdraw earlier FC PASS claims as production-default release evidence;
-  archive their reports and the ADR implementation journal in docs. Next
-  performance work is limited to L2 and set, with hot reads frozen.
-
-
-### Changed
-
-- Replace per-key Tokio mutation mutexes with scalar ready admission and
-  shard-local FIFO queues for suspended work. Cancellation releases queued and
-  unpolled granted claims; unrelated keys in a shard remain independent. Keep
-  fences, recovery/publication and reclamation order. Initialize queue storage
-  only when an ordered path is actually used.
-- Initialize cache-bound shutdown tracking only for an actual exported link.
-  Keep pure shutdown visibility during callbacks and late-link cancellation.
-- Add optional untimed native CPU profiling of frozen paired binaries; timed
-  workloads and performance budgets remain unchanged.
-- Count and pin default cache-bound work for its first poll; create an owned
-  scope and shutdown subscription only after actual suspension. Transfer the
-  same pinned future before admission ends. Keep explicit caller and specialized
-  sources on their existing owned path. Cache-bound cancellation remains visible
-  during blocking callbacks; exported root/child tokens preserve cross-cache
-  shutdown without caller re-poll. Completion and panic preserve retirement
-  order. This removes five allocations from both local L2 fixtures.
-- Store suspended read/origin observers as typed execution handles instead of
-  allocating a second boxed driver. Cache-owned work remains pinned and scoped.
-  First-poll explicit cancellation propagates every terminal cause and retires
-  pending work without caller re-poll; token ownership and failed-preparation
-  capture lifetime remain. This removes one allocation from both L2 APIs.
-- Select a bounded shard-local pool of scalar key-coordination controls only
-  for hybrid caches instead of rebuilding idle lanes and local mutexes on each
-  distributed read. Standalone L1 uses transient coordination. Pool
-  eviction and explicit maintenance preserve active holder/waiter identity and
-  FIFO acquisition; controls cannot retain user values. Standalone L1 hits and
-  inline writes keep their existing execution plans.
-- Keep untimed L2 allocation-stack probes in a separate benchmark executable,
-  preserving the original timed allocator and comparative workloads.
-- Represent local, cooperative and fenced coordination as closed participation
-  states. Disabled distributed locking retains no lease cleanup task, event or
-  key owners. Actual leases keep supervised release, loss detection and fencing;
-  value retirement still follows local coordination.
-- Borrow nested L2 work from its existing cache-owned parent instead of owning
-  a second boxed future and shutdown registration. Independent phase tokens,
-  deadlines and progress checkpoints remain; parent shutdown drains pending
-  work without another caller poll and publishes cancellation before retiring
-  cache-controlled user futures.
-- Acquire an available built-in per-key mutex synchronously. Busy acquisition
-  retains Tokio FIFO waiting and never turns into a miss. Add ready-budget and
-  queued-waiter regressions; global cooperative scheduling remains enabled.
-- Record development performance tables and remaining L2 qualification in
-  `docs/PERFORMANCE.md`, including same-machine baseline comparison and the
-  separately identified Linux runner. Full parity and release remain open.
-- Measure matched in-memory L2 plus JSON reads in a separate process for both
-  public read APIs. Official options bypass L1 reads while preserving
-  hydration; conflicting L1/L2 values and checksums validate the fixture.
-  The complete CI gate requires both L2 measurements to match or beat
-  FusionCache; allocation samples remain visible in the report.
-- Add counterbalanced same-runner Rust diagnostics with frozen workloads,
-  raw allocation samples and source identities. Manual CI runs can compare a
-  local baseline commit without changing the comparative FusionCache gates.
-- Carry only the value and lifetime boundaries through ordinary default L1
-  replacements. Construct the complete entry envelope for new slots, retained
-  aliases and actual capture; reset all metadata on unique reuse and destroy
-  replaced user values after storage coordination. Public metadata, tagged
-  entries, custom options and deferred reclamation preserve their contracts.
-- Retire only the replaced user value for unobserved, exclusively owned L1
-  representations. User destruction still follows storage coordination;
-  subscribed eviction values, retirement-time capture and retained snapshots
-  keep their full immutable representation and original metadata.
-- Select a validated copy policy for default inline writes at construction.
-  Explicit options and inline factory products validate one copy capability
-  before using it, including configured deep-copy strategies.
-- Keep the standard jitter strategy without a shared owner or dynamic call.
-  Explicit user strategies remain invoked and validated even at a zero maximum.
-- Enforce cold and L1-write budgets in the comparative CI job for both
-  read-only and factory-retrieval APIs, alongside warm allocations and scaling.
-- Select callback-free ready copies at construction for built-in primitive
-  values in standalone L1. Only inputs without destructors can use that plan;
-  custom `Clone`, observers, eager work, cancellation and mutations preserve
-  counted admission and shutdown drainage. A miss still retains factory work.
-- Compare identical mutation workloads in fresh processes, independently of
-  the selected warm-read API. Replacement and cold samples now contain one
-  million and one hundred thousand operations respectively in both runtimes;
-  reports retain every raw CSV and check counts and values.
-- Inline factories borrow their version's storage and key from the already
-  retained cache frame. Version comparison and commit remain atomic; snapshot
-  release still follows key coordination, including clear and late completion.
-- Default factory hits reuse the borrowed L1 plan, including native calls.
-  Native factory executor captures are created only for a miss or eager refresh.
-  Unused input destructors remain counted through final cancellation checks;
-  individually configured eager entries retain their refresh behavior.
-- Comparative benchmarks separately cover read-only and factory-retrieval hits,
-  including their matching synchronous APIs. Reports identify the selected API
-  and driver source; both cold fixtures retain preallocated input keys throughout
-  measurement so input destruction is excluded consistently.
-- Prepare logical and physical monotonic deadlines at insertion for the
-  built-in standalone L1. Plain reads compare both boundaries with one
-  elapsed sample under the reader slot, avoiding UTC projection per hit.
-  Replacement and logical expiration rebuild the deadlines; explicit clocks,
-  hybrid storage and public memory providers preserve their time model.
-- `get_or_set` is now a lazy fluent request: options overlay cache defaults,
-  tags accept strings, and fallback, cancellation and commit receipts are
-  explicit inputs. Only a pending operation stores its asynchronous driver.
-  Manually polled requests use `IntoFuture`; `BlockingRuntime::run` accepts it.
-- Ordinary builders now follow FusionCache outage availability: cooperative
-  distributed ownership, retained L1 across notification gaps, no periodic L1
-  clearing for L2-only caches, and no initial subscription wait. `strict()`
-  selects conservative reconciliation, subscription admission and fenced leases;
-  explicit policy setters can refine that profile.
+- Ordinary defaults use cooperative distributed ownership, retain eligible L1
+  entries across backplane gaps, avoid periodic L1 clearing for L2-only caches,
+  and do not wait for an initial subscription. `strict()` explicitly selects
+  conservative reconciliation, subscription admission and fenced leases.
 - `expire` removes L2 by default while retaining eligible L1 fail-safe data.
-  `DistributedExpirePolicy::RetainStale` remains an explicit advanced choice.
-- Factory soft timeouts require a stale fallback entry; a fail-safe default alone
-  does not enable them. The default recovery delay is now five seconds.
-- Rename the cooperative ownership policy to `LeasePolicy::Cooperative`.
-- Reject unsupported fenced ownership and value-store combinations at
-  construction with typed configuration errors. Native value providers declare
-  atomic fenced-write support; custom providers must advertise and implement it.
+  Factory soft timeouts require usable stale data; a fail-safe default alone
+  does not enable them. The default recovery delay is five seconds.
+- Native `BlockingCache` and `BlockingRuntime` share cache state, providers,
+  coalescing and final-owner lifetime with the async view. Preserve pending
+  shared work after caller destruction, explicit cancellation, original causes,
+  stable pinning, commit ownership and actual shutdown drainage.
+- Preserve ReaderSlots, original-value lifetime/copy and marker contracts.
+  Validate actual ReaderSlots with Loom, Miri and TSan; document the released
+  parking dependency's Linux futex ABI limitation for contended Miri coverage.
 
+### Validation and release scope
 
-### Fixed
+- Publish FR/RS statuses as Same, Diff with a reason, or Gap. Full paired
+  FusionCache option coverage and arbitrary custom L2 marker parity remain
+  explicit Gaps; this release does not claim complete FC equivalence.
+- Measure FC 2.9 with normal tiering/Dynamic PGO and settled warmups; retain TC=0
+  diagnostics, source identities and failed warmups/budgets. Report M4 and Linux
+  separately. FC budgets are informational; the blocking performance guard uses
+  the actual published crates.io 0.3.1 package with three counterbalanced pairs
+  and a 5% noise allowance. FC-relative L2/set/Linux hot-hit/scaling work is
+  deferred to 0.4.x.
+- Replace raw benchmark JSON and inflated implementation journals with concise
+  summaries. Exclude measurements/histories from Cargo archives and validate
+  packaged consumers, default/full feature resolution and documentation links.
 
-- Restore the live Redis fault fixture with an atomic journal replacement.
-  A concurrent retry can no longer commit into a temporary empty journal that
-  the fixture then overwrites. Maximum-version and original-lifetime assertions
-  remain unchanged.
-
-- General and hybrid factories now retain their commit and key ownership
-  after a calling future is dropped. Other callers help or await that same
-  work, including callers with different entry options. Explicit cancellation,
-  shutdown and lease loss still stop it; explicit cancellation remains usable
-  after caller destruction. Panics reach the leader unchanged and waiters as
-  typed failures, while background supervision retains the original cause.
-- Native synchronous L1 reads share the source cache’s counted reader-slot
-  admission. Shutdown waits for a started value copy and closed
-  reads reject before invoking `Clone`.
-- Admit built-in L1 writes through a single writer gate and scan only reader
-  slots that were actually used. Readers keep thread-local reservations and
-  park through writer contention; contention never becomes a cache miss.
-  The reader table reserves at least 64 padded slots per storage shard.
-- Transfer admitted L1 representations into storage without an extra clone and
-  keep single-value retirements inline. Preserve lifetime pins when an actual
-  outer coordinator requires deferred reclamation.
-- Compare skipped factory writes against the active origin version atomically,
-  so an older completion cannot invalidate a newer origin.
-
-- Capture the origin version before invoking a factory. A late completion can
-  return its computed value to its caller but cannot overwrite an awaited newer
-  set, resurrect an awaited remove, or survive an intervening clear. Built-in
-  memory commits compare the active revision in the same critical section as
-  the actual storage change; idle revision keys are reclaimed.
-
-- Initialize reader-thread parking metadata during its first slot admission,
-  before acquiring a slot. A warmed hit remains allocation-free when it first
-  contends with a writer; waiting still returns the current entry.
-- Synchronize eager-refresh and native-provider regressions with actual work
-  completion and captured provider behavior, preserving their original assertions.
-
-- Preserve the first terminal cancellation reason when shutdown overlaps
-  caller destruction, polling completion or delayed notification. Publish that
-  reason before returning a result or retiring the owned future; successful
-  completion before shutdown keeps `ScopeFinished`. Native provider callbacks
-  still drain before shutdown completes.
-
-- Typed original-value memory eviction subscriptions and physical reason facts;
-  explicit insertion/retirement capture, bounded independent lag and deferred
-  value reclamation through origin/lane guards. Independently locked unbounded
-  L1 replaces Moka; bounded priority/capacity admission is retained. New closed
-  enum variants require exhaustive consumers to handle their new cases.
-
-
-- Add independent typed component event subscriptions with actual memory/L2 effects, complete backplane commands/envelopes, lazy payloads and explicit loss accounting. Preserve the existing logical event/plugin stream. Distinguish `DistributedTimeout` from transport failure so the selected read budget does not trip the Redis breaker; canonical deadline errors stay typed. Original-value eviction and configurable handler policy remain open; see `docs/LAYER_EVENTS.md`.
-
-- Add `CachePlugin<V>`, `CachePluginContext<V>` and non-owning `PluginCache<V>` with the complete same-cache async/sync operation surface. Preserve interleaved legacy registration order. Stop uses bounded owned cleanup admission; final-owner closure, deferred startup/callback teardown, source failures and native Redis operations have public regressions. See `docs/PLUGIN_CACHE.md`.
-
-- Add `ReconciliationPolicy::BackplaneBestEffort` to retain local/hydrated fresh and physically retained stale L1 over notification gaps/reconnects. Combined with cooperative ownership and suppressed locker errors it supports ordinary outage availability. Known invalidations, deadlines, cancellation and recovery ownership still apply; strict policies remain available explicitly. See `docs/BACKPLANE_OUTAGES.md`.
-
-- Clarify the existing Redis outage contract: strict fenced acquisition rejects errors even with locker rethrow disabled; cooperative foreground suppression and backplane L1 invalidation are separate policies. Add public outage-policy regressions.
-
-- Avoid the local marker mutex until the first marker is observed. Publish that transition before changing marker state; tag/clear maxima and conservative compaction remain fully checked afterward. Public contracts cover the first revision, compacted clear fences and concurrent visibility.
-
-- Sample custom L1 maintenance clocks before taking the retention mutex, so a clock can safely reenter storage. A public regression checks actual completion.
-
-
-### Added
-
-- Native `BlockingCache` and `BlockingRuntime` share cache state, coalescing, providers and final-owner lifetime with the async view. Caller-thread factories, bounded offloaded callbacks, cancellation, actual mutation receipts and awaited shutdown are supported; see `docs/SYNC.md` for explicit limits and reference differences.
-- Typed runtime resource limits and synchronous factory nesting admission. Self-draining shutdown/flush returns `ReentrantDrain` before closing the cache; nested calls across runtimes use strictly increasing callback depths.
-- Factory original key, current tags and stale tags; instance/provider inspection.
-- Independent tag/clear defaults (`tags_default_options`) and default policy factory.
-- Opt-in `MarkerReadPolicy::OptionsControlled`: independent secondary read options and observation bounds, per-marker deadlines/cancellation, typed control authority and peer-command events. CAS admission preserves newer facts, continuity fences reject old observations, and control checks stop at the first invalidation; see the field matrix in `docs/MARKER_READS.md`.
-- Additional `MarkerLifecyclePolicy::CachedSnapshots`: validated expiring control observations, an optional atomic provider facet, nonzero miss/stale repair, independent L1/L2 lifetimes and zero factory budgets. Native memory/Redis renewals preserve newer facts and snapshot ages; Redis uses real TTL and exact integer frames. Foreground/background writes retain owned cancellation and drainage, original fault causes, finite outcome events and metrics. Durable journal facts never expire; snapshot recovery/population and remaining option combinations remain open. Participating repair now owns independent scoped acquisition, peer recheck and foreground/background release; strict repair cannot admit fresh L1 authority before atomic fencing succeeds.
-- Owned marker eager refresh: bounded single flight, peer freshness/lifetime preflight, zero-wait lease participation, independent foreground factory budgets, cancellation and shutdown drainage. Skipped or suppressed failed reads can run a factory over known revisions; unknown absence remains explicit degraded authority. Independent writes on skipped reads are a documented improvement over the reference dependency on locker/backplane.
-- Async complete-snapshot serializer contract and explicit sync/async preference, used by all L2/expire/replay paths. Existing synchronous codec implementations and snapshot overrides remain supported.
-- Additive cooperative snapshot-codec hooks and `FactoryCancellation::check`. Every codec receives its owned operation signal; a linked L2 deadline scope publishes the exact timeout before dropping work without cancelling a later origin. Background factory/eager/passive/replay signals survive caller completion and end on owned shutdown.
-- Cancellation returned by a codec is always propagated, independently of serialization/transport suppression policies; synchronous callbacks cannot commit after cancelling their caller.
-- Explicit conditional-result builder with retain/replace/clear validator updates and typed absent-source rejection. It defaults to stale tags; existing adaptive `not_modified` remains a compatibility adapter.
-- Explicit distributed expire policy: retain stale L2 or remove L2 while retaining stale L1, matching the released FusionCache reference for the latter.
-- Public contracts for null versus miss, L2/clone/conditional/fail-safe null, codec cancellation, eager request tags and independent marker options.
-- Source-preserving `CodecError`/`TransportError` with unchanged concrete causes and independent failure-policy classification; legacy message-only errors remain adapters.
-- A sealed immutable copy capability for scalar/string/container values, selected with `immutable_values`, without admitting shared mutable allocations.
-- Per-key providers can derive options from the owning cache's current default snapshot using `options_for_with_defaults`; legacy hooks remain supported.
-
-### Changed
-
-- Reclaim weak coordination identities inside their own lookup shards, without
-  a shared lookup counter or separate global sweep mutex. Explicit bounded
-  maintenance rotates its start shard, preserving active holder/waiter identity
-  and reclaiming quiet shards even when the first shard contains live work.
-- Plain x86 local reads share the reader admission fence with shutdown activity
-  publication, checking close before value Clone. ARM retains the measured
-  direct admission path; bounded/custom clocks and plugin-owned admission retain
-  complete publication. A weak-memory model and actual blocked-Clone shutdown
-  tests cover the compound protocol.
-
-
-- Ordinary `set` is a lazy fluent request returning `Result<()>`. Options edit
-  cache defaults, string tags validate before mutation, and `.with_receipt()`
-  explicitly requests storage/publication evidence. Dropping a scheduled receipt
-  does not cancel its cache-owned work.
-- Track suspended work with Tokio's TaskTracker and an owned cancellation tree,
-  replacing the global weak-scope registry. Shutdown waits until user futures
-  are actually destroyed, including reentrant and panicking destructors.
-- Reused L1 writes borrow their retirement key. Quiet replacements neither clone
-  a key reference count nor construct an unused eviction payload; subscriptions
-  attached during the operation still observe the actual retirement.
-
-
-- Keep standalone mutation inputs lazy and create asynchronous work only for
-  actual hybrid writes. Default lifetimes without jitter/eager refresh are
-  prepared at construction; private local writes use one elapsed sample for
-  freshness and the physical deadline.
-- Borrow existing mutation keys and reuse uniquely owned entry allocations.
-  Retained snapshots and cloner sources remain immutable. Original-value
-  observations and destruction stay outside storage guards.
-
-- Plain built-in L1 factories share an active computation independently of caller
-  futures. Immediately ready factories commit without registered owned work or
-  a background task; pending factories retain one stable pinned address and an
-  independently cancellable observer. Dropping a caller does not cancel that
-  shared computation. Native, eager and advanced paths retain their existing
-  coordination during the migration.
-- Factory panics return their original payload to the leading caller and a typed
-  `FactoryPanicked` error to followers. Shared terminal errors retain the original
-  concrete source through `SharedSource`; public source fields now use that
-  shared wrapper instead of uniquely owned boxes.
-
-- Built-in memory-only caches select synchronous value commits at construction.
-  Set and factory commits avoid the distributed owned pipeline, asynchronous
-  key lanes and completion channels. They return completed mutation receipts.
-  Preparation, observations and destruction remain outside storage coordination;
-  an unpinned replaced value is destroyed before the mutation returns.
-
-- Canonical read queries carry a lazy input instead of reserving the asynchronous preparation frame on every hit. They create owned asynchronous work only after a real miss, preserving cancellation and observation; explicit per-call option snapshots pay for their own storage.
-
-- Built-in standalone caches use one UTC-anchored monotonic time sample for
-  ready-read freshness and expiry. Local duration lifetimes remain steady across
-  civil-clock corrections. Hybrid and external components, plus explicitly
-  supplied clocks, retain their existing time model.
-- In-memory shard routing uses a randomly keyed aHash builder. Full string
-  equality still decides key identity; hashes are neither persisted nor sent
-  between nodes.
-
-- Memory-only caches select a plain read plan at construction. Unobserved hits
-  carry no span or timing envelope; late subscribers still receive one terminal
-  event. Thread-bound admission publishes its own count and releases it with a
-  store, while transferred work and colliding thread indices retain independent
-  atomic accounting. Borrowed guards cannot enter parked futures.
-- Built-in L1 hits use padded reader slots sized for available parallelism,
-  copy values under the slot without entry reference counting, borrow observers,
-  and use striped shutdown admission. Custom callbacks and retired values remain
-  outside storage locks; ordinary value `Clone` must not reenter the same cache.
-- Tag invalidation reads immutable marker snapshots without taking the writer
-  mutex. Background L1 maintenance rotates through shards with non-blocking
-  write admission, while explicit maintenance still drains the whole store.
-- Per-key option providers are resolved once and fresh eager hits return the
-  current value immediately before scheduling refresh. Memory-only hits no
-  longer wait for a backplane subscription.
-- Native ready memory reads share the async admission path without entering
-  the executor. Operations without observers skip timing; subscriptions added
-  during an operation still receive completion with an unmeasured zero duration.
-- Add paired public-API scaling fixtures and a CI gate against the locked
-  FusionCache reference, with native reads, allocation checks and full reports.
-
-- Observed operations transfer owned work before awaiting, keeping lookup futures small. Background pipelines start their owned receipt scope directly instead of embedding an unused foreground receipt future. Cancellation, completion events and shutdown drainage retain the same ownership.
-
-- Cache orchestration is split into private API, builder, read, write, marker, recovery and runtime modules. Public `cache::Cache`/`cache::CacheBuilder` paths and cache field layout are preserved; see `docs/CACHE_INTERNALS.md`.
-
-- Tag/clear operations now use separate marker defaults with foreground backplane completion rather than ordinary value defaults or key providers. Explicit operation options still take precedence. Durable marker lifetime is unchanged.
-- Ready hits avoid key/event materialization without listeners; late plugin attachment during user callbacks remains observable.
-- Empty plugin delivery avoids a registration read lock through a count published under the registration write lock; callback admission and shutdown drainage remain authoritative.
-- Cancellation uses a single closed terminal state and Notify registration-before-check, preserving reasons and owned cancellation/drainage with fewer allocations.
-
-### Fixed
-
-- Supplied values use a constant origin: factory timeouts, eager origin work and factory events no longer apply. Factory-origin results retain the existing policies; four public regressions are checked against released FusionCache 2.9.0.
-- Cache-owned executor lifetime remains valid after converting a native handle to an async view and dropping the native handle. Concurrent final drops drain actual work; cancelled queued callbacks release admission without waiting for another cache's running factory.
-- Eager factories receive triggering request tags separately from saved stale tags.
-- Redis backplane connection failures are classified as backplane failures, retaining the original Redis/timeout cause.
-- Typed control-frame errors retain parsing/validation causes; malformed incoming Redis frames retain and log typed JSON/UTF-8/numeric failures before continuity reconciliation.
-- Redis backplane stop is terminal across late connection acknowledgements and disconnect callbacks; shutdown serializes admission with its liveness barrier.
-
-Full FusionCache functionality remains in progress; see [the complete inventory](docs/FULL_CONTRACT.md). These entries do not constitute a published package or consumer rollout.
+Migration and limits: [Migration guide](docs/MIGRATION_0_4.md),
+[FR/RS matrix](docs/PARITY.md), [Performance](docs/PERFORMANCE.md) and
+[Native API](docs/SYNC.md).
 
 ## [0.3.1] — 2026-10-05
 
