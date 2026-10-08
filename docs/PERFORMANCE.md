@@ -1,6 +1,7 @@
-# Performance for the 0.4 preparation
+# Performance measurements for Amalgam 0.4.0
 
-Published package: **0.3.1** (registry checked 8 October 2026). The M4 table
+Amalgam **0.4.0** is published on crates.io (8 October 2026). The regression
+baseline is the actual published **0.3.1** package. The M4 FC table
 measures the completed read facade before the final exhaustive-state review.
 The final handler review preserves the operation contract but changes the source
 fingerprint. The Linux tables measure the final Rust source, with reports from
@@ -99,6 +100,13 @@ The older c921d31 run recorded L2 read 2.387x and get_or_set 1.666x; it remains
 [a historical checkpoint](https://github.com/ZoonTronLabs/amalgam/actions/runs/37679769506),
 not the source of the final-source rows above.
 
+A repeat of the same final Rust source in
+[PR CI](https://github.com/ZoonTronLabs/amalgam/actions/runs/37738357021)
+measured L2 read **1.475x** FC, L2 get_or_set **1.527x** and set
+**0.884–0.897x** across the two API fixtures. One-worker hot budgets still fail
+and FC cold warmup remains unsettled. The first run above remains unchanged;
+the repeat is retained alongside it rather than replacing its measurements.
+
 ## Published 0.3.1 regression guard — final M4 source
 
 Actual registry package `amalgam-cache = 0.3.1`; same Rust 1.88 toolchain,
@@ -109,7 +117,7 @@ The final source-set SHA-256 is
 counts and instrumentation; its ns/op values are not interchangeable with the
 FC fixture. The local report retains this source identity.
 
-| Workload / workers | Published 0.3.1 ns/op | Candidate ns/op | Candidate / 0.3.1 |
+| Workload / workers | Published 0.3.1 ns/op | Amalgam 0.4.0 ns/op | 0.4.0 / 0.3.1 |
 |---|---:|---:|---:|
 | cold / 1 | 5149.1 | 1043.5 | 0.203 |
 | hot_get_or_set / 1 | 314.7 | 41.8 | 0.133 |
@@ -129,7 +137,7 @@ with the 1.05 noise allowance. The `release-regression-report` artifact records
 registry provenance, source/binary identities and raw process output.
 These numbers use the independent regression fixture, not the FC fixture.
 
-| Workload / workers | Published 0.3.1 ns/op | Candidate ns/op | Candidate / 0.3.1 |
+| Workload / workers | Published 0.3.1 ns/op | Amalgam 0.4.0 ns/op | 0.4.0 / 0.3.1 |
 |---|---:|---:|---:|
 | cold / 1 | 6146.3 | 1778.9 | 0.289 |
 | hot_get_or_set / 1 | 548.5 | 87.8 | 0.160 |

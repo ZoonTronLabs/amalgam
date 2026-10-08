@@ -13,7 +13,7 @@
 
 A Rust hybrid cache with async operations, inspired by [FusionCache](https://github.com/ZiggyCreatures/FusionCache), with local caching, optional distributed storage, fail-safe values, background refresh and observable mutations. Minimum Rust version: **1.88**, edition 2024.
 
-Version **0.4.0** is published on crates.io with the eight-operation API documented below. The outage-policy section describes its defaults. Install the crate:
+The **0.4 release series** provides the eight-operation API documented below. The outage-policy section describes its defaults. Install the published crate:
 
 ```toml
 [dependencies]
@@ -24,6 +24,69 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 The published package is `amalgam-cache`; the Rust library is imported as `amalgam`.
 The release scope and still-open full functionality inventory are tracked
 in [FULL_CONTRACT.md](docs/FULL_CONTRACT.md) and the [changelog](CHANGELOG.md).
+
+## 0.4.0 implementation and measured results
+
+The release completes eight lazy fluent operations: `get_or_set`, `try_get`,
+`get_or_default`, `set`, `remove`, `expire`, `remove_by_tag` and `clear`.
+`try_get` distinguishes a miss from a typed error; mutations have opt-in receipts.
+Native and async callers share cache state and lifecycle. Legacy operation
+adapters and `MaybeValue` are removed. Measured warm L1 reads and replacement
+sets use zero allocations per operation. See [migration](docs/MIGRATION_0_4.md).
+
+The release commit passes [all 20 CI jobs](https://github.com/ZoonTronLabs/amalgam/actions/runs/37757753609).
+Local validation includes 770 default / 835 all-feature checks with live Redis
+and doctests, Rust 1.88/stable Clippy, package consumers and a clean publish dry-run.
+The FR/RS inventory has 20 Same, 6 Diff and 2 Gap rows. Complete paired FC
+qualification and arbitrary custom L2 marker parity remain open; see [PARITY](docs/PARITY.md).
+
+### Compared with the published 0.3.1 package
+
+Each cell is **0.4.0 time / 0.3.1 time** for the same workload and machine;
+**lower is faster**. For example, 0.640 means 36% less time per operation.
+Both tables use the final Rust source and three alternating process pairs.
+All eight workloads pass the blocking regression guard with settled warmups.
+
+| Workload | M4 Pro | Linux |
+|---|---:|---:|
+| Cold factory / 1 worker | 0.203 | 0.289 |
+| Warm L1 get_or_set / 1 worker | 0.133 | 0.160 |
+| Warm L1 get_or_set / 8 workers | 0.009 | 0.101 |
+| Warm L1 read / 1 worker | 0.149 | 0.172 |
+| Warm L1 read / 8 workers | 0.007 | 0.093 |
+| L2 JSON get_or_set / 1 worker | 0.640 | 0.673 |
+| L2 JSON read / 1 worker | 0.544 | 0.635 |
+| Replacement set / 1 worker | 0.022 | 0.041 |
+
+Eight-worker values describe aggregate throughput, not individual request
+latency. These are cache microbenchmarks, not whole-application speedups.
+The regression fixture is separate from the FC fixture below; their ns/op
+values must not be mixed. [Full values, source identities and method](docs/PERFORMANCE.md#published-031-regression-guard--final-m4-source).
+
+### Compared with FusionCache 2.9.0
+
+Ratios are **Amalgam / FC time**, with normal .NET tiering/Dynamic PGO after
+warmup. M4 is the completed-read checkpoint before the final exhaustive-state
+review; Linux measures the final Rust source. Their source identities differ.
+
+| Workload / 1 worker | M4 Pro checkpoint | Linux final source |
+|---|---:|---:|
+| Warm L1 read | 0.205 | 0.646 |
+| Native L1 read | 0.174 | 0.621 |
+| Replacement set / read fixture | 0.758 | 0.879 |
+| L2 JSON read | 0.883 | 1.379 |
+| Warm L1 get_or_set | 0.187 | 0.555 |
+| Native L1 get_or_set | 0.232 | 0.679 |
+| Replacement set / get_or_set fixture | 0.788 | 0.875 |
+| L2 JSON get_or_set | 1.081 | 1.562 |
+
+A second Linux run of the same source measured L2 read 1.475, L2 get_or_set
+1.527 and set 0.884–0.897. The first run stays visible alongside that repeat.
+M4 read scaling was 5.07x against a 6x target; the Linux runner has only two
+available physical cores. Linux FC cold-factory warmups did not settle and
+are diagnostic only. Set, L2 get_or_set, Linux hot-hit and scaling budgets
+remain open and are deferred to 0.4.x. FC checks are informational.
+[Complete performance tables and limitations](docs/PERFORMANCE.md).
 
 ## Basic use
 
@@ -211,20 +274,6 @@ Transport failures trip the corresponding circuit breaker; codec or value-copy f
 Each cache has its own plugin sessions, including when a plugin object is shared. Dynamic registration detaches and stops exactly once. One event hub reports reads, misses, admission, eviction, origins, distributed effects and operation outcomes. Use the resilient event subscription when a slow observer must recover from broadcast lag.
 
 Metrics use a bounded cache-name label budget. Keys and instance IDs belong in traces rather than metric labels. OpenTelemetry exposes a composable tracing layer and [native metric plugin](docs/NATIVE_METRICS.md) with application-owned providers and separate L1/L2/backplane scopes. The convenience tracing initializer preserves an existing subscriber/provider on failure.
-
-## Development performance
-
-Version 0.4.0 has zero-allocation warm L1 reads and replacements.
-The FC comparison uses default .NET tiering/Dynamic PGO after settled warmup;
-TC=0 is a separate diagnostic. Known L2 get_or_set, set and Linux hot-read
-budgets remain unclosed. Further optimization is deferred to 0.4.x.
-
-FC results are informational in CI. The blocking performance check compares
-matched workloads against the actual published 0.3.1 package. The eight-operation
-API and [FR/RS status matrix](docs/PARITY.md) are documented; full paired behavioral
-qualification and custom L2 markers remain explicit Gaps. See
-[tables and measurement method](docs/PERFORMANCE.md) and
-[release requirements](docs/ROADMAP.md).
 
 ## Features
 

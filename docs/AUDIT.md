@@ -31,13 +31,17 @@ CI retains the required aggregate `ci` status and verifies:
 
 Use `cargo test --all-features`, `cargo test --no-default-features`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt --all -- --check` and `cargo doc --all-features --no-deps` for local gates. Configure `AMALGAM_REDIS_URL` and `AMALGAM_REQUIRE_REDIS=1` for a required live run. CI additionally runs feature and downstream-package matrices. The initial delivery CI exercised Rust 1.99 and Windows and exposed compatibility diagnostics and two scheduling/clock fixture assumptions. Scoped compiler compatibility retains Rust 1.88, fixed-size decoding uses the supported safe slice API, Windows checks a representable 100 ns time boundary, and the native recovery test parks its write before inspecting the pending ticket. No expected commit or cleanup assertion is removed.
 
-## Reference and performance limits
+## Historical 0.3 audit measurements and limits
+
+This section retains the 0.3 audit checkpoint; current 0.4.0 performance
+evidence, with normal tiering/PGO and exact source identities, is in
+[PERFORMANCE](PERFORMANCE.md). These historical timings are not 0.4.0 release evidence.
 
 Behavioral comparisons distinguish inspected FusionCache source from the actually executed NuGet 2.9 binary. Released-reference marker equality and pinned-capacity observations are covered in [PARITY](PARITY.md). An observed already-started recovery ordering limitation is shared with FusionCache; Amalgam's stronger local commit ordering is deliberate.
 
 Performance experiments compile both implementations first, alternate sequential runs on one machine, warm hot entries and retain per-process ranges. Shared-reference payloads and owned payload copies are separate workloads. Independent 128-key batches verify 128 actual origins; same-key batches verify one. Codec timing records payload size and encoded size separately from cache timing. These experiments establish behavior for the measured configuration, not equal speed for every application or a universal runtime ranking.
 
-The final reviewed-source measurement uses Rust 1.88 release (downstream Tokio 1.53.1) and the actual .NET 10/FusionCache 2.9 binary on one macOS ARM machine. Each cell is the median of three process medians, followed by the observed process range:
+The historical 0.3 reviewed-source measurement uses Rust 1.88 release (downstream Tokio 1.53.1) and the actual .NET 10/FusionCache 2.9 binary on one macOS ARM machine. Each cell is the median of three process medians, followed by the observed process range:
 
 | Workload | Amalgam | FusionCache 2.9 |
 |---|---:|---:|
@@ -58,7 +62,7 @@ The ready-path repair reduced measured allocation calls from about 19.1 to 1.1 p
 - Local commit lanes cannot order independent external writers globally.
 - Distributed timestamp comparisons require cross-node clock assumptions.
 - A retained cache handle intentionally retains that cache; the last-handle teardown test retains only independent diagnostic handles.
-- Legacy adapters retain their signatures and therefore cannot return every newly typed failure.
+- Version 0.4.0 removes legacy operation adapters; migrate through the [0.4 guide](MIGRATION_0_4.md).
 - New framed snapshots require a coordinated fresh namespace for older running readers.
 
-The package's source version and passing source CI do not themselves publish a registry release or deploy an application's production backend. See the [migration guide](PARITY.md#migrating-from-02) before upgrading consumers.
+The package's source version and passing source CI do not themselves publish a registry release or deploy an application's production backend. See the [0.4 migration guide](MIGRATION_0_4.md) before upgrading consumers.

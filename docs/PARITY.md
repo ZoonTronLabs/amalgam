@@ -1,8 +1,8 @@
-# Functional parity: FusionCache 2.9 and Amalgam 0.4 preparation
+# Functional parity: FusionCache 2.9 and Amalgam 0.4.0
 
-Reference: released FC 2.9.0. Published Amalgam remains 0.3.1. The table describes
-the developing source and its existing evidence, not a completed full paired
-qualification. **Same** means the stated contract follows the FC reference and
+Reference: released FC 2.9.0. Amalgam 0.4.0 is published on crates.io.
+The table describes its source contracts and existing evidence. Full paired
+qualification remains incomplete. **Same** means the stated contract follows the FC reference and
 has an Amalgam witness; **Diff** is an intentional adaptation with its reason;
 **Gap** identifies incomplete support or qualification. A Rust test alone does
 not prove a complete paired FC matrix.

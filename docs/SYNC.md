@@ -1,6 +1,6 @@
 # Synchronous and asynchronous operations on one cache
 
-The unreleased source provides `BlockingCache<V>` for ordinary threads and
+Version 0.4.0 provides `BlockingCache<V>` for ordinary threads and
 `as_async()` for the same `Cache<V>`. Both views share entries, key flights,
 markers, providers, events, commits and public lifetime. They do not copy
 values into a separate cache. Cloned async handles retain the driven executor
