@@ -3,8 +3,8 @@
 Published package: **0.3.1** (registry checked 8 October 2026). The M4 table
 measures the completed read facade before the final exhaustive-state review.
 The final handler review preserves the operation contract but changes the source
-fingerprint. Linux below is a separate historical checkpoint until exact-source
-CI evidence is linked.
+fingerprint. The Linux tables measure the final Rust source, with reports from
+the corresponding CI jobs linked below.
 Source/binary fingerprints accompany every report. Eight-worker ns/op is
 aggregate elapsed time divided by completed operations, not caller latency.
 
@@ -61,29 +61,43 @@ An earlier native get_or_set development checkpoint was 45.4 ns versus 39.4 ns
 (+15.2%, disjoint ranges). That development regression remains disclosed; it is
 separate from the actual published 0.3.1 comparison and these checkpoint rows.
 
-## Linux checkpoint, c921d31
+## Linux — final Rust source, 8 October
 
 GitHub-hosted AMD EPYC 7763 runner: two available physical cores / four logical
-CPUs. Rust 1.88; FC 2.9.0 / .NET 10.0.12. The full read and get_or_set reports
-used seven pairs. This machine cannot qualify sixfold eight-core scaling.
+CPUs, Linux 6.17 / glibc 2.39. Rust 1.88.0; FC 2.9.0 / .NET 10.0.12
+(SDK 10.0.401). Three counterbalanced pairs per API, normal tiering/PGO; TC=0
+is diagnostic. Source-set SHA-256:
+`2319b32da1b24da9bfa128b4743d339226ead45b1695ee5454829e5eed7c5ab1`.
+Reports are retained in `scaling-report` from
+[the measured CI run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37735287338).
+The performance jobs completed; that run's feature matrix later hit its timeout.
+This machine cannot qualify sixfold eight-core scaling.
 
-| API / workload | Amalgam ns/op | FC default PGO ns/op | Amalgam / FC |
-|---|---:|---:|---:|
-| read / same | 127.3 | 200.1 | 0.636 |
-| read / sync | 93.9 | 155.3 | 0.604 |
-| read / set | 253.2 | 279.0 | 0.907 |
-| read / cold | 2655.7 | 3762.6 | 0.706 |
-| read / l2_json | 3811.5 | 1596.8 | 2.387 |
-| get-or-set / same | 132.0 | 250.9 | 0.526 |
-| get-or-set / sync | 132.4 | 182.4 | 0.726 |
-| get-or-set / set | 254.2 | 277.2 | 0.917 |
-| get-or-set / cold | 2674.3 | 3601.7 | 0.742 |
-| get-or-set / l2_json | 3146.6 | 1888.8 | 1.666 |
+| API / workload / 1 worker | Amalgam ns/op | FC PGO ns/op | FC TC=0 diagnostic ns/op | Amalgam / FC PGO | Rust allocations/op |
+|---|---:|---:|---:|---:|---:|
+| read / same | 130.6 | 202.1 | 338.4 | 0.646 | 0.000 |
+| read / distinct | 127.8 | 199.6 | 338.9 | 0.640 | 0.000 |
+| read / sync | 96.5 | 155.5 | 232.9 | 0.621 | 0.000 |
+| read / set | 251.2 | 285.7 | 355.9 | 0.879 | 0.000 |
+| read / cold (diagnostic only) | 2701.3 | 3862.9 | 4578.4 | 0.699 | 5.009 |
+| read / l2_json | 2250.0 | 1631.7 | 2721.8 | 1.379 | 8.000 |
+| get-or-set / same | 139.1 | 250.6 | 380.8 | 0.555 | 0.000 |
+| get-or-set / distinct | 139.4 | 247.9 | 378.7 | 0.562 | 0.000 |
+| get-or-set / sync | 124.5 | 183.3 | 281.4 | 0.679 | 0.000 |
+| get-or-set / set | 247.7 | 283.2 | 358.7 | 0.875 | 0.000 |
+| get-or-set / cold (diagnostic only) | 2708.0 | 4135.6 | 4658.7 | 0.655 | 5.009 |
+| get-or-set / l2_json | 2983.3 | 1909.4 | 2998.9 | 1.562 | 8.000 |
 
-Linux L2 read is 2.387x FC and L2 get_or_set 1.666x FC. One-worker hot read,
-native read and factory-retrieval budgets also fail. Two FC cold warmups in the
-get_or_set run did not settle; its cold result is diagnostic evidence only.
-See [the original CI run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37679769506).
+Both APIs miss the <=0.50x one-worker same/distinct/native hit budgets,
+<=0.75x set budget and <=1.00x L2 budget. L2 read is **1.379x** FC and L2
+get_or_set **1.562x**. Cold results are **diagnostic only**: default FC failed
+to settle in read pairs 2–3 and all three get_or_set pairs; TC=0 cold warmup
+also failed in all read pairs and get_or_set pair 3. Other warmups settled.
+These failures remain recorded by the informational job and are deferred to 0.4.x.
+
+The older c921d31 run recorded L2 read 2.387x and get_or_set 1.666x; it remains
+[a historical checkpoint](https://github.com/ZoonTronLabs/amalgam/actions/runs/37679769506),
+not the source of the final-source rows above.
 
 ## Published 0.3.1 regression guard — final M4 source
 
@@ -93,8 +107,7 @@ pairs, all warmups settled, all eight workloads pass the 1.05 noise allowance.
 The final source-set SHA-256 is
 `2319b32da1b24da9bfa128b4743d339226ead45b1695ee5454829e5eed7c5ab1`. This fixture has its own
 counts and instrumentation; its ns/op values are not interchangeable with the
-FC fixture. Final-source Linux reports are collected by the jobs in
-[PR #5](https://github.com/ZoonTronLabs/amalgam/pull/5) and retain these identities.
+FC fixture. The local report retains this source identity.
 
 | Workload / workers | Published 0.3.1 ns/op | Candidate ns/op | Candidate / 0.3.1 |
 |---|---:|---:|---:|
@@ -106,6 +119,26 @@ FC fixture. Final-source Linux reports are collected by the jobs in
 | l2_get_or_set / 1 | 2164.8 | 1385.9 | 0.640 |
 | l2_read / 1 | 1886.5 | 1026.7 | 0.544 |
 | set / 1 | 4117.4 | 91.4 | 0.022 |
+
+## Published 0.3.1 regression guard — final Linux source
+
+The same final Rust source and registry baseline were measured by the mandatory
+job in [the measured CI run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37735287338).
+Three alternating pairs, all warmups settled, all eight workloads **PASS**
+with the 1.05 noise allowance. The `release-regression-report` artifact records
+registry provenance, source/binary identities and raw process output.
+These numbers use the independent regression fixture, not the FC fixture.
+
+| Workload / workers | Published 0.3.1 ns/op | Candidate ns/op | Candidate / 0.3.1 |
+|---|---:|---:|---:|
+| cold / 1 | 6146.3 | 1778.9 | 0.289 |
+| hot_get_or_set / 1 | 548.5 | 87.8 | 0.160 |
+| hot_get_or_set / 8 | 275.3 | 27.9 | 0.101 |
+| hot_read / 1 | 515.8 | 88.6 | 0.172 |
+| hot_read / 8 | 271.2 | 25.1 | 0.093 |
+| l2_get_or_set / 1 | 2615.6 | 1759.8 | 0.673 |
+| l2_read / 1 | 2250.5 | 1428.8 | 0.635 |
+| set / 1 | 4212.0 | 174.1 | 0.041 |
 
 ## Gates for 0.4.0
 
