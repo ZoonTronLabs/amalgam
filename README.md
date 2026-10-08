@@ -56,19 +56,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use fallible APIs for new callers. `read` currently distinguishes a successful
-miss from a storage, copy or configuration failure while the read facade is being
-migrated. Mutations return `Result<()>`; `.with_receipt()` explicitly requests a
+Use fallible APIs for new callers. `try_get` returns `Result<Option<V>>`,
+distinguishing a successful miss from a storage, copy or configuration failure.
+`get_or_default` returns `Result<V>`. Mutations return `Result<()>`;
+`.with_receipt()` explicitly requests a
 `MutationReceipt`. `Completed` contains its stage report; `Scheduled` contains
 awaitable cache-owned completion. `wait()` observes completion and requested
 error rethrows. Reports also expose skipped stages, suppressed failures and
 recovery admission according to the configured policy.
 
-Legacy invalidation adapters have been removed from the developing source.
-The remaining read aliases are still being migrated. See
-[the 0.4 migration draft](docs/MIGRATION_0_4.md) for the current changes.
+Legacy read and invalidation adapters have been removed in 0.4.0. See
+[the 0.4 migration guide](docs/MIGRATION_0_4.md) for replacement APIs.
 
-## Fluent requests (unreleased source)
+## Fluent requests
 
 `set`, `get_or_set`, remove, expire, tag invalidation and clear execute when awaited. An option transformation starts
 from a copy of the cache defaults, so changing duration retains fail-safe and
@@ -97,16 +97,15 @@ the individual request. `None` removes the fallback; for nullable cached values,
 this separates configuration from pinned execution. Use `source::value(value)` as the second argument to `get_or_set` for a supplied
 value. It preserves constant-source behavior without factory timeouts or eager
 refresh. `source::factory(|ctx| ...)` supplies the inferred context type when
-the callback uses its methods. The read facade is still being migrated for 0.4.
+the callback uses its methods.
 
-## Synchronous use (unreleased source)
+## Synchronous use
 
 `BlockingCache<V>` provides caller-thread operations and `as_async()` for the
 same entries and lifecycle. Timed/cancellable/eager factories use owned,
 bounded callback pools. Mutation receipts expose actual completion.
 [Dispatch, resource bounds and lifecycle](docs/SYNC.md) describe the tested
-contracts and intentional differences. This addition is available in the
-source tree; the published package has not been updated by this work.
+contracts and intentional differences in 0.4.0.
 
 ```rust
 use amalgam::{BlockingCache, source};
@@ -132,7 +131,7 @@ The root exposes the ordinary cache, options, factory context and errors.
 Imports preserve existing runtime behavior; additional contracts are selected
 through configuration or request choices.
 
-Developing 0.4 L2 providers return immutable owned `provider::DistributedBytes`
+In 0.4.0, L2 providers return immutable owned `provider::DistributedBytes`
 snapshots. The in-memory backend shares stored bytes across reads; Redis adopts
 its received buffer. Snapshots survive replacement, removal and expiration.
 Custom providers must update their get signature; see
@@ -157,13 +156,13 @@ An explicit caller token and `FactoryContext` cancellation state identify cancel
 
 ## Distributed storage and continuity
 
-L2 backends, serializers, backplanes, lockers and copy strategies are open traits. Unreleased [custom local coordination](docs/MEMORY_LOCKER.md) adds an owned `MemoryLocker` provider for values and secondary markers, with optional distinct native acquisition through `BlockingMemoryLocker`; unreleased [supplied L1 storage](docs/MEMORY_STORAGE.md) provides the actual value store with typed failures and atomic conditional admission. JSON and reference in-memory providers are available by default; Redis, MessagePack and Postcard are optional. L1 and L2 freshness/retention are configured separately. Hydration caps local deadlines by the remaining source lifetime.
+L2 backends, serializers, backplanes, lockers and copy strategies are open traits. [Custom local coordination](docs/MEMORY_LOCKER.md) adds an owned `MemoryLocker` provider for values and secondary markers, with optional distinct native acquisition through `BlockingMemoryLocker`; [supplied L1 storage](docs/MEMORY_STORAGE.md) provides the actual value store with typed failures and atomic conditional admission. JSON and reference in-memory providers are available by default; Redis, MessagePack and Postcard are optional. L1 and L2 freshness/retention are configured separately. Hydration caps local deadlines by the remaining source lifetime.
 
-Warm healthy L1 reads stay local. Cold L2 reads reconcile tag/clear markers. Atomic guarantees require an atomic invalidation provider; ordinary byte-store I/O retains its weaker contract. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Saved developing 0.4 work includes [independent marker reads](docs/MARKER_READS.md); arbitrary custom L2 marker parity remains an explicit [Gap](docs/PARITY.md). These reads use separate tag defaults, budgets and observation limits.
+Warm healthy L1 reads stay local. Cold L2 reads reconcile tag/clear markers. Atomic guarantees require an atomic invalidation provider; ordinary byte-store I/O retains its weaker contract. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Version 0.4.0 includes [independent marker reads](docs/MARKER_READS.md); arbitrary custom L2 marker parity remains an explicit [Gap](docs/PARITY.md). These reads use separate tag defaults, budgets and observation limits.
 
-Unreleased [expiring marker snapshots](docs/MARKER_SNAPSHOTS.md) add independent remote lifetimes and nonzero read repair through an optional atomic provider capability. Snapshot expiry preserves the durable invalidation fact; this addition does not close the remaining marker eager/locker/recovery contract.
+[Expiring marker snapshots](docs/MARKER_SNAPSHOTS.md) add independent remote lifetimes and nonzero read repair through an optional atomic provider capability. Snapshot expiry preserves the durable invalidation fact; this addition does not close the remaining marker eager/locker/recovery contract.
 
-In the 0.4 source, backplane gaps and reconnects preserve L1 within its normal
+In 0.4.0, backplane gaps and reconnects preserve L1 within its normal
 freshness and fail-safe deadlines. L2-only caches have no periodic global L1
 clearing. Known invalidations still apply. `ready()` and `try_build_ready()` can
 await native subscription acknowledgement; ordinary operations do not wait by
@@ -175,7 +174,7 @@ Distributed lease capabilities are explicit. Native owned acquisition, renewal a
 
 ### Redis outages and lease policy
 
-The 0.4 source defaults to `LeasePolicy::Cooperative`: a suppressed distributed
+Version 0.4.0 defaults to `LeasePolicy::Cooperative`: a suppressed distributed
 locker error permits the ordinary factory to run. Fresh L1 hits contact neither
 the locker nor L2. Retained stale data can serve configured fail-safe during
 an outage. Nodes may compute concurrently while distributed coordination is
@@ -187,8 +186,8 @@ at construction if the locker lacks owned-token lifetime support or L2 lacks
 atomic fenced writes. Custom providers declare those capabilities explicitly.
 
 Published **0.3.1** has different defaults: fenced ownership, conservative gap
-cleanup, and periodic clearing for L2-only configurations. Updating this source
-does not update an existing consumer. Explicit cancellation remains an error;
+cleanup, and periodic clearing for L2-only configurations. Existing consumers
+retain those defaults until they upgrade the crate. Explicit cancellation remains an error;
 owned cleanup failures can still be reported by `shutdown()` after recovery.
 
 Failed or skipped distributed effects can enter recovery with their original bytes, remaining lifetime and pending stage. Local same-key commit lanes order replay, foreground effects and publication. This protects an awaited newer local mutation from an older replay. Independent nodes and custom writes are not globally linearizable without a participating conditional backend protocol.
@@ -201,7 +200,7 @@ Entry count and entry weight are separate limits. Under pressure the priority po
 
 ## Recovery, events and diagnostics
 
-Recovery defaults to enabled for a configured distributed provider, with a 5-second delay and **1024 queued items** in the developing 0.4 source. Explicit `max_items: None` permits an unlimited queue. The bound is a deliberate difference from the FusionCache/0.2 default. Queue-full rejection and exhausted retry budgets are observable. Markers are compacted conservatively rather than silently forgotten.
+Recovery defaults to enabled for a configured distributed provider, with a 5-second delay and **1024 queued items** in 0.4.0. Explicit `max_items: None` permits an unlimited queue. The bound is a deliberate difference from the FusionCache/0.2 default. Queue-full rejection and exhausted retry budgets are observable. Markers are compacted conservatively rather than silently forgotten.
 
 Transport failures trip the corresponding circuit breaker; codec or value-copy failures do not declare every key's transport unhealthy. Default breaker duration is zero, meaning disabled. Read I/O budgets and provider lifecycle budgets are distinct from the intentionally unbounded default cache write/remove contract.
 
@@ -215,7 +214,7 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 
 ## Development performance
 
-The 0.4 source has zero-allocation warm L1 reads and replacements.
+Version 0.4.0 has zero-allocation warm L1 reads and replacements.
 The FC comparison uses default .NET tiering/Dynamic PGO after settled warmup;
 TC=0 is a separate diagnostic. Known L2 get_or_set, set and Linux hot-read
 budgets remain unclosed. Further optimization is deferred to 0.4.x.
