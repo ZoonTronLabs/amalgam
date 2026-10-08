@@ -30,6 +30,7 @@ pub(crate) enum CacheClock {
 }
 impl CacheClock {
     pub(crate) fn local() -> Self {
+        super::coarse::prepare();
         Self::Local(Arc::new(LocalClock {
             epoch: SystemClock.now(),
             origin: Instant::now(),

@@ -16,6 +16,15 @@ on [Keep a Changelog](https://keepachangelog.com/).
   about the same. Loom models SeqCst accesses as AcqRel, so under `cfg(loom)`
   the gate adds the fences and Loom checks that fenced equivalent; a unit test
   keeps every handshake access SeqCst.
+- On Linux, local hits no longer read the precise monotonic clock when a cheap
+  bound settles them. `CLOCK_MONOTONIC_COARSE` (through the vDSO, via `rustix`)
+  is the same timeline as `Instant` as of the last tick; anchored to an
+  `Instant` plus eight ticks of slack it gives an instant no earlier than now.
+  A hit uses it only to prove both deadlines still ahead; a decision within the
+  slack of a deadline, or any retirement, reads the precise clock. Kernels with
+  `nohz_full` CPUs or a tick over 10 ms, other platforms and Miri keep the
+  precise clock. On the measured x86 CI VM the coarse read costs 5.6 ns against
+  29 ns. New Linux-only dependency: `rustix` (`time` feature).
 - Warm L2 reads over immediate providers complete inline. Providers can declare
   `ReadCompletion::Immediate` and answer `get_immediate` / `read_many_immediate`
   from in-process state; the reference in-memory value and marker stores do. A

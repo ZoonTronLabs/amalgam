@@ -16,12 +16,14 @@
 //! Standalone caches with built-in local storage use a UTC anchor plus elapsed
 //! monotonic time for duration lifetimes. Deadlines are prepared at insertion; one
 //! elapsed sample under the reader slot checks both freshness and physical expiry
-//! on the plain ready path.
+//! on the plain ready path. On Linux that sample is first a coarse upper bound,
+//! which can only prove both deadlines ahead; otherwise the precise clock decides.
 //! Hybrid caches, supplied storage/markers, distributed lockers/backplanes and
 //! explicitly supplied clocks preserve their
 //! interoperable clock domain and elapsed backend deadlines. [`SystemClock`]
 //! always returns live system UTC when explicitly selected.
 
+pub(crate) mod coarse;
 pub(crate) mod local;
 
 use std::sync::atomic::{AtomicI64, Ordering};

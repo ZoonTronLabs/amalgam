@@ -5,6 +5,7 @@ use super::{
     Arc, CapacityRejection, CaptureAdmission, Entry, Expected, MemoryAdmission, MemoryExpiry,
     MemoryRead, MemoryUsage, MemoryWriteEvent, Retirement, Timestamp, entry_weight,
 };
+use crate::entry::Freshness;
 use crate::reader_slots::{
     ReadGuard as RwLockReadGuard, ReaderSlots as RwLock, WriteGuard as RwLockWriteGuard,
 };
@@ -54,6 +55,21 @@ impl<V> Stored<V> {
             Some(Reason::Expired)
         } else {
             None
+        }
+    }
+    /// Local deadlines are decided at one elapsed sample taken after admission.
+    /// A coarse upper bound settles a hit ahead of both deadlines; whatever it
+    /// cannot prove is decided again at the precise clock.
+    #[inline]
+    fn local_read(&self, now: Option<Timestamp>, generation: u64) -> Option<Freshness> {
+        let at = |elapsed| {
+            self.retirement_at(now, generation, Some(elapsed))
+                .is_none()
+                .then(|| self.deadlines.freshness(elapsed))
+        };
+        match crate::time::coarse::upper_bound().map(at) {
+            Some(Some(Freshness::Fresh)) => Some(Freshness::Fresh),
+            Some(_) | None => at(Instant::now()),
         }
     }
     fn retire(self, key: Arc<str>, reason: Reason) -> Retirement<V> {
@@ -118,17 +134,15 @@ impl<V> Sharded<V> {
         // Local freshness is sampled after admission, just like the primitive
         // plan. A writer can hold the gate across logical expiry while fail-safe
         // keeps the value physically present. Supplied clocks stay outside guards.
-        let (elapsed, freshness) = match stored.deadlines {
-            super::deadlines::Deadlines::Local { .. } => {
-                let elapsed = Instant::now();
-                (Some(elapsed), stored.deadlines.freshness(elapsed))
-            }
-            super::deadlines::Deadlines::Interoperable(_) => (None, stored.entry.freshness(now)),
-        };
-        stored
-            .retirement_at(Some(now), self.generation.load(Ordering::Acquire), elapsed)
-            .is_none()
-            .then(|| read_entry(&stored.entry, freshness))
+        let generation = self.generation.load(Ordering::Acquire);
+        let freshness = match stored.deadlines {
+            super::deadlines::Deadlines::Local { .. } => stored.local_read(Some(now), generation),
+            super::deadlines::Deadlines::Interoperable(_) => stored
+                .retirement_at(Some(now), generation, None)
+                .is_none()
+                .then(|| stored.entry.freshness(now)),
+        }?;
+        Some(read_entry(&stored.entry, freshness))
     }
     /// The build-selected caller only performs primitive copies and internal
     /// decisions. Close is checked after reader admission, before value access.
@@ -150,11 +164,9 @@ impl<V> Sharded<V> {
         else {
             return Ok(None);
         };
-        let elapsed = Instant::now();
         Ok(stored
-            .retirement_at(None, self.generation.load(Ordering::Acquire), Some(elapsed))
-            .is_none()
-            .then(|| read_entry(&stored.entry, stored.deadlines.freshness(elapsed))))
+            .local_read(None, self.generation.load(Ordering::Acquire))
+            .map(|freshness| read_entry(&stored.entry, freshness)))
     }
     pub(super) fn get(&self, key: &str, now: Option<Timestamp>) -> MemoryRead<V> {
         let (hash, shard) = self.route(key);
