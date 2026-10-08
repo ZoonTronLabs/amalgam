@@ -306,6 +306,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_tick_conversion_matches_nanosecond_division() {
+        for duration in [
+            Duration::ZERO,
+            Duration::from_nanos(99),
+            Duration::from_nanos(100),
+            Duration::from_nanos(1_999_999_999),
+            Duration::new(1_790_000_000, 123_456_789),
+            Duration::new(u64::MAX / 3, 1),
+            Duration::MAX,
+        ] {
+            assert_eq!(
+                duration_ticks_wide(duration),
+                (duration.as_nanos() / NANOS_PER_TICK as u128) as i128
+            );
+        }
+    }
+
+    #[test]
     fn duration_round_trips_through_ticks() {
         let d = Duration::from_millis(1500);
         assert_eq!(ticks_to_duration(duration_to_ticks(d)), d);

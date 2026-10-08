@@ -130,6 +130,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn closed_admission_needs_no_clock_and_close_is_idempotent() {
+        let disabled = CircuitBreaker::new(Duration::ZERO);
+        assert!(disabled.is_closed_without_clock());
+        let breaker = CircuitBreaker::new(Duration::from_secs(1));
+        assert!(breaker.is_closed_without_clock());
+        assert!(!breaker.close());
+        assert!(breaker.trip(Timestamp::from_ticks(0)));
+        assert!(!breaker.is_closed_without_clock());
+        assert!(breaker.close());
+        assert!(breaker.is_closed_without_clock());
+        assert!(!breaker.close());
+    }
+
+    #[test]
     fn disabled_breaker_is_always_closed() {
         let cb = CircuitBreaker::new(Duration::ZERO);
         assert!(cb.is_disabled());

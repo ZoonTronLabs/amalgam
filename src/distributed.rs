@@ -618,8 +618,89 @@ where
     }
 
     fn deserialize(&self, bytes: &[u8]) -> Result<DistributedEntry<V>> {
-        serde_json::from_slice(bytes).map_err(Error::deserialization)
+        match canonical_entry(bytes) {
+            Some(entry) => Ok(entry),
+            None => serde_json::from_slice(bytes).map_err(Error::deserialization),
+        }
     }
+}
+
+/// Decodes the exact envelope layout `serde_json` writes for [`DistributedEntry`]
+/// without matching each field name against every candidate. The value itself
+/// uses the ordinary `serde_json` deserializer. Any other layout, valid or not,
+/// returns `None` and keeps the general decoder and its exact errors.
+fn canonical_entry<V: DeserializeOwned>(bytes: &[u8]) -> Option<DistributedEntry<V>> {
+    let rest = bytes.strip_prefix(br#"{"value":"#)?;
+    let mut values = serde_json::Deserializer::from_slice(rest).into_iter::<V>();
+    let value = values.next()?.ok()?;
+    let rest = &rest[values.byte_offset()..];
+    let rest = rest.strip_prefix(br#","created_ticks":"#)?;
+    let (created_ticks, rest) = canonical_i64(rest)?;
+    let rest = rest.strip_prefix(br#","logical_expiration_ticks":"#)?;
+    let (logical_expiration_ticks, rest) = canonical_i64(rest)?;
+    let rest = rest.strip_prefix(br#","physical_expiration_ticks":"#)?;
+    let (physical_expiration_ticks, rest) = canonical_i64(rest)?;
+    let rest = rest.strip_prefix(br#","is_from_fail_safe":"#)?;
+    let (is_from_fail_safe, rest) = match rest.strip_prefix(b"false") {
+        Some(rest) => (false, rest),
+        None => (true, rest.strip_prefix(b"true")?),
+    };
+    let rest = rest.strip_prefix(br#","etag":"#)?;
+    let (etag, rest) = match rest.strip_prefix(b"null") {
+        Some(rest) => (None, rest),
+        None => {
+            let (etag, rest) = canonical_string(rest)?;
+            (Some(etag), rest)
+        }
+    };
+    let rest = rest.strip_prefix(br#","last_modified_ticks":"#)?;
+    let (last_modified_ticks, rest) = match rest.strip_prefix(b"null") {
+        Some(rest) => (None, rest),
+        None => {
+            let (ticks, rest) = canonical_i64(rest)?;
+            (Some(ticks), rest)
+        }
+    };
+    let mut rest = rest.strip_prefix(br#","tags":["#)?;
+    let mut tags = Vec::new();
+    if let Some(after) = rest.strip_prefix(b"]") {
+        rest = after;
+    } else {
+        loop {
+            let (tag, after) = canonical_string(rest)?;
+            tags.push(tag);
+            match after.split_first()? {
+                (b',', next) => rest = next,
+                (b']', next) => {
+                    rest = next;
+                    break;
+                }
+                _ => return None,
+            }
+        }
+    }
+    (rest == b"}").then_some(DistributedEntry {
+        value,
+        created_ticks,
+        logical_expiration_ticks,
+        physical_expiration_ticks,
+        is_from_fail_safe,
+        etag,
+        last_modified_ticks,
+        tags,
+    })
+}
+
+/// A JSON string without escapes or control characters; anything else falls back.
+fn canonical_string(bytes: &[u8]) -> Option<(String, &[u8])> {
+    let rest = bytes.strip_prefix(b"\"")?;
+    let length = rest.iter().position(|byte| *byte == b'"')?;
+    let (text, rest) = rest.split_at(length);
+    if text.iter().any(|byte| *byte == b'\\' || *byte < 0x20) {
+        return None;
+    }
+    let text = std::str::from_utf8(text).ok()?;
+    Some((text.to_owned(), &rest[1..]))
 }
 
 /// How a provider completes reads, captured once when a cache is built.
@@ -1223,6 +1304,138 @@ mod tests {
 
         clock.advance(Duration::from_secs(11));
         assert_eq!(l2.get("k").await.unwrap(), None);
+    }
+
+    fn envelope(
+        value: &str,
+        etag: Option<&str>,
+        last_modified: Option<i64>,
+        tags: &[&str],
+        ticks: [i64; 3],
+        fail_safe: bool,
+    ) -> DistributedEntry<String> {
+        DistributedEntry {
+            value: value.to_owned(),
+            created_ticks: ticks[0],
+            logical_expiration_ticks: ticks[1],
+            physical_expiration_ticks: ticks[2],
+            is_from_fail_safe: fail_safe,
+            etag: etag.map(str::to_owned),
+            last_modified_ticks: last_modified,
+            tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
+        }
+    }
+
+    fn general(bytes: &[u8]) -> serde_json::Result<DistributedEntry<String>> {
+        serde_json::from_slice(bytes)
+    }
+
+    #[test]
+    fn canonical_envelopes_decode_exactly_like_serde() {
+        let cases = [
+            envelope("v", None, None, &[], [1, 2, 3], false),
+            envelope(
+                "",
+                Some("e"),
+                Some(-7),
+                &["t"],
+                [0, i64::MAX, i64::MAX],
+                true,
+            ),
+            envelope(
+                "ünïcødé ✓",
+                Some(""),
+                Some(i64::MAX),
+                &["a", "b", "c"],
+                [-1, 0, 1],
+                false,
+            ),
+            envelope(
+                "x",
+                None,
+                Some(0),
+                &["", "tag with space"],
+                [i64::MIN + 1, -2, 5],
+                true,
+            ),
+        ];
+        for entry in cases {
+            let bytes = serde_json::to_vec(&entry).unwrap();
+            let fast = canonical_entry::<String>(&bytes).expect("canonical layout");
+            assert_eq!(
+                serde_json::to_vec(&fast).unwrap(),
+                serde_json::to_vec(&general(&bytes).unwrap()).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn non_canonical_envelopes_keep_the_general_decoder_and_errors() {
+        let escaped = serde_json::to_vec(&envelope(
+            "v",
+            Some("quote\"and\\slash"),
+            None,
+            &["line\nbreak", "tab\t"],
+            [1, 2, 3],
+            false,
+        ))
+        .unwrap();
+        let inputs: [&[u8]; 9] = [
+            &escaped,
+            br#"{ "value":"v","created_ticks":1,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]}"#,
+            br#"{"created_ticks":1,"value":"v","logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]}"#,
+            br#"{"value":"v","created_ticks":01,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]}"#,
+            br#"{"value":"v","created_ticks":1,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[],"extra":1}"#,
+            br#"{"value":"v","created_ticks":1.5,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]}"#,
+            br#"{"value":"v","created_ticks":-9223372036854775808,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]}"#,
+            br#"{"value":"v","created_ticks":1,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]} "#,
+            br#"{"value":7,"created_ticks":1,"logical_expiration_ticks":2,"physical_expiration_ticks":3,"is_from_fail_safe":false,"etag":null,"last_modified_ticks":null,"tags":[]}"#,
+        ];
+        for bytes in inputs {
+            let decoded = DistributedSerializer::<String>::deserialize(&JsonSerializer, bytes);
+            match general(bytes) {
+                Ok(expected) => assert_eq!(
+                    serde_json::to_vec(&decoded.unwrap()).unwrap(),
+                    serde_json::to_vec(&expected).unwrap()
+                ),
+                Err(expected) => assert_eq!(
+                    decoded.unwrap_err().to_string(),
+                    Error::deserialization(expected).to_string()
+                ),
+            }
+        }
+        assert!(canonical_entry::<String>(&escaped).is_none());
+    }
+
+    #[test]
+    fn canonical_snapshot_header_matches_serde_and_others_fall_back() {
+        for ticks in [0, 1, -1, i64::MAX, i64::MIN + 1, 638_000_000_000_000_000] {
+            let header = serde_json::to_vec(&SnapshotHeader {
+                inserted_ticks: ticks,
+                retention: WireRetention::Unspecified,
+            })
+            .unwrap();
+            let fast = canonical_header(&header).expect("canonical header");
+            assert_eq!(fast.inserted_ticks, ticks);
+            assert!(matches!(fast.retention, WireRetention::Unspecified));
+        }
+        let specified = serde_json::to_vec(&SnapshotHeader {
+            inserted_ticks: 5,
+            retention: WireRetention::Specified {
+                size: Some(9),
+                priority: 3,
+            },
+        })
+        .unwrap();
+        assert!(canonical_header(&specified).is_none());
+        for other in [
+            &br#"{"retention":{"kind":"Unspecified"},"inserted_ticks":5}"#[..],
+            br#"{"inserted_ticks":5, "retention":{"kind":"Unspecified"}}"#,
+            br#"{"inserted_ticks":-9223372036854775808,"retention":{"kind":"Unspecified"}}"#,
+            br#"{"inserted_ticks":05,"retention":{"kind":"Unspecified"}}"#,
+        ] {
+            assert!(canonical_header(other).is_none());
+        }
     }
 
     #[test]
