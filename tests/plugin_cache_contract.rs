@@ -77,7 +77,7 @@ impl CachePlugin<i32> for Probe {
         .wait()
         .map_err(|e| PluginError::from_source(self.name(), PluginStage::Start, e))?;
         assert_eq!(
-            boundary(PluginStage::Start, cache.read("plugin-start", None))?.value(),
+            boundary(PluginStage::Start, cache.try_get("plugin-start").execute())?.as_ref(),
             Some(&17)
         );
         self.record.contexts.lock().unwrap().push(context.clone());
@@ -110,7 +110,7 @@ impl PluginSession for Session {
         {
             let cache = self.context.cache()?.blocking(self.runtime.clone());
             assert_eq!(
-                boundary(PluginStage::Event, cache.read("caller", None))?.value(),
+                boundary(PluginStage::Event, cache.try_get("caller").execute())?.as_ref(),
                 Some(&23)
             );
             boundary(
@@ -150,7 +150,7 @@ impl PluginSession for Session {
         )?
         .wait()
         .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;
-        assert!(!boundary(PluginStage::Stop, cache.read("plugin-tagged", None))?.has_value());
+        assert!(boundary(PluginStage::Stop, cache.try_get("plugin-tagged").execute())?.is_none());
         assert!(matches!(
             cache.shutdown(),
             Err(Error::ReentrantDrain {
@@ -181,7 +181,10 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
     let cache =
         BlockingCache::from_builder(Cache::<i32>::builder().name("same").key_prefix("p:")).unwrap();
     let registration = cache.register_cache_plugin(plugin(record.clone())).unwrap();
-    assert_eq!(cache.read("plugin-start", None).unwrap().value(), Some(&17));
+    assert_eq!(
+        cache.try_get("plugin-start").execute().unwrap().as_ref(),
+        Some(&17)
+    );
     cache
         .set("caller", 23)
         .with_receipt()
@@ -190,16 +193,23 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
         .wait()
         .unwrap();
     assert_eq!(record.events.load(Ordering::SeqCst), 1);
-    assert_eq!(cache.read("plugin-event", None).unwrap().value(), Some(&24));
+    assert_eq!(
+        cache.try_get("plugin-event").execute().unwrap().as_ref(),
+        Some(&24)
+    );
     let retained = record.contexts.lock().unwrap()[0].cache().unwrap();
     registration.stop().unwrap();
-    assert_eq!(cache.read("plugin-stop", None).unwrap().value(), Some(&30));
+    assert_eq!(
+        cache.try_get("plugin-stop").execute().unwrap().as_ref(),
+        Some(&30)
+    );
     assert_eq!(
         retained
             .blocking(cache.runtime().clone())
-            .read("plugin-stop-factory", None)
+            .try_get("plugin-stop-factory")
+            .execute()
             .unwrap()
-            .value(),
+            .as_ref(),
         Some(&29)
     );
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
@@ -207,7 +217,8 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
     assert!(matches!(
         retained
             .blocking(cache.runtime().clone())
-            .read("plugin-start", None),
+            .try_get("plugin-start")
+            .execute(),
         Err(Error::CacheClosed)
     ));
     assert!(matches!(
@@ -231,16 +242,22 @@ fn shutdown_stop_can_mutate_real_l2_after_normal_operations_close() {
     cache.shutdown().unwrap();
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        cache.read("plugin-stop", None),
+        cache.try_get("plugin-stop").execute(),
         Err(Error::CacheClosed)
     ));
     let peer = BlockingCache::from_builder(hybrid(backend)).unwrap();
     assert_eq!(
-        peer.read("plugin-stop-factory", None).unwrap().value(),
+        peer.try_get("plugin-stop-factory")
+            .execute()
+            .unwrap()
+            .as_ref(),
         Some(&29)
     );
-    assert_eq!(peer.read("plugin-stop", None).unwrap().value(), Some(&30));
-    assert!(!peer.read("plugin-tagged", None).unwrap().has_value());
+    assert_eq!(
+        peer.try_get("plugin-stop").execute().unwrap().as_ref(),
+        Some(&30)
+    );
+    assert!(peer.try_get("plugin-tagged").execute().unwrap().is_none());
     peer.shutdown().unwrap();
 }
 
@@ -274,7 +291,9 @@ fn retained_operational_view_cannot_prevent_last_application_owner_from_closing(
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     let held = record.held.lock().unwrap().take().unwrap();
     assert!(matches!(
-        held.blocking(runtime.clone()).read("plugin-start", None),
+        held.blocking(runtime.clone())
+            .try_get("plugin-start")
+            .execute(),
         Err(Error::CacheClosed)
     ));
     runtime.run(held.shutdown()).unwrap();
@@ -294,7 +313,10 @@ fn external_async_owner_remains_available_inside_its_final_stop_hook() {
     drop(cache);
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     let peer = BlockingCache::from_builder(hybrid(backend)).unwrap();
-    assert_eq!(peer.read("plugin-stop", None).unwrap().value(), Some(&30));
+    assert_eq!(
+        peer.try_get("plugin-stop").execute().unwrap().as_ref(),
+        Some(&30)
+    );
     peer.shutdown().unwrap();
 }
 
@@ -313,7 +335,10 @@ fn dynamic_start_failure_preserves_source_and_writes_without_invented_stop() {
         matches!(&error, Error::Plugin(PluginError::Failure { stage: PluginStage::Start, source, .. }) if source.downcast_ref::<std::io::Error>().unwrap().to_string() == "original start failure")
     );
     assert_eq!(record.stops.load(Ordering::SeqCst), 0);
-    assert_eq!(cache.read("plugin-start", None).unwrap().value(), Some(&17));
+    assert_eq!(
+        cache.try_get("plugin-start").execute().unwrap().as_ref(),
+        Some(&17)
+    );
     cache.shutdown().unwrap();
 }
 
@@ -431,7 +456,7 @@ async fn startup_that_finishes_after_close_still_receives_operational_stop_and_d
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     let peer = hybrid(backend).try_build().unwrap();
     assert_eq!(
-        peer.read("plugin-stop", None).await.unwrap().value(),
+        peer.try_get("plugin-stop").await.unwrap().as_ref(),
         Some(&30)
     );
     peer.shutdown().await.unwrap();
@@ -462,8 +487,11 @@ impl CachePlugin<i32> for TypedOrder {
     ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
         let cache = context.cache()?.blocking(self.runtime.clone());
         match self.position {
-            1 => assert!(!cache.read("ordered", None).unwrap().has_value()),
-            3 => assert_eq!(cache.read("ordered", None).unwrap().value(), Some(&1)),
+            1 => assert!(cache.try_get("ordered").execute().unwrap().is_none()),
+            3 => assert_eq!(
+                cache.try_get("ordered").execute().unwrap().as_ref(),
+                Some(&1)
+            ),
             _ => panic!("fixture uses first/third positions"),
         }
         cache
@@ -507,7 +535,10 @@ fn builder_preserves_interleaved_legacy_and_operational_plugin_order() {
     )
     .unwrap();
     assert_eq!(*order.sequence.lock().unwrap(), [1, 2, 3]);
-    assert_eq!(cache.read("ordered", None).unwrap().value(), Some(&3));
+    assert_eq!(
+        cache.try_get("ordered").execute().unwrap().as_ref(),
+        Some(&3)
+    );
     cache.shutdown().unwrap();
 }
 
@@ -535,8 +566,11 @@ fn one_plugin_definition_gets_independent_operational_sessions_per_cache() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(a.read("plugin-event", None).unwrap().value(), Some(&24));
-    assert!(!b.read("plugin-event", None).unwrap().has_value());
+    assert_eq!(
+        a.try_get("plugin-event").execute().unwrap().as_ref(),
+        Some(&24)
+    );
+    assert!(b.try_get("plugin-event").execute().unwrap().is_none());
     assert_eq!(record.contexts.lock().unwrap()[0].instance_id(), "a-owner");
     assert_eq!(record.contexts.lock().unwrap()[1].instance_id(), "b-owner");
     a.shutdown().unwrap();
@@ -557,7 +591,7 @@ impl Drop for DropSignal<'_> {
 }
 #[async_trait::async_trait]
 impl DistributedCache for GatedStore {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -699,7 +733,7 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         .unwrap();
     assert_eq!(record.events.load(Ordering::SeqCst), 1);
     assert_eq!(
-        cache.read("plugin-event", None).await.unwrap().value(),
+        cache.try_get("plugin-event").await.unwrap().as_ref(),
         Some(&24)
     );
     tokio::time::timeout(Duration::from_secs(6), cache.shutdown())
@@ -716,25 +750,22 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         .try_build()
         .unwrap();
     assert_eq!(
-        peer.read("plugin-start", None).await.unwrap().value(),
+        peer.try_get("plugin-start").await.unwrap().as_ref(),
         Some(&17)
     );
     assert_eq!(
-        peer.read("plugin-event", None).await.unwrap().value(),
+        peer.try_get("plugin-event").await.unwrap().as_ref(),
         Some(&24)
     );
     assert_eq!(
-        peer.read("plugin-stop-factory", None)
-            .await
-            .unwrap()
-            .value(),
+        peer.try_get("plugin-stop-factory").await.unwrap().as_ref(),
         Some(&29)
     );
     assert_eq!(
-        peer.read("plugin-stop", None).await.unwrap().value(),
+        peer.try_get("plugin-stop").await.unwrap().as_ref(),
         Some(&30)
     );
-    assert!(!peer.read("plugin-tagged", None).await.unwrap().has_value());
+    assert!(peer.try_get("plugin-tagged").await.unwrap().is_none());
     peer.shutdown().await.unwrap();
     backplane.shutdown().await.unwrap();
 }

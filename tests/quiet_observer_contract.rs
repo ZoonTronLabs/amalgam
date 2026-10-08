@@ -1,6 +1,7 @@
 //! A recipient arriving inside ordinary Clone sees the same terminal operation.
 use amalgam::{Cache, CacheEvent, Events, OperationOutcome};
 use std::future::Future;
+use std::future::IntoFuture;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
@@ -36,10 +37,10 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
         .wait()
         .await
         .unwrap();
-    cache.read("key", None).await.unwrap().into_value().unwrap();
+    cache.try_get("key").into_future().await.unwrap().unwrap();
     state.armed.store(true, Ordering::SeqCst);
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut read = std::pin::pin!(cache.read("key", None));
+        let mut read = std::pin::pin!(cache.try_get("key").into_future());
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
         read.as_mut().poll(&mut cx)
     }));
@@ -53,7 +54,7 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     }
     assert_eq!(outcomes, vec![OperationOutcome::Panicked]);
     drop(receiver);
-    assert!(cache.read("key", None).await.unwrap().has_value());
+    assert!(cache.try_get("key").into_future().await.unwrap().is_some());
     cache
         .remove("key")
         .with_receipt()
@@ -99,13 +100,12 @@ async fn observer_admitted_by_unused_default_drop_receives_the_hit_completion() 
         .await
         .unwrap();
     let value = cache
-        .read_or_default(
+        .get_or_default(
             "key",
             CompletionValue {
                 number: 99,
                 subscribe_on_drop: Some(state.clone()),
             },
-            None,
         )
         .await
         .unwrap();

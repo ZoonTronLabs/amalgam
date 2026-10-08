@@ -75,7 +75,7 @@ fn same_name_registry_initializes_once_outside_runtime() {
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         caches[0].set("shared", 42).await.unwrap();
         for cache in caches {
-            assert_eq!(cache.try_get("shared", None).await.into_value(), Some(42));
+            assert_eq!(cache.try_get("shared").await.unwrap(), Some(42));
         }
     });
 }
@@ -1385,8 +1385,8 @@ async fn configured_jitter_is_invoked_and_validated_even_with_zero_maximum() {
                 cold,
                 Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
             ));
-            assert!(!cache.read("set", None).await.unwrap().has_value());
-            assert!(!cache.read("cold", None).await.unwrap().has_value());
+            assert!(cache.try_get("set").await.unwrap().is_none());
+            assert!(cache.try_get("cold").await.unwrap().is_none());
         }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         cache.shutdown().await.unwrap();

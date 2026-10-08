@@ -8,10 +8,10 @@ pub use crate::backplane::{
     ContinuityEpoch, InProcessBackplane, MarkerCommand,
 };
 pub use crate::distributed::{
-    AsyncDistributedSerializer, DistributedCache, DistributedEntry, DistributedSerializer,
-    DistributedSnapshot, FencedWriteSupport, InMemoryDistributedCache, InMemoryInvalidationStore,
-    InvalidationStore, JsonSerializer, LeasedMutation, LeasedWriteOutcome, MarkerReadError,
-    SerializationMode, SnapshotRetention,
+    AsyncDistributedSerializer, DistributedBytes, DistributedCache, DistributedEntry,
+    DistributedSerializer, DistributedSnapshot, FencedWriteSupport, InMemoryDistributedCache,
+    InMemoryInvalidationStore, InvalidationStore, JsonSerializer, LeasedMutation,
+    LeasedWriteOutcome, MarkerReadError, SerializationMode, SnapshotRetention,
 };
 pub use crate::distributed_lock::{
     AcquisitionPolicy, DistributedLease, DistributedLocker, InMemoryDistributedLocker, LeaseError,

@@ -80,9 +80,9 @@ async fn ready_hit_reaches_a_plugin_attached_by_its_clone_callback() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     cloner.armed.store(true, Ordering::SeqCst);
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     assert_hit(&plugin.0.lock().unwrap(), "tenant:key");
     cache.shutdown().await.unwrap();
 }
@@ -98,11 +98,11 @@ async fn observers_added_after_an_unobserved_hit_receive_the_next_hit() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     let mut subscriber = cache.events().subscribe();
     let plugin = Arc::new(RecordingPlugin::default());
     let registration = cache.register_plugin(plugin.clone()).unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     let mut received = Vec::with_capacity(2);
     while let Ok(event) = subscriber.try_recv() {
         received.push(event);
@@ -161,9 +161,9 @@ async fn ready_hit_reaches_broadcast_observers_created_by_its_clone_callback() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     cloner.armed.store(true, Ordering::SeqCst);
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     let mut observers = cloner.observers.lock().unwrap().take().unwrap();
     let mut logical = Vec::with_capacity(2);
     while let Ok(event) = observers.logical.try_recv() {
@@ -194,7 +194,7 @@ async fn raw_broadcast_resubscription_after_other_receivers_drop_keeps_emission(
     drop(initial);
     let mut current = retained.resubscribe();
     drop(retained);
-    assert_eq!(cache.read("key", None).await.unwrap().value_or(0), 42);
+    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     let mut received = Vec::with_capacity(2);
     while let Ok(event) = current.try_recv() {
         received.push(event);

@@ -261,7 +261,7 @@ async fn native_core_rechecks_fences_repairs_and_releases_before_returning() {
         return;
     };
     let f = fixture(&url, "normal").await;
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     assert_eq!(f.store.snapshots.reads.load(Ordering::SeqCst), 2);
     assert_eq!(f.store.snapshots.proofs.lock().unwrap().len(), 1);
     assert_eq!(
@@ -270,7 +270,7 @@ async fn native_core_rechecks_fences_repairs_and_releases_before_returning() {
     );
     let next = replacement(&f, &f.store.snapshots.last_proof()).await;
     next.release().await.unwrap();
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     assert_eq!(
         f.store.snapshots.reads.load(Ordering::SeqCst),
         2,
@@ -288,7 +288,7 @@ async fn native_core_replaced_token_cannot_repair_or_create_fresh_local_authorit
     let gate = Gate::new();
     *f.store.snapshots.write.lock().unwrap() = Write::Park(gate.clone());
     let cache = f.cache.clone();
-    let call = tokio::spawn(async move { cache.read("key", None).await });
+    let call = tokio::spawn(async move { cache.try_get("key").await });
     gate.entered().await;
     let old = f.store.snapshots.last_proof();
     f.locker
@@ -322,7 +322,7 @@ async fn native_core_replaced_token_cannot_repair_or_create_fresh_local_authorit
     );
     next.release().await.unwrap();
     *f.store.snapshots.write.lock().unwrap() = Write::Pass;
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     assert_eq!(
         f.store.snapshots.reads.load(Ordering::SeqCst),
         4,
@@ -354,14 +354,14 @@ async fn native_eager_returns_before_fenced_write_and_releases_actual_redis_toke
             .with_skip_distributed_locker(false),
     )
     .await;
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     let gate = Gate::new();
     *f.store.snapshots.write.lock().unwrap() = Write::Park(gate.clone());
     f.clock.set(time(16));
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     gate.entered().await;
     for _ in 0..4 {
-        assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+        assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     }
     assert_eq!(f.store.snapshots.proofs.lock().unwrap().len(), 2);
     assert_eq!(f.store.snapshots.reads.load(Ordering::SeqCst), 3);
@@ -412,7 +412,7 @@ async fn native_failed_repair_reacquires_token_and_preserves_original_deadlines(
     )
     .await;
     *f.store.snapshots.write.lock().unwrap() = Write::Backend;
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     let original = f.store.snapshots.last_proof();
     let queued = f.cache.marker_snapshot_recovery_ticket(&kind()).unwrap();
     let RecoveryWork::MarkerSnapshot(work) = queued.work() else {

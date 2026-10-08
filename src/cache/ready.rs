@@ -126,7 +126,10 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
     ) -> bool {
         let distributed = match target {
             OptionsTarget::Value => matches!(self.storage, Storage::Hybrid { .. }),
-            OptionsTarget::Marker => matches!(self.markers, MarkerAccess::Durable(_)),
+            OptionsTarget::Marker => matches!(
+                self.markers,
+                MarkerAccess::Durable(_) | MarkerAccess::Ordinary(_)
+            ),
         };
         RuntimeRequirement::for_options(
             opts,

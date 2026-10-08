@@ -626,9 +626,6 @@ impl OwnedInlinePermit {
             Ok(())
         }
     }
-    pub(crate) fn status(&self, token: Option<&FactoryCancellation>) -> Result<()> {
-        status(&self.registry, token)
-    }
 }
 impl Drop for OwnedInlinePermit {
     fn drop(&mut self) {

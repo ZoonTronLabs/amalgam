@@ -139,7 +139,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     cache
         .remove_by_tag(Tag::new("new").unwrap())
         .with_receipt()
@@ -148,7 +148,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .wait()
         .await
         .unwrap();
-    assert!(!cache.read("key", None).await.unwrap().has_value());
+    assert!(cache.try_get("key").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 

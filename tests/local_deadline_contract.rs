@@ -73,11 +73,8 @@ async fn zero_duration_and_full_range_duration_have_the_same_boundary_in_both_vi
             .await
             .unwrap();
         let expected = (!duration.is_zero()).then_some(3);
-        assert_eq!(
-            asynchronous.read("k", None).await.unwrap().into_value(),
-            expected
-        );
-        assert_eq!(cache.read("k", None).unwrap().into_value(), expected);
+        assert_eq!(asynchronous.try_get("k").await.unwrap(), expected);
+        assert_eq!(cache.try_get("k").execute().unwrap(), expected);
     }
     asynchronous.shutdown().await.unwrap();
 }
@@ -94,7 +91,7 @@ async fn physically_expired_stale_is_neither_returned_nor_given_to_the_factory()
         .unwrap();
     cache.set("k", 7_u64).await.unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;
-    assert_eq!(cache.read("k", None).await.unwrap().into_value(), None);
+    assert_eq!(cache.try_get("k").await.unwrap(), None);
     assert!(
         cache
             .get_or_set(
@@ -126,14 +123,14 @@ async fn pinned_eviction_snapshot_does_not_keep_the_replaced_deadline() {
         .unwrap();
     let old = evictions.try_recv().unwrap();
     assert_eq!(*old.value(), 1);
-    assert_eq!(cache.read("k", None).await.unwrap().into_value(), Some(2));
+    assert_eq!(cache.try_get("k").await.unwrap(), Some(2));
     cache
         .set("k", 3)
         .options(|_| EntryOptions::new(Duration::from_millis(5)))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;
-    assert_eq!(cache.read("k", None).await.unwrap().into_value(), None);
+    assert_eq!(cache.try_get("k").await.unwrap(), None);
     assert_eq!(*old.value(), 1);
     cache.shutdown().await.unwrap();
 }

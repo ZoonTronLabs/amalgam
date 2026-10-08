@@ -1,4 +1,5 @@
 //! Multi-level orchestration with fallible boundaries and owned work.
+mod advice;
 mod api;
 pub(crate) mod blocking;
 pub(crate) use blocking::MemoryAcquireRoute;
@@ -11,6 +12,8 @@ mod inline_cold;
 pub use get_request::{GetOrSetFuture, GetOrSetRequest, ReceiptGetOrSetRequest};
 mod invalidation_request;
 mod markers;
+mod ordinary_markers;
+use ordinary_markers::{MarkerReadStorage, MarkerWriteOutcome, OrdinaryMarkers};
 mod memory_inline;
 mod mutation_request;
 pub use invalidation_request::{
@@ -26,6 +29,9 @@ mod plain_ready;
 mod plugin;
 mod read;
 mod read_request;
+pub use read_request::{
+    BlockingTryGetRequest, GetOrDefaultFuture, GetOrDefaultRequest, TryGetFuture, TryGetRequest,
+};
 mod ready;
 mod recovery;
 mod runtime;
@@ -82,7 +88,6 @@ use crate::marker_snapshots::{
     MarkerLifecyclePolicy, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotRead,
     MarkerSnapshotRenewal,
 };
-use crate::maybe::MaybeValue;
 use crate::memory::{CacheMemory, MemoryAdmission, MemoryExpiry, MemoryLimits};
 use crate::memory_locker::{LocalGuard, LocalLocks};
 use crate::observability::{
@@ -287,6 +292,7 @@ enum Storage<V> {
 enum MarkerAccess {
     Local,
     Durable(Arc<dyn InvalidationStore>),
+    Ordinary(Arc<OrdinaryMarkers>),
     Unavailable,
 }
 enum Lifecycle {
@@ -418,26 +424,19 @@ enum OptionsTarget {
     Value,
     Marker,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum L2ReadPolicy {
-    PreserveFailure,
-    FactoryFallback,
-}
+struct L2ReadPolicy;
 impl L2ReadPolicy {
-    fn rethrow(self, options: &EntryOptions, error: &Error) -> bool {
-        match self {
-            Self::PreserveFailure => true,
-            Self::FactoryFallback => match error {
-                Error::Serialization(_) | Error::Deserialization(_) | Error::Codec(_) => {
-                    options.rethrow_serialization_exceptions()
-                }
-                Error::Config(_)
-                | Error::Clone(_)
-                | Error::Tag(_)
-                | Error::OperationCancelled { .. }
-                | Error::FactoryCancelled { .. } => true,
-                _ => options.rethrow_distributed_exceptions(),
-            },
+    fn rethrow(options: &EntryOptions, error: &Error) -> bool {
+        match error {
+            Error::Serialization(_) | Error::Deserialization(_) | Error::Codec(_) => {
+                options.rethrow_serialization_exceptions()
+            }
+            Error::Config(_)
+            | Error::Clone(_)
+            | Error::Tag(_)
+            | Error::OperationCancelled { .. }
+            | Error::FactoryCancelled { .. } => true,
+            _ => options.rethrow_distributed_exceptions(),
         }
     }
 }
@@ -806,7 +805,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     fn validate_execution_options(&self, opts: &EntryOptions, target: OptionsTarget) -> Result<()> {
         self.inner.validate_execution_options(opts, target)
     }
-    #[inline]
     fn copy(&self, value: &V, opts: &EntryOptions) -> Result<V> {
         self.inner.copy(value, opts)
     }
@@ -871,7 +869,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         self.memory.emit(event);
     }
-    #[inline]
     fn tags(&self, entry: &Entry<V>) -> TagVerdict {
         self.inner.tags(entry)
     }

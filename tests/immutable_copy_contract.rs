@@ -31,14 +31,10 @@ async fn compiler_proven_owned_values_bypass_codec_copy_and_remain_isolated() {
         .await
         .unwrap();
     original[0].push_str(" input mutation");
-    let mut read = cache
-        .read("value", None)
-        .await
-        .unwrap()
-        .value_or(Vec::new());
+    let mut read = cache.try_get("value").await.unwrap().unwrap_or(Vec::new());
     read[0].push_str(" output mutation");
     assert_eq!(
-        cache.read("value", None).await.unwrap().value().unwrap(),
+        cache.try_get("value").await.unwrap().as_ref().unwrap(),
         &["before"]
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -58,14 +54,14 @@ async fn immutable_shared_allocation_retains_identity_and_null_is_a_present_valu
         .with_receipt()
         .await
         .unwrap();
-    let read = cache.read("shared", None).await.unwrap();
+    let read = cache.try_get("shared").await.unwrap();
     assert!(Arc::ptr_eq(
         &original,
-        read.value().unwrap().as_ref().unwrap()
+        read.as_ref().unwrap().as_ref().unwrap()
     ));
     cache.set("null", None).with_receipt().await.unwrap();
-    assert_eq!(cache.read("null", None).await.unwrap().value(), Some(&None));
-    assert!(!cache.read("absent", None).await.unwrap().has_value());
+    assert_eq!(cache.try_get("null").await.unwrap().as_ref(), Some(&None));
+    assert!(cache.try_get("absent").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 

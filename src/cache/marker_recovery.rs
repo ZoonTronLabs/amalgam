@@ -336,19 +336,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn advance_captured_marker(
         &self,
         work: &MarkerMutationRecovery,
+        snapshot: MarkerSnapshot,
+        options: &EntryOptions,
     ) -> Result<MarkerMutationRecovery> {
         let command = work.command();
-        let store = match &self.inner.markers {
-            MarkerAccess::Durable(store) => store,
-            MarkerAccess::Local | MarkerAccess::Unavailable => {
-                return Err(MarkerError::Unsupported.into());
-            }
-        };
-        let outcome = store
-            .advance(
+        let outcome = self
+            .write_marker_revision(
                 command.scope(),
                 command.marker().kind().clone(),
-                command.marker().version(),
+                snapshot,
+                options,
             )
             .await?;
         self.apply_marker(outcome.marker().clone());
@@ -358,8 +355,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             outcome.marker().clone(),
         )?;
         let additional = match outcome {
-            MarkerAdvanceOutcome::Advanced(_) => Box::from([]),
-            MarkerAdvanceOutcome::Compacted { clear_remove, .. } => {
+            MarkerWriteOutcome::Written(_) => Box::from([]),
+            MarkerWriteOutcome::Compacted { clear_remove, .. } => {
                 let clear = MarkerCommand::new(
                     Arc::clone(&self.inner.instance_id),
                     self.inner.scope.clone(),
@@ -407,8 +404,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let advanced;
         let work = match original.stage() {
-            MarkerMutationStage::Advance { .. } => {
-                advanced = self.advance_captured_marker(original).await?;
+            MarkerMutationStage::Advance { snapshot, options } => {
+                advanced = self
+                    .advance_captured_marker(original, snapshot, options)
+                    .await?;
                 if recovery.marker_population_stage(ticket, advanced.clone())
                     == RecoveryStageTransition::Superseded
                 {

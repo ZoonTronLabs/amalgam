@@ -67,7 +67,7 @@ async fn selected_stale_source(source: NewerSource) {
     }
     clock.advance(Duration::from_secs(2));
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&2));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
     let level = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if let CacheEvent::OperationCompleted { level, .. } = events.recv().await.unwrap() {
@@ -85,7 +85,7 @@ async fn selected_stale_source(source: NewerSource) {
         })
     );
     assert_eq!(
-        cache.read("key", None).await.unwrap().value(),
+        cache.try_get("key").await.unwrap().as_ref(),
         Some(&2),
         "selecting newer stale data must not replace it with an older L2 snapshot"
     );

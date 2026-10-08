@@ -83,7 +83,7 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
             .await
             .unwrap();
         for _ in 0..1000 {
-            assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&17));
+            assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&17));
         }
         assert!(matches!(
             stream.try_recv(),
@@ -170,7 +170,10 @@ impl PluginSession for ReentrantSession {
             let cache = self.context.cache()?.blocking(self.runtime.clone());
             let map =
                 |error| PluginError::from_source("reentrant-layer", PluginStage::Event, error);
-            assert_eq!(cache.read("caller", None).map_err(map)?.value(), Some(&23));
+            assert_eq!(
+                cache.try_get("caller").execute().map_err(map)?.as_ref(),
+                Some(&23)
+            );
             cache
                 .remove("caller")
                 .with_receipt()
@@ -209,7 +212,7 @@ fn cache_aware_layer_hook_can_read_and_mutate_the_same_key_after_lane_release() 
             .wait()
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert!(!cache.read("caller", None).unwrap().has_value());
+        assert!(cache.try_get("caller").execute().unwrap().is_none());
         registration.stop().unwrap();
         cache.shutdown().unwrap();
     }
@@ -221,7 +224,7 @@ struct GatedBackend {
 }
 #[async_trait]
 impl DistributedCache for GatedBackend {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {

@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
         .try_build()?;
     cache.set("answer", 42).with_receipt().await?.wait().await?;
-    assert_eq!(cache.read("answer", None).await?.value(), Some(&42));
+    assert_eq!(cache.try_get("answer").await?.as_ref(), Some(&42));
     cache.shutdown().await?;
     tokio::task::spawn_blocking(move || provider.shutdown()).await??;
     Ok(())

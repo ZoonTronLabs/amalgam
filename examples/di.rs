@@ -181,17 +181,14 @@ async fn main() -> amalgam::Result<()> {
     println!("sessions[\"session:abc\"] -> {token}");
 
     // The `config` cache has never seen `session:abc`. `try_get` is a pure read
-    // (no factory): it returns `MaybeValue::none` here, demonstrating the two
+    // (no factory): it returns `None` here, demonstrating the two
     // named caches do not share storage.
-    let config_view = config.try_get("session:abc", None).await;
+    let config_view = config.try_get("session:abc").await.unwrap();
     println!(
         "config[\"session:abc\"] present? {} (independent storage)",
-        config_view.has_value()
+        config_view.is_some()
     );
-    assert!(
-        !config_view.has_value(),
-        "named caches must not share storage"
-    );
+    assert!(config_view.is_none(), "named caches must not share storage");
 
     // Store something in `config` under a `config:*` key; the options provider
     // hands it the long (1 h) freshness window for that prefix.

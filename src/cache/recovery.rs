@@ -2,10 +2,10 @@
 use super::{
     AcquisitionPolicy, Arc, BackplaneCommand, BackplaneState, CacheInner, CancellationSource,
     CircuitComponent, DataMutation, DistributedSnapshot, Error, FactoryCancellation, LeaseError,
-    LeasePolicy, LocalParticipation, MarkerAccess, MarkerAdvanceOutcome, MarkerCommand,
-    MarkerError, MarkerKind, MarkerReplay, PendingMutation, RecoveryAction, RecoveryExecutor,
-    RecoveryItem, RecoveryWork, ReplayOutcome, ReplayTicket, Result, Storage, StoredMarker,
-    TagVerdict, Timestamp, Worker, acquire_owned_supervised, async_trait,
+    LeasePolicy, LocalParticipation, MarkerAccess, MarkerCommand, MarkerError, MarkerKind,
+    MarkerReplay, MarkerSnapshot, MarkerWriteOutcome, PendingMutation, RecoveryAction,
+    RecoveryExecutor, RecoveryItem, RecoveryWork, ReplayOutcome, ReplayTicket, Result, Storage,
+    StoredMarker, TagVerdict, Timestamp, Worker, acquire_owned_supervised, async_trait,
 };
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
@@ -283,19 +283,24 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     MarkerReplay::AdvanceAndNotify | MarkerReplay::AdvanceOnly
                 ) {
                     match &self.inner.markers {
-                        MarkerAccess::Durable(store) => {
-                            let outcome = store
-                                .advance(
+                        MarkerAccess::Durable(_) | MarkerAccess::Ordinary(_) => {
+                            let outcome = self
+                                .write_marker_revision(
                                     command.scope(),
                                     command.marker().kind().clone(),
-                                    command.marker().version(),
+                                    MarkerSnapshot::fresh(
+                                        command.marker().version(),
+                                        &self.inner.tags_default_options,
+                                        command.marker().version().timestamp(),
+                                    ),
+                                    &self.inner.tags_default_options,
                                 )
                                 .await?;
                             self.apply_marker(outcome.marker().clone());
                             if *stage == MarkerReplay::AdvanceAndNotify {
                                 recovery.notification_stage(&ticket);
                             }
-                            if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
+                            if let MarkerWriteOutcome::Compacted { clear_remove, .. } = outcome {
                                 let clear = MarkerCommand::new(
                                     Arc::clone(&self.inner.instance_id),
                                     self.inner.scope.clone(),

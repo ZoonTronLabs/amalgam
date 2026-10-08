@@ -4,6 +4,7 @@ use amalgam::entry::Entry;
 use amalgam::locking::KeyedLock;
 use amalgam::provider::*;
 use amalgam::*;
+use std::future::IntoFuture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
@@ -48,7 +49,7 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         store.state.lock().unwrap().records["key"].entry().value(),
         &7
     );
-    assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(7));
     assert_eq!(
         c.get_or_set::<_, _>(
             "key",
@@ -65,7 +66,7 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .wait()
         .await
         .unwrap();
-    assert!(c.read("key", None).await.unwrap().into_value().is_none());
+    assert!(c.try_get("key").into_future().await.unwrap().is_none());
     c.set("key", 8)
         .with_receipt()
         .await
@@ -128,7 +129,7 @@ async fn disabled_store_returns_computed_value_with_rejected_admission() {
         .unwrap(),
         12
     );
-    assert!(c.read("key", None).await.unwrap().into_value().is_none());
+    assert!(c.try_get("key").into_future().await.unwrap().is_none());
     assert_eq!(c.memory_usage().unwrap().entries, 0);
     c.shutdown().await.unwrap();
 }
@@ -158,7 +159,7 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
             CapacityRejection::ProtectedCapacity
         ))
     ));
-    assert_eq!(c.read("pinned", None).await.unwrap().into_value(), Some(13));
+    assert_eq!(c.try_get("pinned").into_future().await.unwrap(), Some(13));
     c.remove("pinned")
         .with_receipt()
         .await
@@ -184,8 +185,8 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
         .unwrap();
     // low was inserted before the subscription: select retirement-time capture
     // separately below rather than claiming insertion-time diagnostics exist.
-    assert!(c.read("low", None).await.unwrap().into_value().is_none());
-    assert_eq!(c.read("high", None).await.unwrap().into_value(), Some(16));
+    assert!(c.try_get("low").into_future().await.unwrap().is_none());
+    assert_eq!(c.try_get("high").into_future().await.unwrap(), Some(16));
     assert!(matches!(
         evictions.try_recv(),
         Err(EvictionReceiveError::Empty)
@@ -218,7 +219,7 @@ async fn weight_accounting_uses_full_u64_units_and_rejection_is_explicit() {
         report.local,
         LocalEffect::Stored(MemoryAdmission::Rejected(CapacityRejection::Oversized))
     ));
-    assert_eq!(c.read("large", None).await.unwrap().into_value(), Some(17));
+    assert_eq!(c.try_get("large").into_future().await.unwrap(), Some(17));
     c.shutdown().await.unwrap();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -300,9 +301,9 @@ async fn controlled_clock_keeps_values_until_the_actual_physical_deadline() {
         .unwrap();
     let mut evictions = c.memory_evictions().subscribe();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(c.read("clock", None).await.unwrap().into_value(), Some(29));
+    assert_eq!(c.try_get("clock").into_future().await.unwrap(), Some(29));
     clock.advance(Duration::from_millis(20));
-    assert!(c.read("clock", None).await.unwrap().into_value().is_none());
+    assert!(c.try_get("clock").into_future().await.unwrap().is_none());
     let event = evictions.try_recv().unwrap();
     assert_eq!(event.value(), &29);
     assert_eq!(event.reason(), MemoryEvictionReason::Expired);
@@ -324,7 +325,7 @@ async fn system_clock_retires_physically_expired_records() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(c.read("clock", None).await.unwrap().into_value().is_none());
+    assert!(c.try_get("clock").into_future().await.unwrap().is_none());
     assert_eq!(c.memory_usage().unwrap().entries, 0);
     c.shutdown().await.unwrap();
 }
@@ -399,7 +400,7 @@ async fn eager_refresh_updates_the_supplied_store_in_the_background() {
         41
     );
     c.flush_pending().await.unwrap();
-    assert_eq!(c.read("eager", None).await.unwrap().into_value(), Some(43));
+    assert_eq!(c.try_get("eager").into_future().await.unwrap(), Some(43));
     assert_eq!(
         store.state.lock().unwrap().records["eager"].entry().value(),
         &43
@@ -469,7 +470,7 @@ async fn write_remove_maintenance_and_usage_errors_remain_typed() {
     *store.fault.lock().unwrap() = Some(Fault::Usage);
     assert_eq!(cause(&c.memory_usage().unwrap_err()), Fault::Usage);
     *store.fault.lock().unwrap() = None;
-    assert_eq!(c.read("k", None).await.unwrap().into_value(), Some(53));
+    assert_eq!(c.try_get("k").into_future().await.unwrap(), Some(53));
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -490,7 +491,7 @@ async fn failed_physical_clear_still_prevents_old_records_from_becoming_visible(
     );
     assert!(store.state.lock().unwrap().records.contains_key("k"));
     *store.fault.lock().unwrap() = None;
-    assert!(c.read("k", None).await.unwrap().into_value().is_none());
+    assert!(c.try_get("k").into_future().await.unwrap().is_none());
     assert!(!store.state.lock().unwrap().records.contains_key("k"));
     c.shutdown().await.unwrap();
 }
@@ -524,7 +525,7 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.read("shared", None).await.unwrap().into_value(), Some(67));
+    assert_eq!(b.try_get("shared").into_future().await.unwrap(), Some(67));
     b.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -561,8 +562,8 @@ async fn shared_provider_clear_is_isolated_by_the_actual_key_prefix() {
         .wait()
         .await
         .unwrap();
-    assert!(a.read("key", None).await.unwrap().into_value().is_none());
-    assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(73));
+    assert!(a.try_get("key").into_future().await.unwrap().is_none());
+    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(73));
     assert_eq!(b.memory_usage().unwrap().entries, 1);
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -615,8 +616,8 @@ fn overlapping_clear_preserves_a_write_admitted_after_its_barrier() {
         .unwrap();
     gate.resume.wait();
     work.join().unwrap();
-    assert_eq!(b.read("key", None).unwrap().into_value(), Some(83));
-    assert_eq!(a.read("key", None).unwrap().into_value(), Some(83));
+    assert_eq!(b.try_get("key").execute().unwrap(), Some(83));
+    assert_eq!(a.try_get("key").execute().unwrap(), Some(83));
     a.shutdown().unwrap();
     b.shutdown().unwrap();
 }
@@ -648,13 +649,15 @@ fn native_and_async_views_use_the_same_supplied_store_and_typed_failure() {
         .unwrap();
     assert_eq!(
         runtime
-            .block_on(native.as_async().read("native", None))
-            .unwrap()
-            .into_value(),
+            .block_on(native.as_async().try_get("native").into_future())
+            .unwrap(),
         Some(89)
     );
     *store.fault.lock().unwrap() = Some(Fault::Get);
-    assert_eq!(cause(&native.read("native", None).unwrap_err()), Fault::Get);
+    assert_eq!(
+        cause(&native.try_get("native").execute().unwrap_err()),
+        Fault::Get
+    );
     *store.fault.lock().unwrap() = None;
     native.shutdown().unwrap();
 }
@@ -796,7 +799,7 @@ struct PausedL2 {
 }
 #[async_trait::async_trait]
 impl DistributedCache for PausedL2 {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         let bytes = self.backend.get(key).await?;
         if key.ends_with("value") {
             self.entered.notify_one();
@@ -851,7 +854,7 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
         .try_build()
         .unwrap();
     let reading = a.clone();
-    let work = tokio::spawn(async move { reading.read("value", None).await });
+    let work = tokio::spawn(async move { reading.try_get("value").into_future().await });
     pause.entered.notified().await;
     clock.advance(Duration::from_secs(1));
     b.set("value", 113_u64)
@@ -863,9 +866,9 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
         .unwrap();
     let selected = store.state.lock().unwrap().records["value"].entry().clone();
     pause.resume.add_permits(1);
-    assert!(work.await.unwrap().unwrap().has_value());
+    assert!(work.await.unwrap().unwrap().is_some());
     assert!(store.state.lock().unwrap().records["value"].is_same_entry(&selected));
-    assert_eq!(a.read("value", None).await.unwrap().into_value(), Some(113));
+    assert_eq!(a.try_get("value").into_future().await.unwrap(), Some(113));
     source.shutdown().await.unwrap();
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -916,7 +919,7 @@ async fn soft_timeout_retains_background_completion_in_supplied_storage() {
     entered.notified().await;
     resume.add_permits(1);
     c.flush_pending().await.unwrap();
-    assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(131));
+    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(131));
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -1090,7 +1093,7 @@ fn shared_original_observer_can_reenter_replacing_cache_after_its_commit_guard()
         .wait()
         .unwrap();
     assert_eq!(observer.callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(b.read("key", None).unwrap().into_value(), Some(149));
+    assert_eq!(b.try_get("key").execute().unwrap(), Some(149));
     a.shutdown().unwrap();
     b.shutdown().unwrap();
 }
@@ -1172,7 +1175,7 @@ async fn non_copy_values_use_the_same_public_storage_contract() {
         SystemClock.now()
     ));
     assert_eq!(
-        c.read("key", None).await.unwrap().into_value().as_deref(),
+        c.try_get("key").into_future().await.unwrap().as_deref(),
         Some("first")
     );
     c.remove("key")

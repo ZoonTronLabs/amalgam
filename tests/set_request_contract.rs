@@ -27,7 +27,7 @@ fn request_and_its_unpolled_future_retain_input_without_writing() {
         let weak = Arc::downgrade(&value);
         let request = cache.set("lazy", value);
         assert!(weak.upgrade().is_some());
-        assert!(!ready(cache.read("lazy", None)).unwrap().has_value());
+        assert!(ready(cache.try_get("lazy")).unwrap().is_none());
         if convert {
             let future = request.into_future();
             assert!(weak.upgrade().is_some());
@@ -36,7 +36,7 @@ fn request_and_its_unpolled_future_retain_input_without_writing() {
             drop(request);
         }
         assert!(weak.upgrade().is_none());
-        assert!(!ready(cache.read("lazy", None)).unwrap().has_value());
+        assert!(ready(cache.try_get("lazy")).unwrap().is_none());
     }
 }
 
@@ -44,10 +44,10 @@ fn request_and_its_unpolled_future_retain_input_without_writing() {
 fn plain_write_is_inline_and_receipt_is_an_explicit_completed_choice() {
     let cache = Cache::<u64>::new();
     ready(cache.set("value", 17)).unwrap();
-    assert_eq!(ready(cache.read("value", None)).unwrap().value(), Some(&17));
+    assert_eq!(ready(cache.try_get("value")).unwrap().as_ref(), Some(&17));
     let receipt = ready(cache.set("value", 19).with_receipt()).unwrap();
     assert!(matches!(receipt, MutationReceipt::Completed(_)));
-    assert_eq!(ready(cache.read("value", None)).unwrap().value(), Some(&19));
+    assert_eq!(ready(cache.try_get("value")).unwrap().as_ref(), Some(&19));
     cache.close();
     assert!(matches!(
         ready(cache.set("value", 21)),
@@ -63,7 +63,7 @@ fn a_blank_tag_returns_a_typed_error_and_keeps_the_previous_value() {
         ready(cache.set("value", 19).tags(["valid", " "])),
         Err(Error::Tag(TagError::Blank))
     ));
-    assert_eq!(ready(cache.read("value", None)).unwrap().value(), Some(&17));
+    assert_eq!(ready(cache.try_get("value")).unwrap().as_ref(), Some(&17));
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn duration_overlay_preserves_fail_safe_from_cache_defaults() {
     )
     .unwrap();
     clock.advance(Duration::from_secs(2));
-    assert!(!ready(cache.read("value", None)).unwrap().has_value());
+    assert!(ready(cache.try_get("value")).unwrap().is_none());
     let fallback = ready(cache.get_or_set(
         "value",
         amalgam::source::factory(|context| {

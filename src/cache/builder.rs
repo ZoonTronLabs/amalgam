@@ -38,7 +38,7 @@ pub struct CacheBuilder<V> {
     key_prefix: Option<Arc<str>>,
     default_options: EntryOptions,
     tags_default_options: EntryOptions,
-    marker_read_policy: MarkerReadPolicy,
+    marker_read_policy: Option<MarkerReadPolicy>,
     marker_lifecycle_policy: MarkerLifecyclePolicy,
     marker_read_limits: Option<MemoryLimits>,
     marker_memory_storage:
@@ -85,7 +85,7 @@ impl<V> CacheBuilder<V> {
             key_prefix: None,
             default_options: EntryOptions::default(),
             tags_default_options: EntryOptions::tag_defaults(),
-            marker_read_policy: MarkerReadPolicy::default(),
+            marker_read_policy: None,
             marker_lifecycle_policy: MarkerLifecyclePolicy::default(),
             marker_read_limits: None,
             marker_memory_storage: None,
@@ -246,10 +246,11 @@ impl<V> CacheBuilder<V> {
         self
     }
 
-    /// Selects independent secondary marker reads while preserving the existing
-    /// durable contract by default. Skips/suppressed failures are explicit choices.
+    /// Selects independent secondary marker reads. Atomic providers retain the
+    /// durable default; byte-only L2 selects OptionsControlled automatically.
+    /// Explicit DurableRequired needs a genuine atomic invalidation provider.
     pub fn marker_read_policy(mut self, policy: MarkerReadPolicy) -> Self {
-        self.marker_read_policy = policy;
+        self.marker_read_policy = Some(policy);
         self
     }
 
@@ -562,29 +563,56 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             Arc::clone(&self.distributed_wire_version),
             self.distributed_key_modifier_mode,
         )?;
-        let markers = match self.invalidation_store.or_else(|| {
+        let marker_provider = self.invalidation_store.or_else(|| {
             self.distributed
                 .as_ref()
                 .and_then(|backend| backend.invalidation_store())
-        }) {
-            Some(store) => MarkerAccess::Durable(store),
-            None if self.distributed.is_some() => MarkerAccess::Unavailable,
-            None => MarkerAccess::Local,
+        });
+        let markers = match (marker_provider, self.distributed.as_ref()) {
+            (Some(store), _) => MarkerAccess::Durable(store),
+            (None, Some(backend)) => {
+                if matches!(self.profile, ConfigurationProfile::Strict) {
+                    if !self.disable_tagging {
+                        return Err(ConfigError::AtomicInvalidationUnavailable.into());
+                    }
+                    MarkerAccess::Unavailable
+                } else {
+                    MarkerAccess::Ordinary(Arc::new(super::OrdinaryMarkers::new(Arc::clone(
+                        backend,
+                    ))))
+                }
+            }
+            (None, None) => MarkerAccess::Local,
         };
+        let marker_read_policy = self.marker_read_policy.unwrap_or_else(|| {
+            if matches!(markers, MarkerAccess::Ordinary(_)) {
+                MarkerReadPolicy::OptionsControlled
+            } else {
+                MarkerReadPolicy::default()
+            }
+        });
+        if !self.disable_tagging
+            && matches!(markers, MarkerAccess::Ordinary(_))
+            && marker_read_policy == MarkerReadPolicy::DurableRequired
+        {
+            return Err(ConfigError::AtomicInvalidationUnavailable.into());
+        }
         if self.marker_memory_storage.is_some()
-            && self.marker_read_policy != MarkerReadPolicy::OptionsControlled
+            && marker_read_policy != MarkerReadPolicy::OptionsControlled
         {
             return Err(ConfigError::SuppliedMarkerMemoryRequiresControlledReads.into());
         }
         let marker_lifecycle = match self.marker_lifecycle_policy {
             MarkerLifecyclePolicy::DurableOnly => MarkerLifecycleAccess::DurableOnly,
             MarkerLifecyclePolicy::CachedSnapshots => {
-                if self.marker_read_policy != MarkerReadPolicy::OptionsControlled {
+                if marker_read_policy != MarkerReadPolicy::OptionsControlled {
                     return Err(ConfigError::MarkerLifecycleRequiresControlledReads.into());
                 }
                 let cache = match &markers {
                     MarkerAccess::Durable(store) => store.snapshot_cache(),
-                    MarkerAccess::Local | MarkerAccess::Unavailable => None,
+                    MarkerAccess::Local | MarkerAccess::Ordinary(_) | MarkerAccess::Unavailable => {
+                        None
+                    }
                 }
                 .ok_or(ConfigError::MarkerSnapshotCapabilityUnavailable)?;
                 MarkerLifecycleAccess::CachedSnapshots(cache)
@@ -634,7 +662,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             Arc::clone(&instance_id),
             coordination,
         );
-        let marker_reads = match self.marker_read_policy {
+        let marker_reads = match marker_read_policy {
             MarkerReadPolicy::DurableRequired => MarkerReads::DurableRequired,
             MarkerReadPolicy::OptionsControlled => {
                 let limits = self.marker_read_limits.unwrap_or_else(|| {
@@ -648,7 +676,9 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                     MarkerAccess::Local => crate::marker_reads::MarkerMemoryNamespace::Local(
                         self.key_prefix.clone().unwrap_or_else(|| Arc::from("")),
                     ),
-                    MarkerAccess::Durable(_) | MarkerAccess::Unavailable => {
+                    MarkerAccess::Durable(_)
+                    | MarkerAccess::Ordinary(_)
+                    | MarkerAccess::Unavailable => {
                         crate::marker_reads::MarkerMemoryNamespace::Durable(scope.clone())
                     }
                 };
@@ -794,6 +824,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 .plugins
                 .attach_owned(plugin.bind(&cache.inner))?;
         }
+        cache.inner.advise_configuration();
         Ok(cache)
     }
 }

@@ -487,9 +487,9 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
         .await
         .expect("eager refresh completed promptly")
         .expect("eager refresh drained");
-    let after = a.try_get("k", None).await;
+    let after = a.try_get("k").await.unwrap();
     assert_eq!(
-        (calls.load(Ordering::SeqCst), after.value().copied()),
+        (calls.load(Ordering::SeqCst), after.as_ref().copied()),
         (0, Some(2)),
         "eager refresh skipped newer L2 and executed an unnecessary origin factory"
     );
@@ -559,7 +559,7 @@ async fn tag_invalidation_must_cover_a_factory_snapshot_started_before_its_marke
         .expect("first joined")
         .expect("overlapping call returned its snapshot");
     assert!(
-        !cache.try_get("k", None).await.has_value(),
+        cache.try_get("k").await.unwrap().is_none(),
         "factory snapshot from before marker was timestamped at completion and escaped invalidation"
     );
 }
@@ -657,7 +657,7 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
         1
     );
     cache.remove("k").await.unwrap();
-    assert!(!cache.try_get("k", None).await.has_value());
+    assert!(cache.try_get("k").await.unwrap().is_none());
     let _ = release_tx.send(());
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -672,7 +672,7 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
     .await
     .expect("background completed");
     assert_eq!(
-        cache.try_get("k", None).await.value().copied(),
+        cache.try_get("k").await.unwrap().as_ref().copied(),
         None,
         "an awaited remove supersedes a previously started background factory"
     );

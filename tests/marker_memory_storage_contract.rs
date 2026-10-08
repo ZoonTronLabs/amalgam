@@ -63,7 +63,7 @@ async fn actual_records_include_local_authority_independent_metadata_and_ready_r
     let provider: Arc<dyn MemoryStorage<MarkerObservation>> = store.clone();
     assert!(Arc::ptr_eq(c.marker_memory_storage().unwrap(), &provider));
     tagged(&c, 7).await;
-    assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(7));
     {
         let state = store.state.lock().unwrap();
         assert_eq!(state.records.len(), 3);
@@ -106,7 +106,7 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
     let a = node(&store, &clock, "shared:");
     let b = node(&store, &clock, "shared:");
     tagged(&b, 13).await;
-    assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(13));
+    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(13));
     clock.advance(Duration::from_millis(1));
     a.remove_by_tag(tag())
         .with_receipt()
@@ -149,7 +149,7 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
             .wait()
             .await
             .unwrap();
-        assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(19));
+        assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(19));
         clock.advance(Duration::from_millis(1));
         a.clear(mode)
             .with_receipt()
@@ -158,7 +158,10 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
             .wait()
             .await
             .unwrap();
-        assert!(!b.read("key", None).await.unwrap().has_value(), "{mode:?}");
+        assert!(
+            b.try_get("key").into_future().await.unwrap().is_none(),
+            "{mode:?}"
+        );
         a.shutdown().await.unwrap();
         b.shutdown().await.unwrap();
     }
@@ -180,7 +183,7 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .unwrap();
     tagged(&b, 23).await;
     let original = values.state.lock().unwrap().records["key"].clone();
-    assert!(b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_some());
     clock.advance(Duration::from_millis(1));
     a.remove_by_tag(tag())
         .with_receipt()
@@ -189,7 +192,7 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .wait()
         .await
         .unwrap();
-    assert!(!b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_none());
     store.state.lock().unwrap().records.clear();
     values
         .state
@@ -197,7 +200,7 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .unwrap()
         .records
         .insert(Arc::from("key"), original);
-    assert!(!b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_none());
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -219,8 +222,15 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
         .unwrap();
     tagged(&b, 29).await;
     tagged(&durable, 31).await;
-    assert!(b.read("key", None).await.unwrap().has_value());
-    assert!(durable.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        durable
+            .try_get("key")
+            .into_future()
+            .await
+            .unwrap()
+            .is_some()
+    );
     clock.advance(Duration::from_millis(1));
     a.remove_by_tag(tag())
         .with_receipt()
@@ -229,9 +239,9 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(29));
+    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(29));
     assert_eq!(
-        durable.read("key", None).await.unwrap().into_value(),
+        durable.try_get("key").into_future().await.unwrap(),
         Some(31)
     );
     {
@@ -277,7 +287,7 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
     }
     for c in &caches {
         tagged(c, 37).await;
-        assert!(c.read("key", None).await.unwrap().has_value());
+        assert!(c.try_get("key").into_future().await.unwrap().is_some());
     }
     clock.advance(Duration::from_millis(1));
     caches[0]
@@ -288,9 +298,16 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
         .wait()
         .await
         .unwrap();
-    assert!(!caches[0].read("key", None).await.unwrap().has_value());
+    assert!(
+        caches[0]
+            .try_get("key")
+            .into_future()
+            .await
+            .unwrap()
+            .is_none()
+    );
     for c in &caches[1..] {
-        assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(37));
+        assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(37));
     }
     assert_eq!(store.state.lock().unwrap().records.len(), 9);
     for c in caches {
@@ -343,7 +360,7 @@ async fn marker_maintenance_and_usage_keep_their_original_channels() {
         .wait()
         .await
         .unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     *store.fault.lock().unwrap() = Some(Fault::Maintain);
     assert_eq!(
         cause(&c.run_pending_tasks().await.unwrap_err()),
@@ -386,8 +403,15 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
             .wait()
             .await
             .unwrap();
-        assert!(c.read("key", None).await.unwrap().has_value());
-        assert!(foreign.read("key", None).await.unwrap().has_value());
+        assert!(c.try_get("key").into_future().await.unwrap().is_some());
+        assert!(
+            foreign
+                .try_get("key")
+                .into_future()
+                .await
+                .unwrap()
+                .is_some()
+        );
         let target = store
             .state
             .lock()
@@ -412,7 +436,7 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
         };
         store.state.lock().unwrap().records.insert(target, record);
         assert!(
-            matches!(c.read("key", None).await.unwrap_err(), Error::MarkerMemoryStorage(MemoryStorageError::InvalidRecord { violation: got }) if got == violation)
+            matches!(c.try_get("key").into_future().await.unwrap_err(), Error::MarkerMemoryStorage(MemoryStorageError::InvalidRecord { violation: got }) if got == violation)
         );
         c.shutdown().await.unwrap();
         foreign.shutdown().await.unwrap();
@@ -465,10 +489,10 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .wait()
         .await
         .unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 0);
     let writes = store.writes.load(Ordering::SeqCst);
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     assert!(store.writes.load(Ordering::SeqCst) > writes);
     c.shutdown().await.unwrap();
     let store = MapStorage::new();
@@ -487,11 +511,11 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .wait()
         .await
         .unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     clock.advance(Duration::from_secs(2));
     c.run_pending_tasks().await.unwrap();
     assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 0);
-    assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(67));
+    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(67));
     assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 2);
     c.shutdown().await.unwrap();
 }
@@ -515,7 +539,7 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .wait()
         .await
         .unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     assert_eq!(store.lookups.load(Ordering::SeqCst), 0);
     assert_eq!(store.ready.load(Ordering::SeqCst), 0);
     assert_eq!(store.writes.load(Ordering::SeqCst), 0);
@@ -540,7 +564,7 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .await
         .unwrap();
     assert!(
-        matches!(c.read("key", None).await.unwrap_err(), Error::FactoryTimeout { elapsed } if elapsed.is_zero())
+        matches!(c.try_get("key").into_future().await.unwrap_err(), Error::FactoryTimeout { elapsed } if elapsed.is_zero())
     );
     c.shutdown().await.unwrap();
 }
@@ -563,15 +587,14 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(c.read("key", None).unwrap().into_value(), Some(79));
+    assert_eq!(c.try_get("key").execute().unwrap(), Some(79));
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     assert_eq!(
-        rt.block_on(c.as_async().read("key", None))
-            .unwrap()
-            .into_value(),
+        rt.block_on(c.as_async().try_get("key").into_future())
+            .unwrap(),
         Some(79)
     );
     assert_eq!(store.state.lock().unwrap().records.len(), 2);
@@ -580,7 +603,7 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
     rt.block_on(other.set("key", 83).with_receipt().into_future())
         .unwrap();
     assert_eq!(
-        rt.block_on(other.read("key", None)).unwrap().into_value(),
+        rt.block_on(other.try_get("key").into_future()).unwrap(),
         Some(83)
     );
     rt.block_on(other.shutdown()).unwrap();
@@ -607,11 +630,11 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
         .wait()
         .await
         .unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     let created = clock.now();
     clock.advance(Duration::from_secs(6));
     let mut events = c.events().subscribe();
-    assert_eq!(c.read("key", None).await.unwrap().into_value(), Some(89));
+    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(89));
     c.flush_pending().await.unwrap();
     let mut count = 0;
     while let Ok(event) = events.try_recv() {
@@ -639,7 +662,7 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
     let a = node(&store, &clock, "cas:");
     let b = node(&store, &clock, "cas:");
     tagged(&a, 97).await;
-    assert!(a.read("key", None).await.unwrap().has_value());
+    assert!(a.try_get("key").into_future().await.unwrap().is_some());
     let key = store
         .state
         .lock()
@@ -656,7 +679,7 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
     });
     *store.write_gate.lock().unwrap() = Some(gate.clone());
     let reader = a.clone();
-    let pending = tokio::spawn(async move { reader.read("key", None).await });
+    let pending = tokio::spawn(async move { reader.try_get("key").into_future().await });
     gate.entered.wait();
     clock.advance(Duration::from_millis(1));
     b.remove_by_tag(tag())
@@ -667,7 +690,7 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
         .await
         .unwrap();
     gate.resume.wait();
-    assert!(!pending.await.unwrap().unwrap().has_value());
+    assert!(pending.await.unwrap().unwrap().is_none());
     assert!(matches!(
         *store.state.lock().unwrap().records[&key].entry().value(),
         MarkerObservation::KnownMaximum(_)
@@ -749,7 +772,7 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
             .wait()
             .await
             .unwrap();
-        assert!(c.read("key", None).await.unwrap().has_value());
+        assert!(c.try_get("key").into_future().await.unwrap().is_some());
         let old = values.state.lock().unwrap().records["key"].clone();
         let old_markers: Vec<_> = markers
             .state
@@ -764,7 +787,7 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
             *values.fault.lock().unwrap() = Some(Fault::Clear);
         }
         bp.down.store(true, Ordering::SeqCst);
-        let error = c.read("key", None).await.unwrap_err();
+        let error = c.try_get("key").into_future().await.unwrap_err();
         if both {
             let Error::MemoryInvalidation(failures) = error else {
                 panic!("both failures lost: {error:?}");
@@ -786,7 +809,7 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
         );
         *values.fault.lock().unwrap() = None;
         *markers.fault.lock().unwrap() = None;
-        assert!(!c.read("key", None).await.unwrap().has_value());
+        assert!(c.try_get("key").into_future().await.unwrap().is_none());
         c.shutdown().await.unwrap();
     }
 }
@@ -813,7 +836,7 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .wait()
         .await
         .unwrap();
-    assert!(a.read("key", None).await.unwrap().has_value());
+    assert!(a.try_get("key").into_future().await.unwrap().is_some());
     let old: Vec<_> = markers
         .state
         .lock()
@@ -829,7 +852,7 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
     *values.clear_gate.lock().unwrap() = Some(gate.clone());
     bp.down.store(true, Ordering::SeqCst);
     let reader = a.clone();
-    let pending = tokio::spawn(async move { reader.read("key", None).await });
+    let pending = tokio::spawn(async move { reader.try_get("key").into_future().await });
     gate.entered.wait();
     assert!(old.iter().all(|record| !record.is_live_at(clock.now())));
     clock.advance(Duration::from_millis(1));
@@ -840,7 +863,7 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.read("key", None).await.unwrap().into_value(), Some(107));
+    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(107));
     let new: Vec<_> = markers
         .state
         .lock()
@@ -852,9 +875,9 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .collect();
     assert_eq!(new.len(), 2);
     gate.resume.wait();
-    assert_eq!(pending.await.unwrap().unwrap().into_value(), Some(107));
+    assert_eq!(pending.await.unwrap().unwrap(), Some(107));
     assert!(new.iter().all(|record| record.is_live_at(clock.now())));
-    assert_eq!(a.read("key", None).await.unwrap().into_value(), Some(107));
+    assert_eq!(a.try_get("key").into_future().await.unwrap(), Some(107));
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -977,7 +1000,7 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
         .unwrap()
         .wait()
         .unwrap();
-    assert!(c.read("key", None).unwrap().has_value());
+    assert!(c.try_get("key").execute().unwrap().is_some());
     assert_eq!(locker.native.load(Ordering::SeqCst), 2);
     assert_eq!(locker.asynchronous.load(Ordering::SeqCst), 0);
     markers.state.lock().unwrap().records.clear();
@@ -986,9 +1009,9 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
         .build()
         .unwrap();
     assert!(
-        rt.block_on(c.as_async().read("key", None))
+        rt.block_on(c.as_async().try_get("key").into_future())
             .unwrap()
-            .has_value()
+            .is_some()
     );
     assert_eq!(locker.native.load(Ordering::SeqCst), 2);
     assert_eq!(locker.asynchronous.load(Ordering::SeqCst), 2);
@@ -1022,7 +1045,7 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
         .unwrap();
     clock.advance(Duration::from_millis(1));
     tagged(&c, 113).await;
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     let key = store
         .state
         .lock()
@@ -1042,7 +1065,7 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
     };
     clock.advance(Duration::from_secs(3));
     c.run_pending_tasks().await.unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     assert_eq!(
         store.state.lock().unwrap().records[&key]
             .entry()
@@ -1052,7 +1075,7 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
     );
     clock.advance(Duration::from_secs(31));
     c.run_pending_tasks().await.unwrap();
-    assert!(c.read("key", None).await.unwrap().has_value());
+    assert!(c.try_get("key").into_future().await.unwrap().is_some());
     assert_eq!(
         store.state.lock().unwrap().records[&key]
             .entry()
@@ -1070,7 +1093,7 @@ async fn ready_clear_invalidation_stops_before_a_later_provider_contract_fault()
     let a = node(&store, &clock, "stop:");
     let b = node(&store, &clock, "stop:");
     tagged(&b, 127).await;
-    assert!(b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_some());
     clock.advance(Duration::from_millis(1));
     a.clear(ClearMode::Remove)
         .with_receipt()
@@ -1095,7 +1118,7 @@ async fn ready_clear_invalidation_stops_before_a_later_provider_contract_fault()
             .clone();
         state.records.insert(target, unrelated);
     }
-    assert!(!b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_none());
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -1153,7 +1176,7 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         .unwrap(),
         131
     );
-    assert!(b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_some());
     a.remove_by_tag(tag())
         .with_receipt()
         .await
@@ -1161,7 +1184,7 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         .wait()
         .await
         .unwrap();
-    assert!(!b.read("key", None).await.unwrap().has_value());
+    assert!(b.try_get("key").into_future().await.unwrap().is_none());
     tokio::time::sleep(Duration::from_millis(100)).await;
     tagged(a, 137).await;
     assert_eq!(
@@ -1193,7 +1216,7 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         .await
         .unwrap();
     let started = tokio::time::Instant::now();
-    while b.read("key", None).await.unwrap().has_value() {
+    while b.try_get("key").into_future().await.unwrap().is_some() {
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "backplane clear did not converge"

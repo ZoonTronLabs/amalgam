@@ -1,8 +1,8 @@
 //! Native lazy mutation requests use the shared asynchronous operation engine.
 use super::{BlockingCommitCompletion, BlockingMutationReceipt, BlockingRuntime};
 use crate::cache::{
-    ClearRequest, ExpireRequest, ReceiptInvalidationRequest, ReceiptSetRequest, RemoveRequest,
-    SetRequest, TagInvalidationRequest,
+    ClearRequest, ExpireRequest, GetOrDefaultRequest, ReceiptInvalidationRequest,
+    ReceiptSetRequest, RemoveRequest, SetRequest, TagInvalidationRequest,
 };
 use crate::{
     EntryOptions, FactoryCancellation, Result, advanced::DistributedExpirePolicy,
@@ -62,6 +62,7 @@ macro_rules! settings {
 settings!(BlockingRequest, RemoveRequest, K);
 settings!(BlockingRequest, ExpireRequest, K);
 settings!(BlockingRequest, SetRequest, K);
+settings!(BlockingRequest, GetOrDefaultRequest, K);
 settings!(BlockingRequest, TagInvalidationRequest);
 settings!(BlockingRequest, ClearRequest);
 settings!(BlockingReceiptRequest, ReceiptInvalidationRequest, K);

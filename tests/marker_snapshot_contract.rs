@@ -372,7 +372,7 @@ async fn nonzero_miss_repairs_independent_distributed_deadlines_without_backplan
  {
     let (_, _, store, cache) = fixture(tags(), true).await;
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     let writes = store.cache.writes.lock().unwrap().clone();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].version(), version(1));
@@ -402,7 +402,7 @@ async fn nonzero_miss_repairs_independent_distributed_deadlines_without_backplan
 async fn absent_revision_is_locally_cached_but_never_written_to_snapshot_storage() {
     let (_, _, store, cache) = fixture(tags(), false).await;
     for _ in 0..3 {
-        assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+        assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     }
     assert_eq!(store.cache.count(), 0);
     assert_eq!(store.cache.reads.load(Ordering::Relaxed), 1);
@@ -416,9 +416,9 @@ async fn local_factory_lifetime_is_independent_of_shorter_l2_and_fresh_hydration
         .with_memory_duration(Duration::from_secs(10))
         .with_distributed_duration(Duration::from_secs(1));
     let (clock, backend, store, cache) = fixture(options.clone(), true).await;
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     assert_eq!(store.cache.reads.load(Ordering::Relaxed), 1);
     assert_eq!(store.cache.count(), 1);
     cache.shutdown().await.unwrap();
@@ -429,10 +429,10 @@ async fn local_factory_lifetime_is_independent_of_shorter_l2_and_fresh_hydration
         .await
         .unwrap();
     let second = reader(clock.clone(), backend, store.clone(), options);
-    second.read("key", None).await.unwrap();
+    second.try_get("key").await.unwrap();
     assert_eq!(store.cache.count(), 1);
     clock.advance(Duration::from_secs(5));
-    second.read("key", None).await.unwrap();
+    second.try_get("key").await.unwrap();
     assert_eq!(
         store.cache.count(),
         2,
@@ -450,12 +450,12 @@ async fn logically_stale_and_physically_expired_snapshots_repair_without_forgett
         .renew_snapshot(&scope(), &kind(), stale, time(10), token())
         .await
         .unwrap();
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     assert_eq!(store.cache.count(), 1);
     assert_eq!(store.cache.writes.lock().unwrap()[0].version(), version(1));
     clock.advance(Duration::from_secs(12));
     *store.cache.read_mode.lock().unwrap() = Mode::Miss;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     assert_eq!(store.cache.count(), 2);
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
@@ -467,12 +467,12 @@ async fn logically_stale_and_physically_expired_snapshots_repair_without_forgett
 #[tokio::test]
 async fn all_observations_expiring_cannot_resurrect_an_invalidated_value() {
     let (clock, backend, store, cache) = fixture(tags(), true).await;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     store.advance(&scope(), kind(), version(11)).await.unwrap();
     cache.shutdown().await.unwrap();
     clock.advance(Duration::from_secs(100));
     let fresh_reader = reader(clock, backend, store.clone(), tags());
-    assert!(!fresh_reader.read("key", None).await.unwrap().has_value());
+    assert!(fresh_reader.try_get("key").await.unwrap().is_none());
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
         Some(version(11))
@@ -483,14 +483,14 @@ async fn all_observations_expiring_cannot_resurrect_an_invalidated_value() {
 #[tokio::test]
 async fn explicit_write_skip_prevents_renewal_but_suppressed_read_fault_runs_known_factory() {
     let (_, _, store, cache) = fixture(tags().with_skip_distributed(false, true), true).await;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     assert_eq!(store.cache.count(), 0);
     cache.shutdown().await.unwrap();
     let (clock, _, store, cache) = fixture(tags(), true).await;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
     *store.cache.read_mode.lock().unwrap() = Mode::Backend;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     assert_eq!(
         store.cache.count(),
         2,
@@ -519,14 +519,14 @@ async fn renewal_faults_honor_independent_flags_and_preserve_original_causes() {
             };
             let (_, _, store, cache) = fixture(options, true).await;
             *store.cache.write_mode.lock().unwrap() = mode.clone();
-            let result = cache.read("key", None).await;
+            let result = cache.try_get("key").await;
             if strict {
                 let Error::Marker(error) = result.unwrap_err() else {
                     panic!()
                 };
                 assert!(error.source().unwrap().downcast_ref::<Cause>().is_some());
             } else {
-                assert_eq!(result.unwrap().value(), Some(&7));
+                assert_eq!(result.unwrap().as_ref(), Some(&7));
             }
             assert_eq!(store.cache.count(), 1);
             cache.shutdown().await.unwrap();
@@ -546,13 +546,13 @@ async fn foreground_renewal_is_awaited_and_not_capped_by_read_timeout() {
     *store.cache.write_mode.lock().unwrap() = Mode::Park(gate.clone());
     let call = tokio::spawn({
         let cache = cache.clone();
-        async move { cache.read("key", None).await }
+        async move { cache.try_get("key").await }
     });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(50)).await;
     assert!(!call.is_finished());
     gate.release.add_permits(1);
-    assert_eq!(call.await.unwrap().unwrap().value(), Some(&7));
+    assert_eq!(call.await.unwrap().unwrap().as_ref(), Some(&7));
     cache.shutdown().await.unwrap();
 }
 
@@ -565,7 +565,7 @@ async fn background_renewal_survives_completed_foreground_and_shutdown_cancels_i
     .await;
     let gate = Gate::new();
     *store.cache.write_mode.lock().unwrap() = Mode::Park(gate.clone());
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     gate.entered.notified().await;
     assert!(store.cache.ended.lock().unwrap().is_empty());
     cache.shutdown().await.unwrap();
@@ -583,7 +583,7 @@ async fn parked_old_renewal_cannot_overwrite_concurrent_higher_invalidation_or_l
     *store.cache.write_mode.lock().unwrap() = Mode::Park(gate.clone());
     let call = tokio::spawn({
         let cache = cache.clone();
-        async move { cache.read("key", None).await }
+        async move { cache.try_get("key").await }
     });
     gate.entered.notified().await;
     store.advance(&scope(), kind(), version(11)).await.unwrap();
@@ -594,7 +594,7 @@ async fn parked_old_renewal_cannot_overwrite_concurrent_higher_invalidation_or_l
         .await
         .unwrap();
     gate.release.add_permits(1);
-    assert!(!call.await.unwrap().unwrap().has_value());
+    assert!(call.await.unwrap().unwrap().is_none());
     assert_eq!(
         store
             .inner
@@ -614,7 +614,7 @@ async fn zero_hard_factory_budget_does_not_run_renewal_and_cold_soft_is_ineligib
         true,
     )
     .await;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     assert_eq!(store.cache.count(), 0);
     cache.shutdown().await.unwrap();
     let options = tags()
@@ -622,7 +622,7 @@ async fn zero_hard_factory_budget_does_not_run_renewal_and_cold_soft_is_ineligib
         .with_factory_timeouts(Timeout::Infinite, Timeout::After(Duration::ZERO), false);
     let (_, _, store, cache) = fixture(options, true).await;
     assert!(matches!(
-        cache.read("key", None).await,
+        cache.try_get("key").await,
         Err(Error::FactoryTimeout {
             elapsed: Duration::ZERO
         })
@@ -634,7 +634,7 @@ async fn zero_hard_factory_budget_does_not_run_renewal_and_cold_soft_is_ineligib
         true,
     )
     .await;
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     assert_eq!(store.cache.count(), 1);
     cache.shutdown().await.unwrap();
 }
@@ -651,7 +651,7 @@ async fn zero_soft_factory_budget_is_eligible_for_retained_l2_without_local_obse
         .await
         .unwrap();
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     assert_eq!(store.cache.count(), 0);
     assert!(
         std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
@@ -683,7 +683,7 @@ async fn explicit_cancellation_of_foreground_write_cannot_be_suppressed_as_a_sto
     let call = tokio::spawn({
         let cache = cache.clone();
         let token = source.token();
-        async move { cache.read_cancellable("key", None, token).await }
+        async move { cache.try_get("key").cancellation(token).await }
     });
     gate.entered.notified().await;
     source.cancel();

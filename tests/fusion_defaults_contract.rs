@@ -1,5 +1,4 @@
 //! FusionCache-compatible availability defaults and explicit strict capabilities.
-use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;
@@ -12,7 +11,7 @@ struct OrdinaryStore {
 }
 #[async_trait]
 impl DistributedCache for OrdinaryStore {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     }
@@ -102,6 +101,13 @@ async fn default_l2_only_keeps_l1_until_expiration_instead_of_clearing_each_seco
         .try_build()
         .unwrap();
     cache.set("hot", 42).await.unwrap();
+    assert_eq!(
+        cache
+            .get_or_set("hot", amalgam::source::value(99))
+            .await
+            .unwrap(),
+        42
+    );
     let calls = store.calls.load(Ordering::SeqCst);
     for _ in 0..3 {
         clock.advance(Duration::from_secs(2));
@@ -150,10 +156,10 @@ async fn default_expire_removes_l2_and_retains_the_eligible_l1_fallback() {
     assert_eq!(store.get("v2:hot").await.unwrap(), None);
     assert_eq!(
         cache
-            .read("hot", Some(options.with_allow_stale_on_read_only(true)))
+            .try_get("hot")
+            .options(|_| options.with_allow_stale_on_read_only(true))
             .await
-            .unwrap()
-            .into_value(),
+            .unwrap(),
         Some(42)
     );
     cache.shutdown().await.unwrap();
@@ -180,14 +186,11 @@ async fn a_fail_safe_default_without_a_stale_entry_does_not_enable_soft_timeout(
                 Ok::<_, amalgam::FactoryError>(ctx.value(7))
             }),
         )
-        .fail_safe_default((MaybeValue::from_value(99)).into_value())
+        .fail_safe_default(Some(99))
         .await
         .unwrap();
     assert_eq!(value, 7);
-    assert_eq!(
-        cache.read("cold", None).await.unwrap().into_value(),
-        Some(7)
-    );
+    assert_eq!(cache.try_get("cold").await.unwrap(), Some(7));
     cache.shutdown().await.unwrap();
 }
 

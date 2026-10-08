@@ -140,3 +140,130 @@ async fn close_cancels_initial_ack_admission_before_local_or_notification_effect
         assert!(!matches!(event, CacheEvent::Set { .. }));
     }
 }
+
+#[tokio::test]
+async fn initial_subscription_wait_admits_a_cold_l2_read_after_acknowledgement() -> Result<()> {
+    let backend = Arc::new(amalgam::provider::InMemoryDistributedCache::new(Arc::new(
+        amalgam::provider::SystemClock,
+    )));
+    let writer = Cache::<i32>::builder()
+        .distributed(backend.clone())
+        .serializer(Arc::new(amalgam::provider::JsonSerializer))
+        .try_build()?;
+    writer
+        .set("shared", 42)
+        .with_receipt()
+        .await?
+        .wait()
+        .await?;
+    let backplane = Arc::new(AwaitingAcknowledgement::new());
+    let reader = Cache::<i32>::builder()
+        .distributed(backend)
+        .serializer(Arc::new(amalgam::provider::JsonSerializer))
+        .backplane(backplane.clone())
+        .wait_for_initial_backplane_subscribe(true)
+        .default_options(options().with_skip_memory(true, false))
+        .auto_recovery(RecoveryConfig {
+            enabled: false,
+            ..RecoveryConfig::default()
+        })
+        .try_build()?;
+    let mut read = Box::pin(reader.try_get("shared").into_future());
+    poll_fn(|context| {
+        assert!(read.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    backplane.acknowledge();
+    let value = tokio::time::timeout(Duration::from_secs(1), read)
+        .await
+        .expect("initial acknowledgement did not release the L2 read")?;
+    assert_eq!(value.as_ref(), Some(&42));
+    assert_eq!(backplane.publications.load(Ordering::SeqCst), 0);
+    reader.shutdown().await?;
+    writer.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn admitted_initial_subscription_is_not_awaited_again_after_a_gap_or_stop() -> Result<()> {
+    let backplane = Arc::new(AwaitingAcknowledgement::new());
+    let cache = Cache::<i32>::builder()
+        .backplane(backplane.clone())
+        .wait_for_initial_backplane_subscribe(true)
+        .default_options(options())
+        .auto_recovery(RecoveryConfig {
+            enabled: false,
+            ..RecoveryConfig::default()
+        })
+        .try_build()?;
+    let mut initial = Box::pin(cache.set("initial", 42).into_future());
+    poll_fn(|context| {
+        assert!(initial.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    backplane.acknowledge();
+    initial.await?;
+    for (key, state) in [
+        (
+            "after-gap",
+            BackplaneState::Disconnected {
+                epoch: ContinuityEpoch::INITIAL,
+            },
+        ),
+        ("after-stop", BackplaneState::Stopped),
+    ] {
+        backplane.state.send_replace(state);
+        let value = tokio::time::timeout(
+            Duration::from_secs(1),
+            cache
+                .get_or_set(
+                    key,
+                    amalgam::source::factory(|ctx| async move {
+                        Ok::<_, amalgam::FactoryError>(ctx.value(43))
+                    }),
+                )
+                .into_future(),
+        )
+        .await
+        .expect("an admitted subscription started waiting again")?;
+        assert_eq!(value, 43);
+    }
+    assert_eq!(backplane.publications.load(Ordering::SeqCst), 0);
+    cache.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_stopped_initial_subscription_preserves_its_error_without_running_the_factory() {
+    let backplane = Arc::new(AwaitingAcknowledgement::new());
+    backplane.state.send_replace(BackplaneState::Stopped);
+    let cache = Cache::<i32>::builder()
+        .backplane(backplane.clone())
+        .wait_for_initial_backplane_subscribe(true)
+        .default_options(options())
+        .auto_recovery(RecoveryConfig {
+            enabled: false,
+            ..RecoveryConfig::default()
+        })
+        .try_build()
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = calls.clone();
+    let result = cache
+        .get_or_set(
+            "blocked-origin",
+            amalgam::source::factory(move |ctx| async move {
+                called.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, amalgam::FactoryError>(ctx.value(43))
+            }),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(Error::Backplane(cause)) if cause == "backplane provider stopped")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(backplane.publications.load(Ordering::SeqCst), 0);
+    cache.shutdown().await.unwrap();
+}

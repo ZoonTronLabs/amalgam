@@ -32,6 +32,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
+ "bytes",
  "dashmap",
  "event-listener",
  "fastrand",

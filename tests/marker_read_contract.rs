@@ -308,14 +308,12 @@ async fn provider_reported_cancellation_cannot_be_suppressed_as_marker_failure()
     ));
     assert!(marker_events(&mut events).is_empty());
     assert!(
-        !cache
-            .read(
-                "key",
-                Some(value_options().with_skip_distributed(true, false))
-            )
+        cache
+            .try_get("key")
+            .options(|_| value_options().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .has_value(),
+            .is_none(),
         "cancelled read must not hydrate L1"
     );
     cache.shutdown().await.unwrap();
@@ -333,7 +331,7 @@ async fn explicit_marker_skip_is_independent_of_value_read_and_does_not_fabricat
         control_options().with_skip_distributed(true, false),
     );
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert!(store.reads.lock().unwrap().is_empty());
     assert_eq!(marker_events(&mut events), vec![MarkerReadOutcome::Skipped]);
     cache.shutdown().await.unwrap();
@@ -346,11 +344,11 @@ async fn confirmed_negative_observations_are_reused_and_expire_while_the_value_s
     let store = Store::new();
     let cache = reader(clock.clone(), backend, store.clone(), control_options());
     for _ in 0..2 {
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     }
     assert_eq!(store.tag_count(), 1);
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(store.tag_count(), 2);
     cache.shutdown().await.unwrap();
 }
@@ -366,7 +364,7 @@ async fn marker_memory_read_and_write_skips_affect_existing_value_l1_hits() {
         let store = Store::new();
         let cache = reader(clock, backend, store.clone(), tags);
         for _ in 0..2 {
-            assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+            assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
         }
         assert_eq!(store.tag_count(), 2);
         assert_eq!(store.count(&MarkerKind::ClearRemove), 2);
@@ -385,11 +383,11 @@ async fn stale_marker_remote_skip_does_not_depend_on_value_staleness() {
         store.clone(),
         control_options().with_skip_distributed_read_when_stale(true),
     );
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
     store.mode(Mode::Backend);
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(store.tag_count(), 1);
     assert_eq!(marker_events(&mut events), vec![MarkerReadOutcome::Skipped]);
     cache.shutdown().await.unwrap();
@@ -409,12 +407,12 @@ async fn cold_marker_ignores_soft_budget_and_signals_hard_deadline_before_drop()
     let cache = reader(clock, backend, store.clone(), options);
     let mut events = cache.events().subscribe();
     let task_cache = cache.clone();
-    let task = tokio::spawn(async move { task_cache.read("key", None).await });
+    let task = tokio::spawn(async move { task_cache.try_get("key").await });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(6)).await;
     assert!(!task.is_finished());
     tokio::time::advance(Duration::from_millis(20)).await;
-    assert_eq!(task.await.unwrap().unwrap().into_value(), Some(7));
+    assert_eq!(task.await.unwrap().unwrap(), Some(7));
     assert!(
         store
             .stopped
@@ -441,16 +439,16 @@ async fn only_retained_marker_enables_soft_deadline_and_throttle_preserves_reten
         Timeout::After(Duration::from_millis(20)),
     );
     let cache = reader(clock.clone(), backend, store.clone(), options);
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
     let gate = Gate::new();
     store.mode(Mode::Park(gate.clone()));
     let mut events = cache.events().subscribe();
     let task_cache = cache.clone();
-    let task = tokio::spawn(async move { task_cache.read("key", None).await });
+    let task = tokio::spawn(async move { task_cache.try_get("key").await });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(6)).await;
-    assert_eq!(task.await.unwrap().unwrap().into_value(), Some(7));
+    assert_eq!(task.await.unwrap().unwrap(), Some(7));
     assert!(
         store
             .stopped
@@ -464,7 +462,7 @@ async fn only_retained_marker_enables_soft_deadline_and_throttle_preserves_reten
             MarkerReadFailure::SoftTimeout
         )]
     );
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(
         store.tag_count(),
         2,
@@ -497,7 +495,7 @@ async fn marker_budget_runs_after_and_independently_of_value_deadline() {
             .try_build()
             .unwrap();
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(
         marker_events(&mut events),
         vec![MarkerReadOutcome::Observed]
@@ -557,7 +555,7 @@ async fn suppressed_fault_is_explicit_and_is_never_negative_cached() {
         let cache = reader(clock, backend, store.clone(), control_options());
         let mut events = cache.events().subscribe();
         for _ in 0..2 {
-            assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+            assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
         }
         assert_eq!(store.tag_count(), 2);
         assert!(
@@ -585,7 +583,7 @@ async fn lost_or_expired_observation_cannot_forget_a_known_invalidation() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     clock.advance(Duration::from_secs(2));
     let scope = CacheScope::new("", "v2", KeyModifierMode::Prefix).unwrap();
     store
@@ -596,11 +594,11 @@ async fn lost_or_expired_observation_cannot_forget_a_known_invalidation() {
         )
         .await
         .unwrap();
-    assert!(!cache.read("key", None).await.unwrap().has_value());
+    assert!(cache.try_get("key").await.unwrap().is_none());
     clock.advance(Duration::from_secs(2));
     store.mode(Mode::Absent);
     assert!(
-        !cache.read("key", None).await.unwrap().has_value(),
+        cache.try_get("key").await.unwrap().is_none(),
         "confirmed remote absence cannot lower the known maximum"
     );
     cache.shutdown().await.unwrap();
@@ -618,7 +616,7 @@ async fn cancelled_marker_read_never_hydrates_or_reports_degraded_success() {
     let cancellation = source.token();
     let task_cache = cache.clone();
     let task =
-        tokio::spawn(async move { task_cache.read_cancellable("key", None, cancellation).await });
+        tokio::spawn(async move { task_cache.try_get("key").cancellation(cancellation).await });
     gate.entered.notified().await;
     source.cancel();
     assert!(matches!(
@@ -635,7 +633,7 @@ async fn cancelled_marker_read_never_hydrates_or_reports_degraded_success() {
             .contains(&Some(FactoryCancellationReason::CallerCancelled))
     );
     store.mode(Mode::Pass);
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(store.tag_count(), 2);
     cache.shutdown().await.unwrap();
 }
@@ -657,7 +655,7 @@ async fn rejecting_observation_admission_cannot_change_value_admission_or_ledger
         .try_build()
         .unwrap();
     for _ in 0..2 {
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     }
     assert_eq!(store.tag_count(), 2);
     cache.shutdown().await.unwrap();
@@ -688,7 +686,7 @@ async fn default_durable_policy_preserves_its_existing_combined_budget() {
         MarkerReadPolicy::DurableRequired
     );
     let task_cache = cache.clone();
-    let task = tokio::spawn(async move { task_cache.read("key", None).await });
+    let task = tokio::spawn(async move { task_cache.try_get("key").await });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(2)).await;
     assert!(
@@ -696,7 +694,7 @@ async fn default_durable_policy_preserves_its_existing_combined_budget() {
         "default durable reconciliation keeps the value budget"
     );
     gate.release.add_permits(1);
-    assert_eq!(task.await.unwrap().unwrap().into_value(), Some(7));
+    assert_eq!(task.await.unwrap().unwrap(), Some(7));
     cache.shutdown().await.unwrap();
 }
 
@@ -717,7 +715,7 @@ async fn initialized_clear_scalars_with_backplane_are_independent_of_marker_memo
         .try_build()
         .unwrap();
     for _ in 0..2 {
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     }
     assert_eq!(store.tag_count(), 2);
     assert_eq!(store.count(&MarkerKind::ClearRemove), 1);
@@ -743,7 +741,7 @@ async fn received_marker_seeding_respects_memory_write_without_losing_the_fact()
             .marker_read_policy(MarkerReadPolicy::OptionsControlled)
             .try_build()
             .unwrap();
-        cache.read("key", None).await.unwrap();
+        cache.try_get("key").await.unwrap();
         clock.advance(Duration::from_secs(2));
         let mut events = cache.events().subscribe();
         let scope = CacheScope::new("", "v2", KeyModifierMode::Prefix).unwrap();
@@ -770,7 +768,7 @@ async fn received_marker_seeding_respects_memory_write_without_losing_the_fact()
         .await
         .unwrap();
         store.mode(Mode::Backend);
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
         assert_eq!(store.tag_count(), if skip_write { 2 } else { 1 });
         cache.shutdown().await.unwrap();
     }
@@ -801,13 +799,13 @@ async fn marker_reads_bypass_value_provider_and_value_operation_override() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(
         cache
-            .read("key", Some(value_options().with_skip_memory(true, false)))
+            .try_get("key")
+            .options(|_| value_options().with_skip_memory(true, false))
             .await
-            .unwrap()
-            .into_value(),
+            .unwrap(),
         Some(7)
     );
     assert_eq!(
@@ -830,7 +828,7 @@ async fn strict_capability_errors_cannot_be_suppressed_as_marker_absence() {
     store.mode(Mode::Unsupported);
     let cache = reader(clock, backend, store, control_options());
     assert!(matches!(
-        cache.read("key", None).await,
+        cache.try_get("key").await,
         Err(Error::Marker(MarkerError::Unsupported))
     ));
     cache.shutdown().await.unwrap();
@@ -849,7 +847,7 @@ async fn dropping_or_shutting_down_a_marker_owner_retains_its_exact_reason() {
         store.mode(Mode::Park(gate.clone()));
         let cache = reader(clock, backend, store.clone(), control_options());
         let task_cache = cache.clone();
-        let task = tokio::spawn(async move { task_cache.read("key", None).await });
+        let task = tokio::spawn(async move { task_cache.try_get("key").await });
         gate.entered.notified().await;
         match reason {
             FactoryCancellationReason::CallerDropped => {
@@ -900,16 +898,16 @@ async fn marker_memory_duration_and_injected_jitter_are_independent_of_value_lif
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(
         store.tag_count(),
         1,
         "injected jitter adds two seconds to the marker's L1 window"
     );
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(store.tag_count(), 2);
     cache.shutdown().await.unwrap();
 }
@@ -935,7 +933,7 @@ async fn two_tags_and_two_clear_markers_each_have_their_own_complete_budget() {
         ),
     );
     let start = tokio::time::Instant::now();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert!(start.elapsed() >= Duration::from_millis(100));
     assert_eq!(store.count(&MarkerKind::Tag(second)), 1);
     assert_eq!(store.tag_count(), 1);
@@ -981,16 +979,16 @@ async fn marker_hard_budget_wins_and_soft_budget_requires_retained_fail_safe() {
                     Timeout::After(Duration::from_millis(hard)),
                 ),
         );
-        cache.read("key", None).await.unwrap();
+        cache.try_get("key").await.unwrap();
         clock.advance(Duration::from_secs(2));
         let gate = Gate::new();
         store.mode(Mode::Park(gate.clone()));
         let mut events = cache.events().subscribe();
         let task_cache = cache.clone();
-        let task = tokio::spawn(async move { task_cache.read("key", None).await });
+        let task = tokio::spawn(async move { task_cache.try_get("key").await });
         gate.entered.notified().await;
         tokio::time::advance(Duration::from_millis(hard + 1)).await;
-        assert_eq!(task.await.unwrap().unwrap().into_value(), Some(7));
+        assert_eq!(task.await.unwrap().unwrap(), Some(7));
         assert!(
             store
                 .stopped
@@ -1018,12 +1016,12 @@ async fn physically_expired_marker_is_unavailable_and_failed_reads_do_not_renew_
             Some(Duration::from_secs(1)),
         ),
     );
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(4));
     store.mode(Mode::Backend);
     let mut events = cache.events().subscribe();
     for _ in 0..2 {
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     }
     assert_eq!(store.tag_count(), 3);
     assert_eq!(
@@ -1051,19 +1049,19 @@ async fn contended_marker_lock_uses_stale_fact_without_saving_and_honors_indepen
         let backend = seeded(clock.clone()).await;
         let store = Store::new();
         let cache = reader(clock.clone(), backend, store.clone(), options);
-        cache.read("key", None).await.unwrap();
+        cache.try_get("key").await.unwrap();
         clock.advance(Duration::from_secs(2));
         let gate = Gate::new();
         store.mode(Mode::Park(gate.clone()));
         let task_cache = cache.clone();
-        let owner = tokio::spawn(async move { task_cache.read("key", None).await });
+        let owner = tokio::spawn(async move { task_cache.try_get("key").await });
         gate.entered.notified().await;
         let mut events = cache.events().subscribe();
         let task_cache = cache.clone();
-        let contender = tokio::spawn(async move { task_cache.read("key", None).await });
+        let contender = tokio::spawn(async move { task_cache.try_get("key").await });
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_millis(6)).await;
-        assert_eq!(contender.await.unwrap().unwrap().into_value(), Some(7));
+        assert_eq!(contender.await.unwrap().unwrap(), Some(7));
         assert_eq!(
             store.tag_count(),
             2,
@@ -1078,7 +1076,7 @@ async fn contended_marker_lock_uses_stale_fact_without_saving_and_honors_indepen
         owner.abort();
         assert!(owner.await.unwrap_err().is_cancelled());
         store.mode(Mode::Pass);
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
         assert_eq!(
             store.tag_count(),
             3,
@@ -1135,7 +1133,7 @@ async fn parked_reply_cannot_replace_a_newer_peer_observation_or_falsify_authori
             .marker_read_policy(MarkerReadPolicy::OptionsControlled)
             .try_build()
             .unwrap();
-        cache.read("key", None).await.unwrap();
+        cache.try_get("key").await.unwrap();
         clock.advance(Duration::from_secs(2));
         let gate = Gate::new();
         let fault = matches!(reply, Reply::Backend);
@@ -1144,7 +1142,7 @@ async fn parked_reply_cannot_replace_a_newer_peer_observation_or_falsify_authori
             reply,
         });
         let task_cache = cache.clone();
-        let task = tokio::spawn(async move { task_cache.read("key", None).await });
+        let task = tokio::spawn(async move { task_cache.try_get("key").await });
         gate.entered.notified().await;
         let mut events = cache.events().subscribe();
         let command = MarkerCommand::new(
@@ -1162,7 +1160,7 @@ async fn parked_reply_cannot_replace_a_newer_peer_observation_or_falsify_authori
             .unwrap();
         wait_for_marker(&mut events, &command).await;
         gate.release.add_permits(1);
-        assert_eq!(task.await.unwrap().unwrap().into_value(), Some(7));
+        assert_eq!(task.await.unwrap().unwrap(), Some(7));
         let expected = if fault {
             MarkerReadOutcome::StaleFallback(MarkerReadFailure::Backend)
         } else {
@@ -1170,7 +1168,7 @@ async fn parked_reply_cannot_replace_a_newer_peer_observation_or_falsify_authori
         };
         assert_eq!(marker_events(&mut events), vec![expected]);
         store.mode(Mode::Backend);
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
         assert_eq!(store.tag_count(), 2);
         assert_eq!(
             marker_events(&mut events),
@@ -1215,12 +1213,12 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
         .wait()
         .await
         .unwrap();
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
     let gate = Gate::new();
     store.mode(Mode::Park(gate.clone()));
     let task_cache = cache.clone();
-    let task = tokio::spawn(async move { task_cache.read("key", None).await });
+    let task = tokio::spawn(async move { task_cache.try_get("key").await });
     gate.entered.notified().await;
     backplane
         .publish(BackplaneMessage {
@@ -1233,13 +1231,11 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
         .unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         while cache
-            .read(
-                "proof",
-                Some(value_options().with_skip_distributed(true, false)),
-            )
+            .try_get("proof")
+            .options(|_| value_options().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .has_value()
+            .is_some()
         {
             tokio::task::yield_now().await;
         }
@@ -1248,13 +1244,13 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
     .unwrap();
     store.mode(Mode::Pass);
     gate.release.add_permits(1);
-    assert_eq!(task.await.unwrap().unwrap().into_value(), Some(7));
+    assert_eq!(task.await.unwrap().unwrap(), Some(7));
     assert_eq!(
         store.tag_count(),
         3,
         "post-gap value hydration must re-observe the marker"
     );
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     assert_eq!(store.tag_count(), 3);
     cache.shutdown().await.unwrap();
 }
@@ -1274,24 +1270,22 @@ async fn value_freshness_is_rechecked_after_a_parked_marker_validation() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
     let gate = Gate::new();
     store.mode(Mode::Park(gate.clone()));
     let task_cache = cache.clone();
     let task = tokio::spawn(async move {
         task_cache
-            .read(
-                "key",
-                Some(value_options().with_skip_distributed(true, false)),
-            )
+            .try_get("key")
+            .options(|_| value_options().with_skip_distributed(true, false))
             .await
     });
     gate.entered.notified().await;
     clock.advance(Duration::from_secs(2));
     gate.release.add_permits(1);
     assert!(
-        !task.await.unwrap().unwrap().has_value(),
+        task.await.unwrap().unwrap().is_none(),
         "a value which expired during control validation is not a fresh L1 hit"
     );
     cache.shutdown().await.unwrap();
@@ -1314,7 +1308,7 @@ async fn old_marker_provider_adapter_and_marker_weight_admission_preserve_value_
         .unwrap();
     let mut events = cache.events().subscribe();
     for _ in 0..2 {
-        assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     }
     assert_eq!(
         marker_events(&mut events),
@@ -1355,7 +1349,7 @@ async fn first_invalidating_control_stops_before_following_storage_faults() {
             .marker_read_policy(MarkerReadPolicy::OptionsControlled)
             .try_build()
             .unwrap();
-        assert!(!cache.read("key", None).await.unwrap().has_value());
+        assert!(cache.try_get("key").await.unwrap().is_none());
         assert_eq!(
             store.count(&following),
             0,
@@ -1371,7 +1365,7 @@ async fn retained_tag_expiry_never_bypasses_a_later_hard_clear_remove() {
     let backend = seeded(clock.clone()).await;
     let store = Store::new();
     let cache = reader(clock.clone(), backend, store.clone(), control_options());
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     cache
         .remove_by_tag(tag())
         .with_receipt()
@@ -1391,14 +1385,12 @@ async fn retained_tag_expiry_never_bypasses_a_later_hard_clear_remove() {
         .await
         .unwrap();
     assert!(
-        !cache
-            .read(
-                "key",
-                Some(value_options().with_allow_stale_on_read_only(true))
-            )
+        cache
+            .try_get("key")
+            .options(|_| value_options().with_allow_stale_on_read_only(true))
             .await
             .unwrap()
-            .has_value()
+            .is_none()
     );
     assert_eq!(
         store.count(&MarkerKind::ClearRemove),
@@ -1437,7 +1429,7 @@ async fn marker_copy_does_not_require_the_ordinary_value_cloner() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
     cache
         .remove_by_tag(tag())
         .options(|_| control_options().with_enable_auto_clone(true))
@@ -1449,7 +1441,8 @@ async fn marker_copy_does_not_require_the_ordinary_value_cloner() {
         .unwrap();
     assert!(matches!(
         cache
-            .read("key", Some(value_options().with_enable_auto_clone(true)))
+            .try_get("key")
+            .options(|_| value_options().with_enable_auto_clone(true))
             .await,
         Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
     ));
@@ -1495,7 +1488,7 @@ async fn eager_marker_read_is_owned_by_refresh_and_shutdown() {
         }))
         .try_build()
         .unwrap();
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(6));
     assert_eq!(
         cache
@@ -1537,7 +1530,7 @@ async fn passive_marker_read_is_owned_by_refresh_and_shutdown() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    cache.read("key", None).await.unwrap();
+    cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
     let writer = Cache::<u64>::builder()
         .clock(clock.clone())

@@ -42,7 +42,7 @@ fn ordinary_lookup_futures_fit_within_a_small_stack_budget() {
     let cache: Cache<u64> = Cache::builder().try_build().unwrap();
     const MAX_FUTURE_BYTES: usize = 4 * 1024;
     let sizes = [
-        ("read", size_of_val(&cache.read("x", None))),
+        ("read", size_of_val(&cache.try_get("x"))),
         (
             "get_or_set",
             size_of_val(
@@ -92,7 +92,7 @@ async fn read_then_refresh(cache: &Cache<u64>, value: u64) -> u64 {
     if current != value {
         refresh(cache, value).await;
     }
-    cache.try_get("x", None).await.into_value().unwrap()
+    cache.try_get("x").await.unwrap().unwrap()
 }
 
 #[test]

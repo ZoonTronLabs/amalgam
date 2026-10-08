@@ -21,10 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let first = build()?;
     first.set("answer", 42).with_receipt().await?.wait().await?;
-    assert_eq!(first.read("answer", None).await?.value(), Some(&42));
+    assert_eq!(first.try_get("answer").await?.as_ref(), Some(&42));
 
     let cold = build()?;
-    assert_eq!(cold.read("answer", None).await?.value(), Some(&42));
+    assert_eq!(cold.try_get("answer").await?.as_ref(), Some(&42));
     cold.remove("answer").with_receipt().await?.wait().await?;
     first
         .clear(ClearMode::Remove)
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .wait()
         .await?;
-    assert!(!first.read("answer", None).await?.has_value());
+    assert!(!first.try_get("answer").await?.is_some());
     first.shutdown().await?;
     cold.shutdown().await?;
 
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let asynchronous = native.as_async().clone();
     drop(native);
     assert_eq!(
-        asynchronous.read("null", None).await?.into_value(),
+        asynchronous.try_get("null").await?,
         Some(None)
     );
     asynchronous.shutdown().await?;

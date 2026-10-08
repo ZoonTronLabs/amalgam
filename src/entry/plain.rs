@@ -13,10 +13,12 @@ pub(crate) enum DefaultFreshPlan {
 impl DefaultFreshPlan {
     pub(crate) fn for_options(options: &EntryOptions) -> Result<Self> {
         Ok(match FreshPlan::for_options(options)? {
-            Some(plan) if matches!(plan.retention, RetentionMetadata::Unspecified) => {
+            Some(plan)
+                if matches!(plan.retention, RetentionMetadata::Unspecified)
+                    && plan.logical == plan.physical =>
+            {
                 Self::Plain(PlainPlan {
-                    logical: plan.logical,
-                    physical: plan.physical,
+                    lifetime: plan.logical,
                 })
             }
             Some(plan) => Self::Prepared(plan),
@@ -25,41 +27,38 @@ impl DefaultFreshPlan {
     }
 }
 pub(crate) struct PlainPlan {
-    logical: crate::time::LifetimeSpan,
-    physical: crate::time::LifetimeSpan,
+    lifetime: crate::time::LifetimeSpan,
 }
 impl PlainPlan {
     pub(crate) fn metadata(&self, now: Timestamp) -> PlainMetadata {
-        let logical = self.logical.after(now);
         PlainMetadata {
             created: now,
-            logical,
-            physical: self.physical.after(now).max(logical),
+            expires: self.lifetime.after(now),
         }
     }
     pub(crate) fn prepare<V>(&self, value: V, now: Timestamp, tags: Box<[Tag]>) -> FreshValue<V> {
         self.metadata(now).into_fresh(value, tags)
     }
 }
+/// This plan is selected only for identical logical and physical lifetimes.
 #[derive(Clone, Copy)]
 pub(crate) struct PlainMetadata {
     created: Timestamp,
-    logical: Timestamp,
-    physical: Timestamp,
+    expires: Timestamp,
 }
 impl PlainMetadata {
     pub(crate) fn logical(&self) -> Timestamp {
-        self.logical
+        self.expires
     }
     pub(crate) fn physical(&self) -> Timestamp {
-        self.physical
+        self.expires
     }
     fn install(self, meta: &mut Metadata) {
         meta.created = self.created;
         meta.inserted_at = self.created;
-        meta.logical_expiration = self.logical;
-        meta.physical_expiration = self.physical;
-        meta.backend_ttl = self.physical.saturating_duration_since(self.created);
+        meta.logical_expiration = self.expires;
+        meta.physical_expiration = self.expires;
+        meta.backend_ttl = self.expires.saturating_duration_since(self.created);
         meta.origin = EntryOrigin::Fresh {
             eager_refresh_at: None,
         };
@@ -74,9 +73,9 @@ impl PlainMetadata {
             meta: Metadata {
                 created: self.created,
                 inserted_at: self.created,
-                logical_expiration: self.logical,
-                physical_expiration: self.physical,
-                backend_ttl: self.physical.saturating_duration_since(self.created),
+                logical_expiration: self.expires,
+                physical_expiration: self.expires,
+                backend_ttl: self.expires.saturating_duration_since(self.created),
                 origin: EntryOrigin::Fresh {
                     eager_refresh_at: None,
                 },

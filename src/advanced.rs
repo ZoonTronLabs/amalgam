@@ -38,7 +38,6 @@ pub use crate::marker_snapshots::{
     MarkerSnapshotLimits, MarkerSnapshotRead, MarkerSnapshotRenewal, MarkerSnapshotValidationError,
     MarkerSnapshotWriteOutcome,
 };
-pub use crate::maybe::MaybeValue;
 #[cfg(any(feature = "metrics", feature = "opentelemetry"))]
 pub use crate::observability::CacheLabelBudget;
 #[cfg(feature = "opentelemetry")]

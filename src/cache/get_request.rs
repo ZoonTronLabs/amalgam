@@ -1,7 +1,7 @@
 //! Lazy origin requests. Input choices are separate from pinned execution.
 use super::inline_cold::Start;
 use super::observed_execution::ObservedExecution;
-use super::{Cache, CacheValue, EntryOptions, FactoryCancellation, MaybeValue, Result, Tag};
+use super::{Cache, CacheValue, EntryOptions, FactoryCancellation, Result, Tag};
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -12,7 +12,7 @@ struct Input<K, F, V> {
     factory: F,
     options: Option<Box<EntryOptions>>,
     tags: std::result::Result<Box<[Tag]>, crate::TagError>,
-    fallback: MaybeValue<V>,
+    fallback: Option<V>,
     token: Option<FactoryCancellation>,
 }
 
@@ -39,7 +39,7 @@ impl<'a, K, F, V: Clone + Send + Sync + 'static> GetOrSetRequest<'a, K, F, V> {
                 factory,
                 options: None,
                 tags: Ok(Box::from([])),
-                fallback: MaybeValue::none(),
+                fallback: None,
                 token: None,
             },
         }
@@ -81,7 +81,7 @@ macro_rules! settings {
 
             /// Sets the optional fail-safe value for this caller.
             pub fn fail_safe_default(mut self, value: Option<V>) -> Self {
-                self.input.fallback = value.map_or_else(MaybeValue::none, MaybeValue::from_value);
+                self.input.fallback = value;
                 self
             }
 
@@ -112,15 +112,27 @@ pub struct GetOrSetFuture<'a, K, F, V: Clone + Send + Sync + 'static, T = V> {
 // movable observer retains work in its separate stable pinned allocation.
 impl<K, F, V: Clone + Send + Sync + 'static, T> Unpin for GetOrSetFuture<'_, K, F, V, T> {}
 
-trait Output<V> {
+// The two public request forms select their actual output. Native ready hits
+// need no receipt envelope; scoped work discards it only after completion.
+pub(in crate::cache) trait Output<V>: Send + 'static {
+    fn unchanged(value: V) -> Self;
     fn complete(value: CacheValue<V>) -> Self;
 }
-impl<V> Output<V> for V {
+impl<V: Send + 'static> Output<V> for V {
+    fn unchanged(value: V) -> Self {
+        value
+    }
     fn complete(value: CacheValue<V>) -> Self {
         value.value
     }
 }
-impl<V> Output<V> for CacheValue<V> {
+impl<V: Send + 'static> Output<V> for CacheValue<V> {
+    fn unchanged(value: V) -> Self {
+        Self {
+            value,
+            commit: super::CommitReceipt::Unchanged,
+        }
+    }
     fn complete(value: CacheValue<V>) -> Self {
         value
     }

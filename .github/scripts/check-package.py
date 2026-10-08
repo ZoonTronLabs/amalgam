@@ -56,7 +56,7 @@ with tarfile.open(archive) as contents:
             sys.exit(f'Unsupported archive member: {name}')
         if forbidden.intersection(path.parts):
             sys.exit(f'Private/process file in package: {name}')
-        if name.endswith(('docs/spec-fix-all-audit.md', 'docs/audit-repair-matrix.json')) or '/docs/engineering/' in name:
+        if name.endswith(('docs/spec-fix-all-audit.md', 'docs/audit-repair-matrix.json', 'docs/IMPLEMENTATION_HISTORY.md', 'docs/PERFORMANCE_HISTORY_TC0.md')) or '/docs/engineering/' in name or '/docs/benchmarks/' in name:
             sys.exit(f'Internal process document in package: {name}')
     required = {f'{prefix}/{name}' for name in ('Cargo.toml', 'src/lib.rs', 'README.md', 'LICENSE')}
     missing = required.difference(names)

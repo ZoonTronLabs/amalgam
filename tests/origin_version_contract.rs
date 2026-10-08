@@ -65,7 +65,7 @@ async fn paused_origin(mutation: LaterMutation) {
         1,
         "the original caller may use its computed result"
     );
-    let current = cache.read("key", None).await.unwrap().into_value();
+    let current = cache.try_get("key").await.unwrap();
     let expected = match mutation {
         LaterMutation::Set => Some(2),
         LaterMutation::Remove | LaterMutation::Clear => None,

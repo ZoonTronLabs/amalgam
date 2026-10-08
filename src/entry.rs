@@ -69,7 +69,7 @@ enum EntryOrigin {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum RetentionMetadata {
+pub(crate) enum RetentionMetadata {
     Unspecified,
     Specified {
         size: Option<EntryWeight>,
@@ -747,6 +747,35 @@ impl<V> Entry<V> {
         tags: Box<[Tag]>,
         now: Timestamp,
     ) -> Result<Self> {
+        Self::try_rehydrate_with_retention(
+            value,
+            created,
+            logical_expiration,
+            physical_expiration,
+            is_from_fail_safe,
+            etag,
+            last_modified,
+            tags,
+            RetentionMetadata::Unspecified,
+            now,
+        )
+    }
+
+    // Owned decoded data arrives with already validated retention. Allocate its
+    // one shared representation only after every metadata field is initialized.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_rehydrate_with_retention(
+        value: V,
+        created: Timestamp,
+        logical_expiration: Timestamp,
+        physical_expiration: Timestamp,
+        is_from_fail_safe: bool,
+        etag: Option<String>,
+        last_modified: Option<Timestamp>,
+        tags: Box<[Tag]>,
+        retention: RetentionMetadata,
+        now: Timestamp,
+    ) -> Result<Self> {
         if logical_expiration > physical_expiration {
             return Err(ConfigError::InvalidEntryDeadlines.into());
         }
@@ -766,7 +795,7 @@ impl<V> Entry<V> {
             etag,
             last_modified,
             tags,
-            retention: RetentionMetadata::Unspecified,
+            retention,
         };
         Ok(Self {
             inner: Arc::new(EntryInner {

@@ -28,7 +28,7 @@ pub(super) struct Input<O, V> {
     pub(super) options: EntryOptions,
     pub(super) tags: Box<[Tag]>,
     pub(super) caller: Option<FactoryCancellation>,
-    pub(super) unused: super::MaybeValue<V>,
+    pub(super) unused: Option<V>,
 }
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub(super) fn supports_inline_cold(&self, options: Option<&EntryOptions>) -> bool {

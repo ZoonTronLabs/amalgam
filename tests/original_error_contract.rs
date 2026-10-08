@@ -80,9 +80,13 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
         .try_build()
         .unwrap();
     let mut events = cache.events().subscribe();
-    // Read-only operations preserve a failure despite suppression; origin
-    // operations honor codec suppression independently of transport policy.
-    let error = cache.read("key", None).await.unwrap_err();
+    // Select codec rethrow to inspect its original cause; the origin then uses
+    // the configured codec suppression independently of transport policy.
+    let error = cache
+        .try_get("key")
+        .options(|o| o.with_rethrow_serialization_exceptions(true))
+        .await
+        .unwrap_err();
     assert!(
         error
             .source()

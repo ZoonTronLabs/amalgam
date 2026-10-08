@@ -37,7 +37,7 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
             .await
             .unwrap();
         assert!(backend.get(physical).await.unwrap().is_some());
-        assert_eq!(b.read("订单:🙂", None).await.unwrap().into_value(), Some(1));
+        assert_eq!(b.try_get("订单:🙂").await.unwrap(), Some(1));
         a.set("订单:🙂", 2)
             .with_receipt()
             .await
@@ -47,7 +47,7 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            let value = b.read("订单:🙂", None).await.unwrap().into_value();
+            let value = b.try_get("订单:🙂").await.unwrap();
             if value == Some(2) {
                 break;
             }

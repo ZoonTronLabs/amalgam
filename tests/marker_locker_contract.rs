@@ -390,7 +390,7 @@ async fn fixture(options: EntryOptions, policy: LeasePolicy, prefix: &str) -> Fi
     }
 }
 async fn found(cache: &Cache<u64>) {
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
 }
 
 #[tokio::test]
@@ -476,7 +476,7 @@ async fn contention_is_explicit_strict_rejection_or_deliberate_cooperative_facto
     for policy in [LeasePolicy::Fenced, LeasePolicy::Cooperative] {
         let f = fixture(options(), policy, "").await;
         *f.locker.acquisition.lock().unwrap() = Acquire::Contended;
-        let read = f.cache.read("key", None).await;
+        let read = f.cache.try_get("key").await;
         match policy {
             LeasePolicy::Fenced => {
                 assert!(matches!(
@@ -486,7 +486,7 @@ async fn contention_is_explicit_strict_rejection_or_deliberate_cooperative_facto
                 assert_eq!(f.store.snapshots.writes(), 0);
             }
             LeasePolicy::Cooperative => {
-                assert_eq!(read.unwrap().value(), Some(&7));
+                assert_eq!(read.unwrap().as_ref(), Some(&7));
                 assert_eq!(f.store.snapshots.writes(), 1);
             }
         }
@@ -509,14 +509,14 @@ async fn acquisition_original_fault_policy_is_independent_from_value_defaults() 
         )
         .await;
         *f.locker.acquisition.lock().unwrap() = Acquire::Fault;
-        let read = f.cache.read("key", None).await;
+        let read = f.cache.try_get("key").await;
         if fails {
             assert!(
                 matches!(read, Err(Error::Lease(LeaseError::Backend { source })) if source.downcast_ref::<Cause>().is_some())
             );
             assert_eq!(f.store.snapshots.writes(), 0);
         } else {
-            assert_eq!(read.unwrap().value(), Some(&7));
+            assert_eq!(read.unwrap().as_ref(), Some(&7));
             assert_eq!(f.store.snapshots.writes(), 1);
         }
         f.cache.shutdown().await.unwrap();
@@ -537,13 +537,13 @@ async fn explicit_release_honors_tag_fault_flag_and_preserves_cause() {
         )
         .await;
         *f.locker.release.lock().unwrap() = Release::Fault;
-        let read = f.cache.read("key", None).await;
+        let read = f.cache.try_get("key").await;
         if rethrow {
             assert!(
                 matches!(read, Err(Error::Lease(LeaseError::Backend { source })) if source.to_string().contains("original marker locker fault"))
             );
         } else {
-            assert_eq!(read.unwrap().value(), Some(&7));
+            assert_eq!(read.unwrap().as_ref(), Some(&7));
         }
         assert_eq!(f.store.snapshots.writes(), 1);
         assert_eq!(f.locker.releases(), 1);
@@ -557,7 +557,7 @@ async fn locker_deadline_does_not_use_value_or_distributed_read_deadlines() {
     let f = fixture(selected, LeasePolicy::Fenced, "").await;
     let gate = Gate::new();
     *f.locker.acquisition.lock().unwrap() = Acquire::Park(gate);
-    let read = tokio::time::timeout(Duration::from_secs(2), f.cache.read("key", None))
+    let read = tokio::time::timeout(Duration::from_secs(2), f.cache.try_get("key"))
         .await
         .unwrap();
     assert!(matches!(
@@ -585,7 +585,7 @@ async fn cancelling_parked_acquisition_cleans_known_token_and_does_not_degrade()
     let call = tokio::spawn({
         let cache = f.cache.clone();
         let token = source.token();
-        async move { cache.read_cancellable("key", None, token).await }
+        async move { cache.try_get("key").cancellation(token).await }
     });
     gate.entered().await;
     source.cancel();
@@ -606,7 +606,7 @@ async fn lost_atomic_ownership_cannot_leave_a_fresh_l1_observation() {
     *f.store.snapshots.mode.lock().unwrap() = Write::Park(gate.clone());
     let call = tokio::spawn({
         let cache = f.cache.clone();
-        async move { cache.read("key", None).await }
+        async move { cache.try_get("key").await }
     });
     gate.entered().await;
     f.clock.advance(Duration::from_secs(1));
@@ -631,7 +631,7 @@ async fn unsupported_atomic_provider_does_not_create_local_refresh_authority() {
     let f = fixture(options(), LeasePolicy::Fenced, "").await;
     *f.store.snapshots.mode.lock().unwrap() = Write::Unsupported;
     assert!(matches!(
-        f.cache.read("key", None).await,
+        f.cache.try_get("key").await,
         Err(Error::Lease(LeaseError::UnsupportedFencing))
     ));
     assert_eq!(f.store.snapshots.inner.snapshot_count(), 0);
@@ -928,7 +928,7 @@ async fn propagated_marker_read_fault_stops_before_locker_and_preserves_cause() 
         } else {
             Read::Backend
         };
-        let error = f.cache.read("key", None).await.unwrap_err();
+        let error = f.cache.try_get("key").await.unwrap_err();
         let Error::Marker(error) = error else {
             panic!("expected original marker error")
         };
@@ -951,7 +951,7 @@ async fn excluded_foreground_marker_factory_awaits_release_before_error() {
     )
     .await;
     assert!(matches!(
-        f.cache.read("key", None).await,
+        f.cache.try_get("key").await,
         Err(Error::FactoryTimeout { .. })
     ));
     assert_eq!(f.locker.acquired.lock().unwrap().len(), 1);
@@ -1277,7 +1277,7 @@ async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() 
     )
     .await;
     *f.store.snapshots.mode.lock().unwrap() = Write::Backend;
-    assert_eq!(f.cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     let ticket = f.cache.marker_snapshot_recovery_ticket(&group()).unwrap();
     let RecoveryWork::MarkerSnapshot(work) = ticket.work() else {
         panic!("expected captured snapshot");

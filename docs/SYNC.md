@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         42
     );
     cache.remove("answer").with_receipt().execute()?.wait()?;
-    assert!(!cache.read("answer", None)?.has_value());
+    assert!(!cache.try_get("answer").execute()?.is_some());
     cache.shutdown()?;
     Ok(())
 }

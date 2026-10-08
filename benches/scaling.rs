@@ -3,6 +3,7 @@
 use amalgam::{BlockingCache, Cache, EntryOptions};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::future::IntoFuture;
 use std::hint::black_box;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -90,10 +91,10 @@ trait WarmHit {
 struct ReadHit;
 impl WarmHit for ReadHit {
     async fn value(cache: &Cache<u64>, key: &str) -> u64 {
-        cache.read(key, None).await.unwrap().into_value().unwrap()
+        cache.try_get(key).into_future().await.unwrap().unwrap()
     }
     fn native(cache: &BlockingCache<u64>, key: &str) -> u64 {
-        cache.read(key, None).unwrap().into_value().unwrap()
+        cache.try_get(key).execute().unwrap().unwrap()
     }
 }
 struct OriginHit;
@@ -236,7 +237,7 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             elapsed.as_nanos() as f64 / SET_OPERATIONS as f64
         );
         assert_eq!(
-            writes.read("replace", None).await.unwrap().into_value(),
+            writes.try_get("replace").into_future().await.unwrap(),
             Some(SET_OPERATIONS as u64)
         );
         // Reuse the key strings, never the entries. A fresh bounded-size cache
@@ -445,10 +446,10 @@ fn ready_costs() {
         });
         rt.block_on(async {
             cost(&format!("{label}_async"), || {
-                let mut future = std::pin::pin!(cache.read("cost", None));
+                let mut future = std::pin::pin!(cache.try_get("cost").into_future());
                 let mut context = std::task::Context::from_waker(std::task::Waker::noop());
                 match std::future::Future::poll(future.as_mut(), &mut context) {
-                    std::task::Poll::Ready(value) => value.unwrap().into_value().unwrap(),
+                    std::task::Poll::Ready(value) => value.unwrap().unwrap(),
                     std::task::Poll::Pending => panic!("a warmed read must be ready"),
                 }
             });
@@ -463,7 +464,7 @@ fn ready_costs() {
             .wait()
             .unwrap();
         cost(&format!("{label}_native"), || {
-            native.read("cost", None).unwrap().into_value().unwrap()
+            native.try_get("cost").execute().unwrap().unwrap()
         });
         native.shutdown().unwrap();
     }
@@ -591,11 +592,7 @@ fn metadata_costs() {
             };
             metadata_cost(&format!("set_{}", case.label()), &mut replace);
             assert_eq!(
-                cache
-                    .read("metadata-cost", None)
-                    .await
-                    .unwrap()
-                    .into_value(),
+                cache.try_get("metadata-cost").into_future().await.unwrap(),
                 Some(7)
             );
             metadata_cost(&format!("set_after_read_{}", case.label()), &mut replace);

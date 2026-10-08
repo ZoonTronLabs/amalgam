@@ -37,10 +37,17 @@ impl Timing {
                     .physical_start()
                     .checked_add(physical.saturating_duration_since(time.now())),
             }),
-            Self::Local(clock) => Deadlines::Local {
-                logical: clock.deadline(logical),
-                physical: clock.deadline(physical),
-            },
+            Self::Local(clock) => {
+                let logical_deadline = clock.deadline(logical);
+                Deadlines::Local {
+                    logical: logical_deadline,
+                    physical: if physical == logical {
+                        logical_deadline
+                    } else {
+                        clock.deadline(physical)
+                    },
+                }
+            }
         }
     }
 }

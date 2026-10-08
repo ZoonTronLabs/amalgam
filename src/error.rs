@@ -61,6 +61,11 @@ pub enum ConfigError {
     /// Strict commits require an atomic ownership-checking value backend.
     #[error("fenced leases require an L2 provider with atomic lease-fenced writes")]
     FencedDistributedWithoutAtomicWrites,
+    /// Strong marker validation needs a genuinely atomic provider.
+    #[error(
+        "strict or durable-required tagging needs an atomic invalidation store; supply one or disable tagging"
+    )]
+    AtomicInvalidationUnavailable,
     /// Expiring marker snapshots require their explicit options-controlled read mode.
     #[error("cached marker snapshots require OptionsControlled marker reads")]
     MarkerLifecycleRequiresControlledReads,
@@ -378,7 +383,7 @@ impl std::error::Error for ShutdownError {
 /// An error surfaced from a cache operation.
 ///
 /// Note what is deliberately *absent*: a "cache miss" is not an error (it is a
-/// `None`/`MaybeValue::none`), and a factory that fails while fail-safe rescues
+/// `Ok(None)`), and a factory that fails while fail-safe rescues
 /// a stale value never produces an `Error` at all.
 #[derive(Debug, thiserror::Error, Clone)]
 #[non_exhaustive]

@@ -33,7 +33,7 @@ fn ready_factory_and_receipt_finish_without_a_runtime() {
                     Ok::<_, amalgam::FactoryError>(context.value(7))
                 }),
             )
-            .fail_safe_default((amalgam::advanced::MaybeValue::none()).into_value())
+            .fail_safe_default(None)
             .with_receipt(),
     )
     .unwrap();

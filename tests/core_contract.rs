@@ -90,7 +90,7 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
         })
     ));
     assert!(matches!(
-        cache.read("any", None).await,
+        cache.try_get("any").await,
         Err(Error::CacheClosed)
     ));
 }
@@ -205,7 +205,7 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
 struct FailingIo;
 #[async_trait]
 impl DistributedCache for FailingIo {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         Err(Error::Distributed("actual read cause".into()))
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {
@@ -228,10 +228,10 @@ fn failing_cache(options: EntryOptions) -> Cache<i32> {
 async fn canonical_reads_preserve_error_and_default_only_on_successful_miss() {
     let cache = failing_cache(opts().with_rethrow_distributed_exceptions(true));
     assert!(
-        matches!(cache.read("k",None).await,Err(Error::Distributed(message)) if message=="actual read cause")
+        matches!(cache.try_get("k").await,Err(Error::Distributed(message)) if message=="actual read cause")
     );
     assert!(
-        matches!(cache.read_or_default("k",42,None).await,Err(Error::Distributed(message)) if message=="actual read cause")
+        matches!(cache.get_or_default("k", 42).await,Err(Error::Distributed(message)) if message=="actual read cause")
     );
     cache.shutdown().await.unwrap();
 }
@@ -249,7 +249,7 @@ async fn mutation_receipts_preserve_suppressed_and_rethrown_failures() {
     assert!(
         matches!(report.distributed,EffectOutcome::FailedSuppressed {cause:Error::Distributed(message)} if message=="actual write cause")
     );
-    assert_eq!(cache.read("k", None).await.unwrap().value(), Some(&1));
+    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&1));
     let error = cache
         .remove("k")
         .options(|_| opts().with_rethrow_distributed_exceptions(true))
@@ -268,7 +268,7 @@ struct GatedWrite {
 }
 #[async_trait]
 impl DistributedCache for GatedWrite {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -399,9 +399,9 @@ async fn plain_memory_expiry_uses_controlled_clock_and_never_periodic_invalidati
         .unwrap();
     cache.set("k", 1).with_receipt().await.unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert_eq!(cache.read("k", None).await.unwrap().value(), Some(&1));
+    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&1));
     clock.advance(Duration::from_millis(21));
-    assert!(!cache.read("k", None).await.unwrap().has_value());
+    assert!(cache.try_get("k").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -432,7 +432,7 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
         Err(Error::Config(ConfigError::DeadlineOutOfRange))
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(!cache.read("k", None).await.unwrap().has_value());
+    assert!(cache.try_get("k").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 
@@ -462,8 +462,8 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
         )
         .await;
     assert!(matches!(result, Err(Error::Tag(TagError::Blank))));
-    assert!(!cache.read("bad-size", None).await.unwrap().has_value());
-    assert!(!cache.read("bad-tag", None).await.unwrap().has_value());
+    assert!(cache.try_get("bad-size").await.unwrap().is_none());
+    assert!(cache.try_get("bad-tag").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 
@@ -476,7 +476,7 @@ impl DistributedCache for LostAtWrite {
     fn fenced_write_support(&self) -> FencedWriteSupport {
         FencedWriteSupport::Atomic
     }
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -533,11 +533,12 @@ async fn native_backend_fence_loss_does_not_commit_l1_l2_or_publish() {
     );
     assert_eq!(l2.attempts.load(Ordering::SeqCst), 1);
     assert!(
-        !cache
-            .read("k", Some(opts().with_skip_distributed(true, false)))
+        cache
+            .try_get("k")
+            .options(|_| opts().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .has_value()
+            .is_none()
     );
     assert!(l2.get("v2:k").await.unwrap().is_none());
     assert!(messages.try_recv().is_err());
@@ -593,7 +594,7 @@ impl RecoveryIo {
 }
 #[async_trait]
 impl DistributedCache for RecoveryIo {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         if self.read_down.load(Ordering::SeqCst) {
             Err(Error::Distributed("reconciliation unavailable".into()))
         } else {
@@ -789,10 +790,8 @@ async fn coalesced_gap_retains_exact_ticket_until_successful_l2_and_marker_recon
     backend.down.store(false, Ordering::SeqCst);
     backend.read_down.store(true, Ordering::SeqCst);
     cache
-        .read(
-            "gap-trigger",
-            Some(opts().with_skip_distributed(true, false)),
-        )
+        .try_get("gap-trigger")
+        .options(|_| opts().with_skip_distributed(true, false))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -827,7 +826,7 @@ impl DistributedCache for FencedFault {
     fn fenced_write_support(&self) -> FencedWriteSupport {
         FencedWriteSupport::Atomic
     }
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -1298,7 +1297,7 @@ async fn cold_expire_read_failure_retains_intent_and_original_physical_deadline(
         expired.entry().logical_expiration_ticks,
         clock.now().ticks()
     );
-    assert!(!cache.read("k", None).await.unwrap().has_value());
+    assert!(cache.try_get("k").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
@@ -1420,7 +1419,7 @@ async fn delayed_clear_marker_does_not_evict_a_newer_snapshot() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(cache.read("k", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&7));
     cache.shutdown().await.unwrap();
 }
 
@@ -1447,11 +1446,8 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
         .wait()
         .await
         .unwrap();
-    assert_eq!(
-        cache.read("repaired", None).await.unwrap().into_value(),
-        Some(7)
-    );
-    assert!(!cache.read("invalid", None).await.unwrap().has_value());
+    assert_eq!(cache.try_get("repaired").await.unwrap(), Some(7));
+    assert!(cache.try_get("invalid").await.unwrap().is_none());
     let invalid = EntryOptions::default().with_factory_timeouts(
         Timeout::Infinite,
         Timeout::After(Duration::MAX),

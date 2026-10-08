@@ -105,7 +105,7 @@ async fn async_warm_constant_never_eagerly_replaces_the_existing_value() {
         1
     );
     cache.flush_pending().await.unwrap();
-    let after = cache.read("warm", None).await.unwrap().into_value();
+    let after = cache.try_get("warm").await.unwrap();
     cache.shutdown().await.unwrap();
     assert_eq!(after, Some(1));
     assert_eq!(events.0.load(Ordering::SeqCst), 0);
@@ -137,7 +137,7 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
         1
     );
     cache.flush_pending().unwrap();
-    let after = cache.read("warm", None).unwrap().into_value();
+    let after = cache.try_get("warm").execute().unwrap();
     cache.shutdown().unwrap();
     assert_eq!(after, Some(1));
     assert_eq!(events.0.load(Ordering::SeqCst), 0);

@@ -100,7 +100,7 @@ pub fn ticks_to_duration(ticks: i64) -> Duration {
 }
 
 /// Validated nonnegative lifetime prepared once from a Duration.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LifetimeSpan(i128);
 impl LifetimeSpan {
     pub(crate) fn new(duration: Duration) -> Self {

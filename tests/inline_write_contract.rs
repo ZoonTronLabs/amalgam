@@ -101,10 +101,7 @@ fn retired_value_drop_can_reenter_the_same_key_after_the_commit() {
             2,
             "the reentrant write replaces the outer candidate"
         );
-        let value = ready(cache.read("same", None))
-            .unwrap()
-            .into_value()
-            .unwrap();
+        let value = ready(cache.try_get("same").into_future()).unwrap().unwrap();
         assert!(value.action.is_none());
     }
 }
@@ -116,14 +113,14 @@ fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
     let weak = std::sync::Arc::downgrade(&incoming);
     let pending = cache.set("lazy", incoming).with_receipt().into_future();
     assert!(weak.upgrade().is_some());
-    let mut read = std::pin::pin!(cache.read("lazy", None));
+    let mut read = std::pin::pin!(cache.try_get("lazy").into_future());
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
     let std::task::Poll::Ready(Ok(value)) = std::future::Future::poll(read.as_mut(), &mut context)
     else {
         panic!("a standalone miss must complete without a runtime");
     };
     assert!(
-        !value.has_value(),
+        value.is_none(),
         "constructing a write must not store its value"
     );
     drop(pending);

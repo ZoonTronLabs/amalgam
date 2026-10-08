@@ -49,10 +49,11 @@ async fn provider_runs_once_on_miss_and_hit_uses_raw_key_and_explicit_options_by
     assert_eq!(factories.load(Ordering::SeqCst), 1);
     assert_eq!(
         cache
-            .read("key", Some(EntryOptions::default()))
+            .try_get("key")
+            .options(|_| EntryOptions::default())
+            .into_future()
             .await
-            .unwrap()
-            .into_value(),
+            .unwrap(),
         Some(7)
     );
     assert_eq!(provider.0.lock().unwrap().len(), 2);
@@ -114,7 +115,7 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
     );
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), async {
-        while cache.read("key", None).await.unwrap().into_value() != Some(8) {
+        while cache.try_get("key").into_future().await.unwrap() != Some(8) {
             tokio::task::yield_now().await;
         }
     })
@@ -157,18 +158,15 @@ fn native_and_async_ready_reads_copy_on_the_caller_without_entering_a_runtime() 
         .wait()
         .unwrap();
     armed.store(true, Ordering::Release);
-    assert_eq!(
-        cache.read("key", None).unwrap().into_value().unwrap().value,
-        42
-    );
-    let mut lookup = std::pin::pin!(cache.as_async().read("key", None));
+    assert_eq!(cache.try_get("key").execute().unwrap().unwrap().value, 42);
+    let mut lookup = std::pin::pin!(cache.as_async().try_get("key").into_future());
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
     let std::task::Poll::Ready(result) = std::future::Future::poll(lookup.as_mut(), &mut context)
     else {
         panic!("a fresh hit must complete without a runtime");
     };
-    assert_eq!(result.unwrap().into_value().unwrap().value, 42);
+    assert_eq!(result.unwrap().unwrap().value, 42);
     // The same native operation transfers a real miss once to its executor.
-    assert!(!cache.read("absent", None).unwrap().has_value());
+    assert!(cache.try_get("absent").execute().unwrap().is_none());
     cache.shutdown().unwrap();
 }

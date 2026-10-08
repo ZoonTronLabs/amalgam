@@ -32,7 +32,7 @@ fn node(
 }
 fn miss_after_notification(cache: &BlockingCache<Option<u64>>, key: &str) {
     let deadline = Instant::now() + Duration::from_secs(2);
-    while cache.read(key, None).unwrap().has_value() {
+    while cache.try_get(key).execute().unwrap().is_some() {
         assert!(
             Instant::now() < deadline,
             "acknowledged native peer must observe invalidation"
@@ -106,7 +106,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
     };
     assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
     receipt.wait().unwrap();
-    assert_eq!(peer.read("null", None).unwrap().into_value(), Some(None));
+    assert_eq!(peer.try_get("null").execute().unwrap(), Some(None));
     first
         .remove_by_tag(tag)
         .cancellation(CancellationSource::new().token())
@@ -123,10 +123,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(
-        peer.read("remove-l2", None).unwrap().into_value(),
-        Some(Some(7))
-    );
+    assert_eq!(peer.try_get("remove-l2").execute().unwrap(), Some(Some(7)));
     peer.expire("remove-l2")
         .distributed_policy(DistributedExpirePolicy::Remove)
         .cancellation(CancellationSource::new().token())
@@ -149,7 +146,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         &prefix,
     );
     cold.ready().unwrap();
-    assert!(!cold.read("remove-l2", None).unwrap().has_value());
+    assert!(cold.try_get("remove-l2").execute().unwrap().is_none());
     first
         .set("clear", Some(9))
         .with_receipt()
@@ -157,10 +154,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(
-        peer.read("clear", None).unwrap().into_value(),
-        Some(Some(9))
-    );
+    assert_eq!(peer.try_get("clear").execute().unwrap(), Some(Some(9)));
     first
         .clear(ClearMode::Remove)
         .cancellation(CancellationSource::new().token())
@@ -170,7 +164,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .wait()
         .unwrap();
     miss_after_notification(&peer, "clear");
-    assert!(!cold.read("clear", None).unwrap().has_value());
+    assert!(cold.try_get("clear").execute().unwrap().is_none());
     let cancelled = CancellationSource::new();
     cancelled.cancel();
     assert!(matches!(
@@ -182,7 +176,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
             reason: FactoryCancellationReason::CallerCancelled
         })
     ));
-    assert!(!cold.read("cancelled", None).unwrap().has_value());
+    assert!(cold.try_get("cancelled").execute().unwrap().is_none());
     cold.shutdown().unwrap();
     peer.shutdown().unwrap();
     first.shutdown().unwrap();

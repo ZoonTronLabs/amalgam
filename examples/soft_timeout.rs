@@ -90,13 +90,13 @@ async fn main() {
 
     // 4. Give the background factory time to finish, then read the fresh value.
     tokio::time::sleep(Duration::from_millis(400)).await;
-    let now_cached = cache.try_get("feed", None).await;
+    let now_cached = cache.try_get("feed").await.unwrap();
     println!(
         "cache now holds      => {:?}  (updated by the background factory)",
-        now_cached.value()
+        now_cached.as_ref()
     );
     assert_eq!(
-        now_cached.value(),
+        now_cached.as_ref(),
         Some(&"v2".to_owned()),
         "the background completion should have updated the cache"
     );

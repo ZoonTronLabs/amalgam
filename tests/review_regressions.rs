@@ -24,7 +24,7 @@ struct PausedRead {
 }
 #[async_trait]
 impl DistributedCache for PausedRead {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         let snapshot = self.inner.get(key).await?;
         if self.pause_next.swap(false, Ordering::SeqCst) {
             self.started.notify_one();
@@ -92,10 +92,10 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
         tokio::spawn(async move {
             match lookup {
                 Lookup::Read => {
-                    let _ = reader.read("k", None).await.unwrap();
+                    let _ = reader.try_get("k").await.unwrap();
                 }
                 Lookup::Legacy => {
-                    let _ = reader.try_get("k", None).await;
+                    let _ = reader.try_get("k").await.unwrap();
                 }
                 Lookup::Origin => {
                     let _ = reader
@@ -138,19 +138,20 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
     backend.release.add_permits(1);
     flight.await.unwrap();
     let observed = reader
-        .read("k", Some(opts().with_skip_distributed(true, false)))
+        .try_get("k")
+        .options(|_| opts().with_skip_distributed(true, false))
         .await
         .unwrap();
     reader.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
     match mutation {
         Mutation::Set => assert_eq!(
-            observed.into_value(),
+            observed,
             Some(2),
             "{lookup:?} late hydration overwrote newer local Set"
         ),
         Mutation::Remove => assert!(
-            !observed.has_value(),
+            observed.is_none(),
             "{lookup:?} late hydration resurrected awaited Remove"
         ),
     }
@@ -218,10 +219,10 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             async move {
                 match lookup {
                     Lookup::Read => {
-                        reader.read("k", None).await.unwrap();
+                        reader.try_get("k").await.unwrap();
                     }
                     Lookup::Legacy => {
-                        reader.try_get("k", None).await;
+                        reader.try_get("k").await.unwrap();
                     }
                     Lookup::Origin => {
                         reader
@@ -244,17 +245,18 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             .wait()
             .await
             .unwrap();
-        assert_eq!(reader.read("k", None).await.unwrap().value(), Some(&2));
+        assert_eq!(reader.try_get("k").await.unwrap().as_ref(), Some(&2));
         backend.release.add_permits(1);
         older.await.unwrap();
         let after = reader
-            .read("k", Some(opts().with_skip_distributed(true, false)))
+            .try_get("k")
+            .options(|_| opts().with_skip_distributed(true, false))
             .await
             .unwrap();
         reader.shutdown().await.unwrap();
         writer.shutdown().await.unwrap();
         assert_eq!(
-            after.value(),
+            after.as_ref(),
             Some(&2),
             "{lookup:?}, bounded={bounded}, delta={advance:?}: older read replaced newer hydration"
         );
@@ -362,7 +364,7 @@ struct WriteFault {
 }
 #[async_trait]
 impl DistributedCache for WriteFault {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -430,14 +432,12 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
     .unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if !cache
-                .read(
-                    "continuity-proof",
-                    Some(opts().with_skip_distributed(true, false)),
-                )
+            if cache
+                .try_get("continuity-proof")
+                .options(|_| opts().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .has_value()
+                .is_none()
             {
                 break;
             }

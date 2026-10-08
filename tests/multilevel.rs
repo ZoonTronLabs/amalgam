@@ -122,7 +122,7 @@ async fn backplane_remove_invalidates_peer() {
     tokio::time::sleep(Duration::from_millis(100)).await; // let the Remove propagate
 
     assert!(
-        !cache2.try_get("k", None).await.has_value(),
+        cache2.try_get("k").await.unwrap().is_none(),
         "peer L1 was evicted by the backplane Remove"
     );
 }
@@ -241,12 +241,12 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
 
     // try_get reads L1 ONLY (no factory, no L2 read): the fresh value is already
     // present because it was refreshed eagerly. An evict-only peer would miss here.
-    let got = cache2.try_get("k", None).await;
+    let got = cache2.try_get("k").await.unwrap();
     assert!(
-        got.has_value(),
+        got.is_some(),
         "peer L1 was eagerly refreshed from L2, not just evicted"
     );
-    assert_eq!(got.value().map(String::as_str), Some("v2"));
+    assert_eq!(got.as_deref(), Some("v2"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -291,15 +291,15 @@ async fn backplane_expire_marks_peer_stale_keeping_physical() {
 
     // A plain read hides the now-stale entry...
     assert!(
-        !cache2.try_get("k", None).await.has_value(),
+        cache2.try_get("k").await.unwrap().is_none(),
         "Expire hides the entry from a plain read on the peer"
     );
     // ...but it is still physically present (Expire, not Remove): a stale-allowed
     // read serves it, proving the peer kept it for fail-safe.
     let stale_opts = cache2.entry_options().with_allow_stale_on_read_only(true);
-    let stale = cache2.try_get("k", Some(stale_opts)).await;
+    let stale = cache2.try_get("k").options(|_| stale_opts).await.unwrap();
     assert_eq!(
-        stale.value().map(String::as_str),
+        stale.as_deref(),
         Some("v1"),
         "Expire kept the entry physically; only the logical window elapsed"
     );
@@ -340,7 +340,7 @@ async fn backplane_clear_remove_propagates_to_peer() {
         .await
         .unwrap();
     assert!(
-        cache2.try_get("k", None).await.has_value(),
+        cache2.try_get("k").await.unwrap().is_some(),
         "peer holds the value before the clear"
     );
 
@@ -349,7 +349,7 @@ async fn backplane_clear_remove_propagates_to_peer() {
     cache2.run_pending_tasks().await.unwrap();
 
     assert!(
-        !cache2.try_get("k", None).await.has_value(),
+        cache2.try_get("k").await.unwrap().is_none(),
         "cross-node clear(remove-all) evicted the peer's L1 entry"
     );
 }

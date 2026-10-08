@@ -3,3 +3,5 @@
 /benches/fusioncache/bin/
 /tests/fusioncache/**/obj/
 /tests/fusioncache/**/bin/
+
+/docs/benchmarks/
