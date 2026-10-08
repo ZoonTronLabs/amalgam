@@ -5,6 +5,40 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Performance
+
+- Warm L2 reads over immediate providers complete inline. Providers can declare
+  `ReadCompletion::Immediate` and answer `get_immediate` / `read_many_immediate`
+  from in-process state; the reference in-memory value and marker stores do. A
+  build-selected plan runs the unchanged read pipeline on the caller's stack
+  within its counted admission and finishes on the first poll, without a pinned
+  operation allocation, a registered scope or an observer future. `get_or_set`
+  claims free same-key ownership without waiting, serves an L2 hit inline and
+  continues a confirmed miss in owned execution; user origins never run inline.
+  Any unexpected suspension falls back to the owned pipeline.
+- Cold Redis reads take one round trip under the default `DurableRequired`
+  policy: `DistributedCache::get_marked` lets a provider read clear markers with
+  the value, and Redis pipelines GET and HMGET. Tagged entries read only their
+  tag markers separately; a separately supplied marker store is unchanged.
+- Canonical JSON envelopes and snapshot headers decode without per-field name
+  matching or serde's buffered internally tagged path; other layouts keep the
+  general decoder and its errors. Integers are parsed eight digits at a time.
+- L2 reads no longer sample the clock for a disabled or closed circuit breaker,
+  write the breaker word on success, allocate the physical key, allocate a
+  cancellation request inline, or sample UTC more than twice. Hit and miss
+  events are built only for an actual observer. Small hot-path helpers are
+  `#[inline]` for consumers without LTO, and the reference providers hash with
+  ahash.
+- Same-runner Linux CI (EPYC 7763), main versus this work: L2 read 2338 → 1012 ns,
+  L2 get_or_set 2898 → 1245 ns, allocations 8 → 3 per operation. See
+  [PERFORMANCE](docs/PERFORMANCE.md) for the FusionCache comparison.
+
+### Provider API additions
+
+- `ReadCompletion`, `ImmediateRead`, `MarkedRead`; `DistributedCache::read_completion`,
+  `get_immediate`, `get_marked`; `InvalidationStore::read_completion`,
+  `read_many_immediate`. All have defaults; existing providers are unaffected.
+
 ## [0.4.1] — 2026-10-08
 
 ### Documentation

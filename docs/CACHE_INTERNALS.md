@@ -14,6 +14,7 @@ into private modules so complete workflows can be read and reviewed together.
 | [blocking/api.rs](../src/cache/blocking/api.rs) | Synchronous delegation to the same operation engine |
 | [blocking/runtime.rs](../src/cache/blocking/runtime.rs) | Driven I/O, bounded callback admission, global depth and drain guards |
 | [read.rs](../src/cache/read.rs) | Value reads, origin ownership, fail-safe and eager refresh |
+| [immediate_read.rs](../src/cache/immediate_read.rs) | Build-selected inline completion of L2 reads over immediate providers |
 | [write.rs](../src/cache/write.rs) | Value mutation admission and owned commit pipelines |
 | [markers.rs](../src/cache/markers.rs) | Tag/clear observations, scoped repair ownership and marker mutations |
 | [marker_eager.rs](../src/cache/marker_eager.rs) | Private marker child module: attempt admission, peer preflight and owned eager refresh |

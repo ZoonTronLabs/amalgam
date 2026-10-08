@@ -1,4 +1,74 @@
-# Performance measurements for Amalgam 0.4.0
+# Performance measurements for Amalgam
+
+## Unreleased — inline L2 reads and pipelined markers
+
+Measured source: commit `6dbb8213cd7a7f537d21abaa0e4048d7b37b19dd`. It adds
+inline L2 completion over immediate providers, clear markers with the value,
+canonical JSON fast paths, fewer clock samples and cross-crate inlining (see the
+[changelog](../CHANGELOG.md)). Policy, fixtures and harness are unchanged:
+FusionCache **2.9.0** with normal tiering/Dynamic PGO, settled warmups, three
+counterbalanced process pairs, Rust 1.88. Ratios are **Amalgam / FC time**;
+lower is faster.
+
+### Linux CI — AMD EPYC 9V74, two physical cores
+
+GitHub-hosted runner, Linux 6.17 / glibc 2.39, .NET 10.0.12 (SDK 10.0.401),
+[CI run 37793789026](https://github.com/ZoonTronLabs/amalgam/actions/runs/37793789026)
+(`scaling-report` artifact).
+
+| Workload / 1 worker | read API: Amalgam / FC ns | ratio | get_or_set API: Amalgam / FC ns | ratio |
+|---|---:|---:|---:|---:|
+| Warm L1 hit, same key | 112.5 / 155.1 | 0.725 | 108.7 / 192.6 | 0.564 |
+| Warm L1 hit, distinct keys | 111.9 / 155.1 | 0.721 | 108.4 / 188.8 | 0.574 |
+| Native hit | 76.9 / 110.7 | 0.695 | 89.7 / 143.8 | 0.624 |
+| Replacement set | 187.6 / 219.7 | 0.854 | 191.8 / 221.8 | 0.865 |
+| L2 JSON | 715.3 / 1175.5 | 0.609 | 945.8 / 1388.3 | 0.681 |
+| Cold factory (diagnostic) | 2401.5 / 3429.9 | 0.700 | 2423.7 / 3677.9 | 0.659 |
+
+Warm hits and sets allocate zero times; L2 operations allocate three times
+(eight before). Every row is faster than FusionCache. The stricter project
+budgets still fail on this runner for one-worker hits (≤0.50×) and set
+(≤0.75×). FC cold warmups did not settle in several pairs, so cold remains
+diagnostic. Two physical cores cannot qualify eight-core scaling.
+
+### M4 Pro — same source, local
+
+macOS 26.6.2, 12 physical cores, .NET 10.0.8 (SDK 10.0.300). `--gate all`
+reported no budget failure and every warmup settled for both APIs.
+
+| Workload / 1 worker | read API ratio | get_or_set API ratio |
+|---|---:|---:|
+| Warm L1 hit, same / distinct | 0.197 / 0.197 | 0.190 / 0.188 |
+| Native hit | 0.207 | 0.145 |
+| Replacement set | 0.676 | 0.721 |
+| L2 JSON | 0.349 (414.0 / 1187.7 ns) | 0.386 (518.4 / 1343.0 ns) |
+| Cold factory | 0.592 | 0.570 |
+
+Distinct-key scaling reached 7.24× (read) and 6.68× (get_or_set) against the
+6× target.
+
+### Same-runner improvement over 0.4.1
+
+[CI run 37789637748](https://github.com/ZoonTronLabs/amalgam/actions/runs/37789637748)
+ran the frozen before/after diagnostic on one AMD EPYC 7763 runner, comparing
+main `66fe979` with intermediate commit `d1824fd` of this work (before lazy
+events, cross-crate inlining and ahash providers):
+
+| Workload | 0.4.1 ns | `d1824fd` ns | ratio | allocations |
+|---|---:|---:|---:|---:|
+| L2 JSON read | 2338.3 | 1012.2 | 0.433 | 8 → 3 |
+| L2 JSON get_or_set | 2897.5 | 1245.2 | 0.430 | 8 → 3 |
+
+Warm L1 hits and sets were unchanged within ±2% at that commit; the same run
+compared with FC at 0.625× (L2 read) and 0.646× (L2 get_or_set).
+
+### Redis cold reads
+
+A local Valkey 9.1.2 measured 3000 cold L2 reads with the default
+`DurableRequired` policy: 385.8 µs per read before (GET, then HMGET) and
+199.9 µs after (one pipelined round trip, matching `OptionsControlled`).
+
+## 0.4.0 measurements (history)
 
 Amalgam **0.4.0** is published on crates.io (8 October 2026). The regression
 baseline is the actual published **0.3.1** package. The M4 FC table
