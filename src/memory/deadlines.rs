@@ -10,6 +10,7 @@ pub(super) enum Timing {
     Local(Arc<LocalClock>),
 }
 impl Timing {
+    #[inline]
     pub(super) fn prepare(
         &self,
         meta: &Metadata,
@@ -23,6 +24,7 @@ impl Timing {
             expiry,
         )
     }
+    #[inline]
     pub(super) fn prepare_boundaries(
         &self,
         logical: Timestamp,
@@ -61,6 +63,7 @@ pub(super) enum Deadlines {
     },
 }
 impl Deadlines {
+    #[inline]
     pub(super) fn physically_expired(
         &self,
         meta: &Metadata,
@@ -76,6 +79,7 @@ impl Deadlines {
             Self::Local { physical, .. } => physical.expired(elapsed.unwrap_or_else(Instant::now)),
         }
     }
+    #[inline]
     pub(super) fn freshness(&self, now: Instant) -> Freshness {
         match self {
             Self::Local { logical, .. } => {

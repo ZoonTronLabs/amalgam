@@ -53,6 +53,7 @@ impl PlainMetadata {
     pub(crate) fn physical(&self) -> Timestamp {
         self.expires
     }
+    #[inline]
     fn install(self, meta: &mut Metadata) {
         meta.created = self.created;
         meta.inserted_at = self.created;

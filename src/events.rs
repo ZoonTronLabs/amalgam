@@ -640,9 +640,11 @@ impl Events {
         }
     }
     /// Reads recipient interest without acquiring the idle plugin host.
+    #[inline]
     pub(crate) fn is_quiet(&self) -> bool {
         !self.observes_operations() && !self.has_layer_receivers()
     }
+    #[inline]
     pub(crate) fn observes_operations(&self) -> bool {
         self.has_broadcast_receivers()
             || self
@@ -651,6 +653,7 @@ impl Events {
                 .get()
                 .is_some_and(PluginEventRoute::has_listeners)
     }
+    #[inline]
     pub(crate) fn operation_started(&self, operation: CacheOperation) {
         if self
             .inner
@@ -665,6 +668,7 @@ impl Events {
         }
     }
 
+    #[inline]
     pub(crate) fn component_read_deferred(
         &self,
         component: ComponentRead,
@@ -685,6 +689,7 @@ impl Events {
     pub(crate) fn capacity(&self) -> usize {
         self.inner.capacity
     }
+    #[inline]
     pub(crate) fn has_layer_receivers(&self) -> bool {
         self.inner
             .layers
@@ -697,9 +702,11 @@ impl Events {
                 .is_some_and(PluginEventRoute::has_observers)
     }
 
+    #[inline]
     pub(crate) fn emit_layer_lazy(&self, make: impl FnOnce() -> LayerEvent) {
         self.emit_layer_deferred(make, PendingPluginEvent::deliver);
     }
+    #[inline]
     pub(crate) fn emit_layer_deferred(
         &self,
         make: impl FnOnce() -> LayerEvent,
@@ -753,6 +760,7 @@ impl Events {
     }
 
     /// Keeps optional worker facts lazy while retaining selected callback leases.
+    #[inline]
     pub(crate) fn emit_deferred_lazy(
         &self,
         make: impl FnOnce() -> CacheEvent,
@@ -789,6 +797,7 @@ impl Events {
 
     /// Constructs allocation-bearing events only when an observer can receive
     /// them. Admission is checked at emission, after any user clone callback.
+    #[inline]
     pub(crate) fn emit_lazy(&self, make: impl FnOnce() -> CacheEvent) {
         let host = self.plugin_host();
         if !self.has_broadcast_receivers() && host.as_ref().is_none_or(|host| !host.has_listeners())
@@ -800,10 +809,12 @@ impl Events {
         }
     }
 
+    #[inline]
     fn plugin_host(&self) -> Option<Arc<PluginHostInner>> {
         self.inner.plugins.get().and_then(PluginEventRoute::upgrade)
     }
 
+    #[inline]
     fn has_broadcast_receivers(&self) -> bool {
         self.inner.broadcast_armed.load(Ordering::Acquire) && self.inner.sender.receiver_count() > 0
     }

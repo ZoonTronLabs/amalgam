@@ -552,12 +552,15 @@ pub(crate) struct PluginEventRoute {
 }
 
 impl PluginEventRoute {
+    #[inline]
     pub(crate) fn has_observers(&self) -> bool {
         self.observers.load(Ordering::Acquire) != 0
     }
+    #[inline]
     pub(crate) fn has_listeners(&self) -> bool {
         self.listeners.load(Ordering::Acquire) != 0
     }
+    #[inline]
     pub(crate) fn upgrade(&self) -> Option<Arc<PluginHostInner>> {
         if !self.has_listeners() {
             None

@@ -532,6 +532,7 @@ impl TagRegistry {
 
     /// Applies the strongest known marker using inclusive snapshot comparisons.
     #[must_use]
+    #[inline]
     pub fn evaluate(
         &self,
         created: Timestamp,

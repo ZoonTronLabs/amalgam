@@ -52,6 +52,7 @@ impl JitterPlan {
             Some(source) => Self::Configured(source),
         }
     }
+    #[inline]
     pub(crate) fn sample(&self, maximum: Duration) -> Result<JitterSample, ConfigError> {
         match self {
             Self::Standard if maximum.is_zero() => Ok(JitterSample::ZERO),

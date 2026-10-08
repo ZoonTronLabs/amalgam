@@ -223,6 +223,7 @@ impl<'a> QuietObservation<'a> {
     pub(crate) fn events(&self) -> &'a Events {
         self.events
     }
+    #[inline]
     pub(crate) fn new(events: &'a Events, operation: CacheOperation) -> Self {
         Self {
             events,
@@ -230,6 +231,7 @@ impl<'a> QuietObservation<'a> {
             state: ObservationState::Pending,
         }
     }
+    #[inline]
     pub(crate) fn finish(mut self, outcome: OperationOutcome, level: Option<CacheLevel>) {
         self.state = ObservationState::Completed;
         self.events.emit_lazy(|| CacheEvent::OperationCompleted {
