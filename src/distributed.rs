@@ -574,6 +574,11 @@ impl<V> Serializer<V> {
         result
     }
 
+    /// Whether this configuration decodes without an awaited codec future.
+    pub(crate) fn decodes_synchronously(&self, mode: SerializationMode) -> bool {
+        matches!(self.model(mode), CodecModel::Sync(_))
+    }
+
     fn model(&self, mode: SerializationMode) -> CodecModel<'_, V> {
         match (self, mode) {
             (Self::Sync(codec), _) => CodecModel::Sync(codec.as_ref()),
@@ -611,6 +616,30 @@ where
     }
 }
 
+/// How a provider completes reads, captured once when a cache is built.
+///
+/// `Immediate` is a provider contract: every `*_immediate` read answers from
+/// in-process state without awaiting I/O. A cache built over such providers can
+/// finish warm distributed reads inline, without moving the operation into
+/// cache-owned asynchronous execution. Network providers keep the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReadCompletion {
+    /// Reads may await I/O; the cache always uses the asynchronous methods.
+    #[default]
+    Asynchronous,
+    /// Reads answer in memory through the corresponding `*_immediate` method.
+    Immediate,
+}
+
+/// A synchronous read attempt.
+#[derive(Debug)]
+pub enum ImmediateRead<T> {
+    /// The provider answered without suspending.
+    Completed(T),
+    /// Answering requires awaited I/O; the cache awaits the asynchronous read.
+    Deferred,
+}
+
 /// Atomic ownership validation available for value writes.
 ///
 /// A declaration is a provider contract: `Atomic` requires `write_with_lease`
@@ -640,6 +669,19 @@ pub trait DistributedCache: Send + Sync {
     /// Returns an immutable owned snapshot; providers may share its backing bytes.
     /// Set/remove must never mutate a previously returned snapshot.
     async fn get(&self, key: &str) -> Result<Option<DistributedBytes>>;
+
+    /// Declares whether [`get_immediate`](Self::get_immediate) answers every read.
+    fn read_completion(&self) -> ReadCompletion {
+        ReadCompletion::Asynchronous
+    }
+
+    /// Reads without awaiting, for in-process storage. The default defers to
+    /// [`get`](Self::get). A provider declaring [`ReadCompletion::Immediate`]
+    /// answers here with the same result `get` would return, and never blocks
+    /// the calling thread on I/O.
+    fn get_immediate(&self, _key: &str) -> ImmediateRead<Result<Option<DistributedBytes>>> {
+        ImmediateRead::Deferred
+    }
 
     /// Writes `value` at `key` with an optional TTL.
     ///
@@ -776,6 +818,22 @@ pub trait InvalidationStore: Send + Sync {
         candidate: MarkerVersion,
     ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError>;
 
+    /// Declares whether [`read_many_immediate`](Self::read_many_immediate)
+    /// answers every batch read.
+    fn read_completion(&self) -> ReadCompletion {
+        ReadCompletion::Asynchronous
+    }
+
+    /// Batch read without awaiting, for in-process storage. The default defers
+    /// to [`read_many`](Self::read_many); an `Immediate` provider answers here.
+    fn read_many_immediate(
+        &self,
+        _scope: &CacheScope,
+        _kinds: &[MarkerKind],
+    ) -> ImmediateRead<std::result::Result<Box<[StoredMarker]>, MarkerError>> {
+        ImmediateRead::Deferred
+    }
+
     /// Batch compatibility adapter; native providers may supply one atomic read.
     async fn read_many(
         &self,
@@ -884,26 +942,44 @@ impl InvalidationStore for InMemoryInvalidationStore {
         ))
     }
 
+    fn read_completion(&self) -> ReadCompletion {
+        ReadCompletion::Immediate
+    }
+
+    fn read_many_immediate(
+        &self,
+        scope: &CacheScope,
+        kinds: &[MarkerKind],
+    ) -> ImmediateRead<std::result::Result<Box<[StoredMarker]>, MarkerError>> {
+        ImmediateRead::Completed(Ok(self.read_many_now(scope, kinds)))
+    }
+
     async fn read_many(
         &self,
         scope: &CacheScope,
         kinds: &[MarkerKind],
     ) -> std::result::Result<Box<[StoredMarker]>, MarkerError> {
+        Ok(self.read_many_now(scope, kinds))
+    }
+}
+
+impl InMemoryInvalidationStore {
+    fn read_many_now(&self, scope: &CacheScope, kinds: &[MarkerKind]) -> Box<[StoredMarker]> {
         let scopes = self
             .scopes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(state) = scopes.get(scope) else {
-            return Ok(Box::new([]));
+            return Box::new([]);
         };
-        Ok(kinds
+        kinds
             .iter()
             .filter_map(|kind| {
                 state
                     .read(kind)
                     .map(|at| StoredMarker::new(kind.clone(), at))
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -1035,9 +1111,8 @@ impl InMemoryDistributedCache {
     }
 }
 
-#[async_trait]
-impl DistributedCache for InMemoryDistributedCache {
-    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
+impl InMemoryDistributedCache {
+    fn read_now(&self, key: &str) -> Option<DistributedBytes> {
         let now = self.clock.now();
         // Resolve to an owned value so no DashMap guard is held across `remove`.
         let hit = self.map.get(key).and_then(|stored| {
@@ -1053,7 +1128,22 @@ impl DistributedCache for InMemoryDistributedCache {
                 stored.expires_at.is_some_and(|expires| now >= expires)
             });
         }
-        Ok(hit)
+        hit
+    }
+}
+
+#[async_trait]
+impl DistributedCache for InMemoryDistributedCache {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
+        Ok(self.read_now(key))
+    }
+
+    fn read_completion(&self) -> ReadCompletion {
+        ReadCompletion::Immediate
+    }
+
+    fn get_immediate(&self, key: &str) -> ImmediateRead<Result<Option<DistributedBytes>>> {
+        ImmediateRead::Completed(Ok(self.read_now(key)))
     }
 
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {

@@ -723,6 +723,15 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         } else {
             super::plain_ready::ReadyPlan::General
         };
+        let distributed_read_plan = super::immediate_read::DistributedReadPlan::select(
+            &storage,
+            self.serialization_mode,
+            &markers,
+            &marker_reads,
+            self.disable_tagging,
+            &memory,
+            self.backplane.is_some(),
+        );
         let write_plan = super::memory_inline::WritePlan::select(
             &storage,
             &memory,
@@ -755,6 +764,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
             default_options: self.default_options,
             default_runtime,
             ready_plan,
+            distributed_read_plan,
             write_plan,
             default_fresh_plan,
             default_copy,

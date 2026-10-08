@@ -319,7 +319,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let hydration = self.hydration_fence(key).await?;
         self.memory
             .component_read(crate::events::ComponentRead::Distributed);
-        let bytes = backend.get(&self.inner.l2_key(key)).await?;
+        let physical = self.inner.l2_key(key);
+        let bytes = match backend.get_immediate(&physical) {
+            crate::distributed::ImmediateRead::Completed(bytes) => bytes?,
+            crate::distributed::ImmediateRead::Deferred => backend.get(&physical).await?,
+        };
         self.close_circuit(CircuitComponent::Distributed);
         let Some(bytes) = bytes else {
             observation.record();
