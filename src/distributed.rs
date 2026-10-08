@@ -727,6 +727,22 @@ pub enum ImmediateRead<T> {
     Deferred,
 }
 
+/// A value read that may carry durable markers prefetched in the same round trip.
+#[derive(Debug)]
+pub enum MarkedRead {
+    /// No unexpired value is stored for the key.
+    Miss,
+    /// The stored value. `prefetched` holds the requested markers when the
+    /// provider read them after the value in the same backend round trip;
+    /// `None` leaves the marker read to the cache.
+    Value {
+        /// Immutable value snapshot.
+        bytes: DistributedBytes,
+        /// Requested markers, read after the value, with their own error family.
+        prefetched: Option<std::result::Result<Box<[StoredMarker]>, MarkerError>>,
+    },
+}
+
 /// Atomic ownership validation available for value writes.
 ///
 /// A declaration is a provider contract: `Atomic` requires `write_with_lease`
@@ -768,6 +784,29 @@ pub trait DistributedCache: Send + Sync {
     /// the calling thread on I/O.
     fn get_immediate(&self, _key: &str) -> ImmediateRead<Result<Option<DistributedBytes>>> {
         ImmediateRead::Deferred
+    }
+
+    /// Reads a value and may prefetch `kinds` from this provider's own
+    /// [`invalidation_store`](Self::invalidation_store) in the same backend
+    /// round trip. Markers must be read after the value. The cache calls this
+    /// only when that store is the configured durable marker authority; the
+    /// default reads just the value and leaves markers to the cache.
+    ///
+    /// # Errors
+    /// Returns [`Error::Distributed`] when the value read fails.
+    async fn get_marked(
+        &self,
+        key: &str,
+        _scope: &CacheScope,
+        _kinds: &[MarkerKind],
+    ) -> Result<MarkedRead> {
+        Ok(match self.get(key).await? {
+            Some(bytes) => MarkedRead::Value {
+                bytes,
+                prefetched: None,
+            },
+            None => MarkedRead::Miss,
+        })
     }
 
     /// Writes `value` at `key` with an optional TTL.
