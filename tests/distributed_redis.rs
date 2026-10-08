@@ -226,7 +226,7 @@ async fn live_atomic_markers_survive_new_provider_and_ordinary_private_area_keys
         (&"\u{1f}amalgam/v2/marker-scopes".to_owned(), vec![3]),
     ] {
         backend.set(key, value.clone(), None).await.unwrap();
-        assert_eq!(backend.get(key).await.unwrap(), Some(value));
+        assert_eq!(backend.get(key).await.unwrap(), Some(value.into()));
     }
     assert_eq!(
         store.read(&scope, &kind).await.unwrap(),
@@ -384,7 +384,7 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
             .unwrap(),
         LeasedWriteOutcome::LeaseLost
     );
-    assert_eq!(backend.get(&key).await.unwrap(), Some(vec![1]));
+    assert_eq!(backend.get(&key).await.unwrap(), Some(vec![1].into()));
     let mut state = lease.state();
     tokio::time::timeout(Duration::from_secs(1), async {
         while *state.borrow_and_update() != LeaseState::Lost {
@@ -861,13 +861,11 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         while cache
-            .read(
-                "local",
-                Some(opts.clone().with_skip_distributed(true, false)),
-            )
+            .try_get("local")
+            .options(|_| opts.clone().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .has_value()
+            .is_some()
         {
             tokio::task::yield_now().await;
         }

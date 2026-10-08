@@ -10,6 +10,9 @@
 //! [`InMemoryDistributedCache`] here is a faithful reference used by tests and
 //! single-process multi-instance scenarios.
 
+mod bytes;
+pub use bytes::DistributedBytes;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,7 +23,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::distributed_lock::{LeaseError, LeaseProof};
-use crate::entry::Entry;
+use crate::entry::{Entry, RetentionMetadata};
 use crate::error::{Error, FactoryCancellationReason, Result};
 use crate::execution::FactoryCancellation;
 use crate::marker_snapshots::{
@@ -98,8 +101,16 @@ impl<V: Clone> DistributedEntry<V> {
 
     /// Canonical wire hydration: validates tags and deadline invariants.
     pub fn try_into_entry(self, now: Timestamp) -> Result<Entry<V>> {
+        self.try_into_entry_with_retention(now, RetentionMetadata::Unspecified)
+    }
+
+    fn try_into_entry_with_retention(
+        self,
+        now: Timestamp,
+        retention: RetentionMetadata,
+    ) -> Result<Entry<V>> {
         let tags = try_collect_tags(self.tags)?;
-        Entry::try_rehydrate(
+        Entry::try_rehydrate_with_retention(
             self.value,
             Timestamp::from_ticks(self.created_ticks),
             Timestamp::from_ticks(self.logical_expiration_ticks),
@@ -108,6 +119,7 @@ impl<V: Clone> DistributedEntry<V> {
             self.etag,
             self.last_modified_ticks.map(Timestamp::from_ticks),
             tags,
+            retention,
             now,
         )
     }
@@ -217,6 +229,18 @@ impl<V: Clone> DistributedSnapshot<V> {
             inserted_at,
             retention,
         )
+    }
+
+    // The cache owns the decoded value; initialize retention before sharing it.
+    // Public helpers retain their existing observable copy contract.
+    pub(crate) fn try_into_cache_entry(self, now: Timestamp) -> Result<Entry<V>> {
+        let retention = match self.retention {
+            SnapshotRetention::Unspecified => RetentionMetadata::Unspecified,
+            SnapshotRetention::Specified { size, priority } => {
+                RetentionMetadata::Specified { size, priority }
+            }
+        };
+        self.entry.try_into_entry_with_retention(now, retention)
     }
 
     /// Hydrates source deadlines and persisted retention without extending them.
@@ -578,7 +602,9 @@ pub trait DistributedCache: Send + Sync {
     ///
     /// # Errors
     /// Returns [`Error::Distributed`] on backend failure.
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
+    /// Returns an immutable owned snapshot; providers may share its backing bytes.
+    /// Set/remove must never mutate a previously returned snapshot.
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>>;
 
     /// Writes `value` at `key` with an optional TTL.
     ///
@@ -958,7 +984,7 @@ pub struct InMemoryDistributedCache {
 
 #[derive(Clone)]
 struct StoredBytes {
-    bytes: Vec<u8>,
+    bytes: DistributedBytes,
     expires_at: Option<Timestamp>,
 }
 
@@ -976,7 +1002,7 @@ impl InMemoryDistributedCache {
 
 #[async_trait]
 impl DistributedCache for InMemoryDistributedCache {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let now = self.clock.now();
         // Resolve to an owned value so no DashMap guard is held across `remove`.
         let hit = self.map.get(key).and_then(|stored| {
@@ -1000,7 +1026,7 @@ impl DistributedCache for InMemoryDistributedCache {
         self.map.insert(
             key.to_owned(),
             StoredBytes {
-                bytes: value,
+                bytes: value.into(),
                 expires_at,
             },
         );
@@ -1028,8 +1054,13 @@ impl DistributedCache for InMemoryDistributedCache {
         let committed = proof.with_memory_ownership(|| match mutation {
             LeasedMutation::Set { bytes, ttl } => {
                 let expires_at = ttl.map(|duration| self.clock.now().saturating_add(duration));
-                self.map
-                    .insert(key.to_owned(), StoredBytes { bytes, expires_at });
+                self.map.insert(
+                    key.to_owned(),
+                    StoredBytes {
+                        bytes: bytes.into(),
+                        expires_at,
+                    },
+                );
             }
             LeasedMutation::Remove => {
                 self.map.remove(key);
@@ -1057,7 +1088,7 @@ mod tests {
         l2.set("k", b"hello".to_vec(), Some(Duration::from_secs(10)))
             .await
             .unwrap();
-        assert_eq!(l2.get("k").await.unwrap(), Some(b"hello".to_vec()));
+        assert_eq!(l2.get("k").await.unwrap(), Some(b"hello".to_vec().into()));
 
         clock.advance(Duration::from_secs(11));
         assert_eq!(l2.get("k").await.unwrap(), None);

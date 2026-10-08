@@ -207,7 +207,7 @@ struct FailingRemove {
 
 #[async_trait]
 impl DistributedCache for FailingRemove {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -270,7 +270,7 @@ struct PausedRead {
 
 #[async_trait]
 impl DistributedCache for PausedRead {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         let snapshot = self.inner.get(key).await?;
         if self.pause_next.swap(false, Ordering::SeqCst) {
             self.started.notify_one();
@@ -329,7 +329,7 @@ async fn audit_passive_refresh_does_not_resurrect_after_remove() {
         .unwrap();
     received(&mut events, "k").await;
     tokio::time::timeout(Duration::from_secs(1), async {
-        while reader.try_get("k", None).await.has_value() {
+        while reader.try_get("k").await.unwrap().is_some() {
             tokio::task::yield_now().await;
         }
     })
@@ -337,13 +337,13 @@ async fn audit_passive_refresh_does_not_resurrect_after_remove() {
     .unwrap();
     l2.release.add_permits(1);
     let _ = tokio::time::timeout(Duration::from_millis(100), async {
-        while !reader.try_get("k", None).await.has_value() {
+        while reader.try_get("k").await.unwrap().is_none() {
             tokio::task::yield_now().await;
         }
     })
     .await;
     assert!(
-        !reader.try_get("k", None).await.has_value(),
+        reader.try_get("k").await.unwrap().is_none(),
         "the older in-flight read must not recreate the deleted L1 entry"
     );
 }
@@ -372,7 +372,7 @@ async fn audit_old_backplane_expire_does_not_expire_newer_entry() {
         .unwrap();
     received(&mut events, "k").await;
     assert_eq!(
-        cache.try_get("k", None).await.value(),
+        cache.try_get("k").await.unwrap().as_ref(),
         Some(&2),
         "Expire@1 must not invalidate the newer local Set"
     );
@@ -417,7 +417,7 @@ async fn audit_lagged_backplane_invalidates_possibly_stale_l1() {
         .unwrap();
     received(&mut events, "other-b").await;
     assert!(
-        !cache.try_get("k", None).await.has_value(),
+        cache.try_get("k").await.unwrap().is_none(),
         "a dropped invalidation must not leave a fresh stale L1 value"
     );
 }
@@ -426,7 +426,7 @@ struct HangingL2;
 
 #[async_trait]
 impl DistributedCache for HangingL2 {
-    async fn get(&self, _key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _key: &str, _bytes: Vec<u8>, _ttl: Option<Duration>) -> Result<()> {
@@ -503,7 +503,7 @@ struct FailedWrite;
 
 #[async_trait]
 impl DistributedCache for FailedWrite {
-    async fn get(&self, _key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _key: &str, _bytes: Vec<u8>, _ttl: Option<Duration>) -> Result<()> {
@@ -606,7 +606,7 @@ async fn audit_clear_respects_cache_key_prefix() {
         amalgam::provider::BackplaneCommand::Marker(_)
     ));
     assert_eq!(
-        beta.try_get("k", None).await.value(),
+        beta.try_get("k").await.unwrap().as_ref(),
         Some(&7),
         "clearing alpha must preserve beta's independent prefixed entries"
     );
@@ -636,7 +636,7 @@ async fn audit_ordinary_cache_key_is_not_interpreted_as_a_clear_command() {
     writer.set("__amalgam:clear:remove", 1).await.unwrap();
     received(&mut events, "__amalgam:clear:remove").await;
     assert_eq!(
-        peer.try_get("k", None).await.value(),
+        peer.try_get("k").await.unwrap().as_ref(),
         Some(&7),
         "a publicly accepted data key must not act as a cache-wide clear notification"
     );
@@ -698,7 +698,7 @@ async fn audit_failed_tag_marker_is_recovered_after_backplane_returns() {
     bp.down.store(false, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
-        !peer.try_get("k", None).await.has_value(),
+        peer.try_get("k").await.unwrap().is_none(),
         "tag invalidations must retry like ordinary backplane messages"
     );
 }
@@ -763,7 +763,7 @@ async fn audit_same_tick_tag_marker_invalidates_entry_like_fusioncache() {
         .unwrap();
     cache.remove_by_tag("group").await.unwrap();
     assert!(
-        !cache.try_get("k", None).await.has_value(),
+        cache.try_get("k").await.unwrap().is_none(),
         "FusionCache v2.9.0 invalidates when created <= tag marker"
     );
 }
@@ -779,7 +779,7 @@ struct PausedWrite {
 
 #[async_trait]
 impl DistributedCache for PausedWrite {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         let value = self.inner.get(key).await?;
         self.read.notify_one();
         Ok(value)
@@ -874,7 +874,7 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
         "the delayed L2 write has now completed"
     );
     assert_eq!(
-        reader.try_get("k", None).await.value(),
+        reader.try_get("k").await.unwrap().as_ref(),
         Some(&2),
         "the notification must not leave the peer permanently caching the older L2 snapshot"
     );

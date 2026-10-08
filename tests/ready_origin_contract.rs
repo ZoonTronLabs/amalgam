@@ -308,10 +308,7 @@ async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
         1
     );
     cache.flush_pending().await.unwrap();
-    assert_eq!(
-        cache.read("eager", None).await.unwrap().into_value(),
-        Some(2)
-    );
+    assert_eq!(cache.try_get("eager").await.unwrap(), Some(2));
     cache.shutdown().await.unwrap();
 }
 
@@ -353,9 +350,9 @@ async fn a_value_without_drop_can_still_have_a_user_clone() {
         let reader_cache = cache.clone();
         let reader = std::thread::spawn(move || {
             if native {
-                reader_cache.read("hit", None)
+                reader_cache.try_get("hit").execute()
             } else {
-                let request = reader_cache.as_async().read("hit", None);
+                let request = reader_cache.as_async().try_get("hit");
                 let mut future = std::pin::pin!(std::future::IntoFuture::into_future(request));
                 let mut context = std::task::Context::from_waker(std::task::Waker::noop());
                 match std::future::Future::poll(future.as_mut(), &mut context) {

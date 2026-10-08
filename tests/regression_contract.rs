@@ -33,8 +33,8 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
     let a = make();
     let b = make();
     a.set("shared", 42).await.unwrap();
-    assert_eq!(b.read("shared", None).await.unwrap().value(), Some(&42));
-    assert_eq!(b.read_or_default("shared", -1, None).await.unwrap(), 42);
+    assert_eq!(b.try_get("shared").await.unwrap().as_ref(), Some(&42));
+    assert_eq!(b.get_or_default("shared", -1).await.unwrap(), 42);
     assert_eq!(
         b.get_or_set("shared", amalgam::source::value(999))
             .await
@@ -44,7 +44,11 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
     );
     let skip_memory = EntryOptions::default().with_skip_memory(true, false);
     assert_eq!(
-        b.read("shared", Some(skip_memory)).await.unwrap().value(),
+        b.try_get("shared")
+            .options(|_| skip_memory)
+            .await
+            .unwrap()
+            .as_ref(),
         Some(&42)
     );
 }
@@ -74,7 +78,7 @@ async fn registry_concurrent_get_or_create_returns_one_shared_cache() {
     assert_eq!(registry.len(), 1);
     first.set("private-to-first", 1).await.unwrap();
     assert_eq!(
-        second.try_get("private-to-first", None).await.value(),
+        second.try_get("private-to-first").await.unwrap().as_ref(),
         Some(&1)
     );
 }
@@ -91,7 +95,7 @@ async fn oversized_weighted_entry_is_rejected() {
         .await
         .unwrap();
     cache.run_pending_tasks().await.unwrap();
-    assert!(!cache.read("oversized", None).await.unwrap().has_value());
+    assert!(cache.try_get("oversized").await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -108,7 +112,12 @@ async fn first_admitted_never_remove_entry_survives_capacity_pressure() {
     cache.run_pending_tasks().await.unwrap();
     let mut retained = 0;
     for i in 0..20 {
-        if cache.try_get(format!("pinned-{i}"), None).await.has_value() {
+        if cache
+            .try_get(format!("pinned-{i}"))
+            .await
+            .unwrap()
+            .is_some()
+        {
             retained += 1;
         }
     }
@@ -116,7 +125,7 @@ async fn first_admitted_never_remove_entry_survives_capacity_pressure() {
         retained, 1,
         "pinned entries still consume the configured capacity"
     );
-    assert_eq!(cache.try_get("pinned-0", None).await.value(), Some(&0));
+    assert_eq!(cache.try_get("pinned-0").await.unwrap().as_ref(), Some(&0));
 }
 
 #[tokio::test]
@@ -140,13 +149,14 @@ async fn auto_clone_isolates_mutable_arc_at_public_boundaries() {
         .set("shared-mutable", Arc::new(AtomicI32::new(1)))
         .await
         .unwrap();
-    let returned = cache.try_get("shared-mutable", None).await;
-    returned.value().unwrap().store(2, Ordering::SeqCst);
+    let returned = cache.try_get("shared-mutable").await.unwrap();
+    returned.as_ref().unwrap().store(2, Ordering::SeqCst);
     assert_eq!(
         cache
-            .try_get("shared-mutable", None)
+            .try_get("shared-mutable")
             .await
-            .value()
+            .unwrap()
+            .as_ref()
             .unwrap()
             .load(Ordering::SeqCst),
         1,
@@ -189,7 +199,7 @@ async fn cold_get_or_set_emits_one_logical_miss() {
         .await
         .unwrap();
     assert_eq!(observer.misses.load(Ordering::SeqCst), 1);
-    cache.try_get("absent", None).await;
+    cache.try_get("absent").await.unwrap();
     assert_eq!(
         observer.misses.load(Ordering::SeqCst),
         2,

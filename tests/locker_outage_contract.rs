@@ -32,7 +32,7 @@ impl DistributedCache for Store {
             self.inner.write_with_lease(key, mutation, proof).await
         }
     }
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         if self.down.load(Ordering::SeqCst) {
             Err(Error::Distributed("store unavailable".into()))
@@ -316,10 +316,11 @@ async fn best_effort_fixture(
 }
 async fn local_value(cache: &Cache<u64>, key: &str) -> Option<u64> {
     cache
-        .read(key, Some(options().with_skip_distributed(true, false)))
+        .try_get(key)
+        .options(|_| options().with_skip_distributed(true, false))
         .await
         .unwrap()
-        .value()
+        .as_ref()
         .copied()
 }
 

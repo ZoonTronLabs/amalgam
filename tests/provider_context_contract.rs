@@ -42,13 +42,10 @@ async fn provider_gets_each_caches_defaults_and_raw_key_without_capturing_a_stal
     first.set("short", 2).with_receipt().await.unwrap();
     second.set("ordinary", 3).with_receipt().await.unwrap();
     clock.advance(Duration::from_secs(2));
-    assert!(!first.read("short", None).await.unwrap().has_value());
+    assert!(first.try_get("short").await.unwrap().is_none());
     clock.advance(Duration::from_secs(9));
-    assert!(!first.read("ordinary", None).await.unwrap().has_value());
-    assert_eq!(
-        second.read("ordinary", None).await.unwrap().value(),
-        Some(&3)
-    );
+    assert!(first.try_get("ordinary").await.unwrap().is_none());
+    assert_eq!(second.try_get("ordinary").await.unwrap().as_ref(), Some(&3));
     {
         let observations = provider.0.lock().unwrap();
         assert!(
@@ -86,10 +83,11 @@ async fn explicit_options_bypass_both_provider_hooks_and_legacy_providers_still_
         .unwrap();
     assert_eq!(
         cache
-            .read("key", Some(EntryOptions::default()))
+            .try_get("key")
+            .options(|_| EntryOptions::default())
             .await
             .unwrap()
-            .value(),
+            .as_ref(),
         Some(&7)
     );
     assert!(provider.0.lock().unwrap().is_empty());
@@ -105,6 +103,6 @@ async fn explicit_options_bypass_both_provider_hooks_and_legacy_providers_still_
         .try_build()
         .unwrap();
     cache.set("key", 7).with_receipt().await.unwrap();
-    assert!(!cache.read("key", None).await.unwrap().has_value());
+    assert!(cache.try_get("key").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }

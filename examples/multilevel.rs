@@ -97,7 +97,7 @@ async fn main() -> amalgam::Result<()> {
 
     // node-2 now has "Alice" cached in its own L1 too.
     assert_eq!(
-        node2.try_get("profile", None).await.value(),
+        node2.try_get("profile").await.unwrap().as_ref(),
         Some(&"Alice".to_owned())
     );
 
@@ -109,13 +109,13 @@ async fn main() -> amalgam::Result<()> {
     // Give the in-process backplane a moment to deliver the message.
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    let after = node2.try_get("profile", None).await;
+    let after = node2.try_get("profile").await.unwrap();
     println!(
         "node-2 try_get    => {:?}  (evicted by the backplane)",
-        after.value()
+        after.as_ref()
     );
     assert!(
-        !after.has_value(),
+        after.is_none(),
         "node-2's L1 copy must be evicted after node-1's remove propagates"
     );
     println!("OK: L2 read-through worked and the backplane invalidated the peer.");

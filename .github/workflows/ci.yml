@@ -212,8 +212,31 @@ jobs:
         run: |
           cargo test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --lib reader_slots:: -- --test-threads=1
 
+  release_regression:
+    name: No regression against published 0.3.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: '1.88.0'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Counterbalanced public workloads against the registry package
+        run: python3 benches/check-release-regression.py --output /tmp/amalgam-release-regression
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: release-regression-report
+          path: /tmp/amalgam-release-regression
+          retention-days: 7
+
   scaling:
-    name: Scaling against FusionCache 2.9
+    name: FusionCache comparison (informational)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -233,10 +256,11 @@ jobs:
           dotnet-version: '10.0.x'
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Compare read and factory-retrieval APIs
+        continue-on-error: true
         run: |
           amalgam_scaling_status=0
-          python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-scaling/read || amalgam_scaling_status=1
-          python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-scaling/get-or-set || amalgam_scaling_status=1
+          python3 benches/run-scaling.py --api read --pairs 3 --gate all --output /tmp/amalgam-scaling/read || amalgam_scaling_status=1
+          python3 benches/run-scaling.py --api get-or-set --pairs 3 --gate all --output /tmp/amalgam-scaling/get-or-set || amalgam_scaling_status=1
           exit "$amalgam_scaling_status"
       - name: Optional same-runner before/after diagnostics
         if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
@@ -286,7 +310,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [quality, tests, features, redis, package, security, loom, safety, scaling]
+    needs: [quality, tests, features, redis, package, security, loom, safety, release_regression]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

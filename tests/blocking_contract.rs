@@ -62,8 +62,8 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .execute()
         .unwrap();
     assert_eq!(value, None);
-    assert_eq!(cache.read("key", None).unwrap().into_value(), Some(None));
-    assert_eq!(cache.read("miss", None).unwrap().into_value(), None);
+    assert_eq!(cache.try_get("key").execute().unwrap(), Some(None));
+    assert_eq!(cache.try_get("miss").execute().unwrap(), None);
     assert_eq!(
         cache
             .get_or_set(
@@ -81,7 +81,7 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(cache.read("key", None).unwrap().into_value(), None);
+    assert_eq!(cache.try_get("key").execute().unwrap(), None);
     cache
         .set("clear", Some(7))
         .with_receipt()
@@ -96,7 +96,7 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(cache.read("clear", None).unwrap().into_value(), None);
+    assert_eq!(cache.try_get("clear").execute().unwrap(), None);
     cache.shutdown().unwrap();
 }
 
@@ -207,7 +207,7 @@ fn explicit_cancel_never_returns_failsafe_default_or_stores_late_product() {
             .options(|_| {
                 EntryOptions::new(Duration::from_secs(30)).with_fail_safe(true, None, None)
             })
-            .fail_safe_default((MaybeValue::from_value(7)).into_value())
+            .fail_safe_default(Some(7))
             .cancellation(requested)
             .execute();
         result_tx.send(result).unwrap();
@@ -231,7 +231,7 @@ fn explicit_cancel_never_returns_failsafe_default_or_stores_late_product() {
     release.0.open();
     caller.join().unwrap();
     cache.flush_pending().unwrap();
-    assert!(!cache.read("cancel", None).unwrap().has_value());
+    assert!(cache.try_get("cancel").execute().unwrap().is_none());
     cache.shutdown().unwrap();
 }
 
@@ -283,7 +283,7 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
         .unwrap();
     release.0.open();
     cache.flush_pending().unwrap();
-    assert_eq!(cache.read("eager", None).unwrap().into_value(), Some(2));
+    assert_eq!(cache.try_get("eager").execute().unwrap(), Some(2));
     cache.shutdown().unwrap();
 }
 
@@ -316,7 +316,7 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
         driver,
     )
     .unwrap();
-    assert_eq!(peer.read("shared", None).unwrap().into_value(), Some(123));
+    assert_eq!(peer.try_get("shared").execute().unwrap(), Some(123));
     peer.expire("shared")
         .distributed_policy(DistributedExpirePolicy::Remove)
         .with_receipt()
@@ -332,7 +332,7 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
     )
     .unwrap();
     assert!(
-        !third.read("shared", None).unwrap().has_value(),
+        third.try_get("shared").execute().unwrap().is_none(),
         "a cold node must observe physical L2 removal"
     );
     third.shutdown().unwrap();
@@ -382,7 +382,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(cache.read("native", None).unwrap().into_value(), Some(4));
+    assert_eq!(cache.try_get("native").execute().unwrap(), Some(4));
     assert_eq!(
         cache
             .get_or_set(

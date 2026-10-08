@@ -1,209 +1,61 @@
-# Tested FusionCache contract and 0.3 migration
+# Functional parity: FusionCache 2.9 and Amalgam 0.4 preparation
 
-Amalgam adapts FusionCache's hybrid-cache and resiliency model to Rust. A feature name or a green example is insufficient evidence of full behavioral equivalence. This document states the supported contracts and their limits.
+Reference: released FC 2.9.0. Published Amalgam remains 0.3.1. The table describes
+the developing source and its existing evidence, not a completed full paired
+qualification. **Same** means the stated contract follows the FC reference and
+has an Amalgam witness; **Diff** is an intentional adaptation with its reason;
+**Gap** identifies incomplete support or qualification. A Rust test alone does
+not prove a complete paired FC matrix.
 
-The comparison pins are distinct:
+The [pinned FC oracles](../tests/fusioncache/README.md) cover focused availability,
+default and marker scenarios. Full FR-by-option paired coverage remains a Gap;
+0.4.0 publishes this limitation rather than adding new features to close it.
 
-- Inspected upstream source: FusionCache commit `af09f81a3ea8d7ed71183b46501946da801a2a22`.
-- Executed reference: published NuGet FusionCache **2.9.0**, binary informational version `2.9.0+c2af1f39d3ad50791109bb9d48c0fdaffba010dd`.
-- Amalgam: **0.3.1**.
+| ID | Status | Contract / reason | Existing witness |
+|---|---|---|---|
+| FR-01 | Same | L1 hit, lock/recheck, L2 then factory; local commit before release | ready_hot_path_contract, foundation_contract, core_contract |
+| FR-02 | Same | Factory and supplied value share get_or_set; constant source omits factory-only work | lazy_origin_request_contract, native_output_contract |
+| FR-03 | Same | Read-only L1/L2; Result<Option<V>>, typed cancellation, configured codec/transport policy; no origin or L2 write | read_request_contract, read_failure_policy, null_value_contract, multilevel |
+| FR-04 | Same | set/remove update L1 then configured distributed effects; typed result, optional receipt | set_request_contract, inline_write_contract, review_mutation_policy |
+| FR-05 | Same | Default expire retains eligible L1 stale and removes L2; RetainStale explicit | expire_policy_contract; FC availability oracle |
+| FR-06 | Gap | Logical/physical durations, jitter and zero-duration contracts exist; complete paired edge matrix is not qualified | entry tests, distributed_protocol, readiness_options |
+| FR-07 | Same | Fail-safe chooses eligible newer data, then captured stale/default; no invented L2 replay | behavior, regression_concurrency, cooperative_codec_contract |
+| FR-08 | Same | Soft wait needs an eligible stale entry; hard timeout and owned continuation remain distinct | fusion_defaults_contract, retained_origin_contract; FC availability oracle |
+| FR-09 | Diff | Read budget includes decode/markers; configured rethrow can preserve hard timeout. FC bounds backend get and treats timeout as miss | cooperative_codec_contract, review_read_policy, layer_event_contract |
+| FR-10 | Same | Per-key stampede protection; finite lock policy may serve stale or permit best-effort origin | foundation_contract, regression_concurrency, parked_cancellation |
+| FR-11 | Same | L2 freshness/skip policies and bounded L1 hydration with immutable snapshots | distributed_protocol, l2_hydration_copy_contract, l2_retention_copy_contract |
+| FR-12 | Same | L2 precedes backplane; stages retain real completion/recovery evidence | review_mutation_policy, recovery |
+| FR-13 | Same | Ordinary gaps retain L1; L2-only caches do not periodically clear L1. Strict profile is explicit | fusion_defaults_contract, locker_outage_contract; FC availability oracle |
+| FR-14 | Diff | Last-write recovery, five-second delay; default queue is bounded to 1024. Local ordering rejects stale replay more strongly than FC | recovery, marker_recovery_contract; FC availability oracle |
+| FR-15 | Gap | Native atomic tags work. Ordinary byte-provider work retained from the previous session has focused tests; arbitrary custom L2 marker parity is unqualified and is not a 0.4 promise | marker_visibility_contract, ordinary_marker_contract; focused FC marker oracle |
+| FR-16 | Same | Clear Expire/Remove; memory-only physical clearing | fluent_invalidation_contract, behavior |
+| FR-17 | Same | Eager refresh is factory-only, one owner, L2 preferred; error leaves usable data | regression_concurrency |
+| FR-18 | Same | Mutable context adapts a request-local copy of options/tags/metadata; factory returns Result<V,E> | raw_factory_contract, lazy_origin_request_contract |
+| FR-19 | Same | Conditional modified/not-modified refresh preserves metadata and typed failure | conditional_metadata_contract, core_contract |
+| FR-20 | Diff | Cache<V>, random instance identity, effective prefixes and default provider; Rust type-specific cache replaces FC's heterogeneous cache | provider_context_contract, distributed_key_contract |
+| FR-21 | Diff | Bounded event streams may lose events; deferred callbacks and panic isolation preserve caller progress | layer_event_contract, layer_plugin_contract, otel_metrics_contract |
+| FR-22 | Diff | Owned shutdown drains work and callbacks; final handle Drop initiates close. Stronger lifecycle than FC disposal | core_contract, blocking_contract, retained_origin_contract |
+| RS-1 | Same | Old value Drop is outside internal locks and synchronous before mutation return | eviction_value_contract, inline_write_contract |
+| RS-2 | Diff | External callbacks/Drop run outside locks; ordinary Clone on a ready hit is the documented guarded exception | reader_slot_lifetime_contract, quiet_observer_contract |
+| RS-3 | Same | Caller future Drop retains an already-started origin and its single-flight ownership | retained_origin_contract |
+| RS-4 | Same | Leader panic propagates; followers receive a typed failure; later operations remain usable | regression_concurrency, retained_origin_contract |
+| RS-5 | Same | Clone + Send + Sync + static; ready hit can be polled without a runtime; runtime-dependent plans validate explicitly | ready_hot_path_contract, read_request_contract, blocking_contract |
+| RS-6 | Same | try_build rejects missing runtime/codec and unsupported fenced capability before effects | fusion_defaults_contract, readiness_options, foundation_diagnostics |
 
-Unreleased additions are tracked in [the full functionality inventory](FULL_CONTRACT.md).
-They include original/current/stale factory metadata, independent marker policy,
-async snapshot codecs, explicit conditional/expiry choices, and the shared
-synchronous facade. They are not part
-of the published 0.3.1 package. The remaining public-surface gaps stay open. Unreleased typed plugin contexts now provide complete same-cache operation access, including operational Stop after ordinary admission closes; see [plugin boundaries](PLUGIN_CACHE.md).
+Rust RS contracts have no direct .NET analogue. Same/Diff there denotes the
+required Rust contract, not an unexecuted FC experiment. Test names above are
+entrypoints to the checked-in suites; complete paired coverage and custom L2
+markers remain explicit Gaps.
 
-Unreleased [component observations](LAYER_EVENTS.md) distinguish physical layer hits/misses and committed writes from final logical acceptance. They retain complete peer payloads and separate read deadlines from transport faults. Original-value eviction, callback policy and broader combinations remain open.
+## Selected ordinary defaults
 
-Released 2.9 experiments additionally establish that eager current tags come from
-the triggering request, while stale tags describe the cached source. Its
-`NotModified` resets tags to stale tags but preserves caller changes or clearing
-of validators. The new `not_modified_builder` expresses that contract;
-`ValidatorUpdate` distinguishes retain, replace and clear. Existing `not_modified`
-continues to honor adaptive tags. The new conditional builder rejects a missing
-source with `ConditionalRefreshError` and rejects invalid legacy tag products.
+30-second logical duration; fail-safe/eager/jitter off; infinite factory/lock/L2
+budgets; no initial subscription wait; cooperative distributed lock; five-second
+recovery delay with 1024-item bound; background L2 off and backplane on;
+serialization rethrow on, transport/backplane rethrow off; v2 Prefix namespace.
+Strict policies require real provider capabilities and do not fabricate atomicity.
 
-Released FusionCache Expire retains stale L1 but physically removes L2. Existing
-Rust `try_expire` deliberately retains a physically live L2 snapshot;
-`try_expire_with_policy(..., DistributedExpirePolicy::Remove)` now selects the
-released reference effect. Both paths preserve explicit layer skips and receipts.
-
-Unreleased tag/clear operations use separate `tags_default_options`. Their
-foreground backplane default is independent of ordinary values; durable marker
-lifetime is the existing stronger protocol. `AsyncDistributedSerializer` owns
-the complete validated snapshot; `SerializationMode` selects an available model.
-`SyncPreferred` preserves existing synchronous codec behavior and falls back to an
-async-only provider. `AsyncPreferred` uses a configured asynchronous provider;
-sync-only providers retain their established snapshot overrides.
-
-Default durable control reads retain required validation within the value read
-budget. Opt-in `MarkerReadPolicy::OptionsControlled` applies independent marker
-read options, observation retention, per-marker budgets and typed authority,
-including fresh L1 hits. [The marker field matrix](MARKER_READS.md) describes
-remaining lifecycle gaps and deliberate stronger boundaries. Additional opt-in
-[CachedSnapshots](MARKER_SNAPSHOTS.md) supports expiring remote observations and
-nonzero repair with atomic maxima, independent deadlines and owned writes;
-the journal stays permanent. Owned marker locker orchestration, eager preflight
-and original-policy staged recovery are implemented with native acceptance.
-Remaining budget/read/locker combinations stay open in the inventory. Async
-codecs receive the actual owned cooperative operation signal through additive hooks.
-
-New codec/provider error envelopes preserve the concrete source for downcasting.
-Rust's typed envelope is an idiomatic diagnostic adaptation; it does not expose
-FusionCache's optional same-exception-object rethrow API. Legacy message-only
-variants cannot reconstruct a cause already converted into text. The sealed
-`ImmutableValue` capability permits codec-free copy for supported built-in types;
-custom values continue through their chosen `ValueCloner`. Providers may now use
-`options_for_with_defaults` to inspect the owning cache's current defaults.
-
-The [synchronous facade](SYNC.md) and its async view share the same cache and
-final-owner lifetime. Its explicit thread/depth bounds and fail-safe default
-soft-budget behavior are Rust differences. Supplied values are now distinct
-from user factories in both views: zero factory deadlines do not reject them,
-eager refresh does not overwrite a warm value, and factory events are absent.
-These outcomes were executed against released FusionCache 2.9 and reproduced
-as Rust regressions before repair.
-
-Unreleased [supplied value L1](MEMORY_STORAGE.md) adds an actual in-process
-`MemoryStorage<V>` provider shared by native/async views. Immutable records,
-typed original failures, atomic conditional admission and prefix-scoped shared
-clear barriers preserve value eligibility and newer writes. Storage sharing does
-not imply shared factory ownership; providers own capacity and remain externally
-owned. Optional `BlockingMemoryLocker` now supplies a distinct synchronous
-acquisition callback; async views retain the async provider, and legacy
-implementations keep their adapter. Independent bounded callback pools prevent
-lock waiters from starving factories; started callbacks and late guards remain
-owned until real completion. `ShutdownTask::MemoryLockerAcquisition` is an
-additive closed variant requiring exhaustive downstream handling. See
-[local coordination](MEMORY_LOCKER.md). Separate
-[typed marker storage](MARKER_MEMORY_STORAGE.md) now participates in actual local
-and durable observation reads/writes; broader provider matrices remain open.
-
-## Observable behavior
-
-| Concern | Amalgam contract |
-|---|---|
-| Local coordination | Same-key callers share ownership. Different keys have independent flights, including keys with colliding lock-map shards. A finite lock timeout can deliberately permit best-effort origin work without a lock. |
-| Fresh and stale values | Logical freshness differs from physical fail-safe retention. Ordinary failure can use an eligible captured fallback; explicit cancellation remains an error. |
-| Soft factory timeout | Applies with fail-safe and an available fallback. An allowed background continuation retains the origin and ownership without acquiring a new hard-timeout budget. |
-| Hard factory timeout | Bounds foreground origin work when selected. A zero budget cannot start origin work. |
-| Eager refresh | Request-driven, nonblocking refresh. Rechecks L2 and participates in a configured distributed locker; it does not apply the ordinary factory timeout. |
-| Snapshot ordering | Origin snapshot time is captured before origin work. Insertion time controls TTL separately. Delayed work does not acquire newer source ordering merely by finishing later. |
-| Conditional/adaptive origin | Products and updated options are validated before storage. `not_modified` needs a usable source value. |
-| Read-only lookup | Canonical reads preserve value I/O, codec, deadline, circuit and copy failures. Default L2 budget covers retrieval and required durable validation; explicit OptionsControlled uses independent marker phases and documented marker fault policy. Canonical stale service rechecks physical retention and hard invalidation after waiting; legacy adapters preserve captured fallback compatibility. |
-| L1/L2 lifetime | Layer freshness and physical retention are independent. Hydration uses remaining source lifetime and cannot renew an expired source. |
-| Tags and clear | Durable markers use the effective physical namespace. Invalidation is **inclusive**, `entry_created <= marker`; a present minimum timestamp remains a marker. Explicit skipped distributed writes apply to single/batched tags and both clear modes, with honest per-stage receipts. |
-| Expire and notifications | Cold expire updates L2. Ordinary and passive hydration capture generation, continuity and expected L1 identity; delayed reads cannot overwrite newer hydration or completed local mutations. Preferred newer/equal-stamp stale memory is retained. Optional hydration skips a busy newer commit; private local epoch eligibility prevents post-gap insertion from becoming readable. |
-| Background effects | Requested background work has an awaitable receipt. Notifications follow the corresponding data commit or an explicit recovery decision. |
-| Recovery | Exact item identities, generations, pending stages and original payloads survive retries. Successful stages are not repeated just because a later publication failed. |
-| Copy isolation | Requires a real fallible copy strategy. Ordinary Rust `Clone` may share interior mutable state. |
-| Capacity | Count and weight are separate. Pinned entries occupy capacity; further admission may be refused. Physical expiry still applies. |
-| Diagnostics/lifecycle | One event route, accurate stale servicing-layer attribution, per-cache plugin sessions, typed outcomes, bounded metric labels and owned shutdown. Dynamic attachment startup, callbacks, explicit teardown and owned session destruction are drained; repeated shutdown preserves original failures. |
-
-Actual 2.9 reference experiments cover all nine combinations of tag/expire-clear/remove-clear and entry timestamps immediately before, equal to and after the persisted marker. Only the later timestamp remains valid. A real size-one MemoryCache reference confirms that a `NeverRemove` entry occupies capacity and additional admission can fail.
-
-## Shared reference behavior
-
-The regression suite preserves these observed reference behaviors:
-
-- A previously captured physically valid fallback may be served after a lock wait.
-- Actual NuGet 2.9 read-only lookup can return an eligible captured stale value after its physical lifetime elapses while awaiting L2. Legacy Amalgam `try_get` retains this behavior; canonical `read` deliberately rechecks retention and hard invalidation before stale service.
-- A soft-timeout continuation receives no remaining foreground hard-timeout budget.
-- Normal eager refresh uses no ordinary factory timeout.
-- Ordinary late background origin completion may repopulate a key after `remove`; removal does not cancel that origin.
-- Eligible tag-invalidated stale fallback can be retried according to fail-safe throttle policy.
-- Default cache L2 writes/removes are not assigned an invented read-timeout budget.
-
-Four actual NuGet 2.9 experiments also reproduce an already-started recovery write/remove overtaking a newer write. Amalgam deliberately provides **stronger local ordering** through same-key commit lanes. Awaiting a newer local mutation orders it after an older local replay that already owns that lane. This does not establish global linearizability across independent nodes, custom writers or nonparticipating backends.
-
-## Coordination capabilities
-
-A distributed lease reports its ownership token, lifetime and renewal capability. Native in-memory and Redis providers support token-checked release. An atomic backend ownership check is required to reject a stale owner's data commit; renewal alone cannot guarantee that during a partition. The explicitly selected legacy lease mode provides weaker coordination. An opaque backend-selected acquisition that never completes cannot promise bounded cancellation drainage; that limitation belongs to the provider contract.
-
-Circuit refusal is an admission outcome, not a new transport failure; skipped operations do not restart cooldown. Known caller-selected acquisition tokens receive supervised compare-release after uncertain error replies. Recovery validates representable reconnect delays before starting and invokes/drops external fence behavior outside its queue mutex. A malformed inner control envelope triggers a post-gap recovery barrier when the retained connection is still healthy; conservative policies also discard L1, while explicit best-effort reconciliation retains it.
-
-Durable tag/clear operations require an atomic invalidation store. Existing custom byte stores remain usable for ordinary L2 reads/writes without that optional capability. A custom implementation cannot silently claim atomic markers or fencing that it does not provide.
-
-Default healthy L1 reads remain local. Cold L2 reads reconcile durable markers.
-OptionsControlled may revalidate markers on L1 hits according to independent tag
-defaults. The 0.4 source preserves L1 over notification gaps and does not
-periodically clear L2-only caches. `strict()` selects conservative continuity or
-periodic reconciliation. Native `ready()` and `try_build_ready()` explicitly
-await subscription acknowledgement. Timestamp-based cross-node marker ordering
-still depends on sufficiently consistent clocks.
-
-### Redis outage boundary: 0.3.1 versus 0.4 source
-
-Published 0.3.1 defaults to fenced acquisition and conservative L1 cleanup.
-The 0.4 source defaults to cooperative ownership, suppressed ordinary locker
-failures, retained L1 over backplane gaps, and no periodic L2-only L1 clearing.
-Hot hits remain local; cold misses can compute while Redis is unavailable.
-Received/local invalidations, physical deadlines and cancellation still apply.
-Missed peer changes may remain invisible until expiration. `strict()` restores
-conservative admission and requires explicit native/custom fenced capabilities.
-Construction rejects an unsupported ownership lifetime or atomic value-write
-capability before starting effects. Owned cleanup failures remain observable.
-
-The [public outage contracts](../tests/locker_outage_contract.rs),
-[availability-default contracts](../tests/fusion_defaults_contract.rs) and
-[pinned FC oracle](../tests/fusioncache/README.md) cover the ordinary outage and
-default scenarios. Strict hydration and retained-L2 expiration regressions use
-their policies explicitly, preserving their previous assertions.
-
-## Selected defaults
-
-| Setting | Default |
-|---|---|
-| Logical duration | 30 seconds |
-| Fail-safe | Disabled; configured maximum retention one day, throttle 30 seconds |
-| Eager refresh / jitter | Disabled / zero |
-| Factory and lock budgets | Infinite |
-| Wait for initial backplane subscription | Disabled; enabled by `strict()` |
-| Distributed read budgets | Infinite |
-| Background L2 operations | Disabled |
-| Background backplane operations | Enabled |
-| Rethrow serialization errors | Enabled |
-| Rethrow value transport/backplane errors | Disabled |
-| Lease policy | `Cooperative`; suppressed ordinary acquisition failure permits origin work |
-| Rethrow locker acquisition errors | `false`; suppression applies to ordinary cooperative foreground acquisition |
-| Circuit breaker duration | Zero, disabled |
-| Recovery with configured distributed effects | Enabled; delay 5 seconds, queue bound 1024 |
-| Distributed snapshot namespace | `v2`, Prefix modifier |
-
-These describe the developing 0.4 source. FusionCache 2.9 has the same startup
-and recovery-delay defaults but an unlimited recovery queue. Amalgam retains a
-1024-item bound; `RecoveryConfig.max_items = None` selects unlimited admission.
-Retry counts represent additional attempts after the original operation.
-
-## Migrating from 0.2
-
-1. Compile consumers against 0.3 using `amalgam = { package = "amalgam-cache", version = "0.3" }`. The package and imported library names differ.
-2. Prefer `CacheBuilder::try_build`, fallible `read`/`read_or_default`, typed mutations and their receipts. Existing legacy signatures remain adapters; a signature without an error return cannot expose every failure.
-3. Register an actual `ValueCloner` before enabling auto-clone. Configure count and weight independently and handle refused admission.
-4. Choose participating marker/lease capabilities for the guarantees you need. Unsupported capabilities are typed failures, not successful no-ops.
-5. Use a coordinated fresh distributed namespace. 0.3 decoders accept legacy unframed DTOs, but running 0.2 readers cannot decode new framed snapshots. The new default `v2` Prefix separates them. `KeyModifierMode::None` or intentional reuse of v1 requires a fresh physical prefix or a coordinated migration; it does not make mixed-version readers safe.
-6. Adopt explicit cancellation and `shutdown` for observed drainage. Dropping the last public handle initiates cancellation; retaining an external event handle does not retain the cache.
-
-Source compatibility, legacy decoding and mixed-version runtime compatibility are different claims. Performance depends on value ownership, configured guarantees, providers and workload. See [validation](AUDIT.md), the [README](../README.md) and [porting design](../PORTING.md).
-
-### Cooperative async codec lifetime (unreleased)
-
-The additive `serialize_snapshot_with_cancellation` and
-`deserialize_snapshot_with_cancellation` hooks forward the signal of their
-actual owned execution. The default hooks preserve old implementations and
-check cancellation before and after their await. Cancellation always retains
-its typed channel, independently of codec error-suppression policy. L2 reads
-have a linked child scope, so a read timeout signals `SoftTimeout`/`HardTimeout`
-before the codec is destroyed and does not cancel a subsequent factory.
-Permitted timed-out factories retain their original scope after the caller
-returns; eager, passive and recovery have independent scopes. Shutdown cancels
-and drains all owned work. `FactoryCancellation::check` exposes the exact reason;
-successful scope completion signals `ScopeFinished` as in existing factories.
-
-The upstream 2.9 reference passes operation tokens to foreground codecs but
-uses no caller token for late commit/passive decode. Its distributed timeout
-covers backend get rather than decode/markers; its disposal is less strongly
-owned. Amalgam retains its stronger combined deadlines and drainage. Twelve
-public cooperative contracts and three existing codec-model contracts verify
-this adaptation; source-only review is recorded separately.
+Wire decoding, source compatibility and mixed-version runtime safety are separate
+claims. Use a coordinated fresh physical namespace when older clients cannot
+read the selected format. See [migration](MIGRATION_0_4.md),
+[provider boundaries](MARKER_READS.md) and [performance](PERFORMANCE.md).

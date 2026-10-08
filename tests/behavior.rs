@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use amalgam::{
     Cache, CacheEvent, EagerThreshold, EntryOptions, Error, FactoryContext, Tag, Timeout,
-    advanced::MaybeValue, provider::Clock, provider::ManualClock,
+    provider::Clock, provider::ManualClock,
 };
 
 fn build<V: Clone + Send + Sync + 'static>() -> (Cache<V>, Arc<ManualClock>) {
@@ -103,7 +103,7 @@ async fn fail_safe_default_used_when_no_stale() {
             typed_factory(|ctx| async move { Err(ctx.fail("boom")) }),
         )
         .options(|_| opts)
-        .fail_safe_default((MaybeValue::from_value("default".to_owned())).into_value())
+        .fail_safe_default(Some("default".to_owned()))
         .await
         .unwrap();
     assert_eq!(served, "default");
@@ -163,9 +163,9 @@ async fn soft_timeout_returns_stale_then_completes_in_background() {
 
     // Background factory completes and replaces the value.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let after = cache.try_get("k", None).await;
+    let after = cache.try_get("k").await.unwrap();
     assert_eq!(
-        after.value(),
+        after.as_ref(),
         Some(&"v2".to_owned()),
         "background completion updates cache"
     );
@@ -241,7 +241,7 @@ async fn eager_refresh_triggers_background_update() {
         2,
         "eager refresh ran the factory in background"
     );
-    assert_eq!(cache.try_get("k", None).await.value(), Some(&2));
+    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&2));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -371,7 +371,7 @@ async fn conditional_refresh_not_modified_reuses_stale_and_bumps_expiration() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     // Expiration was bumped ⇒ now fresh again at the current clock.
     assert_eq!(
-        cache.try_get("k", None).await.value(),
+        cache.try_get("k").await.unwrap().as_ref(),
         Some(&"data-v1".to_owned())
     );
 }
@@ -530,23 +530,23 @@ async fn clear_removes_everything() {
     let (cache, _clock) = build::<i32>();
     cache.set("a", 1).await.unwrap();
     cache.set("b", 2).await.unwrap();
-    assert_eq!(cache.try_get("a", None).await.value(), Some(&1));
+    assert_eq!(cache.try_get("a").await.unwrap().as_ref(), Some(&1));
 
     cache.clear(amalgam::ClearMode::Remove).await.unwrap(); // hard remove
     cache.run_pending_tasks().await.unwrap();
-    assert!(!cache.try_get("a", None).await.has_value());
-    assert!(!cache.try_get("b", None).await.has_value());
+    assert!(cache.try_get("a").await.unwrap().is_none());
+    assert!(cache.try_get("b").await.unwrap().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn try_get_and_get_or_default() {
     let cache: Cache<i32> = Cache::new();
-    assert!(!cache.try_get("k", None).await.has_value());
-    assert_eq!(cache.get_or_default("k", -1, None).await, -1);
+    assert!(cache.try_get("k").await.unwrap().is_none());
+    assert_eq!(cache.get_or_default("k", -1).await.unwrap(), -1);
 
     cache.set("k", 5).await.unwrap();
-    assert_eq!(cache.try_get("k", None).await.value(), Some(&5));
-    assert_eq!(cache.get_or_default("k", -1, None).await, 5);
+    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&5));
+    assert_eq!(cache.get_or_default("k", -1).await.unwrap(), 5);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -564,10 +564,18 @@ async fn allow_stale_on_read_only_serves_stale() {
     clock.advance(Duration::from_secs(20)); // stale
 
     // Default read-only: stale hidden.
-    assert!(!cache.try_get("k", None).await.has_value());
+    assert!(cache.try_get("k").await.unwrap().is_none());
     // With allow_stale_on_read_only: stale visible.
     let stale_opts = EntryOptions::new(Duration::from_secs(10)).with_allow_stale_on_read_only(true);
-    assert_eq!(cache.try_get("k", Some(stale_opts)).await.value(), Some(&9));
+    assert_eq!(
+        cache
+            .try_get("k")
+            .options(|_| stale_opts)
+            .await
+            .unwrap()
+            .as_ref(),
+        Some(&9)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

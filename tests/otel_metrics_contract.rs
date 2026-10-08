@@ -155,7 +155,7 @@ async fn native_sdk_counts_all_warm_reads_even_when_broadcast_loses_events() {
         .unwrap();
     for _ in 0..1000 {
         assert_eq!(
-            cache.read("secret-key", None).await.unwrap().value(),
+            cache.try_get("secret-key").await.unwrap().as_ref(),
             Some(&17)
         );
     }
@@ -223,7 +223,7 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.read("secret-key", None).await.unwrap().value(), Some(&23));
+    assert_eq!(b.try_get("secret-key").await.unwrap().as_ref(), Some(&23));
     flush(&provider).await;
     assert_eq!(capture.counter("amalgam.cache.set", "l2"), 1);
     assert_eq!(
@@ -297,7 +297,7 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             MetricTags::Exclude => assert!(!point.attributes.contains_key("operation_tag")),
             MetricTags::Include => assert_eq!(point.attributes["operation_tag"], "private-tag"),
         }
-        assert!(!cache.read("key", None).await.unwrap().has_value());
+        assert!(cache.try_get("key").await.unwrap().is_none());
         cache.shutdown().await.unwrap();
         stop(provider).await;
     }
@@ -326,7 +326,7 @@ async fn cache_name_budget_is_historical_shared_and_does_not_mix_named_series() 
             .wait()
             .await
             .unwrap();
-        assert!(cache.read("private-key", None).await.unwrap().has_value());
+        assert!(cache.try_get("private-key").await.unwrap().is_some());
         cache.shutdown().await.unwrap();
     }
     flush(&provider).await;
@@ -436,7 +436,7 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
             .iter()
             .all(|p| !p.attributes.values().any(|v| v.contains("private")))
     );
-    assert_eq!(cache.read("soft", None).await.unwrap().value(), Some(&29));
+    assert_eq!(cache.try_get("soft").await.unwrap().as_ref(), Some(&29));
     cache.shutdown().await.unwrap();
     stop(provider).await;
 }
@@ -629,7 +629,7 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
         17
     );
     a.flush_pending().await.unwrap();
-    assert_eq!(a.read("key", None).await.unwrap().value(), Some(&23));
+    assert_eq!(a.try_get("key").await.unwrap().as_ref(), Some(&23));
     flush(&provider).await;
     assert_eq!(capture.counter("amalgam.eager_refresh", "eager-reuse"), 1);
     assert_eq!(capture.counter("amalgam.factory.success", "eager-reuse"), 0);
@@ -642,7 +642,7 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
 struct Unavailable(std::sync::atomic::AtomicUsize);
 #[async_trait::async_trait]
 impl DistributedCache for Unavailable {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Err(Error::distributed(std::io::Error::other(
             "private backend cause",
@@ -668,19 +668,20 @@ async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_d
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.read("first", None).await,
+        cache
+            .try_get("first")
+            .options(|o| o.with_rethrow_distributed_exceptions(true))
+            .await,
         Err(Error::Transport(TransportError::Distributed { .. }))
     ));
-    assert_eq!(cache.get_or_default("open-circuit", 7, None).await, 7);
+    assert_eq!(cache.get_or_default("open-circuit", 7).await.unwrap(), 7);
     assert!(
-        !cache
-            .read(
-                "policy-skip",
-                Some(options().with_skip_distributed(true, false))
-            )
+        cache
+            .try_get("policy-skip")
+            .options(|_| options().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .has_value()
+            .is_none()
     );
     flush(&provider).await;
     assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);

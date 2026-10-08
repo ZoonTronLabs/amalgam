@@ -49,8 +49,8 @@ async fn l2_hydration_uses_the_supplied_copy_without_an_ordinary_clone() -> amal
     ORDINARY_CLONES.store(0, Ordering::SeqCst);
     copy.0.store(0, Ordering::SeqCst);
 
-    let from_l2 = cache.read("payload", None).await?;
-    assert_eq!(from_l2.value().map(|value| value.0), Some(42));
+    let from_l2 = cache.try_get("payload").await?;
+    assert_eq!(from_l2.as_ref().map(|value| value.0), Some(42));
     assert_eq!(ORDINARY_CLONES.load(Ordering::SeqCst), 0);
     assert_eq!(
         copy.0.load(Ordering::SeqCst),
@@ -59,16 +59,14 @@ async fn l2_hydration_uses_the_supplied_copy_without_an_ordinary_clone() -> amal
     );
 
     let from_l1 = cache
-        .read(
-            "payload",
-            Some(
-                options
-                    .with_skip_memory(false, false)
-                    .with_skip_distributed(true, false),
-            ),
-        )
+        .try_get("payload")
+        .options(|_| {
+            options
+                .with_skip_memory(false, false)
+                .with_skip_distributed(true, false)
+        })
         .await?;
-    assert_eq!(from_l1.value().map(|value| value.0), Some(42));
+    assert_eq!(from_l1.as_ref().map(|value| value.0), Some(42));
     assert_eq!(ORDINARY_CLONES.load(Ordering::SeqCst), 0);
     assert_eq!(copy.0.load(Ordering::SeqCst), 3);
     cache.shutdown().await?;

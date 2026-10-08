@@ -84,17 +84,14 @@ async fn seed(cache: &Cache<i32>) {
 
 async fn memory_value(cache: &Cache<i32>) -> Option<i32> {
     cache
-        .read(
-            "tenant:item",
-            Some(
-                options()
-                    .with_skip_distributed(true, true)
-                    .with_fail_safe(false, None, None),
-            ),
-        )
+        .try_get("tenant:item")
+        .options(|_| {
+            options()
+                .with_skip_distributed(true, true)
+                .with_fail_safe(false, None, None)
+        })
         .await
         .unwrap()
-        .into_value()
 }
 
 #[tokio::test]

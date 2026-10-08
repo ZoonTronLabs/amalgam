@@ -2,14 +2,14 @@
 use super::{
     AcquisitionPolicy, Arc, BackplaneCommand, CacheEvent, CancellationSource, CommitMode,
     CommitReport, ContinuityStamp, Duration, EffectOutcome, EnqueueOutcome, Entry, EntryOptions,
-    Error, FactoryCancellation, InvalidationStore, JitterSample, LeaseError, LeasePolicy, LinkMode,
-    LocalEffect, MarkerAccess, MarkerAdvanceOutcome, MarkerCommand, MarkerError, MarkerKind,
-    MarkerLease, MarkerLeaseKey, MarkerLifecycleAccess, MarkerObservation, MarkerObservations,
-    MarkerPresence, MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy, MarkerReads,
+    Error, FactoryCancellation, JitterSample, LeaseError, LeasePolicy, LinkMode, LocalEffect,
+    MarkerAccess, MarkerAdvanceOutcome, MarkerCommand, MarkerError, MarkerKind, MarkerLease,
+    MarkerLeaseKey, MarkerLifecycleAccess, MarkerObservation, MarkerObservations, MarkerPresence,
+    MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy, MarkerReadStorage, MarkerReads,
     MarkerReplay, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotRead, MarkerSnapshotRenewal,
-    MarkerVersion, MutationReceipt, Observed, OperationOutcome, OptionsTarget, Ordering, Reason,
-    Result, ShutdownTask, SkipReason, StoredMarker, Tag, Timeout, Timestamp, Worker,
-    acquire_owned_supervised, bounded,
+    MarkerVersion, MarkerWriteOutcome, MutationReceipt, Observed, OperationOutcome, OptionsTarget,
+    Ordering, Reason, Result, ShutdownTask, SkipReason, StoredMarker, Tag, Timeout, Timestamp,
+    Worker, acquire_owned_supervised, bounded,
 };
 
 #[path = "marker_eager.rs"]
@@ -145,7 +145,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 return Ok(());
             }
             MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
-            MarkerAccess::Durable(store) => Arc::clone(store),
+            MarkerAccess::Durable(store) => MarkerReadStorage::Atomic(Arc::clone(store)),
+            MarkerAccess::Ordinary(store) => MarkerReadStorage::Ordinary(Arc::clone(store)),
         };
         // Keep the optional controller's large future out of ordinary value
         // flights. Only participating controlled reads allocate this branch.
@@ -157,12 +158,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         entry: &Entry<V>,
         cancellation: &FactoryCancellation,
         observations: &MarkerObservations,
-        store: Arc<dyn InvalidationStore>,
+        store: MarkerReadStorage,
     ) -> Result<()> {
         // Independent deadlines are per marker, as in the released reference.
         for kind in Self::secondary_marker_kinds(entry.meta().tags()) {
             cancellation.check()?;
-            self.read_control_marker(observations, Arc::clone(&store), kind.clone(), cancellation)
+            self.read_control_marker(observations, store.clone(), kind.clone(), cancellation)
                 .await?;
             if self.marker_invalidates_snapshot(&kind, entry.meta().created()) {
                 break;
@@ -220,7 +221,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn read_control_marker(
         &self,
         observations: &MarkerObservations,
-        store: Arc<dyn InvalidationStore>,
+        store: MarkerReadStorage,
         kind: MarkerKind,
         cancellation: &FactoryCancellation,
     ) -> Result<()> {
@@ -273,7 +274,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn refresh_control_marker(
         &self,
         observations: &MarkerObservations,
-        store: Arc<dyn InvalidationStore>,
+        store: MarkerReadStorage,
         kind: &MarkerKind,
         before_lock: Option<&Entry<MarkerObservation>>,
         captured: u64,
@@ -306,7 +307,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn resolve_control_read(
         &self,
         observations: &MarkerObservations,
-        store: Arc<dyn InvalidationStore>,
+        store: MarkerReadStorage,
         kind: &MarkerKind,
         captured: u64,
         cancellation: &FactoryCancellation,
@@ -366,7 +367,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     async fn marker_remote(
         &self,
         observations: &MarkerObservations,
-        store: Arc<dyn InvalidationStore>,
+        store: MarkerReadStorage,
         kind: &MarkerKind,
         cached: Option<&Entry<MarkerObservation>>,
         captured: u64,
@@ -375,7 +376,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let fetched = match &observations.lifecycle {
             MarkerLifecycleAccess::DurableOnly => {
                 self.fetch_control_marker(
-                    Arc::clone(&store),
+                    store.clone(),
                     kind.clone(),
                     cached.is_some(),
                     cancellation,
@@ -1283,7 +1284,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
 
     async fn fetch_control_marker(
         &self,
-        store: Arc<dyn InvalidationStore>,
+        store: MarkerReadStorage,
         kind: MarkerKind,
         has_fallback: bool,
         cancellation: &FactoryCancellation,
@@ -1369,7 +1370,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             MarkerAccess::Local => {
                 MarkerObservation::Local(MarkerPresence::Present(marker.version()))
             }
-            MarkerAccess::Durable(_) => {
+            MarkerAccess::Durable(_) | MarkerAccess::Ordinary(_) => {
                 MarkerObservation::Confirmed(MarkerPresence::Present(marker.version()))
             }
             MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
@@ -1442,8 +1443,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let worker = self.clone();
         let mode = if opts.allow_background_distributed_operations()
             && !opts.skip_distributed_write()
-            && matches!(self.inner.markers, MarkerAccess::Durable(_))
-        {
+            && matches!(
+                self.inner.markers,
+                MarkerAccess::Durable(_) | MarkerAccess::Ordinary(_)
+            ) {
             CommitMode::Background
         } else {
             CommitMode::Foreground
@@ -1486,6 +1489,34 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             .await?;
         Ok(Observed::new(receipt, OperationOutcome::Invalidated, None))
     }
+    pub(super) async fn write_marker_revision(
+        &self,
+        scope: &crate::tags::CacheScope,
+        kind: MarkerKind,
+        snapshot: MarkerSnapshot,
+        options: &EntryOptions,
+    ) -> Result<MarkerWriteOutcome> {
+        match &self.inner.markers {
+            MarkerAccess::Durable(store) => store
+                .advance(scope, kind, snapshot.version())
+                .await
+                .map(MarkerWriteOutcome::from)
+                .map_err(Error::from),
+            MarkerAccess::Ordinary(store) => {
+                let now = self.inner.clock.now();
+                // FC ordinary replay keeps the revision and captured policy,
+                // while recomputing its physical lifetime at the write attempt.
+                let physical = MarkerSnapshot::fresh(snapshot.version(), options, now);
+                store
+                    .write(scope, kind, physical, now)
+                    .await
+                    .map(MarkerWriteOutcome::Written)
+                    .map_err(Error::from)
+            }
+            MarkerAccess::Local | MarkerAccess::Unavailable => Err(MarkerError::Unsupported.into()),
+        }
+    }
+
     async fn commit_marker(
         &self,
         mut command: MarkerCommand,
@@ -1500,15 +1531,18 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let distributed = match &self.inner.markers {
             MarkerAccess::Local => EffectOutcome::NotConfigured,
             MarkerAccess::Unavailable => return Err(MarkerError::Unsupported.into()),
-            MarkerAccess::Durable(_) if opts.skip_distributed_write() => {
+            MarkerAccess::Durable(_) | MarkerAccess::Ordinary(_)
+                if opts.skip_distributed_write() =>
+            {
                 EffectOutcome::Skipped(SkipReason::Policy)
             }
-            MarkerAccess::Durable(store) => {
-                match store
-                    .advance(
+            MarkerAccess::Durable(_) | MarkerAccess::Ordinary(_) => {
+                match self
+                    .write_marker_revision(
                         command.scope(),
                         command.marker().kind().clone(),
-                        command.marker().version(),
+                        MarkerSnapshot::fresh(command.marker().version(), &opts, created),
+                        &opts,
                     )
                     .await
                 {
@@ -1520,7 +1554,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                             self.inner.scope.clone(),
                             outcome.marker().clone(),
                         )?;
-                        if let MarkerAdvanceOutcome::Compacted { clear_remove, .. } = outcome {
+                        if let MarkerWriteOutcome::Compacted { clear_remove, .. } = outcome {
                             let clear = MarkerCommand::new(
                                 Arc::clone(&self.inner.instance_id),
                                 self.inner.scope.clone(),
@@ -1535,7 +1569,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     Err(error) => {
                         let queued =
                             self.queue_marker_mutation(command.clone(), opts.clone(), created)?;
-                        let error = Error::from(error);
                         self.failure(&Arc::from("invalidation"), &error);
                         if opts.rethrow_distributed_exceptions() {
                             return Err(error);

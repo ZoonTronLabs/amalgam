@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = BlockingRuntime::new()?;
     let cache = BlockingCache::from_builder(Cache::builder()
         .cache_plugin(Arc::new(Seed { runtime })))?;
-    assert_eq!(cache.read("status", None)?.value().map(String::as_str), Some("started"));
+    assert_eq!(cache.try_get("status")?.value().map(String::as_str), Some("started"));
     cache.shutdown()?;
     Ok(())
 }

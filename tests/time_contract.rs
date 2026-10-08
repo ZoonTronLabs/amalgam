@@ -134,7 +134,7 @@ async fn explicit_real_time_clock_keeps_elapsed_expiry_when_its_timestamp_stops(
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(45)).await;
-        assert!(cache.read("k", None).await.unwrap().into_value().is_none());
+        assert!(cache.try_get("k").await.unwrap().is_none());
         assert_eq!(cache.memory_usage().unwrap().entries, 0);
         cache.shutdown().await.unwrap();
     }

@@ -1,5 +1,6 @@
 //! A warmed, unobserved scalar L1 read needs no heap-owned operation context.
 //! Unsafe code is restricted to this test allocator forwarding System's contract.
+use std::future::IntoFuture;
 
 use amalgam::{Cache, EntryOptions};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -107,18 +108,15 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
             .await
             .unwrap();
         for _ in 0..1000 {
-            assert_eq!(
-                cache.read("key", None).await.unwrap().into_value(),
-                Some(17)
-            );
+            assert_eq!(cache.try_get("key").into_future().await.unwrap(), Some(17));
         }
     });
     let mut context = Context::from_waker(Waker::noop());
     let allocations = measure_allocations(|| {
         for _ in 0..1000 {
-            let mut lookup = std::pin::pin!(cache.read("key", None));
+            let mut lookup = std::pin::pin!(cache.try_get("key").into_future());
             match lookup.as_mut().poll(&mut context) {
-                Poll::Ready(result) => assert_eq!(result.unwrap().into_value(), Some(17)),
+                Poll::Ready(result) => assert_eq!(result.unwrap(), Some(17)),
                 Poll::Pending => panic!("warmed scalar L1 read must complete on its first poll"),
             }
         }

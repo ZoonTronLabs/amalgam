@@ -5,7 +5,21 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Ordinary marker compatibility
+- Support tag/clear over a byte-only L2 without pretending it implements atomic
+  invalidation. Keep exact revisions, independent secondary reads and physical
+  marker TTL; ordinary recovery keeps the captured revision and write policy while
+  recomputing physical TTL, matching FC. Atomic snapshot recovery retains its
+  original deadline.
+  Reject unavailable durable/strict marker guarantees during construction.
+- Emit configuration advice once at construction for shared named caches without
+  a prefix, a backplane or distributed locker without L2, and ordinary marker
+  writes with weaker concurrent-write/TTL guarantees.
+
 ### Configured construction
+- Extend public initial-subscription contracts: acknowledge once before L2 work,
+  preserve admitted availability after later gaps/stops, and preserve an initial
+  stopped-subscription error without executing the factory.
 - Remove the public panicking `CacheBuilder::build` alias. Configured construction
   uses `try_build` and preserves typed configuration, provider, plugin and runtime
   errors. Keep `Cache::new` for fixed valid memory-only defaults; update examples
@@ -38,6 +52,30 @@ on [Keep a Changelog](https://keepachangelog.com/).
   of losing it in the legacy adapter; cached contents remain unchanged.
 
 ### Factory API and distributed execution
+- Return immutable owned `DistributedBytes` from L2 provider gets. Share stored
+  serialized bytes in the in-memory backend and adopt Redis-owned buffers without
+  an extra copy. Preserve returned snapshots across replacement, removal and
+  expiration; document the custom-provider signature migration. Set inputs and
+  snapshot wire formats keep their existing contracts.
+- Add public scalar L2 contracts for original source versus local expiration,
+  source fail-safe after local expiration and per-call auto-clone overrides.
+  Reject scalar envelope adoption without a demonstrated gain on the required
+  L2 workload; keep the existing copy/ownership behavior.
+- Attach persisted L2 size/priority before creating shared entry ownership.
+  Avoid an extra ordinary value clone and shared allocation inside cache reads,
+  preserving the selected copier, source/local lifetime limits, tags and public
+  snapshot-helper clone behavior.
+- Protect async value-only completion with public contracts for original provider
+  causes reentering shutdown, caller retirement of explicit receipts, and a truly
+  pending background L2 write surviving without a requested receipt.
+- Return the selected native output directly on ready retrieval. Value-only
+  hits avoid a receipt envelope; opt-in receipts retain mutation/unchanged
+  evidence. Preserve completion ownership for genuinely pending L2 writes and
+  cancellation when an unused supplied value closes the cache during Drop.
+- Borrow immutable default options through L2 lookup; create independently
+  mutable adaptive options only on a confirmed factory miss. Preserve original
+  explicit/provider option boxes, validation and per-execution runtime checks,
+  with unchanged lock/recheck, cancellation and guard ownership.
 - Prepare local hydration metadata before the selected value copy. Populate L1
   directly from the decoded value rather than cloning it into a temporary entry
   and replacing that copy. Preserve the public hydration helper, original
@@ -86,6 +124,9 @@ on [Keep a Changelog](https://keepachangelog.com/).
   a writer cannot return an entry that expired during that wait as fresh.
 
 ### Benchmark methodology correction
+- Record complete warmed 1/2/4/8 and native diagnostics, including before/after
+  regressions even when an FC budget passes. Keep instrumented CPU attribution
+  separate from timed qualification.
 - Gate against released FusionCache 2.9 with default .NET tiering/Dynamic PGO;
   publish the TC=0 reference separately rather than using it to qualify release.
 - Replace fixed short warmup with identical three-second minimum settling in

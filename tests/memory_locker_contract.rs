@@ -482,10 +482,7 @@ async fn soft_completion_keeps_the_custom_guard_until_background_factory_finishe
     release.add_permits(1);
     c.flush_pending().await.unwrap();
     provider.drained();
-    assert_eq!(
-        c.read("background", None).await.unwrap().into_value(),
-        Some(37)
-    );
+    assert_eq!(c.try_get("background").await.unwrap(), Some(37));
     c.shutdown().await.unwrap();
 }
 
@@ -527,7 +524,7 @@ async fn eager_uses_nonblocking_custom_attempt_and_owned_guard() {
     c.flush_pending().await.unwrap();
     provider.drained();
     assert_eq!(provider.tries.load(Ordering::SeqCst), 1);
-    assert_eq!(c.read("eager", None).await.unwrap().into_value(), Some(43));
+    assert_eq!(c.try_get("eager").await.unwrap(), Some(43));
     c.shutdown().await.unwrap();
 }
 
@@ -648,15 +645,9 @@ async fn cached_marker_eager_refresh_uses_the_same_custom_provider() {
     .tags(vec![Tag::new("eager-group").unwrap()].into_boxed_slice())
     .await
     .unwrap();
-    assert_eq!(
-        c.read("marker-eager", None).await.unwrap().into_value(),
-        Some(61)
-    );
+    assert_eq!(c.try_get("marker-eager").await.unwrap(), Some(61));
     clock.advance(Duration::from_secs(6));
-    assert_eq!(
-        c.read("marker-eager", None).await.unwrap().into_value(),
-        Some(61)
-    );
+    assert_eq!(c.try_get("marker-eager").await.unwrap(), Some(61));
     c.flush_pending().await.unwrap();
     assert!(provider.requests.lock().unwrap().iter().any(|r| matches!(
         r.kind(),

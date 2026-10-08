@@ -2,8 +2,8 @@
 
 use amalgam::{
     Cache, CodecError, EntryOptions, Error, RecoveryConfig, Result, Timeout,
-    advanced::CircuitComponent, provider::DistributedCache, provider::InMemoryDistributedCache,
-    provider::JsonSerializer, provider::ManualClock,
+    provider::DistributedCache, provider::InMemoryDistributedCache, provider::JsonSerializer,
+    provider::ManualClock,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ struct FailedStore {
 
 #[async_trait]
 impl DistributedCache for FailedStore {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Err(Error::Distributed("original read failure".to_owned()))
     }
@@ -33,8 +33,8 @@ impl DistributedCache for FailedStore {
 
 fn options() -> EntryOptions {
     EntryOptions::new(Duration::from_secs(60))
-        .with_rethrow_distributed_exceptions(false)
-        .with_rethrow_serialization_exceptions(false)
+        .with_rethrow_distributed_exceptions(true)
+        .with_rethrow_serialization_exceptions(true)
         .with_allow_background_backplane_operations(false)
 }
 
@@ -46,7 +46,7 @@ fn no_recovery() -> RecoveryConfig {
 }
 
 #[tokio::test]
-async fn canonical_reads_preserve_default_suppressed_transport_failure_and_no_default() {
+async fn read_rethrow_preserves_transport_failure_and_rejects_default() {
     let cache = Cache::<i32>::builder()
         .distributed(Arc::new(FailedStore::default()))
         .serializer(Arc::new(JsonSerializer))
@@ -55,12 +55,12 @@ async fn canonical_reads_preserve_default_suppressed_transport_failure_and_no_de
         .try_build()
         .unwrap();
     assert!(
-        matches!(cache.read("k", None).await,
+        matches!(cache.try_get("k").await,
             Err(Error::Distributed(cause)) if cause == "original read failure"),
         "canonical read fabricated a miss from a failed lookup"
     );
     assert!(
-        matches!(cache.read_or_default("k", 42, None).await,
+        matches!(cache.get_or_default("k", 42).await,
             Err(Error::Distributed(cause)) if cause == "original read failure"),
         "canonical default disguised failed lookup as successful absence"
     );
@@ -68,7 +68,7 @@ async fn canonical_reads_preserve_default_suppressed_transport_failure_and_no_de
 }
 
 #[tokio::test]
-async fn canonical_open_circuit_is_failure_without_requerying_backend() {
+async fn open_circuit_is_an_admission_skip_without_requerying_backend() {
     let store = Arc::new(FailedStore::default());
     let clock = Arc::new(ManualClock::default());
     let cache = Cache::<i32>::builder()
@@ -81,24 +81,16 @@ async fn canonical_open_circuit_is_failure_without_requerying_backend() {
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.read("k", None).await,
+        cache.try_get("k").await,
         Err(Error::Distributed(cause)) if cause == "original read failure"
     ));
-    assert!(
-        matches!(
-            cache.read_or_default("k", 42, None).await,
-            Err(Error::CircuitOpen {
-                component: CircuitComponent::Distributed
-            })
-        ),
-        "circuit-blocked lookup fabricated successful absence"
-    );
+    assert_eq!(cache.get_or_default("k", 42).await.unwrap(), 42);
     assert_eq!(store.reads.load(Ordering::SeqCst), 1);
     cache.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn canonical_reads_preserve_suppressed_codec_error() {
+async fn read_rethrow_preserves_codec_failure() {
     let clock = Arc::new(ManualClock::default());
     let store = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     store
@@ -114,23 +106,23 @@ async fn canonical_reads_preserve_suppressed_codec_error() {
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.read("k", None).await,
+        cache.try_get("k").await,
         Err(Error::Codec(CodecError::Deserialization { .. }))
     ));
     assert!(matches!(
-        cache.read_or_default("k", 42, None).await,
+        cache.get_or_default("k", 42).await,
         Err(Error::Codec(CodecError::Deserialization { .. }))
     ));
     cache.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn origin_fallback_policy_and_legacy_adapters_keep_their_existing_behavior() {
+async fn configured_suppression_is_a_miss_without_discarding_typed_rethrow() {
     let calls = Arc::new(AtomicUsize::new(0));
     let cache = Cache::<i32>::builder()
         .distributed(Arc::new(FailedStore::default()))
         .serializer(Arc::new(JsonSerializer))
-        .default_options(options())
+        .default_options(options().with_rethrow_distributed_exceptions(false))
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
@@ -149,9 +141,9 @@ async fn origin_fallback_policy_and_legacy_adapters_keep_their_existing_behavior
         7
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(cache.read("k", None).await.unwrap().into_value(), Some(7));
-    assert!(!cache.try_get("another", None).await.has_value());
-    assert_eq!(cache.get_or_default("another", 42, None).await, 42);
+    assert_eq!(cache.try_get("k").await.unwrap(), Some(7));
+    assert!(cache.try_get("another").await.unwrap().is_none());
+    assert_eq!(cache.get_or_default("another", 42).await.unwrap(), 42);
     cache.shutdown().await.unwrap();
 }
 
@@ -159,7 +151,13 @@ struct PendingReadStore;
 
 #[async_trait]
 impl DistributedCache for PendingReadStore {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    fn invalidation_store(&self) -> Option<Arc<dyn amalgam::provider::InvalidationStore>> {
+        Some(Arc::new(
+            amalgam::provider::InMemoryInvalidationStore::default(),
+        ))
+    }
+
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         std::future::pending().await
     }
 
@@ -173,7 +171,7 @@ impl DistributedCache for PendingReadStore {
 }
 
 #[tokio::test]
-async fn canonical_stale_read_preserves_timeout_while_legacy_read_serves_configured_fallback() {
+async fn soft_read_timeout_serves_the_eligible_captured_stale_value() {
     let clock = Arc::new(ManualClock::default());
     let opts = options()
         .with_duration(Duration::from_secs(1))
@@ -190,16 +188,8 @@ async fn canonical_stale_read_preserves_timeout_while_legacy_read_serves_configu
         .unwrap();
     cache.set("k", 7).await.unwrap();
     clock.advance(Duration::from_secs(2));
-    assert!(matches!(
-        cache.read("k", None).await,
-        Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
-    ));
-    assert!(matches!(
-        cache.read_or_default("k", 42, None).await,
-        Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
-    ));
-    assert_eq!(cache.try_get("k", None).await.into_value(), Some(7));
-    assert_eq!(cache.get_or_default("k", 42, None).await, 7);
+    assert_eq!(cache.try_get("k").await.unwrap(), Some(7));
+    assert_eq!(cache.get_or_default("k", 42).await.unwrap(), 7);
     cache.shutdown().await.unwrap();
 }
 
@@ -215,10 +205,17 @@ async fn canonical_hard_read_timeout_never_becomes_successful_default() {
         .try_build()
         .unwrap();
     assert!(matches!(
-        cache.read_or_default("k", 42, None).await,
+        cache.get_or_default("k", 42).await,
         Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
     ));
-    assert_eq!(cache.get_or_default("k", 42, None).await, 42);
+    assert_eq!(
+        cache
+            .get_or_default("k", 42)
+            .options(|o| o.with_rethrow_distributed_exceptions(false))
+            .await
+            .unwrap(),
+        42
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -234,7 +231,8 @@ async fn explicit_skip_remains_successful_absence_without_querying_failed_backen
         .unwrap();
     assert_eq!(
         cache
-            .read_or_default("k", 42, Some(options().with_skip_distributed(true, false)))
+            .get_or_default("k", 42)
+            .options(|_| options().with_skip_distributed(true, false))
             .await
             .unwrap(),
         42

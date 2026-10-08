@@ -174,7 +174,8 @@ async fn caller_cancellation_reaches_both_codec_directions_before_repoll() {
                     .await
                     .map(|_| ()),
                 Direction::Decode => cache
-                    .read_cancellable("key", None, source.token())
+                    .try_get("key")
+                    .cancellation(source.token())
                     .await
                     .map(|_| ()),
             }
@@ -193,14 +194,12 @@ async fn caller_cancellation_reaches_both_codec_directions_before_repoll() {
         ));
         assert_eq!(backend.get("v2:key").await.unwrap(), before);
         assert!(
-            !cache
-                .read(
-                    "key",
-                    Some(EntryOptions::default().with_skip_distributed(true, false))
-                )
+            cache
+                .try_get("key")
+                .options(|_| EntryOptions::default().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .has_value()
+                .is_none()
         );
         cache.shutdown().await.unwrap();
     }
@@ -268,14 +267,12 @@ async fn codec_cancellation_is_never_suppressed_as_a_miss_or_local_only_write() 
         ));
         assert_eq!(cache.pending_recovery(), 0);
         assert!(
-            !cache
-                .read(
-                    "key",
-                    Some(EntryOptions::default().with_skip_distributed(true, false))
-                )
+            cache
+                .try_get("key")
+                .options(|_| EntryOptions::default().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .has_value()
+                .is_none()
         );
         cache.shutdown().await.unwrap();
     }
@@ -370,7 +367,7 @@ async fn permitted_background_encoder_survives_caller_completion_and_owns_shutdo
                 .unwrap()
                 .unwrap();
             assert_cancelled(&token, FactoryCancellationReason::ScopeFinished);
-            assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&2));
+            assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
             cache.shutdown().await.unwrap();
         } else {
             tokio::time::timeout(Duration::from_secs(3), cache.shutdown())
@@ -415,7 +412,7 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
                             |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) }
                         )
                     )
-                    .fail_safe_default((MaybeValue::from_value(1)).into_value())
+                    .fail_safe_default(Some(1))
                     .await
                     .unwrap(),
                 2
@@ -428,10 +425,13 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
                 &recorder.token(Direction::Encode),
                 FactoryCancellationReason::ScopeFinished,
             );
-            assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&2));
+            assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
         } else {
             assert!(matches!(
-                cache.read("key", None).await,
+                cache
+                    .try_get("key")
+                    .options(|o| o.with_rethrow_distributed_exceptions(true))
+                    .await,
                 Err(Error::DistributedTimeout { .. })
             ));
             assert_cancelled(
@@ -526,7 +526,7 @@ struct FailFirstWrite {
 }
 #[async_trait]
 impl DistributedCache for FailFirstWrite {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.backend.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -663,7 +663,7 @@ async fn eager_encoder_outlives_the_hit_and_is_cancelled_by_shutdown() {
         .default_options(opts)
         .try_build()
         .unwrap();
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&1));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&1));
     clock.advance(Duration::from_secs(6));
     assert_eq!(
         cache
@@ -724,7 +724,8 @@ async fn cancellation_inside_synchronous_codec_callbacks_cannot_commit_or_return
                 .await
                 .map(|_| ()),
             Direction::Decode => cache
-                .read_cancellable("key", None, source.token())
+                .try_get("key")
+                .cancellation(source.token())
                 .await
                 .map(|_| ()),
         };
@@ -736,14 +737,12 @@ async fn cancellation_inside_synchronous_codec_callbacks_cannot_commit_or_return
         ));
         assert_eq!(backend.get("v2:key").await.unwrap(), before);
         assert!(
-            !cache
-                .read(
-                    "key",
-                    Some(EntryOptions::default().with_skip_distributed(true, false))
-                )
+            cache
+                .try_get("key")
+                .options(|_| EntryOptions::default().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .has_value()
+                .is_none()
         );
         cache.shutdown().await.unwrap();
     }

@@ -44,7 +44,7 @@ async fn plain_result_and_custom_error_keep_value_and_original_source() {
             .unwrap()
             .0
     ));
-    assert!(!cache.read("error", None).await.unwrap().has_value());
+    assert!(cache.try_get("error").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 
@@ -109,10 +109,7 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
         .unwrap();
     assert_eq!(value, 9);
     clock.advance(Duration::from_secs(1));
-    assert_eq!(
-        cache.read("adaptive", None).await.unwrap().value(),
-        Some(&9)
-    );
+    assert_eq!(cache.try_get("adaptive").await.unwrap().as_ref(), Some(&9));
     cache
         .remove_by_tag(Tag::new("adapted").unwrap())
         .with_receipt()
@@ -121,6 +118,6 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
         .wait()
         .await
         .unwrap();
-    assert!(!cache.read("adaptive", None).await.unwrap().has_value());
+    assert!(cache.try_get("adaptive").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }

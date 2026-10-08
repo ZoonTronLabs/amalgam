@@ -36,14 +36,7 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
     let identity = native.instance_id().to_owned();
     drop(native);
     assert_eq!(asynchronous.instance_id(), identity);
-    assert_eq!(
-        asynchronous
-            .read("before", None)
-            .await
-            .unwrap()
-            .into_value(),
-        Some(7)
-    );
+    assert_eq!(asynchronous.try_get("before").await.unwrap(), Some(7));
     let value = asynchronous
         .get_or_set(
             "after",
@@ -183,10 +176,7 @@ fn callbacks_cannot_drain_their_own_cache() {
                 .execute()
         };
         assert_eq!(answer.unwrap(), 7);
-        assert_eq!(
-            cache.read("self-drain", None).unwrap().into_value(),
-            Some(7)
-        );
+        assert_eq!(cache.try_get("self-drain").execute().unwrap(), Some(7));
         cache.shutdown().unwrap();
         return;
     }

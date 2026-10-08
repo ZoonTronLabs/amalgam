@@ -56,9 +56,13 @@ async fn distributed_hard_read_budget_includes_required_marker_read() {
         .try_build()
         .unwrap();
     let options = EntryOptions::default()
+        .with_rethrow_distributed_exceptions(true)
         .with_distributed_timeouts(Timeout::Infinite, Timeout::After(Duration::from_millis(5)));
-    let result =
-        tokio::time::timeout(Duration::from_secs(1), cache.read("key", Some(options))).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        cache.try_get("key").options(|_| options),
+    )
+    .await;
     cache.shutdown().await.unwrap();
     assert!(
         matches!(result, Ok(Err(Error::DistributedTimeout { elapsed })) if elapsed == Duration::from_millis(5)),
@@ -74,7 +78,7 @@ struct CapturedRead {
 }
 #[async_trait]
 impl DistributedCache for CapturedRead {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         let snapshot = self.inner.get(key).await?;
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -92,12 +96,8 @@ impl DistributedCache for CapturedRead {
         self.inner.invalidation_store()
     }
 }
-#[derive(Clone, Copy)]
-enum ReadContract {
-    Canonical,
-    Legacy,
-}
-async fn captured_stale(contract: ReadContract) {
+#[tokio::test]
+async fn read_preserves_fusioncache_captured_stale_after_l2_wait() {
     let clock = Arc::new(ManualClock::default());
     let backend = Arc::new(CapturedRead {
         inner: InMemoryDistributedCache::new(clock.clone()),
@@ -127,12 +127,7 @@ async fn captured_stale(contract: ReadContract) {
     backend.armed.store(true, Ordering::SeqCst);
     let read = tokio::spawn({
         let cache = cache.clone();
-        async move {
-            match contract {
-                ReadContract::Canonical => cache.read("key", None).await.unwrap(),
-                ReadContract::Legacy => cache.try_get("key", None).await,
-            }
-        }
+        async move { cache.try_get("key").await.unwrap() }
     });
     tokio::time::timeout(Duration::from_secs(1), backend.entered.notified())
         .await
@@ -141,25 +136,11 @@ async fn captured_stale(contract: ReadContract) {
     backend.release.add_permits(1);
     let observed = read.await.unwrap();
     cache.shutdown().await.unwrap();
-    match contract {
-        ReadContract::Canonical => assert!(
-            !observed.has_value(),
-            "canonical stale service must recheck the physical deadline after I/O"
-        ),
-        ReadContract::Legacy => assert_eq!(
-            observed.value(),
-            Some(&1),
-            "the legacy adapter preserves FusionCache's eligible captured fallback"
-        ),
-    }
-}
-#[tokio::test]
-async fn canonical_stale_read_rechecks_physical_retention_after_l2_wait() {
-    captured_stale(ReadContract::Canonical).await;
-}
-#[tokio::test]
-async fn legacy_stale_read_preserves_fusioncache_captured_fallback() {
-    captured_stale(ReadContract::Legacy).await;
+    assert_eq!(
+        observed,
+        Some(1),
+        "read preserves FC's eligible captured fallback"
+    );
 }
 
 #[tokio::test]
@@ -189,17 +170,15 @@ async fn stale_distributed_only_read_is_attributed_to_distributed_layer() {
     clock.advance(Duration::from_secs(2));
     let mut events = cache.events().subscribe();
     let observed = cache
-        .read(
-            "key",
-            Some(
-                options
-                    .with_skip_memory(true, true)
-                    .with_allow_stale_on_read_only(true),
-            ),
-        )
+        .try_get("key")
+        .options(|_| {
+            options
+                .with_skip_memory(true, true)
+                .with_allow_stale_on_read_only(true)
+        })
         .await
         .unwrap();
-    assert_eq!(observed.value(), Some(&7));
+    assert_eq!(observed.as_ref(), Some(&7));
     let level = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if let CacheEvent::OperationCompleted { level, .. } = events.recv().await.unwrap() {
@@ -266,7 +245,7 @@ struct ParkedWriteBackend {
 }
 #[async_trait]
 impl DistributedCache for ParkedWriteBackend {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         let captured = self.inner.get(key).await?;
         if self.pause_read.swap(false, Ordering::SeqCst) {
             self.read_entered.notify_one();
@@ -322,7 +301,7 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
     backend.pause_read.store(true, Ordering::SeqCst);
     let mut read = tokio::spawn({
         let cache = cache.clone();
-        async move { cache.read("key", None).await }
+        async move { cache.try_get("key").await }
     });
     tokio::time::timeout(Duration::from_secs(1), backend.read_entered.notified())
         .await
@@ -352,9 +331,9 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
     if premature_wait {
         read.await.unwrap().unwrap();
     } else {
-        assert_eq!(observed.unwrap().value(), Some(&1));
+        assert_eq!(observed.unwrap().as_ref(), Some(&1));
     }
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&2));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
     cache.shutdown().await.unwrap();
     assert!(
         !premature_wait,

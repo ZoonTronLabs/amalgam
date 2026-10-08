@@ -2,8 +2,8 @@
 use super::{
     Arc, BackplaneAction, BackplaneCommand, BackplaneEvent, BackplaneMessage, BackplaneReadiness,
     BackplaneState, CacheEvent, CacheInner, CancellationSource, CircuitComponent, CloseOutcome,
-    Duration, Entry, Error, FallbackAvailability, Fence, Instant, L2ReadPolicy, LayerEvent,
-    Lifecycle, MarkerReads, MemoryEvent, Ordering, ReconciliationPolicy, Result, ShutdownError,
+    Duration, Entry, Error, FallbackAvailability, Fence, Instant, LayerEvent, Lifecycle,
+    MarkerReads, MemoryEvent, Ordering, ReconciliationPolicy, Result, ShutdownError,
     ShutdownFailure, ShutdownReport, ShutdownTask, TagVerdict, Worker, broadcast, health_changed,
     lock,
 };
@@ -366,7 +366,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         &key,
                         &opts,
                         FallbackAvailability::Unavailable,
-                        L2ReadPolicy::FactoryFallback,
                         &cancellation,
                     )
                     .await;

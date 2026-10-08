@@ -594,12 +594,13 @@ impl RedisDistributedCache {
 
 #[async_trait]
 impl DistributedCache for RedisDistributedCache {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<crate::distributed::DistributedBytes>> {
         let mut connection = self.manager.clone();
         redis::cmd("GET")
             .arg(value_key(key))
-            .query_async(&mut connection)
+            .query_async::<Option<Vec<u8>>>(&mut connection)
             .await
+            .map(|value| value.map(Into::into))
             .map_err(distributed_err)
     }
 
@@ -1752,7 +1753,10 @@ mod tests {
             .set(&key, b"hello".to_vec(), Some(Duration::from_secs(30)))
             .await
             .unwrap();
-        assert_eq!(cache.get(&key).await.unwrap(), Some(b"hello".to_vec()));
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            Some(b"hello".to_vec().into())
+        );
 
         cache.remove(&key).await.unwrap();
         assert_eq!(cache.get(&key).await.unwrap(), None);

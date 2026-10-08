@@ -61,7 +61,7 @@ async fn populated(cache: &Cache<i32>) {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.read("k", None).await.unwrap().value_or(0), 7);
+    assert_eq!(cache.try_get("k").await.unwrap().unwrap_or(0), 7);
 }
 fn cancelled(result: std::result::Result<i32, Error>, reason: FactoryCancellationReason) {
     assert!(
@@ -132,16 +132,7 @@ async fn unused_canonical_default_is_dropped_inside_counted_completion() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(
-        cache
-            .read("k", None)
-            .await
-            .unwrap()
-            .into_value()
-            .unwrap()
-            .number,
-        7
-    );
+    assert_eq!(cache.try_get("k").await.unwrap().unwrap().number, 7);
     gate.arm();
     let reading = cache.clone();
     let default = DefaultDrop {
@@ -149,12 +140,12 @@ async fn unused_canonical_default_is_dropped_inside_counted_completion() {
         gate: Some(gate.clone()),
     };
     let operation =
-        tokio::spawn(async move { Ok(reading.read_or_default("k", default, None).await?.number) });
+        tokio::spawn(async move { Ok(reading.get_or_default("k", default).await?.number) });
     close_while_blocked(&cache, &gate, operation).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unused_legacy_default_hit_is_dropped_under_transferred_count() {
+async fn unused_default_drop_retains_explicit_cancellation_and_shutdown_drain() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
     cache
@@ -171,38 +162,36 @@ async fn unused_legacy_default_hit_is_dropped_under_transferred_count() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(
-        cache
-            .read("k", None)
-            .await
-            .unwrap()
-            .into_value()
-            .unwrap()
-            .number,
-        7
-    );
+    assert_eq!(cache.try_get("k").await.unwrap().unwrap().number, 7);
     gate.arm();
     let reading = cache.clone();
     let default = DefaultDrop {
         number: 99,
         gate: Some(gate.clone()),
     };
-    let operation =
-        tokio::spawn(async move { reading.get_or_default("k", default, None).await.number });
+    let source = CancellationSource::new();
+    let token = source.token();
+    let operation = tokio::spawn(async move {
+        reading
+            .get_or_default("k", default)
+            .cancellation(token)
+            .await
+            .map(|value| value.number)
+    });
     gate.wait_entered().await;
+    source.cancel();
     cache.close();
     let draining = cache.clone();
     let shutdown = tokio::spawn(async move { draining.shutdown().await });
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(
         !shutdown.is_finished(),
-        "legacy unused input is still being destroyed"
+        "unused input is still being destroyed"
     );
     gate.unblock();
-    assert_eq!(
+    cancelled(
         operation.await.unwrap(),
-        7,
-        "legacy signature retains produced values with diagnosed cancellation"
+        FactoryCancellationReason::CallerCancelled,
     );
     shutdown.await.unwrap().unwrap();
 }
@@ -233,22 +222,10 @@ async fn ordinary_value_clone_is_counted_as_user_work() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(
-        cache
-            .read("k", None)
-            .await
-            .unwrap()
-            .into_value()
-            .unwrap()
-            .number,
-        7
-    );
+    assert_eq!(cache.try_get("k").await.unwrap().unwrap().number, 7);
     gate.arm();
     let reading = cache.clone();
-    let operation =
-        tokio::spawn(
-            async move { Ok(reading.read("k", None).await?.into_value().unwrap().number) },
-        );
+    let operation = tokio::spawn(async move { Ok(reading.try_get("k").await?.unwrap().number) });
     close_while_blocked(&cache, &gate, operation).await;
 }
 
@@ -269,7 +246,7 @@ async fn blocked_ready_clock_is_cancelled_and_drained_from_another_thread() {
     populated(&cache).await;
     gate.arm();
     let reading = cache.clone();
-    let operation = tokio::spawn(async move { Ok(reading.read("k", None).await?.value_or(0)) });
+    let operation = tokio::spawn(async move { Ok(reading.try_get("k").await?.unwrap_or(0)) });
     close_while_blocked(&cache, &gate, operation).await;
 }
 
@@ -291,7 +268,7 @@ async fn blocked_ready_value_cloner_is_cancelled_and_drained() {
     populated(&cache).await;
     gate.arm();
     let reading = cache.clone();
-    let operation = tokio::spawn(async move { Ok(reading.read("k", None).await?.value_or(0)) });
+    let operation = tokio::spawn(async move { Ok(reading.try_get("k").await?.unwrap_or(0)) });
     close_while_blocked(&cache, &gate, operation).await;
 }
 
@@ -468,7 +445,7 @@ async fn ready_cloner_reentrant_close_rejects_value_before_hit() {
     *closing.lock().unwrap() = Some(cache.clone());
     let mut events = cache.events().subscribe();
     cancelled(
-        cache.read("k", None).await.map(|value| value.value_or(0)),
+        cache.try_get("k").await.map(|value| value.unwrap_or(0)),
         FactoryCancellationReason::CacheShutdown,
     );
     let mut hits = 0;
@@ -490,7 +467,7 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
     let cache = Cache::new();
     populated(&cache).await;
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.read("k", None).await.unwrap().value_or(0), 7);
+    assert_eq!(cache.try_get("k").await.unwrap().unwrap_or(0), 7);
     assert_eq!(
         cache
             .get_or_set::<_, _>(
@@ -505,8 +482,8 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
         completions(&mut events),
         vec![OperationOutcome::Hit, OperationOutcome::Hit]
     );
-    let missing = cache.read("missing", None).await.unwrap();
-    assert!(!missing.has_value());
+    let missing = cache.try_get("missing").await.unwrap();
+    assert!(missing.is_none());
     assert_eq!(completions(&mut events), vec![OperationOutcome::Miss]);
     cache
         .get_or_set::<_, _>(
@@ -521,7 +498,7 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
     );
     let invalid = EntryOptions::default().with_enable_auto_clone(true);
     assert!(matches!(
-        cache.read("k", Some(invalid)).await,
+        cache.try_get("k").options(|_| invalid).await,
         Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
     ));
     assert_eq!(
@@ -582,9 +559,10 @@ async fn already_cancelled_ready_read_skips_user_copy() {
     let mut events = cache.events().subscribe();
     cancelled(
         cache
-            .read_cancellable("k", None, source.token())
+            .try_get("k")
+            .cancellation(source.token())
             .await
-            .map(|value| value.value_or(0)),
+            .map(|value| value.unwrap_or(0)),
         FactoryCancellationReason::CallerCancelled,
     );
     assert_eq!(completions(&mut events), vec![OperationOutcome::Cancelled]);

@@ -13,7 +13,7 @@ struct ToggleBackend {
 }
 #[async_trait]
 impl DistributedCache for ToggleBackend {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -177,7 +177,7 @@ async fn skipped_marker_write(mutation: MarkerMutation) {
     }
     let fresh_node = build();
     assert_eq!(
-        fresh_node.read("key", None).await.unwrap().value(),
+        fresh_node.try_get("key").await.unwrap().as_ref(),
         Some(&7),
         "a local-only invalidation escaped into shared storage"
     );

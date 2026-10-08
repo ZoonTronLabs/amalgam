@@ -1,4 +1,3 @@
-use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;
 use std::sync::{
@@ -31,8 +30,8 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(first.read("null", None).await.unwrap().value(), Some(&None));
-    assert!(!first.read("missing", None).await.unwrap().has_value());
+    assert_eq!(first.try_get("null").await.unwrap().as_ref(), Some(&None));
+    assert!(first.try_get("missing").await.unwrap().is_none());
     let second = build();
     let calls = Arc::new(AtomicUsize::new(0));
     let factory_calls = calls.clone();
@@ -50,10 +49,7 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
         None
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        second.read("null", None).await.unwrap().value(),
-        Some(&None)
-    );
+    assert_eq!(second.try_get("null").await.unwrap().as_ref(), Some(&None));
     first.shutdown().await.unwrap();
     second.shutdown().await.unwrap();
 }
@@ -108,13 +104,11 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
     );
     assert_eq!(
         cache
-            .read(
-                "null",
-                Some(EntryOptions::default().with_allow_stale_on_read_only(true))
-            )
+            .try_get("null")
+            .options(|_| EntryOptions::default().with_allow_stale_on_read_only(true))
             .await
             .unwrap()
-            .value(),
+            .as_ref(),
         Some(&None)
     );
     cache.shutdown().await.unwrap();
@@ -131,7 +125,7 @@ async fn present_null_fallback_is_distinct_from_absent_fallback() {
                 typed_factory(|ctx| async move { Err(ctx.fail("expected failure")) })
             )
             .options(|_| options.clone())
-            .fail_safe_default((MaybeValue::from_value(None)).into_value())
+            .fail_safe_default(Some(None))
             .await
             .unwrap(),
         None

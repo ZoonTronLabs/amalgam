@@ -6,7 +6,7 @@
 //! ordinary stampedes; an explicitly finite lock wait can permit best-effort
 //! origin work. Different keys have independent flights.
 //!
-//! New callers should use [`CacheBuilder::try_build`], fallible [`Cache::read`],
+//! New callers should use [`CacheBuilder::try_build`], fallible [`Cache::try_get`],
 //! typed mutation receipts and [`Cache::shutdown`]. Ordinary origin failure can
 //! activate an eligible stale fallback; cancellation remains a typed error.
 //! Soft-timeout continuation and eager refresh have explicit ownership, while
@@ -44,7 +44,6 @@ pub mod locking;
 mod marker_leases;
 pub mod marker_reads;
 pub mod marker_snapshots;
-pub mod maybe;
 pub mod memory;
 pub mod memory_locker;
 pub mod memory_storage;

@@ -345,7 +345,7 @@ struct ParkFirstRead {
 }
 #[async_trait::async_trait]
 impl DistributedCache for ParkFirstRead {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
             std::future::poll_fn(|cx| {
                 if self.ready.load(Ordering::SeqCst) {

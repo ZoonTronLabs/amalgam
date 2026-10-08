@@ -524,7 +524,7 @@ async fn atomic_reference_fence_rejects_expired_and_replaced_owners() {
             .unwrap(),
         LeasedWriteOutcome::LeaseLost
     );
-    assert_eq!(backend.get("key").await.unwrap(), Some(vec![1]));
+    assert_eq!(backend.get("key").await.unwrap(), Some(vec![1].into()));
     assert!(matches!(lease.proof(), Err(LeaseError::Lost)));
     lease.release().await.unwrap();
     assert_eq!(

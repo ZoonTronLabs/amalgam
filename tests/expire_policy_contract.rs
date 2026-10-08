@@ -48,17 +48,18 @@ async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() 
         let stale_read = options.clone().with_allow_stale_on_read_only(true);
         assert_eq!(
             first
-                .read("key", Some(stale_read.clone()))
+                .try_get("key")
+                .options(|_| stale_read.clone())
                 .await
                 .unwrap()
-                .value(),
+                .as_ref(),
             Some(&7)
         );
         let second = build();
-        let remote = second.read("key", Some(stale_read)).await.unwrap();
+        let remote = second.try_get("key").options(|_| stale_read).await.unwrap();
         match policy {
-            DistributedExpirePolicy::RetainStale => assert_eq!(remote.value(), Some(&7)),
-            DistributedExpirePolicy::Remove => assert!(!remote.has_value()),
+            DistributedExpirePolicy::RetainStale => assert_eq!(remote.as_ref(), Some(&7)),
+            DistributedExpirePolicy::Remove => assert!(remote.is_none()),
         }
         first.shutdown().await.unwrap();
         second.shutdown().await.unwrap();
@@ -96,7 +97,7 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
             reason: FactoryCancellationReason::CallerCancelled
         })
     ));
-    assert_eq!(cache.read("key", None).await.unwrap().value(), Some(&7));
+    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     let report = cache
         .expire("key")
         .options(|_| EntryOptions::default().with_skip_distributed(false, true))

@@ -43,14 +43,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     cache.set("greeting", "hello again".to_owned()).await?;
     assert_eq!(
         cache
-            .read("greeting", None)
+            .try_get("greeting")
             .await?
-            .value()
+            .as_ref()
             .map(String::as_str),
         Some("hello again")
     );
     cache.remove("greeting").await?;
-    assert!(!cache.read("greeting", None).await?.has_value());
+    assert!(!cache.try_get("greeting").await?.is_some());
     cache.shutdown().await?;
     Ok(())
 }
@@ -132,6 +132,12 @@ The root exposes the ordinary cache, options, factory context and errors.
 Imports preserve existing runtime behavior; additional contracts are selected
 through configuration or request choices.
 
+Developing 0.4 L2 providers return immutable owned `provider::DistributedBytes`
+snapshots. The in-memory backend shares stored bytes across reads; Redis adopts
+its received buffer. Snapshots survive replacement, removal and expiration.
+Custom providers must update their get signature; see
+[the provider migration](docs/MIGRATION_0_4.md#immutable-l2-provider-bytes).
+
 ## Freshness, origin work and cancellation
 
 Entries have independent logical freshness and physical fail-safe retention. Fail-safe can serve a captured stale value after an ordinary origin failure or timeout, within its physical lifetime. Cancellation stays a cancellation and bypasses fail-safe.
@@ -153,7 +159,7 @@ An explicit caller token and `FactoryContext` cancellation state identify cancel
 
 L2 backends, serializers, backplanes, lockers and copy strategies are open traits. Unreleased [custom local coordination](docs/MEMORY_LOCKER.md) adds an owned `MemoryLocker` provider for values and secondary markers, with optional distinct native acquisition through `BlockingMemoryLocker`; unreleased [supplied L1 storage](docs/MEMORY_STORAGE.md) provides the actual value store with typed failures and atomic conditional admission. JSON and reference in-memory providers are available by default; Redis, MessagePack and Postcard are optional. L1 and L2 freshness/retention are configured separately. Hydration caps local deadlines by the remaining source lifetime.
 
-Default healthy L1 reads stay local. Cold L2 reads reconcile durable tag/clear markers; tags and clear against a custom L2 require an atomic invalidation provider. Ordinary legacy byte-store I/O remains usable without that capability. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Unreleased opt-in [independent marker reads](docs/MARKER_READS.md) can revalidate L1 hits using separate tag defaults, budgets and observation limits.
+Warm healthy L1 reads stay local. Cold L2 reads reconcile tag/clear markers. Atomic guarantees require an atomic invalidation provider; ordinary byte-store I/O retains its weaker contract. Control markers live outside ordinary value keys and are scoped by the effective physical namespace. Saved developing 0.4 work includes [independent marker reads](docs/MARKER_READS.md); arbitrary custom L2 marker parity remains an explicit [Gap](docs/PARITY.md). These reads use separate tag defaults, budgets and observation limits.
 
 Unreleased [expiring marker snapshots](docs/MARKER_SNAPSHOTS.md) add independent remote lifetimes and nonzero read repair through an optional atomic provider capability. Snapshot expiry preserves the durable invalidation fact; this addition does not close the remaining marker eager/locker/recovery contract.
 
@@ -209,13 +215,15 @@ Metrics use a bounded cache-name label budget. Keys and instance IDs belong in t
 
 ## Development performance
 
-The developing 0.4 source has zero-allocation warm L1 reads and replacements.
-The performance harness compares against default .NET tiering/Dynamic PGO
-after sustained warmup and publishes TC=0 separately. Mandatory gates use the
-default-PGO result; earlier TC=0 PASS claims do not qualify release performance.
-Focused L2 work removed five allocations from each read path. L2 and set still
-miss their required budgets and remain the performance targets.
-The final API, behavioral matrix and release qualification remain open. See
+The preparing 0.4 source has zero-allocation warm L1 reads and replacements.
+The FC comparison uses default .NET tiering/Dynamic PGO after settled warmup;
+TC=0 is a separate diagnostic. Known L2 get_or_set, set and Linux hot-read
+budgets remain unclosed. Further optimization is deferred to 0.4.x.
+
+FC results are informational in CI. The blocking performance check compares
+matched workloads against the actual published 0.3.1 package. The eight-operation
+API and [FR/RS status matrix](docs/PARITY.md) are prepared; full paired behavioral
+qualification and custom L2 markers remain explicit Gaps. See
 [tables and measurement method](docs/PERFORMANCE.md) and
 [release requirements](docs/ROADMAP.md).
 

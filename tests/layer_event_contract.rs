@@ -73,7 +73,7 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
         }
     }
     assert_eq!(logical_set, 1);
-    assert_eq!(c.read("k", None).await.unwrap().value(), Some(&17));
+    assert_eq!(c.try_get("k").await.unwrap().as_ref(), Some(&17));
     assert_eq!(
         drain(&mut layer),
         vec![LayerEvent::Memory(MemoryEvent::Hit {
@@ -163,7 +163,7 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .await
         .unwrap();
     drain(&mut events);
-    assert!(!c.read("tagged", None).await.unwrap().has_value());
+    assert!(c.try_get("tagged").await.unwrap().is_none());
     let facts = drain(&mut events);
     assert_eq!(
         facts.first(),
@@ -193,7 +193,7 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
             key: key("stale")
         })]
     );
-    assert!(!c.read("stale", None).await.unwrap().has_value());
+    assert!(c.try_get("stale").await.unwrap().is_none());
     assert_eq!(
         drain(&mut events),
         vec![LayerEvent::Memory(MemoryEvent::Hit {
@@ -238,7 +238,7 @@ async fn decoded_l2_hit_and_memory_promotion_are_distinct_actual_facts() {
             LayerEvent::Distributed(DistributedEvent::Set { key: key("k") }),
         ]
     );
-    assert_eq!(b.read("k", None).await.unwrap().value(), Some(&5));
+    assert_eq!(b.try_get("k").await.unwrap().as_ref(), Some(&5));
     assert_eq!(
         drain(&mut rb),
         vec![
@@ -277,7 +277,7 @@ async fn l2_hit_precedes_durable_tag_rejection_without_a_fabricated_miss() {
         .unwrap();
     let b = hybrid(clock, store);
     let mut events = b.events().subscribe_layers();
-    assert!(!b.read("k", None).await.unwrap().has_value());
+    assert!(b.try_get("k").await.unwrap().is_none());
     let facts = drain(&mut events);
     assert!(
         facts.contains(&LayerEvent::Distributed(DistributedEvent::Hit {
@@ -326,7 +326,7 @@ impl Store {
 }
 #[async_trait]
 impl DistributedCache for Store {
-    async fn get(&self, k: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, k: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         match self.phase() {
             Phase::Healthy => {}
@@ -359,7 +359,7 @@ async fn suppressed_transport_fault_misses_once_but_open_circuit_skips_the_attem
     let store = Arc::new(Store::new(clock.clone(), Phase::Unavailable));
     let c = hybrid(clock.clone(), store.clone());
     let mut events = c.events().subscribe_layers();
-    assert_eq!(c.get_or_default("first", 7, None).await, 7);
+    assert_eq!(c.get_or_default("first", 7).await.unwrap(), 7);
     let first = drain(&mut events);
     assert!(first.contains(&LayerEvent::Distributed(
         DistributedEvent::CircuitBreakerChange { closed: false }
@@ -372,7 +372,7 @@ async fn suppressed_transport_fault_misses_once_but_open_circuit_skips_the_attem
         1
     );
     let reads = store.reads.load(Ordering::SeqCst);
-    assert_eq!(c.get_or_default("second", 8, None).await, 8);
+    assert_eq!(c.get_or_default("second", 8).await.unwrap(), 8);
     assert_eq!(reads, store.reads.load(Ordering::SeqCst));
     assert!(
         !drain(&mut events)
@@ -381,7 +381,7 @@ async fn suppressed_transport_fault_misses_once_but_open_circuit_skips_the_attem
     );
     store.recover();
     clock.advance(Duration::from_secs(3));
-    assert!(!c.read("recovered", None).await.unwrap().has_value());
+    assert!(c.try_get("recovered").await.unwrap().is_none());
     let after = drain(&mut events);
     assert!(after.contains(&LayerEvent::Distributed(
         DistributedEvent::CircuitBreakerChange { closed: true }
@@ -404,13 +404,19 @@ async fn cache_read_deadline_is_typed_and_never_trips_the_transport_circuit() {
     let budget = Duration::from_millis(15);
     let opts = options().with_distributed_timeouts(Timeout::After(budget), Timeout::After(budget));
     assert!(
-        matches!(c.read("timed", Some(opts.clone())).await, Err(Error::DistributedTimeout { elapsed }) if elapsed == budget)
+        matches!(c.try_get("timed").options(|_| opts.clone().with_rethrow_distributed_exceptions(true)).await, Err(Error::DistributedTimeout { elapsed }) if elapsed == budget)
     );
     assert!(!drain(&mut events).iter().any(|e| matches!(
         e,
         LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange { .. })
     )));
-    assert_eq!(c.get_or_default("suppressed", 9, Some(opts)).await, 9);
+    assert_eq!(
+        c.get_or_default("suppressed", 9)
+            .options(|_| opts)
+            .await
+            .unwrap(),
+        9
+    );
     let facts = drain(&mut events);
     assert_eq!(
         facts
@@ -424,7 +430,7 @@ async fn cache_read_deadline_is_typed_and_never_trips_the_transport_circuit() {
         LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange { .. })
     )));
     store.recover();
-    assert!(!c.read("healthy", None).await.unwrap().has_value());
+    assert!(c.try_get("healthy").await.unwrap().is_none());
     assert!(
         drain(&mut events).contains(&LayerEvent::Distributed(DistributedEvent::Miss {
             key: key("healthy")
@@ -442,7 +448,7 @@ async fn caller_cancellation_does_not_become_a_layer_miss_or_codec_failure() {
     let source = CancellationSource::new();
     let running = c.clone();
     let token = source.token();
-    let task = tokio::spawn(async move { running.read_cancellable("cancel", None, token).await });
+    let task = tokio::spawn(async move { running.try_get("cancel").cancellation(token).await });
     tokio::time::timeout(Duration::from_secs(2), store.entered.notified())
         .await
         .unwrap();
@@ -518,7 +524,13 @@ async fn codec_failures_keep_causes_and_do_not_claim_transport_success_or_open_a
         .await
         .unwrap();
     let opts = options().with_rethrow_serialization_exceptions(false);
-    assert_eq!(read.get_or_default("decode", 11, Some(opts)).await, 11);
+    assert_eq!(
+        read.get_or_default("decode", 11)
+            .options(|_| opts)
+            .await
+            .unwrap(),
+        11
+    );
     assert_eq!(
         drain(&mut reader),
         vec![
@@ -617,7 +629,7 @@ async fn explicit_layer_skips_and_ignore_incoming_emit_no_false_component_calls(
         .wait()
         .await
         .unwrap();
-    assert!(!c.read("skip", Some(skip)).await.unwrap().has_value());
+    assert!(c.try_get("skip").options(|_| skip).await.unwrap().is_none());
     assert!(drain(&mut events).is_empty());
     bp.publish(BackplaneMessage {
         source_id: key("remote"),
@@ -749,7 +761,7 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
     let mut removal_seen = false;
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            let absent = !b.read("k", None).await.unwrap().has_value();
+            let absent = b.try_get("k").await.unwrap().is_none();
             // Consume the bounded stream while waiting for the received frame
             // to finish its physical effect; reads produce their own events.
             removal_seen |= drain(&mut eb).contains(&expected_remove);
@@ -826,7 +838,7 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
         e,
         LayerEvent::Backplane(BackplaneEvent::MessagePublished { .. })
     )));
-    assert_eq!(c.read("warm", None).await.unwrap().value(), Some(&23));
+    assert_eq!(c.try_get("warm").await.unwrap().as_ref(), Some(&23));
     drain(&mut events);
     let invalid = BackplaneMessage {
         source_id: key("\u{1f}amalgam-control-v2:not-hex"),
@@ -846,7 +858,7 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
     );
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if !c.read("warm", None).await.unwrap().has_value() {
+            if c.try_get("warm").await.unwrap().is_none() {
                 break;
             }
             tokio::task::yield_now().await;
@@ -905,7 +917,14 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
     let mut events = reader.events().subscribe_layers();
     let opts = options()
         .with_distributed_timeouts(Timeout::Infinite, Timeout::After(Duration::from_millis(15)));
-    assert_eq!(reader.get_or_default("key", 29, Some(opts)).await, 29);
+    assert_eq!(
+        reader
+            .get_or_default("key", 29)
+            .options(|_| opts)
+            .await
+            .unwrap(),
+        29
+    );
     assert_eq!(
         drain(&mut events),
         vec![

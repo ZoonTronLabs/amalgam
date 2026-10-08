@@ -68,11 +68,12 @@ async fn lose_continuity<V: Clone + Send + Sync + 'static>(
         .unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if !cache
-                .read("proof", Some(options().with_skip_distributed(true, false)))
+            if cache
+                .try_get("proof")
+                .options(|_| options().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .has_value()
+                .is_none()
             {
                 break;
             }
@@ -138,7 +139,7 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
             boundary.armed.store(true, Ordering::SeqCst);
             Some(tokio::spawn({
                 let reader = reader.clone();
-                async move { reader.read("k", None).await }
+                async move { reader.try_get("k").await }
             }))
         }
         Hydration::Passive => {
@@ -180,11 +181,11 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
     }
     // Drain passive work before observing a subsequent read.
     reader.flush_pending().await.unwrap();
-    let after = reader.read("k", None).await.unwrap();
+    let after = reader.try_get("k").await.unwrap();
     reader.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
     assert!(
-        !after.has_value(),
+        after.is_none(),
         "hydration crossing a continuity gap repopulated L1"
     );
 }
@@ -308,7 +309,7 @@ async fn gap_during_storage_insertion(bounded: bool) {
     cloner.armed.store(true, Ordering::SeqCst);
     let read = tokio::spawn({
         let reader = reader.clone();
-        async move { reader.read("k", None).await }
+        async move { reader.try_get("k").await }
     });
     boundary.wait().await;
     lose_continuity(&reader, &backplane, &clock).await;
@@ -322,11 +323,11 @@ async fn gap_during_storage_insertion(bounded: bool) {
         .unwrap();
     boundary.unblock();
     read.await.unwrap().unwrap();
-    let after = reader.read("k", None).await.unwrap();
+    let after = reader.try_get("k").await.unwrap();
     reader.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
     assert!(
-        !after.has_value(),
+        after.is_none(),
         "storage insertion after the fence check made a pre-gap value readable"
     );
 }

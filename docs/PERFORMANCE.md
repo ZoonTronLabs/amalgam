@@ -1,333 +1,130 @@
-# Development performance against FusionCache
+# Performance for the 0.4 preparation
 
-The published package is 0.3.1; these measurements concern the developing 0.4
-source. Release performance qualification is open.
+Published package: **0.3.1** (registry checked 8 October 2026). The M4 table
+measures the completed read facade before the final exhaustive-state review.
+The final handler review preserves the operation contract but changes the source
+fingerprint. Linux below is a separate historical checkpoint until exact-source
+CI evidence is linked.
+Source/binary fingerprints accompany every report. Eight-worker ns/op is
+aggregate elapsed time divided by completed operations, not caller latency.
 
-## Method correction, 2026-10-07
+## Honest reference and measurement policy
 
-The previous harness forced `DOTNET_TieredCompilation=0` and warmed only 20,000
-operations. That disables Dynamic PGO and is not the production-default FC
-reference. Previous FC PASS claims are withdrawn as release evidence.
-The original reports and Rust-only diagnostics remain in
-[the historical tables](PERFORMANCE_HISTORY_TC0.md).
+The primary reference is released FusionCache **2.9.0**, running with normal
+.NET tiered compilation and Dynamic PGO after a settled warmup. Inherited JIT
+options are removed. Both runtimes warm each scenario for at least three seconds;
+the last five operation-time windows must have max/min <=1.10. An unsettled run
+is reported as a qualification failure. Process order rotates across at least
+three pairs. TC=0 is a separate diagnostic column and never the release reference.
+See [the reproducible harness](../benches/README.md).
 
-The corrected harness runs three isolated modes: Rust, FC with runtime defaults,
-and FC with tiering disabled. All six process orderings rotate across pairs.
-The gate uses **FC with default tiering/PGO**; TC=0 is a diagnostic column only.
-Inherited JIT overrides are removed and their names recorded; runtime discovery
-settings remain. Embedded fixture tiering overrides are rejected.
+Old comparisons that disabled tiering are withdrawn as release evidence.
+Instrumented allocation/CPU timings are excluded from the timing tables.
+Different operating systems and different source checkpoints are kept separate.
 
-Each scenario warms for at least three seconds. Operation-time windows contain
-at least 100 ms; the last five must have max/min at most 1.10. Warmup stops at
-15 seconds if it does not settle, and that run fails qualification. Both runtimes
-use this same policy, and all settling windows/verdicts are saved. Cold warmup
-uses fresh caches of at most 20,000 entries and excludes setup/cleanup from the
-operation windows, avoiding unbounded memory growth. Timed operation counts,
-checksums and the warmed zero-allocation check remain unchanged.
+## M4 Pro read-facade checkpoint — 8 October
 
-Tiering optimizes hot methods in the background; Dynamic PGO uses observed
-types and paths. See [Microsoft's runtime configuration documentation](https://learn.microsoft.com/en-us/dotnet/core/runtime-config/compilation).
-Separate warmup and workload phases follow the principle described by
-[BenchmarkDotNet](https://benchmarkdotnet.org/articles/guides/how-it-works.html);
-this fixture uses the explicit settling policy above, not BenchmarkDotNet itself.
+macOS 26.6.2, 12 physical/logical CPUs; Rust 1.88.0; FC 2.9.0 / .NET 10.0.8
+(SDK 10.0.300). Three counterbalanced process pairs per API, normal tiering/PGO
+as the primary reference and TC=0 only as a diagnostic. The source-set SHA-256 is
+`ff9e172a4e60c7fbbcac77466b48c7e332dcff8a972f407fa3a82e9b219081a2`. This source checkpoint also passed the local published-0.3.1 guard; the final
+source has its own independent guard and CI artifacts.
 
-## Independent reproduction supplied by the owner
+| API / workload | Amalgam ns/op | FC PGO ns/op | FC TC=0 diagnostic ns/op | Amalgam / FC PGO | Rust allocations/op |
+|---|---:|---:|---:|---:|---:|
+| read / same | 42.0 | 204.6 | 304.0 | 0.205 | 0.000 |
+| read / distinct / 8 workers | 8.0 | 39.5 | 65.0 | 0.204 | 0.000 |
+| read / sync | 29.5 | 169.0 | 261.1 | 0.174 | 0.000 |
+| read / set | 91.6 | 120.9 | 144.7 | 0.758 | 0.000 |
+| read / cold | 1065.9 | 1748.7 | 1863.5 | 0.610 | 5.009 |
+| read / l2_json | 1042.8 | 1181.1 | 1886.5 | 0.883 | 8.000 |
+| get-or-set / same | 43.0 | 229.7 | 338.1 | 0.187 | 0.000 |
+| get-or-set / distinct / 8 workers | 6.9 | 51.4 | 76.7 | 0.135 | 0.000 |
+| get-or-set / sync | 45.1 | 194.8 | 283.8 | 0.232 | 0.000 |
+| get-or-set / set | 92.2 | 117.1 | 145.6 | 0.788 | 0.000 |
+| get-or-set / cold | 1133.7 | 1743.7 | 1974.9 | 0.650 | 5.009 |
+| get-or-set / l2_json | 1379.7 | 1275.9 | 2119.5 | 1.081 | 8.000 |
 
-Three runs on an M4 Pro using the same fixtures, commit `f277bf6`, and a
-1,000,000-operation FC warmup. These are the owner's independent results,
-not freshly qualified output from the corrected repository harness.
+Warm L1 reads and replacement writes allocate zero times. L2 costs eight
+allocations; cold factories about 5.009 per operation. Timing ranges are retained
+in artifacts, including wide eight-worker and FC set ranges; no small-change or
+neutral-hot-path optimization claim follows from these medians.
 
-| Operation | Amalgam ns/op | FC TC=0 ns/op | FC default PGO ns/op | Amalgam / FC default | Required |
-|---|---:|---:|---:|---:|---|
-| L1 read, one worker | 39.4 | 312.0 | 195.2 | 0.20 | <=0.50 |
-| L1 read, eight workers | 5.2 | 59.9 | 57.9 | 0.09 | Read budget passes |
-| L1 get_or_set hit | 47.9 | 362.8 | 223.6 | 0.21 | <=0.50 |
-| L1 replacement | 89.5 | 140.9 | 102.4 | 0.87 | **Fail: <=0.75** |
-| Cold factory | 1017 | 2257 | 1638 | 0.62 | <=0.75 |
-| L2 plus JSON, read | 1419 | 1907 | 1192 | 1.19 | **Fail: <=1.00** |
-| L2 plus JSON, get_or_set | 1786 | 2076 | 1313 | 1.36 | **Fail: <=1.00** |
+- read: distinct-key scaling 5.07x; unsettled warmups 0; recorded budget failures: ('set', 1): 0.758 x FC exceeds 0.75; distinct scaling: 5.07 below 6.00 for 12 available physical cores.
+- get-or-set: distinct-key scaling 6.09x; unsettled warmups 0; recorded budget failures: ('set', 1): 0.788 x FC exceeds 0.75; ('l2_json', 1): 1.081 x FC exceeds 1.00.
 
-The corrected paired repository diagnostic is recorded below. Final-source
-qualification remains required before release. Optimizations now target L2 and set;
-hot reads are frozen apart from the explicitly requested simplification and
-verification work.
+Set's <=0.75x and L2 get_or_set's <=1.00x budgets remain open. Read's sixfold
+eight-core scaling target also remains unqualified on this M4 run. This scope
+publishes the failed criteria; closing them is deferred to 0.4.x.
 
-Eight-worker ns/op represents aggregate elapsed / completed operations, not
-one caller's latency. Eight-thread measurements on a two-core hosted runner
-cannot demonstrate eight-core scaling. Qualification requires at least eight
-physical cores for the sixfold scaling criterion.
+An earlier native get_or_set development checkpoint was 45.4 ns versus 39.4 ns
+(+15.2%, disjoint ranges). That development regression remains disclosed; it is
+separate from the actual published 0.3.1 comparison and these checkpoint rows.
 
-## L2 hydration copy contract and focused measurement
+## Linux checkpoint, c921d31
 
-The latest candidate prepares validated local lifetime facts and copies the
-decoded value directly into its hydrated L1 entry. It avoids an ordinary
-`V::clone()` whose result was immediately replaced by the configured copy.
-The public entry-hydration helper retains its existing clone and lifetime
-contract. A public auto-clone regression verifies that only the supplied cloner
-copies the L1 and caller values; hydration deadlines and fencing are unchanged.
+GitHub-hosted AMD EPYC 7763 runner: two available physical cores / four logical
+CPUs. Rust 1.88; FC 2.9.0 / .NET 10.0.12. The full read and get_or_set reports
+used seven pairs. This machine cannot qualify sixfold eight-core scaling.
 
-Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
-FC 2.9.0/.NET 10.0.8 settled all 48 warmup records. The baseline is the constructor
-and coordination checkpoint. These are focused diagnostics; hot reads are frozen.
+| API / workload | Amalgam ns/op | FC default PGO ns/op | Amalgam / FC |
+|---|---:|---:|---:|
+| read / same | 127.3 | 200.1 | 0.636 |
+| read / sync | 93.9 | 155.3 | 0.604 |
+| read / set | 253.2 | 279.0 | 0.907 |
+| read / cold | 2655.7 | 3762.6 | 0.706 |
+| read / l2_json | 3811.5 | 1596.8 | 2.387 |
+| get-or-set / same | 132.0 | 250.9 | 0.526 |
+| get-or-set / sync | 132.4 | 182.4 | 0.726 |
+| get-or-set / set | 254.2 | 277.2 | 0.917 |
+| get-or-set / cold | 2674.3 | 3601.7 | 0.742 |
+| get-or-set / l2_json | 3146.6 | 1888.8 | 1.666 |
 
-| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
-|---|---:|---:|---:|---:|---:|---:|---|
-| L2 JSON read | 1157.1 | 1151.7 | 1158.3 | 1840.9 | 0.994 | 9 | <=1.00 |
-| L2 JSON get_or_set | 1436.7 | 1448.2 | 1283.1 | 1977.7 | **1.129** | 9 | **Fail: <=1.00** |
-| L1 replacement | 93.1 | 90.0 | 108.7 | 140.9 | **0.828** | 0 | **Fail: <=0.75** |
-| Cold factory | 1080.0 | 1098.1 | 1578.2 | 1884.8 | 0.696 | 5.009 | <=1668 ns, <=6 allocations |
+Linux L2 read is 2.387x FC and L2 get_or_set 1.666x FC. One-worker hot read,
+native read and factory-retrieval budgets also fail. Two FC cold warmups in the
+get_or_set run did not settle; its cold result is diagnostic evidence only.
+See [the original CI run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37679769506).
 
-Both L2 timing changes are below one percent, and the integer fixture still has
-nine allocations. This change is retained for the selected-copy contract and
-simpler hydration; it does not establish an L2 speedup. Set is unchanged by the
-hydration change, and cold ranges overlap. L2 get_or_set and set remain outside
-their budgets. This is not full scaling or release qualification. See the
-[source identities, ranges and warmup windows](benchmarks/2026-10-08-l2-hydration-prepared.json).
+## Published 0.3.1 regression guard — final M4 source
 
-## Focused L2 coordination ownership diagnostic
+Actual registry package `amalgam-cache = 0.3.1`; same Rust 1.88 toolchain,
+workload fixture and pinned direct harness dependencies. Three alternating
+pairs, all warmups settled, all eight workloads pass the 1.05 noise allowance.
+The final source-set SHA-256 is
+`2319b32da1b24da9bfa128b4743d339226ead45b1695ee5454829e5eed7c5ab1`. This fixture has its own
+counts and instrumentation; its ns/op values are not interchangeable with the
+FC fixture. Final-source Linux reports are collected by the jobs in
+[PR #5](https://github.com/ZoonTronLabs/amalgam/pull/5) and retain these identities.
 
-Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
-FC 2.9.0/.NET 10.0.8. The candidate moves upgraded coordination owners into
-lock/fence consumers and sweeps idle identities only when creating an identity
-or running explicit maintenance. Existing holders, waiters and generation
-checks retain their identities. The baseline is the source API checkpoint below.
-All 48 warmup records settled. Hot reads are unchanged and not measured here.
+| Workload / workers | Published 0.3.1 ns/op | Candidate ns/op | Candidate / 0.3.1 |
+|---|---:|---:|---:|
+| cold / 1 | 5149.1 | 1043.5 | 0.203 |
+| hot_get_or_set / 1 | 314.7 | 41.8 | 0.133 |
+| hot_get_or_set / 8 | 662.6 | 5.8 | 0.009 |
+| hot_read / 1 | 277.5 | 41.4 | 0.149 |
+| hot_read / 8 | 784.2 | 5.6 | 0.007 |
+| l2_get_or_set / 1 | 2164.8 | 1385.9 | 0.640 |
+| l2_read / 1 | 1886.5 | 1026.7 | 0.544 |
+| set / 1 | 4117.4 | 91.4 | 0.022 |
 
-| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
-|---|---:|---:|---:|---:|---:|---:|---|
-| L2 JSON read | 1163.2 | 1116.4 | 1162.6 | 1821.0 | 0.960 | 9 | <=1.00 |
-| L2 JSON get_or_set | 1442.2 | 1397.1 | 1273.5 | 1961.6 | **1.097** | 9 | **Fail: <=1.00** |
-| L1 replacement | 90.6 | 90.8 | 108.0 | 142.1 | **0.840** | 0 | **Fail: <=0.75** |
-| Cold factory | 1113.8 | 1079.9 | 1592.7 | 2168.9 | 0.678 | 5.009 | <=1668 ns, <=6 allocations |
+## Gates for 0.4.0
 
-Read and get_or_set medians improve 4.0% and 3.1%; their before/after ranges do
-not overlap in this comparison. Allocation counts are unchanged. Set differs by
-less than one percent; cold ranges overlap, so neither establishes an improvement.
-The focused read budget passes, but L2 get_or_set and set still fail. This is not
-full scaling or release qualification. See the
-[source identities, ranges and all warmup windows](benchmarks/2026-10-07-l2-coordination-owned.json).
+The owner defers closing FC-relative L2, set, scaling and Linux hot-read gaps to 0.4.x.
+The FC comparison is **informational**: it retains failed budgets, warmup
+verdicts and raw evidence in seven-day CI artifacts. It does not block the
+aggregate required `ci` gate. This is a scope decision, not a claim that the
+budgets now pass.
 
-## Focused measurement after API migration
+The blocking performance job runs matched public workloads against the actual
+crates.io **amalgam-cache 0.3.1** package. Three counterbalanced pairs cover L1
+read/get_or_set with one and eight workers, replacement set, cold factory and
+L2 read/get_or_set. It checks source/binary identities, complete settled warmup,
+identical operation counts and medians. A ratio above **1.05** fails; 5% is the
+explicit measurement-noise allowance. Missing or unstable evidence also fails.
+This guard protects the published baseline and does not replace FC parity.
+Native-only APIs did not exist in published 0.3.1 and have no matching baseline;
+their FC measurements and existing allocation/lifecycle contracts remain visible.
 
-Three counterbalanced comparisons on the same M4 Pro, Rust 1.88.0 and released
-FC 2.9.0/.NET 10.0.8. The candidate uses the unified source requests, fallible
-writes and provider/advanced namespaces. The baseline is the recorded origin
-partition candidate above, before those API changes. All 48 warmup records
-settled. These timings cover L2/set/cold and do not qualify hot reads, scaling
-or release.
-
-| Operation | Before API ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
-|---|---:|---:|---:|---:|---:|---:|---|
-| L2 JSON read | 1162.1 | 1178.1 | 1177.5 | 1853.5 | **1.001** | 9 | **Fail: <=1.00** |
-| L2 JSON get_or_set | 1502.3 | 1475.4 | 1281.7 | 2034.6 | **1.151** | 9 | **Fail: <=1.00** |
-| L1 replacement | 90.6 | 92.3 | 112.2 | 142.4 | **0.823** | 0 | **Fail: <=0.75** |
-| Cold factory | 1102.6 | 1122.9 | 1789.3 | 1903.0 | 0.628 | 5.009 | <=1668 ns, <=6 allocations |
-
-L2 read is within measurement noise of FC, but its exact median ratio remains
-above the unchanged limit. Small before/after median changes do not establish
-an API speedup. L2 get_or_set and set still miss their required budgets; this
-checkpoint is not release qualified. See the
-[source identities, ranges and verdicts](benchmarks/2026-10-07-source-api.json).
-
-## Focused L2 origin partition diagnostic
-
-Three counterbalanced comparisons on the same M4 Pro and frozen reference
-binaries. The candidate moves factory execution into its own state only after
-L1/L2 have actually missed; successful L2 lookup retains coordination, provider
-I/O, JSON, marker checks and hydration. All 48 warmup records settled. This
-precedes the unified source API migration and is diagnostic evidence, not
-final-source release qualification.
-
-| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
-|---|---:|---:|---:|---:|---:|---:|---|
-| L2 JSON read | 1188.2 | 1184.3 | 1174.0 | 1841.0 | **1.009** | 9 | **Fail: <=1.00** |
-| L2 JSON get_or_set | 1537.7 | 1488.7 | 1287.7 | 2027.8 | **1.156** | 9 | **Fail: <=1.00** |
-| L1 replacement | 91.9 | 90.6 | 107.7 | 144.9 | **0.842** | 0 | **Fail: <=0.75** |
-| Cold factory | 1068.2 | 1098.8 | 1859.5 | 1878.1 | 0.591 | 5.009 | <=0.75, <=6 allocations |
-
-Read differs by 0.3%, below the one-percent signal threshold. The get_or_set
-median improves 3.2%, but its ranges overlap; this does not establish a repeatable
-speedup. The untimed ownership probe observes a 512-byte reduction in the pinned
-get_or_set execution frame, with the same nine allocations. Set and cold ranges
-also overlap. L2 and set qualification remain open. See the
-[source identities, ranges and verdicts](benchmarks/2026-10-07-l2-origin-partition.json).
-
-## Focused L2 key and marker diagnostic
-
-Three counterbalanced comparisons on the same M4 Pro and reference binaries
-used below. The candidate selects physical key encoding at construction and
-uses a stack batch for the two required clear markers on an untagged read.
-Provider I/O, JSON, both marker checks, deadlines and L1 hydration remain intact.
-All 48 warmup records settled. This is a focused diagnostic, not final-source
-qualification.
-
-| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
-|---|---:|---:|---:|---:|---:|---:|---|
-| L2 JSON read | 1224.9 | 1194.1 | 1173.4 | 1867.1 | **1.018** | 9 (was 11) | **Fail: <=1.00** |
-| L2 JSON get_or_set | 1596.7 | 1553.2 | 1280.7 | 2010.8 | **1.213** | 9 (was 11) | **Fail: <=1.00** |
-| L1 replacement | 91.1 | 91.5 | 108.7 | 143.4 | **0.842** | 0 | **Fail: <=0.75** |
-| Cold factory | 1090.9 | 1073.9 | 1774.9 | 1824.8 | 0.605 | 5.009 | <=0.75, <=6 allocations |
-
-L2 medians improve by 2.5% and 2.7% in this comparison; read ranges overlap.
-Two allocation removals are directly observed. Set differs by less than one
-percent; cold ranges overlap. These results do not establish a set or cold
-improvement. All L2 and set budgets remain open. See the
-[source identities, ranges and verdicts](benchmarks/2026-10-07-l2-key-encoding.json).
-
-## Focused L2 execution diagnostic
-
-Three counterbalanced before/after comparisons on the same M4 Pro, Rust 1.88.0
-and released FC 2.9. The source accepts plain factory values and errors. The
-candidate borrows the parent read budget for synchronous serializers; both
-versions retain identical provider, JSON, marker-validation and hydration work.
-All warmup windows settled. This focused comparison does not qualify hot reads,
-scaling, the complete API or release.
-
-| Operation | Before ns/op | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op | Required |
-|---|---:|---:|---:|---:|---:|---:|---|
-| L2 JSON read | 1339.0 | 1226.0 | 1177.5 | 1877.5 | **1.041** | 11 (was 14) | **Fail: <=1.00** |
-| L2 JSON get_or_set | 1748.3 | 1600.6 | 1278.7 | 2012.5 | **1.252** | 11 (was 14) | **Fail: <=1.00** |
-| L1 replacement | 90.3 | 91.0 | 109.1 | 144.5 | **0.835** | 0 | **Fail: <=0.75** |
-| Cold factory | 1070.4 | 1099.3 | 1687.3 | 1911.8 | 0.651 | 5.009 | <=0.75, <=6 allocations |
-
-Both L2 operations improve by about 8.4% against the same-runner baseline.
-Set is unchanged within one percent. Cold ranges overlap; its median alone is
-insufficient to attribute the difference to this L2 change. L2 and set budgets
-remain open. Ranges and exact source/binary identities are available in
-[the focused report](benchmarks/2026-10-07-l2-parent-budget.json).
-
-## Baseline after ready-plan simplification
-
-Three process triplets per API on macOS 26.6.2 arm64, M4 Pro, 12 available
-physical/logical cores; Rust 1.88.0, .NET SDK 10.0.300/runtime 10.0.8,
-released FC 2.9.0. This measures `a327912` plus two unrelated owner removals
-of `#[inline]` in `src/cache.rs`. It includes the two ready plans and actual
-ReaderSlots instrumentation. All 306 warmup records per API settled.
-Runtime/fixture identities, ranges, allocations and gate failures are in
-[the extracted diagnostic report](benchmarks/2026-10-07-honest-fc-two-ready.json).
-Full per-window reports remain the local benchmark artifacts; the extracted
-report contains their verdict summaries and source/binary hashes.
-These are diagnostic results, not final-source or API 0.4 qualification.
-Final release qualification uses seven process triplets.
-
-| API / operation | Workers | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Budget result |
-|---|---:|---:|---:|---:|---:|---|
-| read: same key | 1 | 40.435 | 205.495 | 325.288 | 0.197 | Pass in diagnostic |
-| read: distinct keys | 1 | 43.029 | 204.356 | 322.578 | 0.211 | Pass in diagnostic |
-| read: same key | 2 | 22.977 | 110.830 | 208.408 | 0.207 | Pass in diagnostic |
-| read: distinct keys | 2 | 21.681 | 105.414 | 192.730 | 0.206 | Pass in diagnostic |
-| read: same key | 4 | 10.784 | 78.737 | 115.022 | 0.137 | Pass in diagnostic |
-| read: distinct keys | 4 | 11.314 | 61.964 | 104.711 | 0.183 | Pass in diagnostic |
-| read: same key | 8 | 8.242 | 76.981 | 91.725 | 0.107 | Pass in diagnostic |
-| read: distinct keys | 8 | 7.967 | 41.761 | 70.528 | 0.191 | Pass in diagnostic |
-| read: sync hit | 1 | 31.877 | 182.581 | 277.608 | 0.175 | Pass in diagnostic |
-| read: L1 replacement | 1 | 95.202 | 112.871 | 150.951 | 0.843 | **Fail** |
-| read: cold factory | 1 | 1136.762 | 2021.164 | 2241.473 | 0.562 | Pass in diagnostic |
-| read: L2 plus JSON | 1 | 1415.105 | 1218.116 | 1921.003 | 1.162 | **Fail** |
-| get-or-set: same key | 1 | 47.691 | 245.797 | 358.984 | 0.194 | Pass in diagnostic |
-| get-or-set: distinct keys | 1 | 48.565 | 251.305 | 363.122 | 0.193 | Pass in diagnostic |
-| get-or-set: same key | 2 | 25.077 | 142.338 | 229.694 | 0.176 | Pass in diagnostic |
-| get-or-set: distinct keys | 2 | 24.359 | 129.381 | 187.692 | 0.188 | Pass in diagnostic |
-| get-or-set: same key | 4 | 13.663 | 92.231 | 133.917 | 0.148 | Pass in diagnostic |
-| get-or-set: distinct keys | 4 | 13.365 | 89.583 | 113.053 | 0.149 | Pass in diagnostic |
-| get-or-set: same key | 8 | 9.730 | 91.584 | 90.649 | 0.106 | Pass in diagnostic |
-| get-or-set: distinct keys | 8 | 9.879 | 67.025 | 85.042 | 0.147 | Pass in diagnostic |
-| get-or-set: sync hit | 1 | 41.456 | 216.430 | 300.002 | 0.192 | Pass in diagnostic |
-| get-or-set: L1 replacement | 1 | 95.333 | 118.035 | 152.124 | 0.808 | **Fail** |
-| get-or-set: cold factory | 1 | 1152.338 | 1989.289 | 2346.730 | 0.579 | Pass in diagnostic |
-| get-or-set: L2 plus JSON | 1 | 1773.824 | 1345.739 | 2132.849 | 1.318 | **Fail** |
-
-**Both APIs fail the set and L2 budgets and the sixfold scaling gate.**
-Distinct-key scaling is 5.401x for read and 4.916x for get_or_set.
-The previous, pre-simplification diagnostic was 7.335x / 7.639x; this change
-cannot be dismissed as noise or assigned to a runtime cause without a
-controlled comparison. The scaling threshold is unchanged. Hot-read speed
-relative to FC and zero allocations still pass; their runtime design is frozen.
-New speed changes target L2 and set.
-
-Warm hits and replacement allocate zero; cold allocates 5.009 per operation;
-L2 allocates 14. The two API fixtures produce separate set/cold repetitions;
-both repetitions are shown rather than selecting the faster one.
-
-read L2 ranges: Amalgam 1391.016-1434.773 ns; FC default 1217.290-1270.044; FC TC=0 1911.018-2118.354.
-
-get-or-set L2 ranges: Amalgam 1766.992-1852.467 ns; FC default 1310.891-1347.143; FC TC=0 2130.958-2173.934.
-
-## Source API checkpoint on hosted Linux
-
-[CI 37671995620](https://github.com/ZoonTronLabs/amalgam/actions/runs/37671995620)
-measured `0664bea`, before the coordination ownership change and documentation
-repairs above. AMD EPYC 7763, two available physical cores/four logical CPUs,
-Rust 1.88.0, .NET 10.0.12, released FC 2.9.0; seven alternating pairs per API.
-These are separate-machine results and cannot serve as a before/after comparison
-with the M4 Pro. Several FC cold warmups did not settle, so the whole run fails
-qualification even where a measured median meets a ratio.
-
-| Fixture | Operation | Amalgam ns/op | FC default PGO ns/op | FC TC=0 ns/op | Amalgam / FC default | Allocations/op |
-|---|---|---:|---:|---:|---:|---:|
-| read | L2 JSON | 3785.8 | 1624.8 | 2699.9 | **2.330** | 9 |
-| get_or_set | L2 JSON | 3278.3 | 1935.3 | 3053.3 | **1.694** | 9 |
-| read | L1 replacement | 254.0 | 285.2 | 357.5 | **0.891** | 0 |
-| get_or_set | L1 replacement | 254.4 | 281.1 | 355.1 | **0.905** | 0 |
-| read | Cold factory | 2757.2 | 3862.7 | 4153.1 | 0.714 | 5.009 |
-| get_or_set | Cold factory | 2731.5 | 3728.0 | 4137.4 | 0.733 | 5.009 |
-
-L2 and set miss their unchanged budgets. Single-worker warm read/get_or_set and
-native reads also miss the <=0.50 ratio. Warm hits still allocate zero. Distinct
-1-to-8-worker ratios are 3.016 and 2.657; this host cannot verify eight-core
-scaling. Hot-read optimization remains frozen by the owner's instruction;
-the failures are retained and prevent release rather than changing the gate.
-All source identities, ranges, warmup records and verdicts are preserved in the
-[read report](benchmarks/2026-10-07-source-api-linux-read.json) and
-[get_or_set report](benchmarks/2026-10-07-source-api-linux-get-or-set.json).
-
-## Release gate
-
-The [default-PGO Linux run](https://github.com/ZoonTronLabs/amalgam/actions/runs/37650344482)
-completed 17 functional, quality, platform, packaging/consumer and safety jobs.
-Actual ReaderSlots Loom and native TSan passed; Miri passed its documented subset.
-The mandatory scaling job and aggregate gate failed. Hosted Linux also missed
-the L2 and set budgets and reported unsettled cold warmups. These results concern
-the pushed ready-plan checkpoint, before the focused L2 changes above.
-The subsequent Source API CI run above also remains red. Safety, individual
-features, dependency advisories and packaged consumers passed; platform and live
-Redis jobs reached a stale OpenTelemetry doctest, and quality found a removed
-builder documentation link. Both references have been fixed locally and the
-full all-feature tests, strict lints and rustdoc pass. These local repairs still
-require CI verification; they do not close the independent performance failure.
-
-No main push/merge or 0.4.0 publication is allowed with a red mandatory gate.
-Final API, paired FR/RS contracts, packaged consumers, MSRV, live Redis/Valkey
-and the final source still need qualification.
-
-## Reproduce
-
-```sh
-python3 benches/run-scaling.py --api read --gate all --output /tmp/amalgam-read
-python3 benches/run-scaling.py --api get-or-set --gate all --output /tmp/amalgam-get
-```
-
-Seven pairs are the default. Use `--pairs 3` for an initial diagnostic, not final
-release qualification. Keep generated files outside the checkout and reuse one
-Cargo target. Reports include both FC columns, source/binary hashes, identities,
-topology, ranges, operation counts, allocations and full warmup evidence.
-
-
-## ReaderSlots verification scope
-
-Loom instruments the actual `src/reader_slots.rs` admission, guard and wakeup
-algorithm through `cfg(loom)`, including full-lifetime tracked value access.
-Deliberately bypassing the writer gate produces a tracked value-access race;
-restored source passes its bounded models. Native TSan also runs the actual
-parking and collision stress. These checks supplement contracts rather than
-proving every possible execution.
-
-Miri checks actual native guard borrowing and overlapping reader reservations.
-The contended parking case explicitly remains ignored under Miri because the
-released `parking_lot_core` 0.9.12 uses a C-variadic futex argument rejected by
-current Miri. The cause and fix are documented by
-[upstream parking_lot](https://github.com/Amanieu/parking_lot/pull/539).
-No Miri UB/alias/race check is disabled, and the runtime algorithm/dependency is
-not replaced for the check. Native TSan and Loom retain parking coverage.
-Full contended Miri coverage remains open until a compatible released
-dependency includes the upstream fix.
+Raw JSON and exploratory journals are kept out of the repository and crate.
+The source worktree was archived locally before cleanup. New reports live
+outside the checkout and are uploaded by CI.

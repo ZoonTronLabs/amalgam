@@ -5,10 +5,9 @@ use super::{
     Execution, ExecutionCheckpoint, FactoryCancellation, FactoryContext, FallbackAvailability,
     FlightGuard, HitKind, HydrationFence, HydrationOutcome, Instrument, L1Read, L2ReadPolicy,
     LayerEvent, LeaseError, LeasePolicy, LocalParticipation, LockOutcome, LookupKey,
-    MarkerReadPolicy, MaybeValue, MemoryEvent, Observed, OperationOutcome, Ordering,
-    OriginCompletion, OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage,
-    Tag, TagVerdict, Timeout, Worker, acquire_owned_supervised, bounded, component_span,
-    lease_lost, newer_of,
+    MarkerReadPolicy, MemoryEvent, Observed, OperationOutcome, Ordering, OriginCompletion,
+    OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict,
+    Timeout, Worker, acquire_owned_supervised, bounded, component_span, lease_lost, newer_of,
 };
 
 // Physical completion remains visible after a later marker timeout. The
@@ -41,12 +40,64 @@ struct OriginMiss<V, O> {
     options: EntryOptions,
     tags: Box<[Tag]>,
     stale: Option<Entry<V>>,
-    default: MaybeValue<V>,
+    default: Option<V>,
     caller: super::origin::OriginCaller,
     guard: FlightGuard,
 }
 
+// Cache defaults are immutable and validated at construction. A lookup borrows
+// them; only a real origin miss materializes its adaptive factory options.
+// Overrides keep their existing allocation and validation boundary.
+enum LookupOptions<'a> {
+    Defaults(&'a EntryOptions),
+    Selected(Box<EntryOptions>),
+}
+impl std::ops::Deref for LookupOptions<'_> {
+    type Target = EntryOptions;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Defaults(options) => options,
+            Self::Selected(options) => options,
+        }
+    }
+}
+impl LookupOptions<'_> {
+    fn into_owned(self) -> EntryOptions {
+        match self {
+            Self::Defaults(options) => options.clone(),
+            Self::Selected(options) => *options,
+        }
+    }
+}
+
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
+    fn resolve_lookup_options(
+        &self,
+        key: &str,
+        options: Option<Box<EntryOptions>>,
+    ) -> Result<LookupOptions<'_>> {
+        let selected = options.or_else(|| {
+            self.inner
+                .default_options_provider
+                .as_ref()
+                .and_then(|provider| {
+                    provider
+                        .options_for_with_defaults(key, &self.inner.default_options)
+                        .map(Box::new)
+                })
+        });
+        match selected {
+            Some(options) => {
+                self.validate_options(&options)?;
+                Ok(LookupOptions::Selected(options))
+            }
+            None => {
+                // Runtime availability belongs to this execution, not build time.
+                self.inner.default_runtime.validate()?;
+                Ok(LookupOptions::Defaults(&self.inner.default_options))
+            }
+        }
+    }
     async fn read_l1(
         &self,
         key: &Arc<str>,
@@ -106,7 +157,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: &Arc<str>,
         opts: &EntryOptions,
         fallback: FallbackAvailability,
-        policy: L2ReadPolicy,
         cancellation: &FactoryCancellation,
     ) -> Result<Option<DistributedLookup<V>>> {
         if matches!(self.inner.storage, Storage::MemoryOnly) {
@@ -119,13 +169,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let error = Error::CircuitOpen {
                 component: CircuitComponent::Distributed,
             };
-            return match policy {
-                L2ReadPolicy::PreserveFailure => Err(error),
-                L2ReadPolicy::FactoryFallback => {
-                    tracing::warn!(%error,key=%key,"legacy/origin lookup skipped an open circuit");
-                    Ok(None)
-                }
-            };
+            tracing::warn!(%error,key=%key,"read-only/origin lookup skipped an open circuit");
+            return Ok(None);
         }
         let timeout = opts
             .appropriate_distributed_timeout(matches!(fallback, FallbackAvailability::Available));
@@ -138,8 +183,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let result = match budget {
             L2ReadBudget::Completed(result) => result,
             L2ReadBudget::TimedOut => {
-                if policy == L2ReadPolicy::FactoryFallback
-                    && opts.is_fail_safe_enabled()
+                if opts.is_fail_safe_enabled()
                     && matches!(fallback, FallbackAvailability::Available)
                     && timeout == opts.distributed_soft_timeout()
                 {
@@ -164,7 +208,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
             Err(error) => {
                 self.failure(key, &error);
-                if policy.rethrow(opts, &error) {
+                if L2ReadPolicy::rethrow(opts, &error) {
                     Err(error)
                 } else {
                     tracing::warn!(%error,key=%key,"distributed read degraded to miss");
@@ -285,7 +329,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let snapshot = serializer
             .decode(&bytes, self.inner.serialization_mode, cancellation)
             .await?;
-        let source = snapshot.try_into_entry(self.inner.clock.now())?;
+        let source = snapshot.try_into_cache_entry(self.inner.clock.now())?;
         let now = self.inner.clock.now();
         observation.record();
         if source.is_physically_expired(now) {
@@ -377,11 +421,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     pub(super) async fn read(
         &self,
         key: LookupKey,
-        options: Option<EntryOptions>,
-        policy: L2ReadPolicy,
+        options: Option<Box<EntryOptions>>,
         cancellation: &FactoryCancellation,
-    ) -> Result<Observed<MaybeValue<V>>> {
-        let opts = self.resolve_options(&key.raw, options)?;
+    ) -> Result<Observed<Option<V>>> {
+        let opts = self.resolve_lookup_options(&key.raw, options)?;
         let key = key.full;
         self.ensure_health()?;
         let mut stale = None;
@@ -404,7 +447,6 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     } else {
                         FallbackAvailability::Unavailable
                     },
-                    policy,
                     cancellation,
                 )
                 .await?
@@ -438,19 +480,12 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         }
         if opts.allow_stale_on_read_only()
             && let Some(stale) = stale
-            && (policy == L2ReadPolicy::FactoryFallback
-                || (!stale.entry().is_physically_expired(self.inner.clock.now())
-                    && self.tags(stale.entry()) != TagVerdict::Remove))
         {
             let (entry, level) = stale.into_parts();
             return self.read_hit(key, entry, &opts, HitKind::Stale, level);
         }
         self.emit(CacheEvent::Miss { key });
-        Ok(Observed::new(
-            MaybeValue::none(),
-            OperationOutcome::Miss,
-            None,
-        ))
+        Ok(Observed::new(None, OperationOutcome::Miss, None))
     }
     fn read_hit(
         &self,
@@ -459,17 +494,13 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         opts: &EntryOptions,
         kind: HitKind,
         level: CacheLevel,
-    ) -> Result<Observed<MaybeValue<V>>> {
+    ) -> Result<Observed<Option<V>>> {
         let value = self.copy(entry.value(), opts)?;
         self.emit(CacheEvent::Hit {
             key,
             stale: kind.is_stale(),
         });
-        Ok(Observed::new(
-            MaybeValue::from_value(value),
-            kind.outcome(),
-            Some(level),
-        ))
+        Ok(Observed::new(Some(value), kind.outcome(), Some(level)))
     }
     fn served(
         &self,
@@ -579,16 +610,16 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         &self,
         key: LookupKey,
         origin: O,
-        options: Option<EntryOptions>,
+        options: Option<Box<EntryOptions>>,
         tags: Box<[Tag]>,
-        default: MaybeValue<V>,
+        default: Option<V>,
         caller: super::origin::OriginCaller,
     ) -> Result<Observed<CacheValue<V>>> {
         let super::origin::OriginCaller {
             operation: caller,
             explicit,
         } = caller;
-        let opts = self.resolve_options(&key.raw, options)?;
+        let opts = self.resolve_lookup_options(&key.raw, options)?;
         let raw_key = key.raw;
         let key = key.full;
         self.ensure_health()?;
@@ -649,12 +680,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .read_l2(
                     &key,
                     &opts,
-                    if stale.is_some() || default.has_value() {
+                    if stale.is_some() || default.is_some() {
                         FallbackAvailability::Available
                     } else {
                         FallbackAvailability::Unavailable
                     },
-                    L2ReadPolicy::FactoryFallback,
                     &caller,
                 )
                 .await?
@@ -676,7 +706,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 full: key,
             },
             origin,
-            options: opts,
+            options: opts.into_owned(),
             tags,
             stale,
             default,
@@ -891,7 +921,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: &Arc<str>,
         opts: &EntryOptions,
         stale: Option<&Entry<V>>,
-        default: &MaybeValue<V>,
+        default: &Option<V>,
         timeout: Timeout,
     ) -> Result<Observed<CacheValue<V>>> {
         if let Some(value) = self.fallback(key, opts, stale, default).await? {
@@ -914,7 +944,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         key: &Arc<str>,
         opts: &EntryOptions,
         stale: Option<&Entry<V>>,
-        default: &MaybeValue<V>,
+        default: &Option<V>,
     ) -> Result<Option<V>> {
         if !opts.is_fail_safe_enabled() {
             return Ok(None);
@@ -928,7 +958,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let entry = match entry {
             Some(entry) => Some(entry),
             None => default
-                .value()
+                .as_ref()
                 .map(|value| {
                     self.copy(value, opts)
                         .and_then(|value| Entry::try_from_fail_safe_default(value, opts, now))
@@ -1004,7 +1034,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 let lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::Cooperative=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;guard.lease=worker.cluster_participation(&key,lease,worker.inner.lease_policy);
                 if guard.lease.is_local(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
-            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,L2ReadPolicy::FactoryFallback,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}
+            if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}
             let ctx=FactoryContext::with_cancellation(keys,opts.clone(),tags,Some(worker.stale_info(&current,&opts)?),token.clone()).with_invocation(crate::factory::FactoryInvocation::EagerRefresh);
             let lease_state=guard.lease.state();
             let guard=worker.capture_origin(&key,guard)?;

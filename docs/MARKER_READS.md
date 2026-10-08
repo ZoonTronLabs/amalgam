@@ -1,9 +1,12 @@
 # Independent secondary marker reads (unreleased)
 
-`MarkerReadPolicy::DurableRequired` remains the default. It preserves the
-existing healthy-local L1 contract and durable cold hydration: value retrieval,
-decoding and required marker validation share the value's distributed deadline.
-It does not promise a durable check on every L1 hit.
+Atomic invalidation providers retain `MarkerReadPolicy::DurableRequired` by
+default. It preserves healthy-local L1 and durable cold hydration: value
+retrieval, decoding and required marker validation share the value's distributed
+deadline. It does not promise a durable check on every L1 hit. A byte-only L2
+without an atomic invalidation provider automatically selects
+`OptionsControlled`; explicit `DurableRequired` is rejected during construction
+when tagging is enabled.
 
 `MarkerReadPolicy::OptionsControlled` explicitly selects independent secondary
 checks. They use `tags_default_options`, bypass the ordinary value-options
@@ -30,9 +33,34 @@ let cache = Cache::<u64>::builder()
 # Ok::<(), amalgam::Error>(())
 ```
 
-Attach a participating `InvalidationStore` for distributed control checks. In a
-memory-only cache, local invalidation facts still apply. Selecting independent
-checks with a byte-only L2 and no marker capability is a typed Unsupported error.
+A supplied `InvalidationStore` provides genuine atomic maxima. A byte-only L2
+uses separate ordinary control keys through its existing get/set interface;
+it never advertises atomic capability. In a memory-only cache, local
+invalidation facts still apply.
+
+Ordinary control keys use a length-delimited scope and distinct tag, clear-remove
+and clear-expire categories under `amalgam:byte-marker:`. That prefix is reserved
+when value-key modification is disabled; prefix/suffix value encoding already
+separates values. Marker bytes and namespaces are Amalgam's protocol, not FC's
+wire format. Ordinary writes use the original marker revision and physical TTL
+from tag options, including the fail-safe retention limit. Ordinary recovery retains the
+captured revision and options but recomputes physical TTL at replay, as FC does.
+Atomic snapshot recovery retains its original deadline. Re-observing a marker
+does not rewrite it with a newer timestamp or extend its remote TTL.
+
+A delayed or concurrent ordinary write can replace a stronger remote revision;
+an unseen invalidation can disappear after TTL. The local ledger preserves facts
+that a node has already observed, but cannot manufacture an unseen remote fact.
+Use a genuine atomic provider for the stronger durable contract. `strict()`
+rejects an unavailable atomic marker capability before I/O when tagging is
+active. Optional `CachedSnapshots` still requires its actual provider capability.
+The public `ordinary_marker_contract` verifies cold-node invalidation,
+Expire/Remove fail-safe behavior, namespace isolation, original causes and
+captured recovery policy. The [pinned released FC oracle](../tests/fusioncache/README.md)
+checks the corresponding byte-provider behavior, including inclusive boundaries
+and the two initial clear reads. Re-run the fixture to capture output for
+the current source.
+Full native/provider and option-combination qualification remains open.
 
 ## Authority, retention and cancellation
 
@@ -41,7 +69,13 @@ ledger. Expiring/evicting an observation never erases a known invalidation.
 Successful absence is distinct from a skipped or failed check. Observation
 admission atomically merges maxima; a delayed response cannot overwrite a newer
 peer observation, and a degraded fallback cannot replace a concurrent refresh.
-By default, continuity generations fence observations and value hydration across gaps. Explicit `ReconciliationPolicy::BackplaneBestEffort` keeps their generation and existing lifetimes over notification gaps instead; received invalidations still apply, while missed peer changes can remain unseen. See [outage policies](BACKPLANE_OUTAGES.md).
+The developing 0.4 builder selects `ReconciliationPolicy::BackplaneBestEffort`
+for a configured backplane. It preserves observation generations and existing
+value lifetimes over notification gaps; received invalidations still apply,
+while missed peer changes can remain unseen. `strict()` with acknowledged
+backplane health selects continuity fencing, which revokes crossing observation
+and hydration authority. Explicit reconciliation choices retain their own
+policies. See [outage policies](BACKPLANE_OUTAGES.md).
 
 `CacheEvent::MarkerRead` reports the actual authority: `Observed`, `Cached`,
 `KnownMaximum`, `Local`, `Skipped`, `StaleFallback(reason)` or `Unavailable(reason)`.
@@ -111,10 +145,13 @@ recovery/population and remaining option combinations stay open. DurableOnly
 does not schedule marker eager work. SkipAutoCloneForImmutableObjects
 does not force an ordinary value serializer over typed markers.
 
-DistributedDuration and DistributedFailSafeMaxDuration do not expire durable
-markers, including explicit mutations: the atomic control protocol retains
-monotonic tombstones independently of ordinary value TTL. In CachedSnapshots,
-those distributed durations instead govern the expendable observation record.
+With an atomic provider, DistributedDuration and
+DistributedFailSafeMaxDuration do not expire durable markers, including explicit
+mutations: the atomic control protocol retains monotonic tombstones independently
+of ordinary value TTL. In CachedSnapshots, those distributed durations govern
+the expendable observation record. In byte-only mode they govern the ordinary
+remote marker's physical TTL; DurableOnly selects no snapshot repair factory,
+not an atomic storage guarantee.
 SkipDistributedWrite and background distributed writes also select its renewal
 behavior. Backplane notification options control explicit marker mutations;
 read renewal never publishes an invalidation.

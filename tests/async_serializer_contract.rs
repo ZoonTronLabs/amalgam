@@ -99,13 +99,11 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
             .unwrap();
         assert_eq!(
             cache
-                .read(
-                    "value",
-                    Some(EntryOptions::default().with_skip_memory(true, false))
-                )
+                .try_get("value")
+                .options(|_| EntryOptions::default().with_skip_memory(true, false))
                 .await
                 .unwrap()
-                .value(),
+                .as_ref(),
             Some(&7)
         );
         clock.advance(Duration::from_millis(1));
@@ -119,17 +117,15 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
             .await
             .unwrap();
         let stale = cache
-            .read(
-                "value",
-                Some(
-                    EntryOptions::default()
-                        .with_skip_memory(true, false)
-                        .with_allow_stale_on_read_only(true),
-                ),
-            )
+            .try_get("value")
+            .options(|_| {
+                EntryOptions::default()
+                    .with_skip_memory(true, false)
+                    .with_allow_stale_on_read_only(true)
+            })
             .await
             .unwrap();
-        assert_eq!(stale.value(), Some(&7));
+        assert_eq!(stale.as_ref(), Some(&7));
         if expected_async {
             assert!(counts.async_encode.load(Ordering::SeqCst) >= 2);
             assert!(counts.async_decode.load(Ordering::SeqCst) >= 2);
@@ -215,14 +211,12 @@ async fn cancelling_a_parked_async_codec_releases_it_without_committing_either_l
         })
     ));
     assert!(
-        !cache
-            .read(
-                "value",
-                Some(EntryOptions::default().with_skip_distributed(true, false))
-            )
+        cache
+            .try_get("value")
+            .options(|_| EntryOptions::default().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .has_value()
+            .is_none()
     );
     assert!(backend.get("v2:value").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
@@ -266,13 +260,11 @@ async fn legacy_snapshot_overrides_keep_their_contract_even_with_async_preferenc
         .unwrap();
     assert_eq!(
         cache
-            .read(
-                "value",
-                Some(EntryOptions::default().with_skip_memory(true, false))
-            )
+            .try_get("value")
+            .options(|_| EntryOptions::default().with_skip_memory(true, false))
             .await
             .unwrap()
-            .value(),
+            .as_ref(),
         Some(&7)
     );
     cache.shutdown().await.unwrap();

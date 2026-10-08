@@ -47,8 +47,9 @@ Caller cancellation propagates without a fabricated miss or codec failure.
 
 `Error::DistributedTimeout { elapsed }` identifies the selected combined
 get/decode/required-marker read budget. It is classified as `TimedOut`, does not
-trip a transport circuit, and canonical reads preserve it. Origin/legacy fallback
-retains the configured suppression policy. Real provider causes remain available
+trip a transport circuit. Reads and origin lookup share the configured
+transport-rethrow policy: a hard timeout is preserved when rethrow is enabled
+and otherwise degrades to a miss or eligible fallback. Real provider causes remain available
 through typed operation/receipt errors. Codecs and read deadlines do not declare
 the transport unhealthy. Breaker duration is zero (disabled) by default.
 
@@ -90,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(facts.recv().await?, LayerEvent::Memory(MemoryEvent::Set {
         key: "answer".into(),
     }));
-    assert_eq!(cache.read("answer", None).await?.value(), Some(&42));
+    assert_eq!(cache.try_get("answer").await?.as_ref(), Some(&42));
     assert_eq!(facts.recv().await?, LayerEvent::Memory(MemoryEvent::Hit {
         key: "answer".into(), stale: false,
     }));

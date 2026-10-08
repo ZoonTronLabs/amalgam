@@ -241,7 +241,7 @@ async fn physical_expiry_and_capacity_report_the_actual_cause_and_value() {
             .await
             .unwrap();
         clock.advance(Duration::from_secs(61));
-        assert!(!cache.read("expiry", None).await.unwrap().has_value());
+        assert!(cache.try_get("expiry").await.unwrap().is_none());
         let event = events.try_recv().unwrap();
         assert_eq!(event.reason(), MemoryEvictionReason::Expired);
         assert_eq!(*event.value(), 8);
@@ -296,7 +296,7 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
             .await
             .unwrap();
         // Clear visibility is immediate; unbounded physical extraction is lazy.
-        assert!(!cache.read("a", None).await.unwrap().has_value());
+        assert!(cache.try_get("a").await.unwrap().is_none());
         cache.run_pending_tasks().await.unwrap();
         let mut values = Vec::new();
         for _ in 0..2 {
@@ -649,7 +649,7 @@ struct PausedWrite {
 }
 #[async_trait::async_trait]
 impl DistributedCache for PausedWrite {
-    async fn get(&self, _: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {

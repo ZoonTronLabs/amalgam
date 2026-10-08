@@ -92,7 +92,7 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
         .wait()
         .await
         .unwrap();
-    assert!(!second.read("raw", None).await.unwrap().has_value());
+    assert!(second.try_get("raw").await.unwrap().is_none());
     first.shutdown().await.unwrap();
     second.shutdown().await.unwrap();
 }
@@ -111,7 +111,7 @@ async fn invalid_legacy_tags_are_visible_as_a_typed_error_and_cannot_be_committe
         )
         .await;
     assert!(matches!(result, Err(amalgam::Error::Tag(TagError::Blank))));
-    assert!(!cache.read("raw", None).await.unwrap().has_value());
+    assert!(cache.try_get("raw").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 
@@ -161,10 +161,7 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
         .unwrap()
         .unwrap();
     cache.flush_pending().await.unwrap();
-    assert_eq!(
-        cache.read("scope:raw", None).await.unwrap().value(),
-        Some(&8)
-    );
+    assert_eq!(cache.try_get("scope:raw").await.unwrap().as_ref(), Some(&8));
     cache.shutdown().await.unwrap();
 }
 

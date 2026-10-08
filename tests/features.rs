@@ -184,7 +184,7 @@ struct FlakyL2 {
 
 #[async_trait]
 impl DistributedCache for FlakyL2 {
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
         if self.down.load(Ordering::SeqCst) {
             return Err(amalgam::Error::Distributed("down".into()));
         }
@@ -402,8 +402,8 @@ async fn registry_resolves_named_caches_independently() {
     // The two named caches are independent stores.
     alpha.set("k", 1).await.unwrap();
     beta.set("k", 2).await.unwrap();
-    assert_eq!(alpha.try_get("k", None).await.value(), Some(&1));
-    assert_eq!(beta.try_get("k", None).await.value(), Some(&2));
+    assert_eq!(alpha.try_get("k").await.unwrap().as_ref(), Some(&1));
+    assert_eq!(beta.try_get("k").await.unwrap().as_ref(), Some(&2));
 
     // `get_or_create` builds exactly once: a second call returns the existing
     // cache without invoking the builder again.
@@ -423,7 +423,7 @@ async fn registry_resolves_named_caches_independently() {
         "gamma was built only once"
     );
     assert_eq!(
-        gamma2.try_get("k", None).await.value(),
+        gamma2.try_get("k").await.unwrap().as_ref(),
         Some(&7),
         "the second get_or_create returned the same gamma cache"
     );

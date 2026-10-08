@@ -31,10 +31,10 @@ fn an_abandoned_request_releases_its_capture_without_invoking_the_factory() {
         }),
     );
     assert!(weak.upgrade().is_some());
-    assert!(!ready(cache.read("abandoned", None)).unwrap().has_value());
+    assert!(ready(cache.try_get("abandoned")).unwrap().is_none());
     drop(request);
     assert!(weak.upgrade().is_none());
-    assert!(!ready(cache.read("abandoned", None)).unwrap().has_value());
+    assert!(ready(cache.try_get("abandoned")).unwrap().is_none());
 }
 
 #[test]
@@ -123,7 +123,7 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
         .tags(["valid", " "])
         .await;
     assert!(invalid.is_err());
-    assert!(!cache.read("invalid", None).await.unwrap().has_value());
+    assert!(cache.try_get("invalid").await.unwrap().is_none());
     let cancellation = CancellationSource::new();
     cancellation.cancel();
     let factory_calls = calls.clone();
@@ -144,7 +144,7 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(!cache.read("cancelled", None).await.unwrap().has_value());
+    assert!(cache.try_get("cancelled").await.unwrap().is_none());
     cache.shutdown().await.unwrap();
 }
 
@@ -174,7 +174,7 @@ fn native_request_keeps_captures_lazy_and_runs_the_factory_on_the_caller() {
     drop(request);
     assert!(weak.upgrade().is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(!cache.read("abandoned", None).unwrap().has_value());
+    assert!(cache.try_get("abandoned").execute().unwrap().is_none());
 
     let caller = std::thread::current().id();
     let created = cache
@@ -204,7 +204,7 @@ fn native_supplied_value_rejects_invalid_tags_and_cancellation_without_writing()
         .tags(["valid", " "])
         .execute();
     assert!(matches!(invalid, Err(Error::Tag(_))));
-    assert!(!cache.read("invalid", None).unwrap().has_value());
+    assert!(cache.try_get("invalid").execute().unwrap().is_none());
     let cancellation = CancellationSource::new();
     cancellation.cancel();
     let cancelled = cache
@@ -217,6 +217,6 @@ fn native_supplied_value_rejects_invalid_tags_and_cancellation_without_writing()
             reason: FactoryCancellationReason::CallerCancelled
         })
     ));
-    assert!(!cache.read("cancelled", None).unwrap().has_value());
+    assert!(cache.try_get("cancelled").execute().unwrap().is_none());
     cache.shutdown().unwrap();
 }

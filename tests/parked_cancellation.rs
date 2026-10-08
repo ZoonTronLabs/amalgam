@@ -63,7 +63,7 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
             reason: FactoryCancellationReason::CallerCancelled
         })
     ));
-    assert!(!cache.read("parked", None).await.expect("read").has_value());
+    assert!(cache.try_get("parked").await.expect("read").is_none());
     assert_eq!(
         cache
             .get_or_set(

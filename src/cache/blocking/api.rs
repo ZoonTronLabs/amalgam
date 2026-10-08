@@ -81,47 +81,28 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     pub fn ready(&self) -> Result<BackplaneReadiness> {
         self.runtime.run(self.cache.ready())
     }
-    /// Canonical fallible read with no factory.
-    pub fn read(
+    pub(in crate::cache) fn execute_read(
         &self,
-        key: impl AsRef<str>,
+        key: &str,
         options: Option<EntryOptions>,
-    ) -> Result<MaybeValue<V>> {
-        self.cache.native_read(key.as_ref(), options, &self.runtime)
+        token: Option<FactoryCancellation>,
+    ) -> Result<Option<V>> {
+        self.cache.native_read(key, options, token, &self.runtime)
     }
-    /// Read with explicit caller cancellation.
-    pub fn read_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<MaybeValue<V>> {
-        self.runtime
-            .run(self.cache.read_cancellable(key, options, token))
+    /// Lazily reads L1/L2; execute() returns a value, miss or typed error.
+    pub fn try_get<K: AsRef<str>>(&self, key: K) -> super::super::BlockingTryGetRequest<'_, K, V> {
+        super::super::BlockingTryGetRequest::new(self, key)
     }
-    /// Fallible read retaining an explicit fallback value.
-    pub fn read_or_default(
+    /// Lazily reads L1/L2, returning the supplied value on a successful miss.
+    pub fn get_or_default<K: AsRef<str>>(
         &self,
-        key: impl AsRef<str>,
+        key: K,
         value: V,
-        options: Option<EntryOptions>,
-    ) -> Result<V> {
-        self.runtime
-            .run(self.cache.read_or_default(key, value, options))
-    }
-    /// Existing compatibility read policy; canonical read preserves failures.
-    pub fn try_get(&self, key: impl AsRef<str>, options: Option<EntryOptions>) -> MaybeValue<V> {
-        self.runtime.run(self.cache.try_get(key, options))
-    }
-    /// Existing compatibility default-read policy.
-    pub fn get_or_default(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-    ) -> V {
-        self.runtime
-            .run(self.cache.get_or_default(key, value, options))
+    ) -> BlockingRequest<'_, super::super::GetOrDefaultRequest<'_, K, V>> {
+        BlockingRequest {
+            runtime: &self.runtime,
+            request: self.cache.get_or_default(key, value),
+        }
     }
     /// Lazily retrieves a value from a native factory or `source::value`.
     /// Ordinary factories retain direct caller-thread execution on `execute()`.
@@ -132,15 +113,15 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     ) -> super::BlockingGetOrSetRequest<'_, K, S, V> {
         super::BlockingGetOrSetRequest::new(self, key, source)
     }
-    pub(super) fn retrieve<F>(
+    pub(super) fn retrieve<F, T: super::super::get_request::Output<V>>(
         &self,
         key: &str,
         factory: F,
-        options: Option<EntryOptions>,
+        options: Option<Box<EntryOptions>>,
         tags: Box<[Tag]>,
-        fallback: MaybeValue<V>,
+        fallback: Option<V>,
         token: Option<FactoryCancellation>,
-    ) -> Result<CacheValue<V>>
+    ) -> Result<T>
     where
         F: FnOnce(FactoryContext<V>) -> std::result::Result<V, FactoryError> + Send + 'static,
     {
@@ -148,7 +129,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
             Some(_) => CallerCancellation::Explicit,
             None => CallerCancellation::Absent,
         };
-        let default_present = fallback.has_value();
+        let default_present = fallback.is_some();
         self.cache.native_origin_lazy(
             key,
             || {
@@ -323,19 +304,5 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     /// Immutable finite marker observation repair stage.
     pub fn marker_snapshot_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
         self.cache.marker_snapshot_recovery_ticket(kind)
-    }
-
-    /// Default only after a successful miss; cancellation remains an error.
-    pub fn read_or_default_cancellable(
-        &self,
-        key: impl AsRef<str>,
-        value: V,
-        options: Option<EntryOptions>,
-        token: FactoryCancellation,
-    ) -> Result<V> {
-        self.runtime.run(
-            self.cache
-                .read_or_default_cancellable(key, value, options, token),
-        )
     }
 }

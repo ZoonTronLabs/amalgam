@@ -78,12 +78,7 @@ enum Lookup {
 impl Lookup {
     async fn value(self, cache: &Cache<u64>) -> u64 {
         match self {
-            Self::Read => cache
-                .read("l2-json", None)
-                .await
-                .unwrap()
-                .into_value()
-                .unwrap(),
+            Self::Read => cache.try_get("l2-json").await.unwrap().unwrap(),
             Self::GetOrSet => cache
                 .get_or_set(
                     "l2-json",

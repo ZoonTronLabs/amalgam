@@ -1,6 +1,7 @@
 //! The lazy query may contain an unpinned input that opts out of Unpin.
 use amalgam::{Cache, Error};
 use std::future::Future;
+use std::future::IntoFuture;
 use std::marker::PhantomPinned;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -24,9 +25,9 @@ fn creating_and_dropping_a_read_does_not_access_the_key_or_admit_work() {
         calls: calls.clone(),
         _pin: PhantomPinned,
     };
-    drop(cache.read(key(), None));
+    drop(cache.try_get(key()).into_future());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let query = cache.read(key(), None);
+    let query = cache.try_get(key()).into_future();
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     cache.close();
     let mut query = std::pin::pin!(query);

@@ -2,6 +2,7 @@
 use amalgam::{
     Cache, CloneError, EntryOptions, Error, FactoryCancellationReason, provider::ValueCloner,
 };
+use std::future::IntoFuture;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -99,13 +100,7 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
         .await
         .unwrap();
     assert_eq!(
-        cache
-            .read("key", None)
-            .await
-            .unwrap()
-            .into_value()
-            .unwrap()
-            .0,
+        cache.try_get("key").into_future().await.unwrap().unwrap().0,
         1
     );
     gate.armed.store(true, Ordering::SeqCst);
@@ -115,7 +110,7 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
             .enable_all()
             .build()
             .unwrap()
-            .block_on(reading.read("key", None))
+            .block_on(reading.try_get("key").into_future())
     });
     tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
         .await

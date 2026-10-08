@@ -1,4 +1,4 @@
-# Performance gates
+# Reproducible performance checks
 
 Run `python3 benches/run-scaling.py --gate hot` from a checkout with Rust and
 .NET 10 installed. The default is seven alternating process pairs; use
@@ -31,11 +31,14 @@ are aggregate elapsed time divided by all completed operations, rather than
 per-request latency. Rust allocations use a thread-local allocator counter;
 .NET reports allocated bytes, which are a different unit.
 
-Release Rust is compared with fully optimized .NET JIT code. Tiered compilation
-is disabled in reference processes to keep tier transitions outside the timed
-work. Seven medians and ranges are reported; small changes within two percent
-need more evidence. Source and binary fingerprints make the report reproducible;
-the identity includes this Python driver and excludes generated C# files.
+Release Rust is compared with FusionCache 2.9.0 using normal .NET tiered
+compilation and Dynamic PGO. Inherited JIT overrides are removed. Both runtimes
+warm each scenario for at least three seconds and require the last five timing
+windows to have max/min <=1.10. Unsettled warmup fails qualification. TC=0 runs
+are separate diagnostics. At least three alternating pairs are required; seven
+are the default. Reports include medians, ranges and source/binary fingerprints,
+including the driver and excluding generated C# files. Small changes within two
+percent need more evidence.
 
 The `hot` gate requires zero Rust allocations on warmed hits, async/sync
 single-thread and same-key eight-thread costs at most half of FusionCache, and
@@ -51,7 +54,9 @@ FusionCache with at most six allocations. `--gate all` also requires replacement
 and in-memory L2 plus JSON at most the FusionCache cost. L2 allocations are
 reported separately; the zero-allocation limit applies to warmed L1 hits.
 `--gate report` records all measurements without enforcing speed ratios. CI
-enforces `--gate all` for both `read` and `get-or-set`.
+records `--gate all` failures for both `read` and `get-or-set` in the informational
+FusionCache job. These budgets remain targets for 0.4.x; they do not block the
+aggregate CI gate.
 
 The report also includes `ready-costs.csv`, a diagnostic breakdown of clock,
 hash, counter and framework costs. Constant clocks isolate framework and
@@ -110,3 +115,20 @@ reports. It uses [perf's DWARF call-graph recording](https://man7.org/linux/man-
 Unavailable tools or incomplete profiles are recorded explicitly. Manual CI
 diagnostics prepare the Linux tool and upload rendered reports; raw samples
 stay on the ephemeral runner. Profile measurements are not performance gates.
+
+## Published-release regression guard
+
+Run `python3 benches/check-release-regression.py --output /absolute/path/outside/the/checkout`.
+This blocking check builds an independent consumer of the actual crates.io
+`amalgam-cache = 0.3.1` package and a consumer of the current checkout, using
+the same pinned Rust 1.88 compiler and shared workload fixture. A small adapter
+accounts for the breaking public API change; operations and timed counts match.
+
+Three alternating pairs cover public L1 read/get_or_set at one/eight workers,
+replacement set, cold factory and in-memory JSON L2 read/get_or_set. Source,
+lockfile and frozen binary hashes accompany the report. Every warmup must settle
+under the policy above. A median candidate/baseline ratio above 1.05 fails; 5%
+is an explicit noise allowance. Missing or unsettled evidence also fails.
+Native-only APIs have no published 0.3.1 equivalent and remain outside this
+baseline comparison. The guard neither demonstrates full FC parity nor closes
+the known FC budgets in [PERFORMANCE](../docs/PERFORMANCE.md).

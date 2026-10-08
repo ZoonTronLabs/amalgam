@@ -2,7 +2,7 @@
 //! Storage admission still excludes writers and checks close before the copy.
 //! Any actual observer or input destructor retains ordinary counted admission.
 use super::plain_ready::{QuietCopy, QuietReady, QuietStart};
-use super::{Cache, CacheMemory, CacheOperation, Error, LookupMode, MaybeValue, QuietObservation};
+use super::{Cache, CacheMemory, CacheOperation, Error, LookupMode, QuietObservation};
 use std::any::TypeId;
 
 pub(super) enum Inputs {
@@ -10,8 +10,8 @@ pub(super) enum Inputs {
     Destructors,
 }
 impl Inputs {
-    pub(super) fn origin<T, V>(_: &T, tags: &[super::Tag], fallback: &MaybeValue<V>) -> Self {
-        if std::mem::needs_drop::<T>() || !tags.is_empty() || fallback.has_value() {
+    pub(super) fn origin<T, V>(_: &T, tags: &[super::Tag], fallback: &Option<V>) -> Self {
+        if std::mem::needs_drop::<T>() || !tags.is_empty() || fallback.is_some() {
             Self::Destructors
         } else {
             Self::NoCallbacks

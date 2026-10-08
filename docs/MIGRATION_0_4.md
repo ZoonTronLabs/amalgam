@@ -1,8 +1,8 @@
 # Migration from 0.3 to 0.4
 
 Version 0.4 is under development and has not been published. This guide is being
-updated alongside the API; the complete eight-operation migration is a release
-requirement.
+updated for the complete eight-operation API; publication still requires the
+owner-approved release steps and final qualification.
 
 ## Construction
 
@@ -229,8 +229,54 @@ implementation module paths remain accessible, but new examples use the two
 intentional entry points. Imports do not enable a runtime feature or add work
 to a disabled cache path.
 
-## Remaining migration work
+## Immutable L2 provider bytes
 
-The read facade and complete final examples are still being migrated.
-They must be complete before publishing 0.4.0. The 0.3 `MaybeValue` and
-error-swallowing adapters are not the target API.
+`provider::DistributedCache::get` now returns
+`Result<Option<provider::DistributedBytes>>` instead of `Result<Option<Vec<u8>>>`.
+The new type is an immutable owned byte snapshot. A received snapshot must remain
+valid after the provider replaces, removes or expires its stored value.
+
+A provider receiving an owned network buffer can return
+`buffer.map(DistributedBytes::from)`. To read or deserialize, use `as_ref()` or
+borrow it as `&[u8]`. To obtain an independently editable buffer, convert an owned
+snapshot with `Vec::<u8>::from(snapshot)`. Cloning a stored `DistributedBytes`
+shares backing bytes; writes replace the snapshot instead of mutating its buffer.
+
+The `set` input remains `Vec<u8>`. Serializer signatures, encoded snapshots,
+physical namespaces, TTL, marker coordination and fenced-write capabilities keep
+their existing contracts. This provider signature change does not add another
+cache operation or change the wire format. The reference in-memory backend
+avoids a serialized-buffer copy on repeated reads; its first sharing operation
+may still allocate sharing metadata.
+
+## Read-only operations
+
+The sole read operation is `try_get(key)`: awaiting returns `Result<Option<V>>`.
+Use `get_or_default(key, value)` for `Result<V>` with an explicit successful-miss
+fallback. Native callers configure the same request and call `.execute()`.
+
+```rust
+# async fn example(cache: &amalgam::Cache<String>) -> amalgam::Result<()> {
+let value: Option<String> = cache.try_get("profile").await?;
+let fallback = cache.get_or_default("profile", "anonymous".to_owned()).await?;
+let stale = cache.try_get("profile")
+    .options(|o| o.with_allow_stale_on_read_only(true))
+    .await?;
+# let _ = (value, fallback, stale);
+# Ok(())
+# }
+```
+
+`read`, `read_cancellable`, `read_or_default`, `read_or_default_cancellable` and
+error-swallowing legacy read signatures are removed. `MaybeValue` is removed;
+use ordinary `Option`, including `Some(None)` for a present null cached value.
+An explicit cancellation signal uses `.cancellation(token)`. Cancellation and
+configuration/copy failures always retain their typed channel. Transport and
+codec errors follow the selected rethrow options; an open circuit is an admission
+skip. A configured suppressed read fault is a successful miss/fallback.
+
+The supplied default is destroyed inside the admitted operation on a hit, so
+shutdown waits its destructor and cancellation is rechecked before completion.
+A dropped request performs no lookup. Manual Future consumers use
+`.into_future()` before pinning. Read-only operations never call a factory or
+write L2/backplane. See [the documented FC differences](PARITY.md).

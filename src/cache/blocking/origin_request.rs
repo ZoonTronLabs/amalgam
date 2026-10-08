@@ -4,7 +4,7 @@ use crate::cache::inline_cold::Start;
 use crate::cache::origin::{CacheOrigin, OriginKind};
 use crate::{
     EntryOptions, FactoryCancellation, FactoryContext, FactoryError, FactoryProduct, Result, Tag,
-    advanced::CacheValue, advanced::MaybeValue,
+    advanced::CacheValue,
 };
 use std::future::{Future, ready};
 
@@ -63,7 +63,7 @@ struct Input<K, S, V> {
     source: S,
     options: Option<Box<EntryOptions>>,
     tags: std::result::Result<Box<[Tag]>, crate::TagError>,
-    fallback: MaybeValue<V>,
+    fallback: Option<V>,
     token: Option<FactoryCancellation>,
 }
 /// A lazy native retrieval. Configure it before explicit `execute()`.
@@ -87,7 +87,7 @@ impl<'a, K, S, V: Clone + Send + Sync + 'static> BlockingGetOrSetRequest<'a, K, 
                 source,
                 options: None,
                 tags: Ok(Box::from([])),
-                fallback: MaybeValue::none(),
+                fallback: None,
                 token: None,
             },
         }
@@ -125,7 +125,7 @@ macro_rules! settings {
             }
             /// Configures the optional fail-safe value for this request.
             pub fn fail_safe_default(mut self, value: Option<V>) -> Self {
-                self.input.fallback = value.map_or_else(MaybeValue::none, MaybeValue::from_value);
+                self.input.fallback = value;
                 self
             }
             /// Links explicit caller cancellation.
@@ -143,7 +143,7 @@ impl<K: AsRef<str>, S: crate::source::BlockingSource<V>, V: Clone + Send + Sync 
 {
     /// Runs the caller-thread retrieval and returns its cached or supplied value.
     pub fn execute(self) -> Result<V> {
-        complete(self.cache, self.input).map(|value| value.value)
+        complete(self.cache, self.input)
     }
 }
 impl<K: AsRef<str>, S: crate::source::BlockingSource<V>, V: Clone + Send + Sync + 'static>
@@ -151,17 +151,19 @@ impl<K: AsRef<str>, S: crate::source::BlockingSource<V>, V: Clone + Send + Sync 
 {
     /// Runs retrieval and preserves scheduled completion on the same executor.
     pub fn execute(self) -> Result<BlockingCacheValue<V>> {
-        complete(self.cache, self.input).map(|value| self.cache.wrap_value(value))
+        complete::<_, _, _, CacheValue<V>>(self.cache, self.input)
+            .map(|value| self.cache.wrap_value(value))
     }
 }
 fn complete<
     K: AsRef<str>,
     S: crate::source::BlockingSource<V>,
     V: Clone + Send + Sync + 'static,
+    T: crate::cache::get_request::Output<V>,
 >(
     cache: &BlockingCache<V>,
     input: Input<K, S, V>,
-) -> Result<CacheValue<V>> {
+) -> Result<T> {
     let Input {
         key,
         source,
@@ -174,23 +176,26 @@ fn complete<
         Ok(tags) if matches!(S::KIND, OriginKind::Factory) => cache.retrieve(
             key.as_ref(),
             move |context| NativeOrigin::invoke(source, context),
-            options.map(|options| *options),
+            options,
             tags,
             fallback,
             token,
         ),
-        tags => cache.runtime.run(async {
-            match cache.cache.begin_origin_request(
-                key.as_ref(),
-                source.into_async(),
-                options,
-                tags,
-                fallback,
-                token,
-            ) {
-                Start::Ready(result) => result,
-                Start::Pending(work) => work.await,
-            }
-        }),
+        tags => cache
+            .runtime
+            .run(async {
+                match cache.cache.begin_origin_request(
+                    key.as_ref(),
+                    source.into_async(),
+                    options,
+                    tags,
+                    fallback,
+                    token,
+                ) {
+                    Start::Ready(result) => result,
+                    Start::Pending(work) => work.await,
+                }
+            })
+            .map(T::complete),
     }
 }

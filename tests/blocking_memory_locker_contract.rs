@@ -632,7 +632,7 @@ fn caller_cancellation_is_prompt_while_an_opaque_callback_is_still_owned() {
     ));
     caller.join().unwrap();
     reason(&request, FactoryCancellationReason::CallerCancelled);
-    assert_eq!(cache.read("hot", None).unwrap().into_value(), Some(8));
+    assert_eq!(cache.try_get("hot").execute().unwrap(), Some(8));
     cache
         .runtime()
         .run(async { tokio::time::sleep(Duration::from_millis(2)).await });
@@ -944,7 +944,7 @@ fn soft_timeout_background_keeps_the_blocking_acquired_guard_until_commit() {
     assert_eq!(state.returned.load(Ordering::SeqCst), 0);
     gate.release();
     cache.flush_pending().unwrap();
-    assert_eq!(cache.read("soft", None).unwrap().into_value(), Some(2));
+    assert_eq!(cache.try_get("soft").execute().unwrap(), Some(2));
     state.drained();
     cache.shutdown().unwrap();
 }
@@ -981,7 +981,7 @@ fn eager_refresh_uses_nonblocking_try_and_never_blocking_acquisition() {
         1
     );
     cache.flush_pending().unwrap();
-    assert_eq!(cache.read("eager", None).unwrap().into_value(), Some(2));
+    assert_eq!(cache.try_get("eager").execute().unwrap(), Some(2));
     assert_eq!(state.count(Method::Blocking), 1);
     assert_eq!(state.count(Method::Try), 1);
     state.drained();
@@ -1010,7 +1010,7 @@ fn native_marker_factories_use_the_blocking_provider_and_disjoint_keys() {
             .unwrap(),
         7
     );
-    assert_eq!(cache.read("tagged", None).unwrap().into_value(), Some(7));
+    assert_eq!(cache.try_get("tagged").execute().unwrap(), Some(7));
     let requests = state.requests.lock().unwrap();
     assert!(
         requests
