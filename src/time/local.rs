@@ -9,11 +9,13 @@ pub(crate) enum WriteTime {
     Elapsed { now: Timestamp, instant: Instant },
 }
 impl WriteTime {
+    #[inline]
     pub(crate) fn now(self) -> Timestamp {
         match self {
             Self::Clock(now) | Self::Elapsed { now, .. } => now,
         }
     }
+    #[inline]
     pub(crate) fn physical_start(self) -> Instant {
         match self {
             Self::Clock(_) => Instant::now(),
@@ -39,12 +41,14 @@ impl CacheClock {
             Self::Shared(clock) => Arc::clone(clock),
         }
     }
+    #[inline]
     pub(crate) fn now(&self) -> Timestamp {
         match self {
             Self::Local(clock) => clock.now(),
             Self::Shared(clock) => clock.now(),
         }
     }
+    #[inline]
     pub(crate) fn write_time(&self) -> WriteTime {
         match self {
             Self::Local(clock) => {
@@ -68,6 +72,7 @@ pub(crate) struct LocalClock {
     origin: Instant,
 }
 impl LocalClock {
+    #[inline]
     pub(crate) fn sample(&self) -> (Timestamp, Instant) {
         let elapsed = Instant::now();
         (
@@ -93,6 +98,7 @@ pub(crate) enum MonotonicDeadline {
     BeyondRange,
 }
 impl MonotonicDeadline {
+    #[inline]
     pub(crate) fn expired(self, now: Instant) -> bool {
         match self {
             Self::At(deadline) => now >= deadline,
@@ -101,6 +107,7 @@ impl MonotonicDeadline {
     }
 }
 impl LocalClock {
+    #[inline]
     pub(crate) fn deadline(&self, at: Timestamp) -> MonotonicDeadline {
         match self
             .origin

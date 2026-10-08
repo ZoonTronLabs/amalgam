@@ -29,6 +29,7 @@ impl RuntimeRequirement {
             Self::Inline
         }
     }
+    #[inline]
     pub(super) fn validate(self) -> Result<()> {
         match self {
             Self::Inline => Ok(()),

@@ -56,6 +56,7 @@ fn try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
     mutex.try_lock().ok()
 }
 #[allow(deprecated, reason = "Atomic::try_update is unavailable on Rust 1.88")]
+#[inline]
 fn reader_index() -> usize {
     READER.with(|reader| match reader.get() {
         Some(index) => index,

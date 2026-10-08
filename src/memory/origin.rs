@@ -76,6 +76,7 @@ impl Origins {
         }
         Ok((revision, captured))
     }
+    #[inline]
     pub(super) fn advance(&self, key: &str) {
         if self.active.is_empty() {
             return;

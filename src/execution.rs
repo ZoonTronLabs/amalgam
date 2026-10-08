@@ -317,6 +317,7 @@ thread_local! {
     // The shared allocator is touched once per thread, never once per lookup.
     static ACTIVE_STRIPE: Cell<Option<StripeIndex>> = const { Cell::new(None) };
 }
+#[inline]
 fn current_stripe() -> StripeIndex {
     ACTIVE_STRIPE.with(|cached| match cached.get() {
         Some(index) => index,
@@ -365,12 +366,15 @@ impl Scopes {
             }),
         })
     }
+    #[inline]
     pub(crate) fn is_closed(&self) -> bool {
         self.closing.load(Ordering::SeqCst)
     }
+    #[inline]
     fn activity(&self) -> ThreadActivity<'_> {
         self.reserve_activity(Ordering::SeqCst)
     }
+    #[inline]
     fn reserve_activity(&self, publication: Ordering) -> ThreadActivity<'_> {
         let stripe = current_stripe();
         let counter = &self.active[stripe.position];
@@ -403,6 +407,7 @@ impl Scopes {
     }
     /// A synchronous operation has no parked future to own. Count it through
     /// every user callback so close rejects its result and shutdown drains it.
+    #[inline]
     pub(crate) fn inline(&self) -> InlinePermit<'_> {
         let activity = self.activity();
         InlinePermit {
@@ -582,6 +587,7 @@ enum Activity<'a> {
     Shared(&'a Scopes, StripeIndex),
 }
 impl Activity<'_> {
+    #[inline]
     fn registry(&self) -> &Scopes {
         match self {
             Self::Local(registry, _) | Self::Shared(registry, _) => registry,
@@ -593,6 +599,7 @@ struct ThreadActivity<'a> {
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 impl Drop for ThreadActivity<'_> {
+    #[inline]
     fn drop(&mut self) {
         let idle = match self.activity {
             Activity::Local(registry, stripe) => {
@@ -619,6 +626,7 @@ pub(crate) struct OwnedInlinePermit {
     stripe: StripeIndex,
 }
 impl OwnedInlinePermit {
+    #[inline]
     pub(crate) fn admit(&self) -> Result<()> {
         if self.registry.is_closed() {
             Err(Error::CacheClosed)
@@ -670,10 +678,12 @@ impl InlinePermit<'_> {
     }
     /// Cancellation wins over a clone/completion result. Borrowed reservations
     /// are thread-bound and released before handing a miss to owned execution.
+    #[inline]
     pub(crate) fn status(&self, token: Option<&FactoryCancellation>) -> Result<()> {
         status(self.activity.registry(), token)
     }
 }
+#[inline]
 fn status(registry: &Scopes, token: Option<&FactoryCancellation>) -> Result<()> {
     if let Some(reason) = token.and_then(FactoryCancellation::reason) {
         return Err(Error::OperationCancelled { reason });
