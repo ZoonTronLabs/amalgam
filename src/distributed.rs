@@ -347,7 +347,10 @@ fn canonical_i64(bytes: &[u8]) -> Option<(i64, &[u8])> {
         (b'-', rest) => (true, rest),
         _ => (false, bytes),
     };
-    let length = digits.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    let length = digits
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
     if length == 0 || (length > 1 && digits[0] == b'0') {
         return None;
     }
@@ -357,7 +360,10 @@ fn canonical_i64(bytes: &[u8]) -> Option<(i64, &[u8])> {
             .checked_mul(10)?
             .checked_add(i64::from(digit - b'0'))?;
     }
-    Some((if negative { -magnitude } else { magnitude }, &digits[length..]))
+    Some((
+        if negative { -magnitude } else { magnitude },
+        &digits[length..],
+    ))
 }
 
 fn priority_byte(priority: Priority) -> u8 {

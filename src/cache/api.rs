@@ -610,7 +610,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         fallback: Option<V>,
         cancellation: Option<FactoryCancellation>,
     ) -> super::inline_cold::Start<V> {
-        let (observation, full, permit, resolved, origin) = match lookup {
+        let (observation, full, permit, resolved, origin, tags, fallback) = match lookup {
             LookupStart::Ready(ready) => {
                 // These captures can execute user Drop code; keep them within
                 // the same counted operation before its final cancellation check.
@@ -668,12 +668,36 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     );
                     return start;
                 }
-                (
-                    observation.into_owned(),
-                    Arc::<str>::from(key.as_ref()),
+                let raw = key
+                    .strip_prefix(self.inner.key_prefix.as_deref().unwrap_or(""))
+                    .unwrap_or(&key);
+                let deferred = match self.immediate_origin(
+                    raw,
+                    &key,
+                    resolved.as_deref().or(options.as_deref()),
+                    cancellation.as_ref(),
+                    observation,
                     permit,
+                    (origin, tags, fallback),
+                ) {
+                    super::immediate_read::InlineOrigin::Completed(result) => {
+                        drop((resolved, options));
+                        return super::inline_cold::Start::Ready(result);
+                    }
+                    super::immediate_read::InlineOrigin::Continued(work) => {
+                        drop((resolved, options));
+                        return super::inline_cold::Start::Pending(work);
+                    }
+                    super::immediate_read::InlineOrigin::Deferred(deferred) => deferred,
+                };
+                (
+                    deferred.observation.into_owned(),
+                    Arc::<str>::from(key.as_ref()),
+                    deferred.permit,
                     resolved,
-                    origin,
+                    deferred.origin,
+                    deferred.tags,
+                    deferred.fallback,
                 )
             }
         };
