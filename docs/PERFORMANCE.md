@@ -31,10 +31,16 @@ budgets still fail on this runner for one-worker hits (≤0.50×) and set
 (≤0.75×). FC cold warmups did not settle in several pairs, so cold remains
 diagnostic. Two physical cores cannot qualify eight-core scaling.
 
-### M4 Pro — same source, local
+### M4 Pro — same source, local (superseded: ru-RU FusionCache reference)
 
 macOS 26.6.2, 12 physical cores, .NET 10.0.8 (SDK 10.0.300). `--gate all`
 reported no budget failure and every warmup settled for both APIs.
+
+**Superseded.** The FusionCache process inherited a ru-RU user locale. FC 2.9
+compares keys culture-sensitively on hits and L2 reads, so those rows ran
+through ICU collation and understate FC: an FC hit cost ~200 ns instead of
+~84 ns, and an L2 read ~1206 ns instead of ~677 ns. Set and cold rows are
+unaffected. The invariant-reference measurement below replaces this table.
 
 | Workload / 1 worker | read API ratio | get_or_set API ratio |
 |---|---:|---:|
@@ -46,6 +52,47 @@ reported no budget failure and every warmup settled for both APIs.
 
 Distinct-key scaling reached 7.24× (read) and 6.68× (get_or_set) against the
 6× target.
+
+### M4 Pro — invariant FusionCache reference, local
+
+Branch `perf/general-hit-path` (commit `166a4a9`), macOS 26.6.2, 12 physical
+cores, Rust 1.95.0 (local stable; CI uses 1.88), .NET 10.0.8, FC 2.9.0 with
+`DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` and the verified culture recorded in
+the report. Three counterbalanced pairs per API, `--gate all`.
+
+| Workload / 1 worker | read: Amalgam / FC ns | ratio | get_or_set: Amalgam / FC ns | ratio |
+|---|---:|---:|---:|---:|
+| Warm L1 hit, same key | 38.0 / 84.0 | 0.453 | 42.1 / 121.3 | 0.347 |
+| Warm L1 hit, distinct keys | 37.9 / 79.2 | 0.478 | 41.7 / 119.6 | 0.349 |
+| Native hit | 33.4 / 62.5 | 0.534 | 36.5 / 91.3 | 0.399 |
+| Replacement set | 72.8 / 114.1 | 0.638 | 72.7 / 111.9 | 0.650 |
+| L2 JSON | 423.3 / 668.0 | 0.634 | 493.5 / 767.2 | 0.643 |
+| Cold factory | 1022.8 / 1583.8 | 0.646 | 1007.2 / 1599.9 | 0.630 |
+
+Eight workers: read 5.65 / 59.73 ns same key (0.095) and 5.73 / 25.37 ns
+distinct keys (0.226); get_or_set 6.25 / 51.19 (0.122) and 6.22 / 27.21 (0.228).
+Distinct-key scaling 6.60× (read) and 6.71× (get_or_set). The read run fails
+the native-hit budget (0.534 > 0.50), and FC eight-worker distinct warmups did
+not settle in its pairs 2–3 under background load, so that run is diagnostic.
+The get_or_set run settled every warmup and met every budget.
+
+### Linux CI — invariant FusionCache reference
+
+[CI run 37821158960](https://github.com/ZoonTronLabs/amalgam/actions/runs/37821158960)
+on the same branch, GitHub-hosted `ubuntu-latest` with two physical cores
+(CPU model in the `scaling-report` artifact), Rust 1.88.0.
+
+| Workload / 1 worker | read: Amalgam / FC ns | ratio | get_or_set: Amalgam / FC ns | ratio |
+|---|---:|---:|---:|---:|
+| Warm L1 hit, same key | 130.3 / 200.5 | 0.650 | 129.2 / 248.3 | 0.520 |
+| Native hit | 93.6 / 153.9 | 0.608 | 106.3 / 185.6 | 0.573 |
+| Replacement set | 228.4 / 289.5 | 0.789 | 230.8 / 288.6 | 0.800 |
+| L2 JSON | 936.6 / 1602.5 | 0.584 | 1154.2 / 1916.1 | 0.602 |
+| Cold factory (diagnostic) | 2818.8 / 4383.1 | 0.643 | 2760.7 / 4581.2 | 0.603 |
+
+The Linux ratios match the earlier hosted runs, so `LANG=C.UTF-8` CI was not
+affected by the locale issue. One-worker hit (≤0.50×) and set (≤0.75×) budgets
+still fail on Linux; FC cold warmups did not settle, as before.
 
 ### Same-runner improvement over 0.4.1
 
