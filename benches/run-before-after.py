@@ -11,6 +11,7 @@ import platform
 import shutil
 import statistics
 import subprocess
+import tomllib
 
 
 def execute(command, root, env):
@@ -22,6 +23,19 @@ def execute(command, root, env):
 
 def digest(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def locked_packages(lockfile):
+    return {(package["name"], package["version"], package.get("source"), package.get("checksum"))
+            for package in tomllib.loads(lockfile.decode()).get("package", [])}
+
+
+def added_dependencies(baseline_lock, candidate_lock):
+    """Packages the candidate adds, or None when it changes or drops any baseline package."""
+    baseline, candidate = locked_packages(baseline_lock), locked_packages(candidate_lock)
+    if not baseline <= candidate:
+        return None
+    return sorted(f"{name} {version}" for name, version, _, _ in candidate - baseline)
 
 
 def source_identity(root):
@@ -74,6 +88,8 @@ def main():
     parser.add_argument("--toolchain", default="1.88.0")
     parser.add_argument("--rust-target")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allow-added-dependencies", action="store_true",
+                        help="Accept a candidate that only adds locked packages; both builds use its manifest")
     args = parser.parse_args()
     if args.pairs < 3:
         parser.error("at least three counterbalanced pairs are required")
@@ -85,11 +101,20 @@ def main():
     env.update(CARGO_INCREMENTAL="0", CARGO_PROFILE_DEV_DEBUG="0", CARGO_PROFILE_TEST_DEBUG="0")
     baseline_ref = execute(["git", "rev-parse", "--verify", "--end-of-options", f"{args.baseline}^{{commit}}"], root, env).decode().strip()
     # API/workload/dependency changes need their own matched fixture rather than
-    # silently attributing a different benchmark to a storage change.
-    for relative in ["Cargo.toml", "Cargo.lock"]:
-        baseline = execute(["git", "show", f"{baseline_ref}:{relative}"], root, env)
-        if baseline != (root / relative).read_bytes():
-            raise SystemExit(f"Frozen workload/dependencies differ at {relative}")
+    # silently attributing a different benchmark to a storage change. With
+    # --allow-added-dependencies a candidate may add packages: every baseline
+    # package must stay locked at the same version, source and checksum, both
+    # builds use the candidate manifest, and the additions go into the report.
+    added = []
+    manifests = {relative: execute(["git", "show", f"{baseline_ref}:{relative}"], root, env)
+                 for relative in ["Cargo.toml", "Cargo.lock"]}
+    if any(content != (root / relative).read_bytes() for relative, content in manifests.items()):
+        added = added_dependencies(manifests["Cargo.lock"], (root / "Cargo.lock").read_bytes())
+        if not args.allow_added_dependencies or added is None:
+            changed = [relative for relative, content in manifests.items()
+                       if content != (root / relative).read_bytes()]
+            raise SystemExit(f"Frozen workload/dependencies differ at {', '.join(changed)}")
+        print(f"Candidate adds locked packages: {', '.join(added) or 'none'}", flush=True)
     paths = execute(["git", "ls-tree", "-r", "--name-only", baseline_ref, "--", "src"], root, env).decode().splitlines()
     baseline_sources = {path: execute(["git", "show", f"{baseline_ref}:{path}"], root, env)
                         for path in paths if path.endswith(".rs")}
@@ -170,6 +195,7 @@ def main():
     identity = {"baseline_commit": baseline_ref, "platform": platform.platform(),
                 "rust_target": args.rust_target, "rust": execute(["rustc", f"+{args.toolchain}", "-Vv"], root, env).decode(),
                 "driver_sha256": digest(Path(__file__).read_bytes()),
+                "added_dependencies": added,
                 "baseline_sources_sha256": baseline_identity, "candidate_sources_sha256": current_identity,
                 "binaries_sha256": {"baseline": digest(baseline_binary.read_bytes()),
                                     "candidate": digest(current_binary.read_bytes())}}

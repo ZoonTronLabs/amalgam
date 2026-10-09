@@ -10,6 +10,11 @@ on:
         description: Optional full commit SHA for same-runner Rust diagnostics
         required: false
         type: string
+      diagnostic_allow_added_dependencies:
+        description: Let the diagnostics compare a candidate that only adds locked packages
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -268,10 +273,13 @@ jobs:
         if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
         env:
           AMALGAM_DIAGNOSTIC_BASELINE: ${{ inputs.diagnostic_baseline }}
+          AMALGAM_ALLOW_ADDED_DEPENDENCIES: ${{ inputs.diagnostic_allow_added_dependencies }}
         run: |
           [[ "$AMALGAM_DIAGNOSTIC_BASELINE" =~ ^[0-9a-fA-F]{40}$ ]]
           git fetch --no-tags --depth=1 origin "$AMALGAM_DIAGNOSTIC_BASELINE"
-          python3 benches/run-before-after.py --baseline "$AMALGAM_DIAGNOSTIC_BASELINE" --output /tmp/amalgam-before-after
+          extra=()
+          if [[ "$AMALGAM_ALLOW_ADDED_DEPENDENCIES" == "true" ]]; then extra+=(--allow-added-dependencies); fi
+          python3 benches/run-before-after.py --baseline "$AMALGAM_DIAGNOSTIC_BASELINE" --output /tmp/amalgam-before-after "${extra[@]}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnostic_baseline != ''
         with:
