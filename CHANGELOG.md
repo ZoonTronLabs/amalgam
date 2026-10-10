@@ -18,11 +18,15 @@ on [Keep a Changelog](https://keepachangelog.com/).
   keeps every handshake access SeqCst.
 - On Linux, local hits no longer read the precise monotonic clock when a cheap
   bound settles them. `CLOCK_MONOTONIC_COARSE` (through the vDSO, via `rustix`)
-  is the same timeline as `Instant` as of the last tick; anchored to an
-  `Instant` plus eight ticks of slack it gives an instant no earlier than now.
-  A hit uses it only to prove both deadlines still ahead; a decision within the
-  slack of a deadline, or any retirement, reads the precise clock. Kernels with
-  `nohz_full` CPUs or a tick over 10 ms, other platforms and Miri keep the
+  is the same timeline as `Instant` as of the last timekeeping update; anchored
+  to an `Instant` plus a slack of eight ticks but at least one second, it gives
+  an instant no earlier than now while the coarse clock lags by less than the
+  slack. A hit uses it only to prove both deadlines still ahead; a decision
+  within the slack of a deadline, or any retirement, reads the precise clock.
+  The lag bound is an assumption: a timekeeping stall longer than the slack
+  (for example a whole-VM pause, before the next tick) can let a hit near its
+  deadline count as fresh for up to the excess. Kernels with `nohz_full` CPUs
+  or a reported tick outside 0.5-10 ms, other platforms and Miri keep the
   precise clock. On the measured x86 CI VM the coarse read costs 5.6 ns against
   29 ns. New Linux-only dependency: `rustix` (`time` feature).
 - Warm L2 reads over immediate providers complete inline. Providers can declare

@@ -11,7 +11,6 @@ import platform
 import shutil
 import statistics
 import subprocess
-import tomllib
 
 
 def execute(command, root, env):
@@ -25,9 +24,42 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
+DEPENDENCY_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
+
+
+def parse_toml(content):
+    # Imported lazily: only a candidate with a changed manifest needs Python 3.11+.
+    import tomllib
+    return tomllib.loads(content.decode())
+
+
 def locked_packages(lockfile):
     return {(package["name"], package["version"], package.get("source"), package.get("checksum"))
-            for package in tomllib.loads(lockfile.decode()).get("package", [])}
+            for package in parse_toml(lockfile).get("package", [])}
+
+
+def split_dependency_tables(manifest):
+    """The manifest's dependency tables, keyed by (target cfg or None, kind), and the rest."""
+    rest = dict(manifest)
+    tables = {(None, kind): rest.pop(kind) for kind in DEPENDENCY_TABLES if kind in rest}
+    targets = {}
+    for cfg, table in rest.pop("target", {}).items():
+        table = dict(table)
+        tables.update({(cfg, kind): table.pop(kind) for kind in DEPENDENCY_TABLES if kind in table})
+        if table:
+            targets[cfg] = table
+    if targets:
+        rest["target"] = targets
+    return tables, rest
+
+
+def manifest_only_adds_dependencies(baseline_manifest, candidate_manifest):
+    """True when the candidate manifest differs only by new dependency entries."""
+    baseline, baseline_rest = split_dependency_tables(parse_toml(baseline_manifest))
+    candidate, candidate_rest = split_dependency_tables(parse_toml(candidate_manifest))
+    return baseline_rest == candidate_rest and all(
+        candidate.get(key, {}).get(name) == spec
+        for key, table in baseline.items() for name, spec in table.items())
 
 
 def added_dependencies(baseline_lock, candidate_lock):
@@ -89,7 +121,8 @@ def main():
     parser.add_argument("--rust-target")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-added-dependencies", action="store_true",
-                        help="Accept a candidate that only adds locked packages; both builds use its manifest")
+                        help="Accept a candidate whose manifest and lockfile only add dependencies; "
+                             "both builds use its manifest (needs Python 3.11+)")
     args = parser.parse_args()
     if args.pairs < 3:
         parser.error("at least three counterbalanced pairs are required")
@@ -102,15 +135,21 @@ def main():
     baseline_ref = execute(["git", "rev-parse", "--verify", "--end-of-options", f"{args.baseline}^{{commit}}"], root, env).decode().strip()
     # API/workload/dependency changes need their own matched fixture rather than
     # silently attributing a different benchmark to a storage change. With
-    # --allow-added-dependencies a candidate may add packages: every baseline
-    # package must stay locked at the same version, source and checksum, both
-    # builds use the candidate manifest, and the additions go into the report.
+    # --allow-added-dependencies a candidate may add packages: its manifest may
+    # differ only by new dependency entries, every baseline package must stay
+    # locked at the same version, source and checksum, both builds use the
+    # candidate manifest, and the additions and both manifest hashes go into the
+    # report.
     added = []
     manifests = {relative: execute(["git", "show", f"{baseline_ref}:{relative}"], root, env)
                  for relative in ["Cargo.toml", "Cargo.lock"]}
+    candidate_manifest = (root / "Cargo.toml").read_bytes()
     if any(content != (root / relative).read_bytes() for relative, content in manifests.items()):
-        added = added_dependencies(manifests["Cargo.lock"], (root / "Cargo.lock").read_bytes())
-        if not args.allow_added_dependencies or added is None:
+        added = None
+        if args.allow_added_dependencies and manifest_only_adds_dependencies(
+                manifests["Cargo.toml"], candidate_manifest):
+            added = added_dependencies(manifests["Cargo.lock"], (root / "Cargo.lock").read_bytes())
+        if added is None:
             changed = [relative for relative, content in manifests.items()
                        if content != (root / relative).read_bytes()]
             raise SystemExit(f"Frozen workload/dependencies differ at {', '.join(changed)}")
@@ -196,6 +235,8 @@ def main():
                 "rust_target": args.rust_target, "rust": execute(["rustc", f"+{args.toolchain}", "-Vv"], root, env).decode(),
                 "driver_sha256": digest(Path(__file__).read_bytes()),
                 "added_dependencies": added,
+                "manifests_sha256": {"baseline": digest(manifests["Cargo.toml"]),
+                                     "candidate": digest(candidate_manifest)},
                 "baseline_sources_sha256": baseline_identity, "candidate_sources_sha256": current_identity,
                 "binaries_sha256": {"baseline": digest(baseline_binary.read_bytes()),
                                     "candidate": digest(current_binary.read_bytes())}}

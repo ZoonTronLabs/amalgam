@@ -93,7 +93,10 @@ reporting a storage optimization that applies only before reader registration.
 For a storage or execution change, run
 `python3 benches/run-before-after.py --baseline <local-commit> --output /absolute/path/outside/the/checkout`.
 This diagnostic requires identical dependency manifests and compiles the
-current frozen workloads against both source versions. It verifies identical
+current frozen workloads against both source versions. With
+`--allow-added-dependencies` (Python 3.11+) a candidate may differ only by new
+dependency entries in `Cargo.toml` and new locked packages; both builds then use
+its manifest, and the report records the additions and both manifest hashes. It verifies identical
 harness fingerprints, freezes both executables, restores the current source
 before measurement,
 and alternates their order for at least three pairs on the same machine. It

@@ -1,19 +1,25 @@
 //! A cheap upper bound of the monotonic clock for local hit decisions.
 //!
 //! On Linux `CLOCK_MONOTONIC_COARSE` is `CLOCK_MONOTONIC`, the clock behind
-//! [`Instant`], as of the last timer tick: never ahead of it and normally
-//! behind by less than one tick. On the measured x86 CI VM it costs 5.6 ns
-//! against 29 ns for the precise clock. An anchor pairs a coarse reading with a
-//! later `Instant`, so `anchor + (coarse now - coarse anchor) + slack` is no
-//! earlier than the precise clock now. A hit uses that bound only to prove that
-//! a deadline is still ahead; every other decision reads the precise clock.
+//! [`Instant`], as of the last timekeeping update: never ahead of it and
+//! normally behind by up to about two ticks. On the measured x86 CI VM it costs
+//! 5.6 ns against 29 ns for the precise clock. An anchor pairs a coarse reading
+//! with a later `Instant`, so `anchor + (coarse now - coarse anchor) + slack`
+//! is no earlier than the precise clock now while the coarse clock lags by less
+//! than the slack. A hit uses that bound only to prove that a deadline is still
+//! ahead; every other decision reads the precise clock.
 //!
-//! The slack is eight ticks. A tick-driven update can stall while the
-//! timekeeping vCPU is preempted, and the kernel lets another CPU take over
-//! after five stalled ticks. After a whole-VM pause the first overdue tick
-//! catches the coarse clock up. Kernels with `nohz_full` CPUs, where a busy CPU
-//! can stop ticking, or a tick coarser than 10 ms use the precise clock
-//! throughout, as do other platforms and Miri.
+//! That lag is an assumption, not a kernel guarantee. The timekeeping update can
+//! stall: kernels 5.18+ (and 5.15.127+) let another CPU take over after five of
+//! its own ticks, older kernels do not, and after a whole-VM pause or an SMI a
+//! reader can run before the first overdue tick catches up. The slack is
+//! therefore eight ticks but at least one second, far above ordinary stalls; a
+//! hit within it of a deadline reads the precise clock. A stall longer than the
+//! slack can let a hit near its deadline count as fresh for up to the excess,
+//! until the next timekeeping update. Kernels with `nohz_full` CPUs, where a
+//! busy CPU can stop ticking, a reported tick outside 0.5-10 ms, other platforms
+//! and Miri use the precise clock throughout. Without a vDSO the coarse read is
+//! a system call: slower than the precise clock, still correct.
 //!
 //! The anchor is probed when a cache creates its local clock, outside any
 //! reader slot; a hit only reads it.
@@ -52,6 +58,11 @@ mod linux {
     use std::time::{Duration, Instant};
 
     const SLACK_TICKS: u32 = 8;
+    const MIN_SLACK: Duration = Duration::from_secs(1);
+    // Linux reports one tick, 1-10 ms for HZ 1000-100. A much finer resolution
+    // (a compatibility layer reporting its counter frequency) says nothing
+    // about how often the coarse clock actually steps.
+    const MIN_TICK: Duration = Duration::from_micros(500);
     const MAX_TICK: Duration = Duration::from_millis(10);
 
     pub(super) struct Anchor {
@@ -77,16 +88,13 @@ mod linux {
             if nohz_full() {
                 return None;
             }
-            let tick = duration(clock_getres(ClockId::MonotonicCoarse))?;
-            if tick.is_zero() || tick > MAX_TICK {
-                return None;
-            }
+            let tick = tick().filter(|tick| (MIN_TICK..=MAX_TICK).contains(tick))?;
             // Coarse first: the precise reading taken after it cannot be earlier.
             let coarse = duration(clock_gettime(ClockId::MonotonicCoarse))?;
             Some(Self {
                 coarse,
                 precise: Instant::now(),
-                slack: tick * SLACK_TICKS,
+                slack: (tick * SLACK_TICKS).max(MIN_SLACK),
             })
         }
 
@@ -101,6 +109,17 @@ mod linux {
         pub(super) fn slack(&self) -> Duration {
             self.slack
         }
+    }
+
+    /// The coarse clock's step as the kernel reports it.
+    pub(super) fn tick() -> Option<Duration> {
+        duration(clock_getres(ClockId::MonotonicCoarse))
+    }
+
+    /// Whether [`Anchor::probe`] accepts this tick.
+    #[cfg(test)]
+    pub(super) fn usable_tick(tick: Duration) -> bool {
+        (MIN_TICK..=MAX_TICK).contains(&tick)
     }
 
     #[inline]
@@ -125,9 +144,17 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn anchors_unless_cpus_run_tickless() {
-        // Every supported CI kernel ticks at 1-4 ms, so only nohz_full disables it.
-        assert_eq!(linux::prepare().is_some(), !linux::nohz_full());
+    fn anchors_unless_cpus_run_tickless_or_the_tick_is_unusable() {
+        // CI kernels tick at 1-4 ms, so there the coarse path is exercised.
+        let usable = linux::tick().is_some_and(linux::usable_tick);
+        assert_eq!(linux::prepare().is_some(), usable && !linux::nohz_full());
+    }
+
+    #[test]
+    fn slack_is_at_least_one_second() {
+        if let Some(anchor) = linux::prepare() {
+            assert!(anchor.slack() >= std::time::Duration::from_secs(1));
+        }
     }
 
     #[test]
