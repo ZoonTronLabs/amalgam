@@ -12,9 +12,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
   use SeqCst accesses, whose single total order gives the same guarantee: the
   writer sees the reservation or the reader sees the closed gate. On x86 the
   fence was an `mfence`, about 21 ns per admission on a Zen 4 runner against
-  about 3 ns for the `xchg` of a SeqCst publication; on AArch64 both forms cost
-  the same. Under `cfg(loom)` the fences remain, because Loom models SeqCst
-  accesses as AcqRel.
+  about 3 ns for the `xchg` of a SeqCst store; on Apple M4 both forms cost
+  about the same. Loom models SeqCst accesses as AcqRel, so under `cfg(loom)`
+  the gate adds the fences and Loom checks that fenced equivalent; a unit test
+  keeps every handshake access SeqCst.
 - Warm L2 reads over immediate providers complete inline. Providers can declare
   `ReadCompletion::Immediate` and answer `get_immediate` / `read_many_immediate`
   from in-process state; the reference in-memory value and marker stores do. A

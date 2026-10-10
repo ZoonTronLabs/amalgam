@@ -1,17 +1,24 @@
 //! Private reader slots with a single writer admission gate.
 //!
 //! Readers publish a padded count, then check the writer gate. A writer closes
-//! the gate, then scans the published counts. Every access in these Dekker
-//! handshakes (count publication, gate store and load, bitmap of used slots,
-//! waiter interest) is SeqCst, so the single total order of SeqCst operations
-//! prevents both sides from overlooking each other: either the writer observes
-//! the reservation or the reader observes the closed gate. A standalone fence
-//! is not needed. That matters on x86, where `fence(SeqCst)` is an `mfence`:
-//! ~21 ns per admission on a Zen 4 CI runner, against ~3 ns for the `xchg` of
-//! a SeqCst publication. On AArch64 the accesses become `swpal`/`stlr`/`ldar`,
-//! as cheap as the fenced form. Loom models SeqCst accesses as AcqRel, so under
-//! `cfg(loom)` the former SeqCst fences stay and the model checks the fenced
-//! handshake, which these SeqCst accesses only strengthen.
+//! the gate, then scans the published counts. These are Dekker handshakes: each
+//! side stores, then loads what the other side stores. Every access in them
+//! (count publication and scan, gate store and load, bitmap of used slots,
+//! waiter interest) is a `HANDSHAKE` access, SeqCst. The single total order of
+//! SeqCst operations (C++20 [atomics.order]/4) prevents both sides from
+//! overlooking each other: either the writer observes the reservation or the
+//! reader observes the closed gate. No standalone fence is needed. That matters
+//! on x86, where `fence(SeqCst)` is an `mfence`: ~21 ns per admission on a Zen 4
+//! CI runner, against ~3 ns for the `xchg` of a SeqCst store. On AArch64 SeqCst
+//! stores and loads are `stlr`/`ldar`; read-modify-writes are `swpal`/`casal`
+//! only where LSE is enabled at compile time (Apple targets) and calls to
+//! outline-atomics helpers on the default Linux targets.
+//!
+//! Loom models SeqCst accesses as AcqRel, so it cannot check this fence-free
+//! form. Under `cfg(loom)` the `Gate` puts a SeqCst fence between each
+//! handshake store and the load that follows it, and Loom checks that fenced
+//! equivalent. Loom would not notice a handshake access weakened below SeqCst,
+//! so a unit test counts the `HANDSHAKE` accesses instead.
 //! Release/Acquire count handoff orders completed reads before mutable access;
 //! Release/Acquire gate handoff orders completed writes before admitted reads.
 //!
@@ -114,6 +121,42 @@ fn slot_count() -> usize {
             .next_power_of_two()
     })
 }
+/// The ordering of every access in the admission handshakes: SeqCst, never
+/// weaker (module docs). Loom cannot check this; a unit test counts the uses.
+const HANDSHAKE: Ordering = Ordering::SeqCst;
+
+/// In the Loom model only: the SeqCst fence that stands in for the total order
+/// of SeqCst accesses, which Loom does not model.
+#[inline]
+fn model_fence() {
+    #[cfg(loom)]
+    fence(Ordering::SeqCst);
+}
+
+/// The writer admission gate. Closing pairs with a reader's count publication,
+/// reopening with a parked reader's waiter interest. The model fence sits
+/// between each handshake store and the load that follows it.
+struct Gate(AtomicBool);
+impl Gate {
+    fn new() -> Self {
+        Self(AtomicBool::new(false))
+    }
+    /// Writer: close, then scan the published counts.
+    fn close(&self) {
+        self.0.store(true, HANDSHAKE);
+        model_fence();
+    }
+    /// Writer: reopen, then check for waiter interest.
+    fn open(&self) {
+        self.0.store(false, HANDSHAKE);
+        model_fence();
+    }
+    /// Reader: check after publishing a count or waiter interest.
+    fn is_closed(&self) -> bool {
+        model_fence();
+        self.0.load(HANDSHAKE)
+    }
+}
 #[repr(align(128))]
 struct Slot {
     owner: AtomicUsize,
@@ -128,7 +171,7 @@ enum Reservation<'a> {
 }
 pub(crate) struct ReaderSlots<T> {
     slots: Box<[Slot]>,
-    writer: AtomicBool,
+    gate: Gate,
     serial: Mutex<()>,
     waiters: Mutex<()>,
     waiting: AtomicUsize,
@@ -159,7 +202,7 @@ impl<T> ReaderSlots<T> {
                     initialized: AtomicUsize::new(0),
                 })
                 .collect(),
-            writer: AtomicBool::new(false),
+            gate: Gate::new(),
             serial: Mutex::new(()),
             waiters: Mutex::new(()),
             waiting: AtomicUsize::new(0),
@@ -181,7 +224,7 @@ impl<T> ReaderSlots<T> {
             let width = usize::BITS as usize;
             self.slots[index / width * width]
                 .initialized
-                .fetch_or(1 << (index % width), Ordering::SeqCst);
+                .fetch_or(1 << (index % width), HANDSHAKE);
         }
         let local = owner == identity
             || owner == 0
@@ -192,15 +235,12 @@ impl<T> ReaderSlots<T> {
         if local {
             let count = slot.local.load(Ordering::Relaxed);
             let next = count.checked_add(1).expect("reader reservation exhausted");
-            // Only the owner writes `local`; the SeqCst swap is the publication
-            // half of the admission handshake.
-            slot.local.swap(next, Ordering::SeqCst);
+            // Only the owner writes `local`, so a store publishes the count.
+            slot.local.store(next, HANDSHAKE);
             Reservation::Local(slot)
         } else {
             slot.shared
-                .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |count| {
-                    count.checked_add(1)
-                })
+                .fetch_update(HANDSHAKE, Ordering::Relaxed, |count| count.checked_add(1))
                 .expect("shared reader reservations exhausted");
             Reservation::Shared(slot)
         }
@@ -210,9 +250,7 @@ impl<T> ReaderSlots<T> {
             let reservation = ReservationGuard {
                 reservation: self.reserve(),
             };
-            #[cfg(loom)]
-            fence(Ordering::SeqCst);
-            if !self.writer.load(Ordering::SeqCst) {
+            if !self.gate.is_closed() {
                 return ReadGuard {
                     lock: self,
                     #[cfg(loom)]
@@ -227,15 +265,13 @@ impl<T> ReaderSlots<T> {
     }
     fn wait_for_writer(&self) {
         // Waiting interest is published before checking the gate. A writer's
-        // gate clear and interest check are the other SeqCst half of this
+        // gate reopen and interest check are the other half of this
         // handshake. Its notification takes this mutex, so it cannot pass the
         // check-to-park registration window.
-        self.waiting.fetch_add(1, Ordering::SeqCst);
-        #[cfg(loom)]
-        fence(Ordering::SeqCst);
+        self.waiting.fetch_add(1, HANDSHAKE);
         {
             let mut wait = lock(&self.waiters);
-            while self.writer.load(Ordering::SeqCst) {
+            while self.gate.is_closed() {
                 #[cfg(not(loom))]
                 self.changed.wait(&mut wait);
                 #[cfg(loom)]
@@ -250,11 +286,10 @@ impl<T> ReaderSlots<T> {
         // A sparse bitmap visits only slots that have actually been used,
         // regardless of the process-wide reader index or available core count.
         self.slots.chunks(usize::BITS as usize).all(|group| {
-            let mut used = group[0].initialized.load(Ordering::SeqCst);
+            let mut used = group[0].initialized.load(HANDSHAKE);
             while used != 0 {
                 let slot = &group[used.trailing_zeros() as usize];
-                if slot.local.load(Ordering::SeqCst) != 0 || slot.shared.load(Ordering::SeqCst) != 0
-                {
+                if slot.local.load(HANDSHAKE) != 0 || slot.shared.load(HANDSHAKE) != 0 {
                     return false;
                 }
                 used &= used - 1;
@@ -344,9 +379,7 @@ struct WriterHold<'a, T> {
 }
 impl<'a, T> WriterHold<'a, T> {
     fn new(lock: &'a ReaderSlots<T>, serial: MutexGuard<'a, ()>) -> Self {
-        lock.writer.store(true, Ordering::SeqCst);
-        #[cfg(loom)]
-        fence(Ordering::SeqCst);
+        lock.gate.close();
         Self {
             lock,
             _serial: serial,
@@ -355,10 +388,8 @@ impl<'a, T> WriterHold<'a, T> {
 }
 impl<T> Drop for WriterHold<'_, T> {
     fn drop(&mut self) {
-        self.lock.writer.store(false, Ordering::SeqCst);
-        #[cfg(loom)]
-        fence(Ordering::SeqCst);
-        if self.lock.waiting.load(Ordering::SeqCst) != 0 {
+        self.lock.gate.open();
+        if self.lock.waiting.load(HANDSHAKE) != 0 {
             let _wait = lock(&self.lock.waiters);
             self.lock.changed.notify_all();
         }
@@ -532,6 +563,29 @@ mod compatibility_tests {
             .is_err()
         );
         assert_eq!(*lock.try_write().unwrap(), 16_001);
+    }
+
+    /// Loom checks only the fenced equivalent of the admission handshakes, so
+    /// it cannot notice one of their accesses weakened below SeqCst. This
+    /// tripwire counts them instead: the definition, three in `Gate`, three in
+    /// `reserve`, one in `wait_for_writer`, three in `idle` and one when the
+    /// writer reopens the gate.
+    #[test]
+    fn every_handshake_access_stays_sequentially_consistent() {
+        assert_eq!(HANDSHAKE, Ordering::SeqCst);
+        let primitive = include_str!("reader_slots.rs")
+            .split("#[cfg(all(test, not(loom)))]")
+            .next()
+            .expect("primitive source precedes its tests");
+        let uses: usize = primitive
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .map(|line| line.matches("HANDSHAKE").count())
+            .sum();
+        assert_eq!(
+            uses, 12,
+            "a handshake access changed; each must use HANDSHAKE (module docs)"
+        );
     }
 
     #[test]
