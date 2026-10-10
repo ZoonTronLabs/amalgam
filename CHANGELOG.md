@@ -5,6 +5,8 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-10-10
+
 ### Performance
 
 - Reader admission no longer issues a standalone SeqCst fence. The reader-slot
