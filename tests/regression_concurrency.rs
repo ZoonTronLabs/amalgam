@@ -405,6 +405,17 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
             1
         );
     }
+    // Wait for the first eager factory rather than a fixed 40 ms: on a slow
+    // macOS runner the background refresh had not started by then (0 calls).
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("an eager factory started");
+    // The first factory holds the lease until the gate opens; give the other
+    // node time to start a second factory if the locker failed to stop it.
     tokio::time::sleep(Duration::from_millis(40)).await;
     let concurrent_factories = calls.load(Ordering::SeqCst);
     gate.add_permits(2);
