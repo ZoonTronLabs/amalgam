@@ -14,6 +14,13 @@ use amalgam::{
 };
 use tokio::sync::{Semaphore, oneshot};
 
+/// Upper bound for something these tests require to happen: a released flight,
+/// a panic diagnostic, a bounded lock wait, progress without deadlock. A
+/// deadlock or an unbounded wait still fails at this bound; a passing test
+/// finishes as soon as the event happens. Bounds of 60-300 ms failed on GitHub
+/// macOS runners from scheduling delay alone (2026-10-10).
+const LIVENESS: Duration = Duration::from_secs(2);
+
 struct Running(Arc<AtomicUsize>);
 
 impl Running {
@@ -115,7 +122,7 @@ async fn unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide(
     let cache: Cache<i32> = Cache::new();
     let nested_cache = cache.clone();
     let result = tokio::time::timeout(
-        Duration::from_millis(80),
+        LIVENESS,
         cache.get_or_set::<_, _>(
             outer,
             typed_factory(move |ctx| async move {
@@ -157,7 +164,7 @@ async fn distinct_cold_keys_keep_independent_factory_progress() {
                 .await
         }));
     }
-    tokio::time::timeout(Duration::from_millis(300), async move {
+    tokio::time::timeout(LIVENESS, async move {
         for (index, task) in tasks.into_iter().enumerate() {
             assert_eq!(
                 task.await.expect("factory task").expect("origin result"),
@@ -200,7 +207,7 @@ async fn foreground_factory_panics_propagate_and_release_the_flight() {
                 .is_panic()
         );
         let next = tokio::time::timeout(
-            Duration::from_millis(100),
+            LIVENESS,
             cache.get_or_set::<_, _>(
                 "k",
                 typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) }),
@@ -236,7 +243,7 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
             .expect("fresh eager hit"),
         1
     );
-    tokio::time::timeout(Duration::from_millis(100), async {
+    tokio::time::timeout(LIVENESS, async {
         loop {
             if let CacheEvent::BackgroundFactoryError { message, .. } =
                 events.recv().await.expect("background diagnostics")
@@ -251,7 +258,7 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
     clock.advance(Duration::from_secs(10));
     assert_eq!(
         tokio::time::timeout(
-            Duration::from_millis(100),
+            LIVENESS,
             cache.get_or_set::<_, _>(
                 "k",
                 typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) })
@@ -293,7 +300,7 @@ async fn a_configured_memory_lock_timeout_must_bound_a_cold_waiter() {
             false,
         );
     let second = tokio::time::timeout(
-        Duration::from_millis(60),
+        LIVENESS,
         cache
             .get_or_set(
                 "k",
@@ -350,7 +357,7 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
     );
     clock.advance(Duration::from_secs(1)); // Throttle expired while background factory still holds lock.
     let second = tokio::time::timeout(
-        Duration::from_millis(60),
+        LIVENESS,
         cache.get_or_set::<_, _>(
             "k",
             typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(3)) }),
@@ -407,7 +414,7 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
     }
     // Wait for the first eager factory rather than a fixed 40 ms: on a slow
     // macOS runner the background refresh had not started by then (0 calls).
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(LIVENESS, async {
         while calls.load(Ordering::SeqCst) == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -612,7 +619,7 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
     };
     started_rx.await.expect("first factory holds lock");
     let second = tokio::time::timeout(
-        Duration::from_millis(150),
+        LIVENESS,
         cache
             .get_or_set(
                 "k",
