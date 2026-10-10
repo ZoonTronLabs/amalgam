@@ -296,14 +296,10 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         // A ready hit needs the physical key only for the L1 probe; it is
         // assembled without allocation and owned only if work outlives the call.
         let parts = super::KeyParts::new(self.inner.key_prefix.as_ref(), raw);
-        let joined;
-        let full: &str = match parts.prefix() {
-            None => raw,
-            Some(prefix) => {
-                joined = super::PhysicalKey::joined(prefix, raw);
-                &joined
-            }
-        };
+        let joined = parts
+            .prefix()
+            .map(|prefix| super::PhysicalKey::joined(prefix, raw));
+        let full: &str = joined.as_deref().unwrap_or(raw);
         let observation = ReadyObservation::new(
             &self.inner.events,
             &self.inner.name,
@@ -331,10 +327,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         match result {
             Ok(None) => LookupStart::Owned {
                 observation,
-                key: match parts.prefix() {
-                    None => Cow::Borrowed(raw),
-                    Some(_) => Cow::Owned(full.to_owned()),
-                },
+                key: joined.map_or(Cow::Borrowed(raw), |joined| Cow::Owned(joined.into_owned())),
                 permit,
                 resolved: resolved.map(Box::new),
             },

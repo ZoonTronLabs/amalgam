@@ -76,8 +76,9 @@ def default_jit_environment(inherited):
 def reference_environment(base):
     # FusionCache 2.9 compares keys culture-sensitively on hits and L2 reads, so
     # the process culture would otherwise set the reference cost: under ru-RU the
-    # ICU collation made an M4 hit ~2.4x slower than under en-US. Measure the
-    # culture services usually run with: invariant globalization.
+    # ICU collation made an M4 hit ~2.4x slower than under en-US. Pin invariant
+    # globalization so the reference does not depend on the host locale. Removing
+    # LANG/LC_* alone is not enough: on macOS .NET reads the system locale.
     removed = sorted(key for key in base
                      if key.startswith(("DOTNET_SYSTEM_GLOBALIZATION_", "LC_", "LANG")))
     reference = {key: value for key, value in base.items() if key not in removed}
@@ -206,8 +207,8 @@ def main():
                     lines = result.stderr.strip().splitlines()
                     if len(lines) < 4 or not lines[0].startswith("2.9.0+"):
                         raise SystemExit("The reference is not the released FusionCache 2.9.0 package")
-                    if lines[3] != "culture=invariant":
-                        raise SystemExit(f"The reference must run with the invariant culture, got {lines[3]}")
+                    if lines[3] != "culture=invariant globalization=invariant":
+                        raise SystemExit(f"The reference must run with invariant globalization, got {lines[3]}")
                     current = lines[:4]
                     if identity is not None and current != identity:
                         raise SystemExit("The reference package or runtime changed during measurement")
@@ -277,7 +278,7 @@ def main():
             "dotnet": execute(["dotnet", "--version"], root, env).stdout.strip(),
             "dotnet_tiered_compilation": "default", "fusion_identity": identity,
             "removed_jit_override_names": removed_jit_overrides,
-            "dotnet_globalization": "invariant (DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1)",
+            "dotnet_globalization": identity[3] if identity else None,
             "removed_locale_override_names": removed_locale_overrides,
             "fusion_modes": {"fusion": "runtime defaults; gate reference",
                              "fusion_no_tiering": "DOTNET_TieredCompilation=0; diagnostic only"},

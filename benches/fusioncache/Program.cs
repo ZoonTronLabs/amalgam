@@ -119,9 +119,14 @@ internal static class Program
         Console.Error.WriteLine(library.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
         Console.Error.WriteLine(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(library.Location))).ToLowerInvariant());
         Console.Error.WriteLine(System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
-        // FusionCache key checks are culture-sensitive; the harness pins the culture.
+        // FusionCache key checks are culture-sensitive; the harness pins invariant
+        // globalization. The culture name alone cannot prove it: without LANG/LC_*
+        // Linux reports the invariant culture under ICU too. Invariant mode compares
+        // ordinally, while ICU equates these canonically equivalent strings.
         string culture = System.Globalization.CultureInfo.CurrentCulture.Name;
-        Console.Error.WriteLine("culture=" + (culture.Length == 0 ? "invariant" : culture));
+        bool invariant = string.Compare("\u00C5", "A\u030A", StringComparison.InvariantCulture) != 0;
+        Console.Error.WriteLine("culture=" + (culture.Length == 0 ? "invariant" : culture)
+            + " globalization=" + (invariant ? "invariant" : "icu"));
     }
     private static async Task RunMutations()
     {

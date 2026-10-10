@@ -30,8 +30,10 @@ on [Keep a Changelog](https://keepachangelog.com/).
   `#[inline]` for consumers without LTO, and the reference providers hash with
   ahash.
 - Caches with a `key_prefix` no longer allocate the joined key on every L1 read
-  or local write. The joined key is assembled on the stack for the probe and
-  owned only when work outlives the call; L1 and L2 share one physical-key type.
+  or local write when prefix and key together fit in 64 bytes; a longer joined
+  key allocates once instead of twice. The joined key is assembled on the stack
+  for the probe and owned only when work outlives the call; L1 and L2 share one
+  physical-key type.
   M4, `Arc<Vec<_>>` values, medians of three alternating runs: prefixed
   `try_get` 144–149 → 113–114 ns and `get_or_set` 168–170 → 133 ns
   (memory-only and hybrid alike); prefixed `set` of `u64` 129 → 88 ns.
@@ -45,11 +47,12 @@ on [Keep a Changelog](https://keepachangelog.com/).
 
 - The FusionCache reference now runs with invariant globalization
   (`DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`); inherited locale variables are
-  removed and the culture is verified and recorded in `report.json`.
+  removed, and the measured globalization mode is verified and recorded in
+  `report.json`.
   FusionCache 2.9 compares keys culture-sensitively on hits and L2 reads, so the
   process culture changed the reference cost: on the M4 with a ru-RU user
-  locale an FC hit cost ~200 ns instead of ~84 ns, and an L2 read ~1206 ns
-  instead of ~677 ns. Earlier M4 hit and L2 ratios in PERFORMANCE overstate
+  locale an FC hit cost ~200 ns instead of ~84 ns, and an L2 read ~1188 ns
+  instead of ~668 ns. Earlier M4 hit and L2 ratios in PERFORMANCE overstate
   Amalgam's lead accordingly; set and cold rows are unaffected.
 
 ### Provider API additions

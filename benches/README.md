@@ -36,7 +36,8 @@ compilation and Dynamic PGO. Inherited JIT overrides are removed. The .NET
 processes run with invariant globalization: FusionCache compares keys
 culture-sensitively on hits and L2 reads, and under a non-English user locale
 (ICU collation) that alone made an M4 hit ~2.4x slower. Inherited locale
-variables are removed and the verified culture is recorded in the report. Both runtimes
+variables are removed; the reference measures its globalization mode, and the
+harness rejects anything but invariant and records it in the report. Both runtimes
 warm each scenario for at least three seconds and require the last five timing
 windows to have max/min <=1.10. Unsettled warmup fails qualification. TC=0 runs
 are separate diagnostics. At least three alternating pairs are required; seven

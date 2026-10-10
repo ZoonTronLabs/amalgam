@@ -39,7 +39,7 @@ reported no budget failure and every warmup settled for both APIs.
 **Superseded.** The FusionCache process inherited a ru-RU user locale. FC 2.9
 compares keys culture-sensitively on hits and L2 reads, so those rows ran
 through ICU collation and understate FC: an FC hit cost ~200 ns instead of
-~84 ns, and an L2 read ~1206 ns instead of ~677 ns. Set and cold rows are
+~84 ns, and an L2 read ~1188 ns instead of ~668 ns. Set and cold rows are
 unaffected. The invariant-reference measurement below replaces this table.
 
 | Workload / 1 worker | read API ratio | get_or_set API ratio |
@@ -141,6 +141,11 @@ Instrumented allocation/CPU timings are excluded from the timing tables.
 Different operating systems and different source checkpoints are kept separate.
 
 ## M4 Pro read-facade checkpoint — 8 October
+
+**Superseded for FusionCache hit and L2 rows.** This run used the same ru-RU
+user locale as the superseded table above, so FC hits and L2 reads ran through
+ICU collation; compare with the invariant-reference measurement instead. Set
+and cold rows are unaffected.
 
 macOS 26.6.2, 12 physical/logical CPUs; Rust 1.88.0; FC 2.9.0 / .NET 10.0.8
 (SDK 10.0.300). Three counterbalanced process pairs per API, normal tiering/PGO

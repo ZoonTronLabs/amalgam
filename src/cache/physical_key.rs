@@ -1,10 +1,10 @@
 //! Physical keys: a caller key joined with a cache prefix or a distributed
 //! key modifier.
 //!
-//! Ordinary keys are joined inline instead of allocating a `String` for every
-//! access; long keys keep the heap form. A ready L1 hit therefore allocates
-//! nothing for a prefixed cache, and an owned copy is made only when work
-//! outlives the call.
+//! Keys of at most `INLINE_KEY` bytes are joined inline instead of allocating a
+//! `String` for every access; longer keys allocate once. A ready L1 hit with a
+//! prefixed key of that size allocates nothing, and an owned copy is made only
+//! when work outlives the call.
 use std::sync::Arc;
 
 pub(super) const INLINE_KEY: usize = 64;
@@ -32,6 +32,16 @@ impl PhysicalKey<'_> {
         bytes[..first.len()].copy_from_slice(first.as_bytes());
         bytes[first.len()..length].copy_from_slice(second.as_bytes());
         Self::Inline { length, bytes }
+    }
+}
+impl PhysicalKey<'_> {
+    /// The owned text; a heap key moves instead of being copied.
+    #[inline]
+    pub(super) fn into_owned(self) -> String {
+        match self {
+            Self::Owned(key) => key,
+            key => String::from(&*key),
+        }
     }
 }
 impl std::ops::Deref for PhysicalKey<'_> {
@@ -115,7 +125,12 @@ mod tests {
         }
         let prefix: Arc<str> = Arc::from("ref:");
         let ref_key = |raw| KeyParts::new(Some(&prefix), raw).physical();
-        assert_eq!(std::mem::size_of::<KeyParts<'_>>(), 24);
+        assert_eq!(
+            std::mem::size_of::<KeyParts<'_>>(),
+            std::mem::size_of::<std::borrow::Cow<'_, str>>()
+        );
+        assert_eq!(ref_key(&long).into_owned(), format!("ref:{long}"));
+        assert_eq!(ref_key(&fits).into_owned(), format!("ref:{fits}"));
         assert!(matches!(ref_key(&fits), PhysicalKey::Inline { .. }));
         assert!(matches!(ref_key(&long), PhysicalKey::Owned(_)));
         assert!(matches!(

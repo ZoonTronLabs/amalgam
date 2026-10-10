@@ -46,19 +46,19 @@ an in-memory distributed cache with the JSON serializer and skips L1 reads.
 | `get_or_set` through L2 | 946 ns | 1,388 ns | **1.5× faster** |
 | Cold `get_or_set` (runs the factory) ¹ | 2,402 ns | 3,430 ns | **1.4× faster** |
 
-**macOS** — Apple M4 Pro, local
+**macOS** — Apple M4 Pro, local, FusionCache with invariant globalization ([details](docs/PERFORMANCE.md#m4-pro--invariant-fusioncache-reference-local))
 
 | Operation | Amalgam | FusionCache 2.9 | Amalgam is |
 |---|---:|---:|:---|
-| `try_get`, value in memory | 39 ns | 199 ns | **5.1× faster** |
-| `get_or_set`, value in memory | 43 ns | 226 ns | **5.3× faster** |
-| Synchronous `try_get` | 37 ns | 180 ns | **4.8× faster** |
-| Synchronous `get_or_set` | 30 ns | 205 ns | **6.9× faster** |
-| `set` (replace a value) | 78 ns | 115 ns | **1.5× faster** |
-| `try_get` through L2 | 414 ns | 1,188 ns | **2.9× faster** |
-| `get_or_set` through L2 | 518 ns | 1,343 ns | **2.6× faster** |
-| Cold `get_or_set` (runs the factory) | 1,048 ns | 1,769 ns | **1.7× faster** |
-| `try_get`, 8 workers on distinct keys ² | 5.4 ns | 38.0 ns | **7.0× faster** |
+| `try_get`, value in memory | 38 ns | 84 ns | **2.2× faster** |
+| `get_or_set`, value in memory | 42 ns | 121 ns | **2.9× faster** |
+| Synchronous `try_get` | 33 ns | 63 ns | **1.9× faster** |
+| Synchronous `get_or_set` | 37 ns | 91 ns | **2.5× faster** |
+| `set` (replace a value) | 73 ns | 114 ns | **1.6× faster** |
+| `try_get` through L2 | 423 ns | 668 ns | **1.6× faster** |
+| `get_or_set` through L2 | 494 ns | 767 ns | **1.6× faster** |
+| Cold `get_or_set` (runs the factory) | 1,007 ns | 1,600 ns | **1.6× faster** |
+| `get_or_set`, 8 workers on distinct keys ² | 6.2 ns | 27.2 ns | **4.4× faster** |
 
 ¹ FusionCache's cold warmup did not settle on the Linux runner; treat this row
 as diagnostic. ² Aggregate elapsed time divided by completed operations.
