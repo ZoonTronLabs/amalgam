@@ -291,7 +291,7 @@ async fn circuit_breaker_opens_then_auto_recovery_replays_write() {
 
     // Keep the cache alive until the end: the recovery loop holds only a Weak to
     // it, and would stop the moment the cache were dropped.
-    drop(cache);
+    std::mem::drop(cache);
 }
 
 // ---------------------------------------------------------------------------

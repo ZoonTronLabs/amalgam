@@ -87,7 +87,7 @@ fn measure_allocations(work: impl FnOnce()) -> usize {
         Measurement::Counting(count) => count,
         Measurement::Inactive => unreachable!("measurement remains active until guard release"),
     });
-    drop(guard);
+    std::mem::drop(guard);
     count
 }
 

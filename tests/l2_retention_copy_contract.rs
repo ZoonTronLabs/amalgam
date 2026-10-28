@@ -132,7 +132,7 @@ async fn cache_l2_retention_uses_selected_copies_and_preserves_all_metadata() ->
                 .collect::<Vec<_>>(),
             ["alpha", "beta"]
         );
-        drop(record);
+        std::mem::drop(record);
         cache.shutdown().await?;
     }
     Ok(())

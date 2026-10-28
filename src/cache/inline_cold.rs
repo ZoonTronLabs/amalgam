@@ -101,14 +101,14 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             flight.poll_work();
         } else {
             // Unused user captures are dropped while borrowed admission is live.
-            drop((origin, tags, keys));
+            std::mem::drop((origin, tags, keys));
         }
-        drop(unused);
+        std::mem::drop(unused);
         if let Some(completion) = claim.subscription.try_complete() {
             let result = self
                 .inner
                 .complete_inline_value(completion, leader, &options);
-            drop(claim.subscription);
+            std::mem::drop(claim.subscription);
             let result = permit.status(caller.as_ref()).and(result);
             match &result {
                 Ok(value) => {
@@ -147,7 +147,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 inner.complete_inline_value(completion, leader, &options)
             },
         );
-        drop(_entered);
+        std::mem::drop(_entered);
         Start::Pending(pending)
     }
 }
@@ -168,7 +168,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         let initial = self.inline_memory_read(memory, &keys.full, O::KIND);
         let stale = match initial {
             Some(MemoryRead::Fresh(value)) => {
-                drop((origin, tags));
+                std::mem::drop((origin, tags));
                 token.check()?;
                 return Ok(self.inline_hit(keys.full, value));
             }
@@ -193,7 +193,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         token.check()?;
         let stale = match self.inline_memory_read(memory, &keys.full, O::KIND) {
             Some(MemoryRead::Fresh(value)) => {
-                drop((local, version, origin, tags, stale));
+                std::mem::drop((local, version, origin, tags, stale));
                 token.check()?;
                 return Ok(self.inline_hit(keys.full, value));
             }
@@ -240,7 +240,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         )?;
         let local_effect = if product.options.skip_memory_write() {
             let current = memory.skip_borrowed_origin(&keys.full, &version);
-            drop((local, version, entry));
+            std::mem::drop((local, version, entry));
             if current {
                 super::LocalEffect::Skipped
             } else {
@@ -252,10 +252,10 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
             let prepared = memory.prepare_insert(Arc::clone(&keys.full), entry, now);
             let commit = memory.apply_borrowed_origin(prepared, &version);
             // User Drop/observations never run while the factory lock is held.
-            drop((local, version));
+            std::mem::drop((local, version));
             super::LocalEffect::Stored(memory.finish_insert(commit))
         };
-        drop(product.value);
+        std::mem::drop(product.value);
         token.check()?;
         if !matches!(
             local_effect,

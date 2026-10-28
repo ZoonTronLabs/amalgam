@@ -438,7 +438,7 @@ async fn otlp_failed_init_preserves_global_provider() {
         !span.span_context().is_valid(),
         "failed initialization must leave the global provider intact"
     );
-    drop(span);
+    std::mem::drop(span);
     opentelemetry::global::set_tracer_provider(
         opentelemetry::trace::noop::NoopTracerProvider::new(),
     );

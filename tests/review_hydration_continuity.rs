@@ -35,7 +35,7 @@ impl CopyBoundary {
     fn block_once(&self) {
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
-            drop(
+            std::mem::drop(
                 self.release
                     .wait_while(self.released.lock().unwrap(), |released| !*released)
                     .unwrap(),

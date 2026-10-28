@@ -173,7 +173,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     };
                     if opts.skip_memory_write() {
                         memory.invalidate_origin(key);
-                        drop(entry);
+                        std::mem::drop(entry);
                         LocalEffect::Skipped
                     } else {
                         LocalEffect::Stored(memory.insert_value_borrowed(key, entry, time))
@@ -185,7 +185,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             });
             // The incoming representation can have its own destructor even
             // when the stored copy is pinned. Attribute a reentrant close now.
-            drop(value);
+            std::mem::drop(value);
             permit.status(token)?;
             Ok(local)
         })()
@@ -226,8 +226,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     unreachable!("inline origin carries a memory version")
                 }
             };
-            drop(origin);
-            drop(prepared);
+            std::mem::drop(origin);
+            std::mem::drop(prepared);
             return Ok(receipt(if current {
                 LocalEffect::Skipped
             } else {
@@ -244,7 +244,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             }
         };
         // Release local factory coordination before callbacks or value destruction.
-        drop(origin);
+        std::mem::drop(origin);
         Ok(receipt(LocalEffect::Stored(
             memory.finish_insert(committed),
         )))

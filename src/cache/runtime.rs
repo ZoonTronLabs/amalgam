@@ -109,7 +109,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 }
             }
         }
-        drop(seen);
+        std::mem::drop(seen);
         if invalidate {
             self.invalidate_memory_layers()?;
         }
@@ -337,7 +337,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     }
                     BackplaneAction::Set => {
                         if let Some(existing) = existing {
-                            drop(lane_guard);
+                            std::mem::drop(lane_guard);
                             self.passive(key, existing, fence);
                             return Ok(());
                         }

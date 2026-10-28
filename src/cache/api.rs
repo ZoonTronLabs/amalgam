@@ -231,7 +231,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let prepared: Result<Execution<T>> = (|| {
             let span = observation.span();
             if self.operation_scopes().is_closed() {
-                drop(work);
+                std::mem::drop(work);
                 observation.finish(OperationOutcome::from_error(&Error::CacheClosed));
                 return Err(Error::CacheClosed);
             }
@@ -295,7 +295,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             // caller work before the ready path's permit is released.
             match admission {
                 ObservationAdmission::New => {}
-                ObservationAdmission::Inline(permit) => drop(permit),
+                ObservationAdmission::Inline(permit) => std::mem::drop(permit),
             }
             Ok(execution)
         })();
@@ -485,7 +485,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     Ok(()) => error.into(),
                     Err(error) => error,
                 };
-                drop((origin, options, fallback));
+                std::mem::drop((origin, options, fallback));
                 let error = match permit.status(token.as_ref()) {
                     Ok(()) => error,
                     Err(error) => error,
@@ -531,7 +531,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             inputs,
         ) {
             QuietStart::Complete(result) => {
-                drop((make_origin, tags, fallback, options));
+                std::mem::drop((make_origin, tags, fallback, options));
                 return super::inline_cold::Start::Ready(result.map(|value| CacheValue {
                     value,
                     commit: CommitReceipt::Unchanged,
@@ -543,7 +543,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     key,
                     cancellation.as_ref(),
                     move |value| {
-                        drop((make_origin, tags, fallback, options));
+                        std::mem::drop((make_origin, tags, fallback, options));
                         CacheValue {
                             value,
                             commit: CommitReceipt::Unchanged,
@@ -637,7 +637,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 let span = ready.observation.span();
                 let _entered = span.enter();
                 let ready = self.ready_origin(ready, key, make_origin, tags);
-                drop((fallback, options));
+                std::mem::drop((fallback, options));
                 return super::inline_cold::Start::Ready(
                     ready
                         .finish(
@@ -659,7 +659,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             } => {
                 // The native caller has entered its executor before this miss.
                 // Start incremental cleanup once, without a Worker on a hit.
-                drop(self.ready_context());
+                std::mem::drop(self.ready_context());
                 let origin = make_origin();
                 if self.supports_inline_cold(resolved.as_deref().or(options.as_deref())) {
                     let full: Arc<str> = Arc::from(key.as_ref());
@@ -701,11 +701,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     (origin, tags, fallback),
                 ) {
                     super::immediate_read::InlineOrigin::Completed(result) => {
-                        drop((resolved, options));
+                        std::mem::drop((resolved, options));
                         return super::inline_cold::Start::Ready(result);
                     }
                     super::immediate_read::InlineOrigin::Continued(work) => {
-                        drop((resolved, options));
+                        std::mem::drop((resolved, options));
                         return super::inline_cold::Start::Pending(work);
                     }
                     super::immediate_read::InlineOrigin::Deferred(deferred) => deferred,
@@ -764,7 +764,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         let result = match result {
             Ok(mut hit) => {
                 match std::mem::replace(&mut hit.refresh, ReadyRefresh::Complete) {
-                    ReadyRefresh::Complete => drop((make_origin, tags)),
+                    ReadyRefresh::Complete => std::mem::drop((make_origin, tags)),
                     ReadyRefresh::Eager(work) => {
                         let ReadyEager { current, options } = *work;
                         self.worker().eager(
@@ -782,7 +782,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 Ok(hit)
             }
             Err(error) => {
-                drop((make_origin, tags));
+                std::mem::drop((make_origin, tags));
                 Err(error)
             }
         };
@@ -820,11 +820,11 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             inputs,
         ) {
             QuietStart::Complete(result) => {
-                drop((make_origin, tags, fallback, options));
+                std::mem::drop((make_origin, tags, fallback, options));
                 result.map(T::unchanged)
             }
             QuietStart::Ready(ready) => ready.finish(key, cancellation.as_ref(), move |value| {
-                drop((make_origin, options, tags, fallback));
+                std::mem::drop((make_origin, options, tags, fallback));
                 T::unchanged(value)
             }),
             QuietStart::Owned {

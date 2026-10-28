@@ -105,7 +105,7 @@ fn a_new_caller_drives_the_same_pinned_origin_across_option_paths_without_a_runt
         );
         assert!(once(first.as_mut()).is_pending());
         assert_eq!(runs.load(Ordering::SeqCst), 1);
-        drop(first);
+        std::mem::drop(first);
         assert!(
             !dropped.load(Ordering::SeqCst),
             "caller destruction cancelled shared work"
@@ -248,7 +248,7 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
             .into_future(),
     );
     started(first.as_mut(), &runs).await;
-    drop(first);
+    std::mem::drop(first);
     assert!(!token.lock().unwrap().as_ref().unwrap().is_cancelled());
     let mut waiters = Vec::with_capacity(30);
     for _ in 0..30 {
@@ -451,7 +451,7 @@ fn a_waiter_admitted_before_factory_installation_is_not_stranded() {
         wakes.0.load(Ordering::SeqCst) > 0,
         "factory installation must wake the existing lock waiter"
     );
-    drop(first);
+    std::mem::drop(first);
     assert!(!dropped.load(Ordering::SeqCst));
     ready.store(true, Ordering::SeqCst);
     assert!(matches!(once(second.as_mut()), Poll::Ready(Ok(9))));
@@ -489,7 +489,7 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
             .into_future(),
     );
     started(first.as_mut(), &runs).await;
-    drop(first);
+    std::mem::drop(first);
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     source.cancel();
     cache.flush_pending().await.unwrap();
@@ -534,7 +534,7 @@ async fn a_retained_background_panic_preserves_the_supervised_shutdown_cause() {
             .into_future(),
     );
     started(first.as_mut(), &runs).await;
-    drop(first);
+    std::mem::drop(first);
     release.send(()).unwrap();
     let _ = cache.flush_pending().await;
     let Error::Shutdown(report) = cache.shutdown().await.unwrap_err() else {

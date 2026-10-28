@@ -74,7 +74,7 @@ impl ValueCloner<Arc<Value>> for CopyGate {
     fn clone_value(&self, value: &Arc<Value>) -> Result<Arc<Value>, CloneError> {
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
-            drop(
+            std::mem::drop(
                 self.release
                     .wait_while(self.released.lock().unwrap(), |released| !*released)
                     .unwrap(),

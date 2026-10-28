@@ -306,7 +306,7 @@ impl<K: AsRef<str>, V: Clone + Send + Sync + 'static> Future for InvalidationFut
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.get_mut().work)
             .poll(cx)
-            .map(|result| result.map(drop))
+            .map(|result| result.map(std::mem::drop))
     }
 }
 impl<K: AsRef<str>, V: Clone + Send + Sync + 'static> Future

@@ -575,7 +575,7 @@ fn system_clock_and_disabled_recovery_build_on_std_thread() {
             .auto_recovery(no_recovery())
             .try_build()
             .unwrap();
-        drop(cache);
+        std::mem::drop(cache);
     })
     .join()
     .unwrap();

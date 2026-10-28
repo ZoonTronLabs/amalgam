@@ -334,7 +334,7 @@ async fn replacement_survives_old_completion(fail_old: bool) {
         .enqueue_versioned(work(10), fence(1, current.clone(), pin.clone()))
         .unwrap();
     let old = queue.snapshot("key").unwrap();
-    drop(pin);
+    std::mem::drop(pin);
     assert!(
         weak.upgrade().is_some(),
         "queued ticket must pin its original lane"
@@ -371,7 +371,7 @@ async fn replacement_survives_old_completion(fail_old: bool) {
         queue.supersede_through("key", OperationGeneration::new(2)),
         SupersedeOutcome::Removed
     );
-    drop(old);
+    std::mem::drop(old);
     assert!(weak.upgrade().is_none());
 }
 

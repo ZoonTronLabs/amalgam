@@ -244,7 +244,7 @@ mod tests {
                     }
                 })
                 .collect();
-            drop(cache);
+            std::mem::drop(cache);
             let threads: Vec<_> = clones
                 .into_iter()
                 .map(|cache| {
@@ -252,8 +252,8 @@ mod tests {
                     thread::spawn(move || {
                         barrier.wait();
                         match cache {
-                            PublicHandle::Native(handle) => drop(handle),
-                            PublicHandle::Async(handle) => drop(handle),
+                            PublicHandle::Native(handle) => std::mem::drop(handle),
+                            PublicHandle::Async(handle) => std::mem::drop(handle),
                         }
                     })
                 })

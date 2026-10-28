@@ -34,7 +34,7 @@ impl FactoryFeedback {
             .get_or_init(|| Box::new(parking_lot::Mutex::new(None)));
         let previous = cell.lock().replace(adaptation);
         // The lock's temporary guard ended before metadata retirement.
-        drop(previous);
+        std::mem::drop(previous);
     }
     pub(crate) fn take(&self) -> Option<FactoryAdaptation> {
         self.0.get().and_then(|cell| cell.lock().take())

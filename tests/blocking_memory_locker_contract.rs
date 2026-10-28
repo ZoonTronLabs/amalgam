@@ -166,7 +166,7 @@ impl State {
                 .wait_timeout(slots, Duration::from_millis(2))
                 .unwrap();
         }
-        drop(slots);
+        std::mem::drop(slots);
         Ok(self.guard(request.coordination_key().to_owned()))
     }
     async fn asynchronous(
@@ -358,7 +358,7 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
     for (_, request) in requests.iter() {
         reason(request, FactoryCancellationReason::ScopeFinished);
     }
-    drop(requests);
+    std::mem::drop(requests);
     cache.shutdown().unwrap();
     state.drained();
     assert_eq!(state.shutdowns.load(Ordering::SeqCst), 1);
@@ -843,7 +843,7 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
     );
     assert_eq!(state.count(Method::Blocking), 1);
     assert_eq!(state.count(Method::Async), 1);
-    drop(cache);
+    std::mem::drop(cache);
     assert_eq!(
         driver
             .run(asynchronous.get_or_set(
@@ -1036,7 +1036,7 @@ fn native_marker_factories_use_the_blocking_provider_and_disjoint_keys() {
             .any(|(method, r)| *method == Method::Blocking && r.kind() == &MemoryLockKind::Entry)
     );
     assert!(!requests.iter().any(|(method, _)| *method == Method::Async));
-    drop(requests);
+    std::mem::drop(requests);
     state.drained();
     cache.shutdown().unwrap();
 }

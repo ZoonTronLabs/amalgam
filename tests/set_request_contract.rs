@@ -34,9 +34,9 @@ fn request_and_its_unpolled_future_retain_input_without_writing() {
         if convert {
             let future = request.into_future();
             assert!(weak.upgrade().is_some());
-            drop(future);
+            std::mem::drop(future);
         } else {
-            drop(request);
+            std::mem::drop(request);
         }
         assert!(weak.upgrade().is_none());
         assert!(ready(cache.try_get("lazy")).unwrap().is_none());

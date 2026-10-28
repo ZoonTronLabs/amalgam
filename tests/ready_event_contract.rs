@@ -116,7 +116,7 @@ async fn observers_added_after_an_unobserved_hit_receive_the_next_hit() {
     }
     assert_hit(&received, "tenant:key");
     assert_hit(&plugin.0.lock().unwrap(), "tenant:key");
-    drop(registration);
+    std::mem::drop(registration);
     cache.shutdown().await.unwrap();
 }
 
@@ -198,9 +198,9 @@ async fn raw_broadcast_resubscription_after_other_receivers_drop_keeps_emission(
         .unwrap();
     let initial = cache.events().subscribe();
     let retained = initial.resubscribe();
-    drop(initial);
+    std::mem::drop(initial);
     let mut current = retained.resubscribe();
-    drop(retained);
+    std::mem::drop(retained);
     assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
     let mut received = Vec::with_capacity(2);
     while let Ok(event) = current.try_recv() {

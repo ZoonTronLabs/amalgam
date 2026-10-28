@@ -304,7 +304,7 @@ fn mutations(rt: &Runtime) {
             warm.shutdown().await.unwrap_or_else(|error| {
                 panic!("benchmark cache shutdown must complete: {error:?}")
             });
-            drop(warm);
+            std::mem::drop(warm);
             if warmup.record(elapsed, BATCH) {
                 break;
             }
@@ -625,13 +625,13 @@ fn metadata_costs() {
             MetadataCase::Tagged => assert_eq!(source.meta().tags(), std::slice::from_ref(&tag)),
         }
         metadata_cost(&format!("entry_{}", case.label()), || {
-            drop(hint::black_box(fresh()));
+            std::mem::drop(hint::black_box(fresh()));
         });
         metadata_cost(&format!("snapshot_{}", case.label()), || {
-            drop(hint::black_box(source.meta().clone()));
+            std::mem::drop(hint::black_box(source.meta().clone()));
         });
         metadata_cost(&format!("expire_{}", case.label()), || {
-            drop(hint::black_box(source.with_logical_expiration(now)));
+            std::mem::drop(hint::black_box(source.with_logical_expiration(now)));
         });
         let cache = Cache::builder()
             .default_options(options)

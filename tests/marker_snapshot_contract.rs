@@ -395,7 +395,7 @@ async fn nonzero_miss_repairs_independent_distributed_deadlines_without_backplan
     assert_eq!(writes[0].version(), version(1));
     assert_eq!(writes[0].logical_expiration(), time(15));
     assert_eq!(writes[0].physical_expiration(), time(22));
-    drop(writes);
+    std::mem::drop(writes);
     let mut completed = false;
     while let Ok(event) = events.try_recv() {
         if let CacheEvent::MarkerSnapshotWrite {

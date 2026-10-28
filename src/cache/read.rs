@@ -911,7 +911,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             OriginKind::Constant => (Timeout::Infinite, false, "constant"),
         };
         if matches!(timeout,Timeout::After(duration) if duration.is_zero()) {
-            drop(guard);
+            std::mem::drop(guard);
             return self
                 .timeout_fallback(&key, &opts, stale.as_ref(), &default, timeout)
                 .await;
@@ -1152,10 +1152,10 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 match execution.await? {
                     OriginCompletion::Factory(value) => {
                         worker.emit(CacheEvent::BackgroundFactorySuccess { key: success });
-                        drop(value);
+                        std::mem::drop(value);
                     }
                     OriginCompletion::Constant(value) | OriginCompletion::Distributed(value) => {
-                        drop(value)
+                        std::mem::drop(value)
                     }
                 }
                 Ok(())

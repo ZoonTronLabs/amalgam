@@ -209,7 +209,7 @@ impl Waiter {
     fn register(&self, waker: &Waker) {
         let replacement = waker.clone();
         let previous = self.waker.lock().replace(replacement);
-        drop(previous);
+        std::mem::drop(previous);
     }
     fn wake(&self) {
         let waker = self.waker.lock().take();
@@ -262,7 +262,7 @@ impl LaneAcquisition {
             unreachable!("a granted claim was matched");
         };
         let guard = LaneGuard(lane);
-        drop(waiter);
+        std::mem::drop(waiter);
         guard
     }
     fn poll_waiter(&mut self, cx: &mut Context<'_>) -> Poll<LaneGuard> {

@@ -191,7 +191,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
                 Some(work)
             }
         };
-        drop(unused);
+        std::mem::drop(unused);
     }
     /// First poll uses the same pinned allocation as every later driver.
     /// This method never polls or destroys user work inside coordination.
@@ -218,7 +218,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
             let mut work = work;
             match work.as_mut().poll(&mut context) {
                 Poll::Ready(result) => {
-                    drop(work);
+                    std::mem::drop(work);
                     (Some(result), None)
                 }
                 Poll::Pending => (None, Some(work)),
@@ -228,12 +228,12 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
             Ok((Some(result), None)) => self.complete(Terminal::Owned(result)),
             Ok((None, Some(work))) => {
                 if let Some(reason) = self.source().token().reason() {
-                    drop(work);
+                    std::mem::drop(work);
                     self.complete(Terminal::Cancelled(reason));
                 } else {
                     let mut cell = self.cell.lock();
                     cell.state = State::Pending(work);
-                    drop(cell);
+                    std::mem::drop(cell);
                     // A cancel can race the transition back to Pending.
                     if let Some(reason) = self.source().token().reason() {
                         self.cancel(reason);
@@ -263,7 +263,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
                 None
             }
         });
-        drop(retired);
+        std::mem::drop(retired);
         let reason = source.token().reason();
         let terminal = match (reason, terminal) {
             // Backend fencing reports the original typed lease error while its
@@ -273,7 +273,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
                 Terminal::Owned(Err(error @ Error::Lease(crate::provider::LeaseError::Lost))),
             ) => Terminal::Owned(Err(error)),
             (Some(reason), terminal) => {
-                drop(terminal);
+                std::mem::drop(terminal);
                 Terminal::Cancelled(reason)
             }
             (None, terminal) => terminal,
@@ -294,7 +294,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
                 None
             }
         };
-        drop(discarded);
+        std::mem::drop(discarded);
         source.cancel_with(Reason::ScopeFinished);
         execution::finish_tracking(&self.tracking);
         self.notify();
@@ -316,7 +316,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
             }
         };
         if retired.is_some() {
-            drop(retired);
+            std::mem::drop(retired);
             self.request.cancel_with(Reason::ScopeFinished);
             self.notify();
         }
@@ -424,7 +424,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> CancelWork for Flight<T, K> {
         } else {
             None
         };
-        drop(Retirement {
+        std::mem::drop(Retirement {
             _work: work,
             _tracking: tracking,
         });
@@ -439,7 +439,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> CancelWork for Flight<T, K> {
                 None
             }
         });
-        drop(retired);
+        std::mem::drop(retired);
         self.notify();
     }
     fn finished(&self) -> bool {
@@ -504,7 +504,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Drop for Subscription<T, K> {
             };
             (retired, abandoned)
         };
-        drop(retired);
+        std::mem::drop(retired);
         if abandoned {
             self.flight.abandon_start();
         }
@@ -524,7 +524,7 @@ mod tests {
         let first = table.acquire(Arc::from("abandoned"), scopes.clone());
         let first_signal = first.subscription.flight.source().token();
         assert!(first.leader);
-        drop(first);
+        std::mem::drop(first);
         assert!(first_signal.is_cancelled());
         let retry = table.acquire(Arc::from("abandoned"), scopes);
         assert!(retry.leader);

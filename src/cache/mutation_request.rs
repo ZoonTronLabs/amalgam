@@ -62,7 +62,7 @@ pub(super) trait MutationOutput: Send + Unpin + 'static {
 impl MutationOutput for () {
     fn local(_effect: super::LocalEffect) {}
     fn pipeline(receipt: MutationReceipt) {
-        drop(receipt);
+        std::mem::drop(receipt);
     }
 }
 impl MutationOutput for MutationReceipt {

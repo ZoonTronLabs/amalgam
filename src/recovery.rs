@@ -787,8 +787,8 @@ impl AutoRecoveryService {
             .is_some_and(|queued| queued.ticket.generation <= generation)
         {
             let retired = queue.entries.remove(&key);
-            drop(queue);
-            drop(retired);
+            std::mem::drop(queue);
+            std::mem::drop(retired);
             SupersedeOutcome::Removed
         } else {
             SupersedeOutcome::Unchanged
@@ -808,8 +808,8 @@ impl AutoRecoveryService {
             .is_some_and(|queued| queued.ticket.work.timestamp() <= at)
         {
             let retired = queue.entries.remove(&key);
-            drop(queue);
-            drop(retired);
+            std::mem::drop(queue);
+            std::mem::drop(retired);
             SupersedeOutcome::Removed
         } else {
             SupersedeOutcome::Unchanged
@@ -965,8 +965,8 @@ impl AutoRecoveryService {
             .is_some_and(|queued| queued.ticket.id == ticket.id)
         {
             let retired = queue.entries.remove(&key);
-            drop(queue);
-            drop(retired);
+            std::mem::drop(queue);
+            std::mem::drop(retired);
             SupersedeOutcome::Removed
         } else {
             SupersedeOutcome::Unchanged
@@ -989,8 +989,8 @@ impl AutoRecoveryService {
         match queued.remaining {
             Some(0 | 1) => {
                 let retired = queue.entries.remove(&key);
-                drop(queue);
-                drop(retired);
+                std::mem::drop(queue);
+                std::mem::drop(retired);
             }
             Some(remaining) => {
                 queued.remaining = Some(remaining - 1);
@@ -1157,7 +1157,7 @@ impl AutoRecoveryService {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::take(&mut queue.entries)
         };
-        drop(retired);
+        std::mem::drop(retired);
     }
 
     /// Joins worker cancellation deterministically; repeated calls are harmless.

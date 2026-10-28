@@ -30,7 +30,7 @@ fn uncontended_mutations_require_neither_a_runtime_nor_a_waiter_queue() {
         let guard = ready(&mut claim);
         assert!(lane.admission.queue.shard().lock().is_empty());
         assert!(lane.try_lock().is_none());
-        drop(guard);
+        std::mem::drop(guard);
     }
     assert!(lane.try_lock().is_some());
 }
@@ -43,14 +43,14 @@ fn handoff_reserves_fifo_ownership_until_the_waiter_is_polled() {
     let mut second = lane.lock();
     assert!(poll(&mut first).is_pending());
     assert!(poll(&mut second).is_pending());
-    drop(holder);
+    std::mem::drop(holder);
     assert!(lane.try_lock().is_none());
     assert!(poll(&mut second).is_pending());
     let first_guard = ready(&mut first);
     assert!(lane.try_lock().is_none());
-    drop(first_guard);
+    std::mem::drop(first_guard);
     assert!(lane.try_lock().is_none());
-    drop(ready(&mut second));
+    std::mem::drop(ready(&mut second));
     assert!(lane.try_lock().is_some());
     assert!(lane.admission.queue.shard().lock().is_empty());
 }
@@ -65,11 +65,11 @@ fn a_cancelled_waiter_never_reorders_the_remaining_key_queue() {
     assert!(poll(&mut first).is_pending());
     assert!(poll(&mut cancelled).is_pending());
     assert!(poll(&mut last).is_pending());
-    drop(cancelled);
-    drop(holder);
+    std::mem::drop(cancelled);
+    std::mem::drop(holder);
     assert!(poll(&mut last).is_pending());
-    drop(ready(&mut first));
-    drop(ready(&mut last));
+    std::mem::drop(ready(&mut first));
+    std::mem::drop(ready(&mut last));
     assert!(lane.try_lock().is_some());
 }
 
@@ -81,11 +81,11 @@ fn cancelling_an_unpolled_grant_releases_its_real_reservation() {
     let mut second = lane.lock();
     assert!(poll(&mut first).is_pending());
     assert!(poll(&mut second).is_pending());
-    drop(holder);
+    std::mem::drop(holder);
     assert!(lane.try_lock().is_none());
-    drop(first);
+    std::mem::drop(first);
     assert!(lane.try_lock().is_none());
-    drop(ready(&mut second));
+    std::mem::drop(ready(&mut second));
     assert!(lane.try_lock().is_some());
 }
 
@@ -95,10 +95,10 @@ fn dropping_the_last_waiter_restores_the_holders_fast_release() {
     let holder = lane.try_lock().unwrap();
     let mut waiting = lane.lock();
     assert!(poll(&mut waiting).is_pending());
-    drop(waiting);
+    std::mem::drop(waiting);
     assert!(lane.admission.queue.shard().lock().is_empty());
     assert!(lane.try_lock().is_none());
-    drop(holder);
+    std::mem::drop(holder);
     assert!(lane.try_lock().is_some());
 }
 
@@ -113,10 +113,10 @@ fn distinct_keys_in_one_shard_never_wait_for_each_others_io() {
     let mut queued = first.lock();
     assert!(poll(&mut queued).is_pending());
     let mut independent = second.lock();
-    drop(ready(&mut independent));
+    std::mem::drop(ready(&mut independent));
     assert!(poll(&mut queued).is_pending());
-    drop(held);
-    drop(ready(&mut queued));
+    std::mem::drop(held);
+    std::mem::drop(ready(&mut queued));
 }
 
 struct ReentrantWaker {
@@ -165,14 +165,14 @@ fn user_waker_wake_and_destruction_run_after_queue_coordination() {
                 .poll(&mut Context::from_waker(&waker))
                 .is_pending()
         );
-        drop(waker);
+        std::mem::drop(waker);
         if complete {
-            drop(holder);
-            drop(ready(&mut claim));
+            std::mem::drop(holder);
+            std::mem::drop(ready(&mut claim));
             assert_eq!(woke.load(Ordering::SeqCst), 1);
         } else {
-            drop(claim);
-            drop(holder);
+            std::mem::drop(claim);
+            std::mem::drop(holder);
             assert_eq!(woke.load(Ordering::SeqCst), 0);
         }
         assert_eq!(destroyed.load(Ordering::SeqCst), 1);
@@ -198,7 +198,7 @@ async fn concurrent_handoffs_and_cancellations_keep_one_owner() {
                         Poll::Ready(guard) => guard,
                         Poll::Pending => {
                             tokio::task::yield_now().await;
-                            drop(claim);
+                            std::mem::drop(claim);
                             continue;
                         }
                     }
@@ -209,7 +209,7 @@ async fn concurrent_handoffs_and_cancellations_keep_one_owner() {
                 visits.fetch_add(1, Ordering::SeqCst);
                 tokio::task::yield_now().await;
                 assert_eq!(active.fetch_sub(1, Ordering::SeqCst), 1);
-                drop(guard);
+                std::mem::drop(guard);
             }
         }));
     }

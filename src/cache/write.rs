@@ -500,7 +500,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             } else {
                 EffectOutcome::Skipped(SkipReason::Policy)
             };
-            drop(flight);
+            std::mem::drop(flight);
             Ok(CommitReport {
                 local,
                 distributed,

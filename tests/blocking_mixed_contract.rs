@@ -40,7 +40,7 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
         .unwrap();
     let asynchronous = native.as_async().clone();
     let identity = native.instance_id().to_owned();
-    drop(native);
+    std::mem::drop(native);
     assert_eq!(asynchronous.instance_id(), identity);
     assert_eq!(asynchronous.try_get("before").await.unwrap(), Some(7));
     let value = asynchronous

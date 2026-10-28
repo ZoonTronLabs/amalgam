@@ -580,7 +580,7 @@ impl Wake for CancelWake {
 }
 pub(crate) fn finish_tracking(tracking: &parking_lot::Mutex<Option<TrackedCancellation>>) {
     let retired = tracking.lock().take();
-    drop(retired);
+    std::mem::drop(retired);
 }
 /// Field order also preserves drainage when a user destructor unwinds.
 pub(crate) struct Retirement<T> {
@@ -755,7 +755,7 @@ impl<T: Send + 'static> CancelWork for Scope<T> {
             },
         };
         self.source.cancel_with(recorded);
-        drop(retirement);
+        std::mem::drop(retirement);
         let waker = lock(&self.waker).take();
         if let Some(waker) = waker {
             waker.wake();
@@ -835,7 +835,7 @@ impl<T: Send + 'static> Execution<T> {
             match &*state {
                 State::Cancelled(reason) => {
                     let reason = *reason;
-                    drop(state);
+                    std::mem::drop(state);
                     scope.source.cancel_with(reason);
                     return Poll::Ready(Err(Error::OperationCancelled { reason }));
                 }
@@ -865,7 +865,7 @@ impl<T: Send + 'static> Execution<T> {
             if result.is_pending() && cancellation.is_none() {
                 *state = State::Pending(work);
             } else {
-                drop(state);
+                std::mem::drop(state);
                 let retirement = Retirement {
                     _work: work,
                     _tracking: scope.tracking.lock().take(),
@@ -875,7 +875,7 @@ impl<T: Send + 'static> Execution<T> {
                 scope
                     .source
                     .cancel_with(cancellation.unwrap_or(Reason::ScopeFinished));
-                drop(retirement);
+                std::mem::drop(retirement);
             }
             cancellation
         };
@@ -952,20 +952,20 @@ mod tests {
         let collision = scopes.inline();
         super::ACTIVE_STRIPE.with(|cached| cached.set(Some(original)));
         scopes.close();
-        drop(outer);
+        std::mem::drop(outer);
         let mut drain = std::pin::pin!(scopes.drained());
         assert!(
             tokio::time::timeout(Duration::from_millis(5), &mut drain)
                 .await
                 .is_err()
         );
-        drop(inner);
+        std::mem::drop(inner);
         assert!(
             tokio::time::timeout(Duration::from_millis(5), &mut drain)
                 .await
                 .is_err()
         );
-        drop(collision);
+        std::mem::drop(collision);
         tokio::time::timeout(Duration::from_secs(1), drain)
             .await
             .unwrap();
@@ -980,7 +980,7 @@ mod tests {
         let thread = std::thread::spawn(move || {
             arrived.send(()).unwrap();
             released.recv().unwrap();
-            drop(permit);
+            std::mem::drop(permit);
         });
         arrival.recv().unwrap();
         scopes.close();
@@ -1039,12 +1039,12 @@ mod close_drop_cause_tests {
         let closer = std::thread::spawn(move || registry.close());
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(scopes.is_closed());
-        drop(target);
+        std::mem::drop(target);
         let observed = token.reason();
         // Always unblock/join before asserting, including on the old failing code.
         release_tx.send(()).unwrap();
         assert!(closer.join().unwrap());
-        drop(blocker);
+        std::mem::drop(blocker);
         assert_eq!(observed, Some(Reason::CacheShutdown));
     }
 
@@ -1132,11 +1132,11 @@ mod close_drop_cause_tests {
                 let mut current = lock(&execution.owned_scope().state);
                 std::mem::replace(&mut *current, state)
             };
-            drop(pending);
+            std::mem::drop(pending);
             assert_eq!(token.reason(), None);
             execution.cancel(Reason::CacheShutdown);
             assert_eq!(token.reason(), Some(expected));
-            drop(execution);
+            std::mem::drop(execution);
             assert!(scopes.close());
         }
     }
@@ -1209,7 +1209,7 @@ mod tracker_contract_tests {
                     },
                     CancellationSource::new(),
                 );
-                drop(work);
+                std::mem::drop(work);
                 assert!(!scopes.close());
             }
         }
@@ -1242,7 +1242,7 @@ mod tracker_contract_tests {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_ready()
         );
-        drop(work);
+        std::mem::drop(work);
     }
 
     struct WaitInDrop {
@@ -1289,7 +1289,7 @@ mod tracker_contract_tests {
         tokio::time::timeout(Duration::from_secs(1), drain)
             .await
             .unwrap();
-        drop(work);
+        std::mem::drop(work);
     }
 
     struct CountDrop(Arc<AtomicUsize>);
@@ -1335,7 +1335,7 @@ mod tracker_contract_tests {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_ready()
         );
-        drop((first, second));
+        std::mem::drop((first, second));
     }
 }
 

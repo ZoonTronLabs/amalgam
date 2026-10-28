@@ -71,7 +71,7 @@ fn opening_writer_gate_does_not_lose_a_parked_reader() {
         let reader = slots.clone();
         let reader = loom::thread::spawn(move || assert_eq!(*reader.read(), 0));
         loom::thread::yield_now();
-        drop(hold);
+        std::mem::drop(hold);
         reader.join().unwrap();
     });
 }
@@ -84,8 +84,8 @@ fn rejected_writer_and_nested_read_release_actual_reservations() {
         let second = slots.read();
         assert!(slots.try_write().is_none());
         assert_eq!(*second, 7);
-        drop(first);
-        drop(second);
+        std::mem::drop(first);
+        std::mem::drop(second);
         *slots.try_write().unwrap() = 9;
         assert_eq!(*slots.read(), 9);
     });

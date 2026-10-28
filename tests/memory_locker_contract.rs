@@ -107,7 +107,7 @@ impl MemoryLockGuard for Owned {
             active,
             result,
         } = *self;
-        drop(guard);
+        std::mem::drop(guard);
         released.fetch_add(1, Ordering::SeqCst);
         active.fetch_sub(1, Ordering::SeqCst);
         match result {

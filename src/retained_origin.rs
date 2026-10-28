@@ -57,7 +57,7 @@ impl FlightIdentity for OriginIdentity {
             };
             (std::mem::replace(&mut *delivery, next), panic)
         };
-        drop(retired);
+        std::mem::drop(retired);
         panic
     }
 }
@@ -76,7 +76,7 @@ impl OriginIdentity {
             (audience, retired)
         };
         // An error can retain a user-defined source: release it outside the guard.
-        drop(retired.1);
+        std::mem::drop(retired.1);
         retired.0
     }
     fn detach(&self) {

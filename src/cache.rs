@@ -241,7 +241,7 @@ impl<V: Clone + Send + Sync + 'static> Drop for PublicLifetime<V> {
                     if let Err(error) = inner.shutdown().await {
                         tracing::warn!(%error, "cache-owned executor drainage failed");
                     }
-                    drop(retained);
+                    std::mem::drop(retained);
                 });
             }
         }
@@ -536,7 +536,7 @@ impl<V> ReadyLookup<'_, V> {
             Ok(ready) => {
                 // Optional background handoff is consumed by factory lookups;
                 // any unused ownership is reclaimed while the permit is live.
-                drop(ready.refresh);
+                std::mem::drop(ready.refresh);
                 Ok(ReadyValue {
                     value: complete(ready.value),
                     key: ready.key,
@@ -544,7 +544,7 @@ impl<V> ReadyLookup<'_, V> {
                 })
             }
             Err(error) => {
-                drop(complete);
+                std::mem::drop(complete);
                 Err(error)
             }
         };
@@ -640,7 +640,7 @@ enum LocalParticipation {
 impl LocalParticipation {
     fn release(self) {
         match self {
-            Self::Held(guard) => drop(guard),
+            Self::Held(guard) => std::mem::drop(guard),
             Self::UnlockedAfterTimeout | Self::ReplayOnly => {}
         }
     }

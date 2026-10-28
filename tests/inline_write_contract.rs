@@ -125,7 +125,7 @@ fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
         value.is_none(),
         "constructing a write must not store its value"
     );
-    drop(pending);
+    std::mem::drop(pending);
     assert!(
         weak.upgrade().is_none(),
         "an abandoned input must not stay in storage"

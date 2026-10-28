@@ -230,7 +230,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             }
         };
         let Some(lookup) = polled else {
-            drop(entered);
+            std::mem::drop(entered);
             return deferred(observation, permit, origin, tags, fallback);
         };
         let result = match lookup {
@@ -255,7 +255,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                     },
                     guard,
                 };
-                drop(entered);
+                std::mem::drop(entered);
                 return InlineOrigin::Continued(self.execute_observed(
                     observation.into_owned(),
                     None,
@@ -265,19 +265,19 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 ));
             }
             Ok(OriginLookup::Served(observed)) => {
-                drop((origin, tags, fallback));
+                std::mem::drop((origin, tags, fallback));
                 Ok(observed)
             }
             Ok(OriginLookup::Refresh { options, current }) => {
-                drop(fallback);
+                std::mem::drop(fallback);
                 worker.refresh_and_serve(key, origin, tags, &options, current)
             }
             Err(error) => {
-                drop((origin, tags, fallback));
+                std::mem::drop((origin, tags, fallback));
                 Err(error)
             }
         };
-        drop(entered);
+        std::mem::drop(entered);
         let result = match lookup_cancellation.reason() {
             Some(reason) => Err(Error::OperationCancelled { reason }),
             None => result,

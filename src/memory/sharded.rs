@@ -553,7 +553,7 @@ mod tests {
             });
             started_rx.recv().unwrap();
             std::thread::sleep(Duration::from_millis(20));
-            drop(writer);
+            std::mem::drop(writer);
             let sampled = sampled.join().unwrap();
             assert_eq!(sampled, crate::entry::Freshness::Stale);
         }

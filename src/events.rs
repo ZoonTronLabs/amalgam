@@ -876,7 +876,7 @@ mod layer_tests {
                 key: Arc::from("after")
             })
         );
-        drop(receiver);
+        std::mem::drop(receiver);
         hub.emit_layer_lazy(|| panic!("last receiver dropped must not build a payload"));
     }
 }

@@ -87,6 +87,6 @@ impl<T> Drop for InlineFrame<T> {
             .reason()
             .unwrap_or(Reason::CallerDropped);
         self.source.cancel_with(reason);
-        drop(work);
+        std::mem::drop(work);
     }
 }

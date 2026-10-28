@@ -48,7 +48,7 @@ fn named_metrics_attribute_sessions_and_bound_historical_labels() {
             elapsed: Duration::from_millis(1),
             level: Some(CacheLevel::Memory),
         });
-        drop(host);
+        std::mem::drop(host);
     }
     for index in 0..1_000 {
         let events = Events::default();
@@ -61,7 +61,7 @@ fn named_metrics_attribute_sessions_and_bound_historical_labels() {
         events.emit(CacheEvent::Miss {
             key: Arc::from(format!("secret-key-{index}")),
         });
-        drop(host);
+        std::mem::drop(host);
     }
     assert_eq!(budget.assigned_names(), 2);
     assert_eq!(&*budget.label_for("unreasonably-long-name"), "other");
@@ -286,7 +286,7 @@ mod tracing_contract {
         ));
         let span = opentelemetry::global::tracer("verify-original").start("verify-original");
         assert_eq!(span.span_context().trace_id(), TraceId::from(42_u128));
-        drop(span);
+        std::mem::drop(span);
         original.shutdown().unwrap();
     }
 }

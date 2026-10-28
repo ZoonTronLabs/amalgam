@@ -366,7 +366,7 @@ async fn lag_is_bounded_independent_and_remaining_records_drain_after_producer_c
     assert_eq!(slow.lost_events(), 2);
     assert_eq!(fast.lost_events(), 0);
     cache.shutdown().await.unwrap();
-    drop(cache);
+    std::mem::drop(cache);
     assert_eq!(*slow.recv().await.unwrap().value(), 4);
     assert!(matches!(slow.try_recv(), Err(EvictionReceiveError::Closed)));
 }
@@ -619,7 +619,7 @@ fn last_receiver_releases_retained_values_after_queue_unlock() {
             .wait()
             .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        drop(events);
+        std::mem::drop(events);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         cache.shutdown().unwrap();
     });
@@ -645,7 +645,7 @@ fn standalone_store_preserves_original_entry_identity() {
                 .build()
                 .unwrap();
             runtime.block_on(store.insert_at(Arc::from("k"), entry.clone(), clock.now()));
-            drop(runtime.block_on(store.remove("k")));
+            std::mem::drop(runtime.block_on(store.remove("k")));
             assert!(events.try_recv().unwrap().entry().is_same_instance(&entry));
         }
     });

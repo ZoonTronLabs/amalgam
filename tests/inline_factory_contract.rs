@@ -130,7 +130,7 @@ fn dropping_a_caller_keeps_the_pinned_factory_for_a_new_driver() {
             .into_future(),
     );
     assert!(once(caller.as_mut()).is_pending());
-    drop(caller);
+    std::mem::drop(caller);
     assert!(!dropped.load(Ordering::SeqCst));
     ready.store(true, Ordering::SeqCst);
     let value = ready_value(&cache);
@@ -283,7 +283,7 @@ fn a_retained_factory_token_does_not_pin_a_completed_value() {
     ))
     .unwrap();
     let weak = Arc::downgrade(&value);
-    drop(value);
+    std::mem::drop(value);
     ready(cache.remove("drop").with_receipt()).unwrap();
     assert!(weak.upgrade().is_none());
     assert_eq!(count.load(Ordering::SeqCst), 1);

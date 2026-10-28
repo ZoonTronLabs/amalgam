@@ -310,7 +310,7 @@ mod tests {
                 )
             );
             assert!(!store.skip_borrowed_origin(&key, &old));
-            drop(old);
+            std::mem::drop(old);
             let current = store
                 .capture_borrowed_origin_from(&key, Some(revision.clone()))
                 .unwrap();
@@ -319,7 +319,7 @@ mod tests {
                 store.finish_insert(store.apply_borrowed_origin(write, &current)),
                 super::super::MemoryAdmission::Admitted
             );
-            drop(current);
+            std::mem::drop(current);
             // A retained factory token must not keep idle revision registration.
             store.invalidate_origin(&key);
             assert_eq!(

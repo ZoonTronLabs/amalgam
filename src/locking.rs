@@ -322,7 +322,7 @@ mod tests {
                 initial.is_ready(),
                 "a free key required scheduler participation"
             );
-            drop(initial);
+            std::mem::drop(initial);
         }
     }
 
@@ -333,11 +333,11 @@ mod tests {
         let mut queued = std::pin::pin!(locks.lock("ordered-key"));
         let initial = std::future::poll_fn(|cx| Poll::Ready(queued.as_mut().poll(cx))).await;
         assert!(initial.is_pending());
-        drop(first);
+        std::mem::drop(first);
         assert!(locks.try_lock("ordered-key").is_none());
         let second = queued.await;
         assert!(locks.try_lock("ordered-key").is_none());
-        drop(second);
+        std::mem::drop(second);
         assert!(locks.try_lock("ordered-key").is_some());
     }
 
@@ -372,10 +372,10 @@ mod tests {
         let slots = WeakSlots::<Mutex<()>>::reusable();
         let first = slots.get("reused", || Mutex::new(()));
         let identity = Arc::downgrade(&first);
-        drop(first);
+        std::mem::drop(first);
         let next = slots.get("reused", || panic!("an idle scalar control was rebuilt"));
         assert!(Arc::ptr_eq(&identity.upgrade().unwrap(), &next));
-        drop(next);
+        std::mem::drop(next);
         slots.clean(1024);
         assert!(identity.upgrade().is_none());
         assert!(
@@ -426,21 +426,21 @@ mod tests {
             })
             .take(RETAINED_CONTROLS_PER_SHARD + 1)
         {
-            drop(locks.mutex_for(&key));
+            std::mem::drop(locks.mutex_for(&key));
         }
         locks.clean_idle(1024);
         assert!(Arc::ptr_eq(
             &identity.upgrade().unwrap(),
             &locks.mutex_for("held")
         ));
-        drop(first);
+        std::mem::drop(first);
         assert!(
             locks.try_lock("held").is_none(),
             "a queued waiter was bypassed"
         );
         let second = queued.await;
         assert!(locks.try_lock("held").is_none());
-        drop(second);
+        std::mem::drop(second);
         assert!(locks.try_lock("held").is_some());
     }
 
@@ -462,7 +462,7 @@ mod tests {
             .map(|key| slots.get(key, || Mutex::new(())))
             .collect();
         let first = values[0].clone();
-        drop(values);
+        std::mem::drop(values);
         for _ in 0..SLOT_SHARDS {
             slots.clean(1);
         }
@@ -498,7 +498,7 @@ mod tests {
             .sum();
         assert_eq!(entries, keys.len());
         assert_eq!(queued, keys.len());
-        drop(values);
+        std::mem::drop(values);
         slots.clean(keys.len());
         assert!(slots.shards.iter().all(|shard| {
             let shard = shard.lock();

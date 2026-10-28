@@ -48,7 +48,7 @@ async fn a_ready_origin_hit_reaches_an_observer_attached_by_the_unused_factory_d
             .get_or_set(
                 "hit",
                 amalgam::source::factory(move |ctx| async move {
-                    drop(capture);
+                    std::mem::drop(capture);
                     Ok::<_, FactoryError>(ctx.value(99))
                 })
             )
@@ -88,7 +88,7 @@ async fn closing_from_the_unused_factory_drop_rejects_the_ready_value_once() {
             .get_or_set(
                 "hit",
                 amalgam::source::factory(move |ctx| async move {
-                    drop(capture);
+                    std::mem::drop(capture);
                     Ok::<_, FactoryError>(ctx.value(99))
                 })
             )
@@ -133,7 +133,7 @@ fn native_ready_origins_preserve_unused_capture_events_and_close() {
             .get_or_set(
                 "hit",
                 amalgam::source::factory(move |ctx| {
-                    drop(capture);
+                    std::mem::drop(capture);
                     Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
@@ -214,7 +214,7 @@ async fn shutdown_drains_ready_clone_and_the_unused_origin_capture() {
         let request = reader_cache.get_or_set(
             "hit",
             amalgam::source::factory(move |ctx| async move {
-                drop(capture);
+                std::mem::drop(capture);
                 Err(ctx.fail("the hot factory must not run"))
             }),
         );
@@ -256,7 +256,7 @@ async fn the_first_inline_factory_miss_starts_physical_cleanup() {
         .unwrap();
     let source = Arc::new(7_u64);
     let weak = Arc::downgrade(&source);
-    drop(
+    std::mem::drop(
         cache
             .get_or_set(
                 "expires",

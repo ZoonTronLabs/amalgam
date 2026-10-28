@@ -451,7 +451,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
             }
         };
         commit.retired.finish(&self.observer, &key);
-        drop(entry);
+        std::mem::drop(entry);
         self.finish_admission(&key, MemoryWriteEvent::Set, commit.admission)
     }
     /// A default standalone replacement need not create an owned envelope.
@@ -467,7 +467,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         }
         let commit = if !time.now().is_before(metadata.physical()) {
             self.invalidate_origin(key);
-            drop(value);
+            std::mem::drop(value);
             RetentionCommit::rejected(CapacityRejection::PhysicallyExpired, Vec::new())
         } else {
             let Backend::Unbounded(store) = &self.backend else {
@@ -706,7 +706,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStore<V> {
         }
         match entry {
             PreparedEntry::Candidate(entry) => self.observer.reclamation.retain(entry),
-            PreparedEntry::Fresh(value) => drop(value),
+            PreparedEntry::Fresh(value) => std::mem::drop(value),
             PreparedEntry::Stored => {}
         }
         if let Some(retained) = retained {
@@ -1429,7 +1429,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryObserver<V> {
                 })
             });
         }
-        drop(value);
+        std::mem::drop(value);
     }
     fn retire(&self, retired: Retirement<V>) {
         let Retirement {

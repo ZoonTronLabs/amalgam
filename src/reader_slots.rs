@@ -267,7 +267,7 @@ impl<T> ReaderSlots<T> {
                     _thread: PhantomData,
                 };
             }
-            drop(reservation);
+            std::mem::drop(reservation);
             self.wait_for_writer();
         }
     }
@@ -486,7 +486,7 @@ mod tests {
         let read = lock.read();
         assert!(lock.try_write().is_none());
         assert_eq!(*lock.read(), 7);
-        drop(read);
+        std::mem::drop(read);
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut guard = lock.write();
@@ -526,7 +526,7 @@ mod compatibility_tests {
         // A rejected writer must reopen admission for every reader slot.
         let guard = lock.read();
         assert!(lock.try_write().is_none());
-        drop(guard);
+        std::mem::drop(guard);
         *lock.try_write().unwrap() = (1, 1);
         let barrier = Arc::new(Barrier::new(33));
         std::thread::scope(|scope| {

@@ -17,7 +17,7 @@ async fn unpolled_mutations_do_nothing_and_receipts_are_explicit() {
     cache.set("key", 7).await.unwrap();
     let request = cache.remove("key");
     assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
-    drop(request);
+    std::mem::drop(request);
     assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
     let receipt = cache.remove("key").with_receipt().await.unwrap();
     assert!(matches!(receipt, MutationReceipt::Completed(_)));
@@ -108,7 +108,7 @@ fn native_mutation_executes_only_when_requested_and_keeps_typed_failures() {
     cache.set("key", 7).tags(["group"]).execute().unwrap();
     let request = cache.remove("key");
     assert_eq!(cache.try_get("key").execute().unwrap().as_ref(), Some(&7));
-    drop(request);
+    std::mem::drop(request);
     assert!(matches!(
         cache.remove_by_tag(" ").execute(),
         Err(Error::Tag(_))

@@ -549,7 +549,7 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
         61
     );
     a.shutdown().await.unwrap();
-    drop(a);
+    std::mem::drop(a);
     let _ = b
         .set("shared", 67)
         .with_receipt()
@@ -1061,7 +1061,7 @@ async fn original_value_destruction_follows_provider_and_factory_guards() {
         )
         .await
         .unwrap();
-    drop(value);
+    std::mem::drop(value);
     c.flush_pending().await.unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     c.shutdown().await.unwrap();
@@ -1260,7 +1260,7 @@ fn native_warm_unused_factory_drop_precedes_final_cancellation_check() {
         .get_or_set(
             "key",
             typed_blocking_factory(move |_| {
-                drop(capture);
+                std::mem::drop(capture);
                 panic!("warm L1 must not invoke origin");
             }),
         )

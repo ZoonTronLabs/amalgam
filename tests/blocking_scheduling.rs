@@ -107,7 +107,7 @@ fn opposite_cross_runtime_nested_calls_progress() {
         })
     })
     .collect();
-    drop(sender);
+    std::mem::drop(sender);
     let first = receiver.recv_timeout(Duration::from_secs(2));
     let second = receiver.recv_timeout(Duration::from_secs(2));
     source.cancel();

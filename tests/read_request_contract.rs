@@ -27,7 +27,7 @@ fn creating_and_dropping_a_read_does_not_access_the_key_or_admit_work() {
         calls: calls.clone(),
         _pin: PhantomPinned,
     };
-    drop(cache.try_get(key()).into_future());
+    std::mem::drop(cache.try_get(key()).into_future());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let query = cache.try_get(key()).into_future();
     assert_eq!(calls.load(Ordering::SeqCst), 0);

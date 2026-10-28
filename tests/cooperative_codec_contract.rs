@@ -233,7 +233,7 @@ async fn dropped_caller_ends_the_codec_scope_without_another_poll() {
     poll_pending(&mut operation).await;
     gate.entered().await;
     let token = recorder.token(Direction::Encode);
-    drop(operation);
+    std::mem::drop(operation);
     assert_cancelled(&token, FactoryCancellationReason::CallerDropped);
     cache.shutdown().await.unwrap();
 }

@@ -184,7 +184,7 @@ impl<V> MemoryEvictions<V> {
             }
             let Some(next) = state.next.checked_add(1) else {
                 state.phase = Phase::Closed;
-                drop(state);
+                std::mem::drop(state);
                 hub.changed.notify_waiters();
                 return None;
             };
@@ -258,7 +258,7 @@ impl<V> Drop for MemoryEvictionSubscription<V> {
                 VecDeque::new()
             }
         };
-        drop(retired);
+        std::mem::drop(retired);
     }
 }
 impl<V> Drop for Producer<V> {

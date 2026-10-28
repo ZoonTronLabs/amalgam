@@ -57,13 +57,13 @@ async fn repeated_last_handle_drop_releases_workers_even_with_live_event_observe
                 .expect("commit");
             observers.push(cache.events().clone());
             let surviving_handle = cache.clone();
-            drop(cache);
+            std::mem::drop(cache);
             caches.push(surviving_handle);
         }
         let expected = (round + 1) * 64;
         assert_eq!(counts.started.load(Ordering::SeqCst), expected);
         assert_eq!(counts.stopped.load(Ordering::SeqCst), round * 64);
-        drop(caches);
+        std::mem::drop(caches);
         tokio::time::timeout(Duration::from_secs(3), async {
             while counts.stopped.load(Ordering::SeqCst) != expected
                 || Arc::strong_count(&backplane) != 1

@@ -409,7 +409,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
         5
     );
     cache.shutdown().unwrap();
-    drop(cache);
+    std::mem::drop(cache);
     let active = BlockingCache::<u64>::new().unwrap();
     let _ = active
         .set("drop", 7)
@@ -418,7 +418,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
         .unwrap()
         .wait()
         .unwrap();
-    drop(active);
+    std::mem::drop(active);
     tokio::task::yield_now().await;
 }
 

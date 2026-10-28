@@ -103,7 +103,7 @@ fn registry_different_names_progress_independently() {
         })
         .collect();
     for thread in threads {
-        drop(thread.join().unwrap());
+        std::mem::drop(thread.join().unwrap());
     }
     assert_eq!(registry.len(), 2);
 }
@@ -838,13 +838,13 @@ fn shared_plugin_has_independent_sessions_and_event_handles_do_not_extend_lifecy
             .collect::<Vec<_>>(),
         ["alpha", "beta"]
     );
-    drop(host_a);
+    std::mem::drop(host_a);
     assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
     events_a.emit(CacheEvent::Miss {
         key: Arc::from("stopped"),
     });
     assert_eq!(counts.events.lock().unwrap().len(), 2);
-    drop(host_b);
+    std::mem::drop(host_b);
     assert_eq!(counts.stops.load(Ordering::SeqCst), 2);
 }
 
@@ -865,7 +865,7 @@ async fn registration_guard_detaches_once_and_stopped_host_has_no_new_start_side
         PluginStopOutcome::AlreadyStopped
     );
     registration.wait_stopped().await.unwrap();
-    drop(registration);
+    std::mem::drop(registration);
     events.emit(CacheEvent::Set {
         key: Arc::from("after"),
     });
@@ -935,7 +935,7 @@ fn event_errors_and_panics_are_isolated_from_other_attachments() {
         }
     ));
     assert_eq!(counts.events.lock().unwrap().len(), 1);
-    drop(owner);
+    std::mem::drop(owner);
 }
 
 #[test]
@@ -1045,7 +1045,7 @@ async fn storage_eviction_reaches_plugin_and_observer_once() {
     );
     assert!(observer.try_recv().is_err());
     assert_eq!(counts.events.lock().unwrap().len(), 1);
-    drop(owner);
+    std::mem::drop(owner);
 }
 
 #[test]
@@ -1118,7 +1118,7 @@ fn retained_eviction_callbacks_and_value_destructors_reenter_after_unlock() {
             clock.advance(Duration::from_millis(1));
             assert!(store.get("expired").await.is_none());
             assert_eq!(calls.load(Ordering::SeqCst), 1);
-            drop(owner);
+            std::mem::drop(owner);
             let drops = Arc::new(AtomicUsize::new(0));
             let store = Arc::new(MemoryStore::with_clock(
                 MemoryLimits::new(Some(1), None),
@@ -1178,7 +1178,7 @@ async fn resilient_observer_counts_lag_and_continues_to_live_events() {
             key: Arc::from("live")
         }
     );
-    drop(events);
+    std::mem::drop(events);
     assert!(observer.recv().await.is_err());
 }
 
@@ -1205,7 +1205,7 @@ fn operation_observation_finishes_once_and_drop_reports_cancellation() {
         }
     ));
     assert!(observer.try_recv().is_err());
-    drop(OperationObservation::new(
+    std::mem::drop(OperationObservation::new(
         events,
         "cache",
         "instance",

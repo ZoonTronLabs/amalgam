@@ -392,7 +392,7 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
     .await
     .unwrap();
     assert!(matches!(lease.proof(), Err(LeaseError::Lost)));
-    drop(lease);
+    std::mem::drop(lease);
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(
         locker
@@ -413,7 +413,7 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
     .await
     .unwrap()
     .unwrap();
-    drop(lease);
+    std::mem::drop(lease);
     let acquired = locker
         .acquire(
             &key,
@@ -667,7 +667,7 @@ async fn live_subscription_requires_ack_recovers_targeted_disconnects_and_releas
     assert!(backplane.publish(message("stopped")).await.is_err());
     await_no_clients(&mut connection, &backplane.subscriber_name()).await;
     await_no_clients(&mut connection, &format!("{name}:publish")).await;
-    drop(backplane);
+    std::mem::drop(backplane);
     await_no_clients(&mut connection, &format!("{name}:publish")).await;
     redis::cmd("ACL")
         .arg("DELUSER")
@@ -712,7 +712,7 @@ async fn live_bounded_push_overflow_and_malformed_wire_create_new_continuity_epo
         .unwrap();
     let _ = await_connected(&mut health, overflow_epoch).await;
     assert!(backplane.stats().malformed_messages > 0);
-    drop(backplane);
+    std::mem::drop(backplane);
     await_no_clients(&mut connection, &format!("{name}:subscriber")).await;
     await_no_clients(&mut connection, &format!("{name}:publish")).await;
 }

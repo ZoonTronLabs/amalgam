@@ -170,7 +170,7 @@ impl<V: Clone + Send + Sync + 'static> CacheRegistry<V> {
             retired
         };
         // Plugin teardown/destructors may reenter the registry.
-        drop(retired);
+        std::mem::drop(retired);
         Ok(())
     }
 
@@ -232,7 +232,7 @@ impl<V: Clone + Send + Sync + 'static> CacheRegistry<V> {
                 }
             }
         }
-        drop(state);
+        std::mem::drop(state);
         let _guard = InitializationGuard { slot: &slot, owner };
         let candidate = build().map_err(|source| RegistryError::Build {
             name: name.to_owned(),

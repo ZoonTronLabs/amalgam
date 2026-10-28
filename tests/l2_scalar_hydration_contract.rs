@@ -94,7 +94,7 @@ async fn scalar_l2_lookup_returns_the_source_while_l1_keeps_its_shorter_limits()
                 .collect::<Vec<_>>(),
             ["alpha", "beta"]
         );
-        drop(record);
+        std::mem::drop(record);
         clock.advance(Duration::from_secs(6));
         let local_only = cache
             .entry_options()

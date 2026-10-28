@@ -11,8 +11,8 @@ fn overlapping_guards_and_failed_try_write_preserve_borrowed_values() {
     assert!(slots.try_write().is_none());
     assert_eq!(**first, 7);
     assert_eq!(**second, 7);
-    drop(first);
-    drop(second);
+    std::mem::drop(first);
+    std::mem::drop(second);
     let replacement = Box::new(9);
     *slots.write() = replacement;
     assert_eq!(**slots.read(), 9);

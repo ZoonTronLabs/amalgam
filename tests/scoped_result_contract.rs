@@ -158,7 +158,7 @@ async fn requested_receipt_retains_original_causes_until_the_caller_retires_it()
     assert_eq!(result.value, 17);
     assert!(probe.outcomes.lock().unwrap().is_empty());
     match result.commit {
-        CommitReceipt::Mutation(MutationReceipt::Completed(report)) => drop(report),
+        CommitReceipt::Mutation(MutationReceipt::Completed(report)) => std::mem::drop(report),
         CommitReceipt::Mutation(MutationReceipt::Scheduled(_)) | CommitReceipt::Unchanged => {
             panic!("foreground mutation must retain its actual completed receipt")
         }

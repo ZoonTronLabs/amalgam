@@ -422,7 +422,7 @@ impl PluginSlot {
             let result = dispatch.stop();
             // Session destruction is still owned teardown, even when its
             // explicit stop hook returned an error. Publish Stopped afterward.
-            drop(dispatch);
+            std::mem::drop(dispatch);
             result
         });
         *lock(&self.state) = SessionState::Stopped(result.clone());
@@ -701,7 +701,7 @@ impl PluginHostInner {
             self.publish_listeners(&state);
             retired
         };
-        drop(retired);
+        std::mem::drop(retired);
     }
 }
 

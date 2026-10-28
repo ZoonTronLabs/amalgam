@@ -132,7 +132,7 @@ impl<V> QuietReady<'_, V> {
                 permit.status(token).map(|()| complete(value))
             }
             Err(error) => {
-                drop(complete);
+                std::mem::drop(complete);
                 Err(error)
             }
         };

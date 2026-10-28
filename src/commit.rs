@@ -219,7 +219,7 @@ impl KeyLane {
         let generation = self.advance_revision()?.value();
         let mut stamp = execution::lock(&self.timestamp);
         *stamp = Some(stamp.map_or(at, |old| old.max(at)));
-        drop(stamp);
+        std::mem::drop(stamp);
         Ok(Arc::new(Fence {
             lane: Arc::clone(self),
             generation: OperationGeneration::new(generation),

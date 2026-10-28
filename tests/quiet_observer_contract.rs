@@ -56,7 +56,7 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
         }
     }
     assert_eq!(outcomes, vec![OperationOutcome::Panicked]);
-    drop(receiver);
+    std::mem::drop(receiver);
     assert!(cache.try_get("key").into_future().await.unwrap().is_some());
     let _ = cache
         .remove("key")
@@ -130,6 +130,6 @@ async fn observer_admitted_by_unused_default_drop_receives_the_hit_completion() 
         receiver.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
     ));
-    drop(receiver);
+    std::mem::drop(receiver);
     cache.shutdown().await.unwrap();
 }

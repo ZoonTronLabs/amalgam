@@ -343,5 +343,5 @@ async fn an_owned_parents_child_sees_closing_before_queued_parent_notification()
             reason: Reason::CacheShutdown
         })
     ));
-    drop(phase);
+    std::mem::drop(phase);
 }

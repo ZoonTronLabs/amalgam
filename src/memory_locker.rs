@@ -127,7 +127,7 @@ pub trait MemoryLockGuard: Send + Sync + 'static {
 }
 impl MemoryLockGuard for KeyGuard {
     fn release(self: Box<Self>) -> std::result::Result<(), MemoryLockerError> {
-        drop(self);
+        std::mem::drop(self);
         Ok(())
     }
 }

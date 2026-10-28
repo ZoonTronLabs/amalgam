@@ -137,7 +137,7 @@ fn warmed_reader_does_not_allocate_on_its_first_contended_slot() {
         }
         std::thread::yield_now();
     }
-    drop(guard);
+    std::mem::drop(guard);
     let results: Vec<_> = readers
         .into_iter()
         .map(|reader| reader.join().unwrap())

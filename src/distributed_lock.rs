@@ -849,7 +849,7 @@ pub(crate) async fn bounded_release(
 impl Drop for DistributedLease {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.take() {
-            drop(LeaseCleanup::new(inner));
+            std::mem::drop(LeaseCleanup::new(inner));
         }
     }
 }

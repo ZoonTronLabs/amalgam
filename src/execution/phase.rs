@@ -115,7 +115,7 @@ impl<'a> BorrowedPhase<'a> {
         }
         let waker = cx.waker().clone();
         let previous = super::lock(&self.control.waker).replace(waker);
-        drop(previous);
+        std::mem::drop(previous);
         let mut lease = PollRetirement {
             phase: self,
             finished: false,

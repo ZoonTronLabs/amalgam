@@ -27,8 +27,8 @@ impl<V> Drop for Garbage<V> {
         }
         for retained in std::mem::take(&mut state.entries) {
             match retained {
-                Retained::Entry(entry) => drop(entry),
-                Retained::Observer(observer) => drop(observer),
+                Retained::Entry(entry) => std::mem::drop(entry),
+                Retained::Observer(observer) => std::mem::drop(observer),
             }
         }
         // All resource destruction follows callbacks without a queue lock.
@@ -71,7 +71,7 @@ impl<V: Send + Sync + 'static> Reclamation<V> {
     }
     pub(super) fn retain(&self, entry: Entry<V>) {
         match self {
-            Self::Immediate => drop(entry),
+            Self::Immediate => std::mem::drop(entry),
             Self::Operation(owner) => owner
                 .state
                 .lock()
@@ -82,7 +82,7 @@ impl<V: Send + Sync + 'static> Reclamation<V> {
     }
     pub(super) fn retain_observer(&self, observer: crate::advanced::MemoryEvictions<V>) {
         match self {
-            Self::Immediate => drop(observer),
+            Self::Immediate => std::mem::drop(observer),
             Self::Operation(owner) => owner
                 .state
                 .lock()
@@ -198,8 +198,8 @@ mod tests {
                         .is_pending()
                 );
             }
-            drop(work);
-            drop(runtime);
+            std::mem::drop(work);
+            std::mem::drop(runtime);
             assert_eq!(drops.load(Ordering::SeqCst), 1);
             assert!(lock.try_lock().is_ok());
         }
@@ -232,9 +232,9 @@ mod tests {
             crate::provider::MemoryAdmission::Admitted
         );
         assert_eq!(drops.load(Ordering::SeqCst), 0);
-        drop(memory);
+        std::mem::drop(memory);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
-        drop(guard);
+        std::mem::drop(guard);
         assert_eq!(drops.load(Ordering::SeqCst), 2);
     }
 }

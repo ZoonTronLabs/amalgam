@@ -694,7 +694,7 @@ async fn layer_loss_and_close_are_independent_of_logical_delivery() {
         LayerEvent::Memory(MemoryEvent::Miss { key: key("4") })
     );
     assert_eq!(rx.lost_events(), 4);
-    drop(events);
+    std::mem::drop(events);
     assert!(rx.recv().await.is_err());
 }
 

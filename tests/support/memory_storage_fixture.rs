@@ -215,7 +215,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
         }
         let key = Arc::from(candidate.key());
         let previous = state.records.insert(key, candidate);
-        drop(state);
+        std::mem::drop(state);
         Ok(match previous {
             Some(previous) => MemoryStorageWrite::Replaced {
                 previous,
@@ -266,7 +266,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
             .map(|key| state.records.remove(&key).unwrap())
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        drop(state);
+        std::mem::drop(state);
         Ok(records)
     }
     fn maintain(
@@ -289,7 +289,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
             .map(|(key, reason)| MemoryRetirement::new(state.records.remove(&key).unwrap(), reason))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        drop(state);
+        std::mem::drop(state);
         Ok(retired)
     }
     fn usage(&self) -> StdResult<MemoryUsage, MemoryStorageError> {

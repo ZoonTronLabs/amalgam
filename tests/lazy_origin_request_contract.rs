@@ -38,7 +38,7 @@ fn an_abandoned_request_releases_its_capture_without_invoking_the_factory() {
     );
     assert!(weak.upgrade().is_some());
     assert!(ready(cache.try_get("abandoned")).unwrap().is_none());
-    drop(request);
+    std::mem::drop(request);
     assert!(weak.upgrade().is_none());
     assert!(ready(cache.try_get("abandoned")).unwrap().is_none());
 }
@@ -173,7 +173,7 @@ fn native_request_keeps_captures_lazy_and_runs_the_factory_on_the_caller() {
         }),
     );
     assert!(weak.upgrade().is_some());
-    drop(request);
+    std::mem::drop(request);
     assert!(weak.upgrade().is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(cache.try_get("abandoned").execute().unwrap().is_none());

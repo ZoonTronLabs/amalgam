@@ -35,7 +35,7 @@ impl Gate {
             return;
         }
         self.entered.notify_one();
-        drop(
+        std::mem::drop(
             self.release
                 .wait_while(self.released.lock().unwrap(), |released| !*released)
                 .unwrap(),
@@ -384,7 +384,7 @@ async fn unused_factory_destructor_remains_inside_ready_drainage() {
             .get_or_set::<_, _>(
                 "k",
                 typed_factory(move |ctx| async move {
-                    drop(unused);
+                    std::mem::drop(unused);
                     Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )

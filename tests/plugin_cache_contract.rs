@@ -303,7 +303,7 @@ fn retained_operational_view_cannot_prevent_last_application_owner_from_closing(
         BlockingCache::from_builder(Cache::builder().cache_plugin(plugin(record.clone()))).unwrap();
     let runtime = cache.runtime().clone();
     *record.held.lock().unwrap() = Some(record.contexts.lock().unwrap()[0].cache().unwrap());
-    drop(cache);
+    std::mem::drop(cache);
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     let held = record.held.lock().unwrap().take().unwrap();
     assert!(matches!(
@@ -326,7 +326,7 @@ fn external_async_owner_remains_available_inside_its_final_stop_hook() {
             .try_build()
             .unwrap()
     });
-    drop(cache);
+    std::mem::drop(cache);
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     let peer = BlockingCache::from_builder(hybrid(backend)).unwrap();
     assert_eq!(
