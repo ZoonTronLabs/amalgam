@@ -1,18 +1,18 @@
 //! Host adapter preserving built-in storage and fallible supplied storage.
+use std::sync::Arc;
+
 use super::{
     MemoryAdmission, MemoryExpiry, MemoryObserver, MemoryStore, MemoryWriteEvent, ReclamationFence,
     ReclamationGuard, Retirement, RetirementReason,
 };
+use crate::advanced::{EvictionCapture, MemoryEvictionReason, MemoryEvictions};
 use crate::entry::Entry;
 use crate::memory_storage::{MemoryStorageError, RecordInner};
-use crate::{
-    Events, Result, Timestamp, advanced::EvictionCapture, advanced::MemoryEvictionReason,
-    advanced::MemoryEvictions, provider::CapacityRejection, provider::Clock,
-    provider::MemoryCondition, provider::MemoryLimits, provider::MemoryRecord,
-    provider::MemoryRetirement, provider::MemoryStorage, provider::MemoryStorageEpoch,
-    provider::MemoryStorageWrite, provider::MemoryUsage,
+use crate::provider::{
+    CapacityRejection, Clock, MemoryCondition, MemoryLimits, MemoryRecord, MemoryRetirement,
+    MemoryStorage, MemoryStorageEpoch, MemoryStorageWrite, MemoryUsage,
 };
-use std::sync::Arc;
+use crate::{Events, Result, Timestamp};
 
 // Storage keeps its closed failure family; cache operations adapt it once.
 type StorageResult<T> = std::result::Result<T, MemoryStorageError>;

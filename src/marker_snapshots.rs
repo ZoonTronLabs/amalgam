@@ -1,14 +1,16 @@
 //! Optional expiring control snapshots, separate from durable invalidation facts.
 #![doc = include_str!("../docs/MARKER_SNAPSHOTS.md")]
 
+use std::time::Duration;
+
+use async_trait::async_trait;
+
 use crate::distributed_lock::{LeaseError, LeaseProof};
 use crate::error::{Error, FactoryCancellationReason};
 use crate::execution::FactoryCancellation;
 use crate::options::EntryOptions;
 use crate::tags::{CacheScope, MarkerError, MarkerKind, MarkerVersion};
 use crate::time::Timestamp;
-use async_trait::async_trait;
-use std::time::Duration;
 
 /// Lifetime model for options-controlled secondary marker checks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

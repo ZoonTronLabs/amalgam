@@ -3,16 +3,16 @@
 //! Run explicitly: cargo test --release --bench l2_ownership -- --ignored --nocapture
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, missing_docs))]
 
-use amalgam::{
-    Cache, EntryOptions, provider::InMemoryDistributedCache, provider::JsonSerializer,
-    provider::SystemClock,
-};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::backtrace::Backtrace;
 use std::cell::Cell;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, SystemClock};
+use amalgam::{Cache, EntryOptions};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 #[derive(Clone, Copy)]
 enum Probe {
@@ -123,7 +123,7 @@ async fn fixture() -> Cache<u64> {
     cache
 }
 fn trace(lookup: Lookup) {
-    tokio::runtime::Builder::new_current_thread()
+    RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()

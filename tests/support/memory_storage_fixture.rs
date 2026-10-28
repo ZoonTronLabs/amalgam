@@ -3,13 +3,20 @@
     dead_code,
     reason = "each integration binary exercises a different provider subset"
 )]
-use amalgam::advanced::*;
-use amalgam::entry::Entry;
-use amalgam::provider::*;
-use amalgam::*;
+
 use std::collections::HashMap;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
+
+use amalgam::advanced::MemoryEvictionReason;
+use amalgam::entry::Entry;
+use amalgam::provider::{
+    CapacityRejection, MemoryCondition, MemoryGeneration, MemoryNamespace, MemoryRecord,
+    MemoryRetirement, MemoryStorage, MemoryStorageEpoch, MemoryStorageError, MemoryStorageWrite,
+    MemoryUsage,
+};
+use amalgam::{Priority, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum Fault {
@@ -72,7 +79,7 @@ impl<V> MapStorage<V> {
             write_gate: Mutex::new(None),
         })
     }
-    fn check(&self, fault: Fault) -> std::result::Result<(), MemoryStorageError> {
+    fn check(&self, fault: Fault) -> StdResult<(), MemoryStorageError> {
         if *self.fault.lock().unwrap() == Some(fault) {
             Err(MemoryStorageError::provider(fault))
         } else {
@@ -107,15 +114,12 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
             .or_default()
             .clone()
     }
-    fn get(&self, key: &str) -> std::result::Result<Option<MemoryRecord<V>>, MemoryStorageError> {
+    fn get(&self, key: &str) -> StdResult<Option<MemoryRecord<V>>, MemoryStorageError> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         self.check(Fault::Get)?;
         Ok(self.state.lock().unwrap().records.get(key).cloned())
     }
-    fn try_get(
-        &self,
-        key: &str,
-    ) -> std::result::Result<Option<MemoryRecord<V>>, MemoryStorageError> {
+    fn try_get(&self, key: &str) -> StdResult<Option<MemoryRecord<V>>, MemoryStorageError> {
         self.ready.fetch_add(1, Ordering::SeqCst);
         self.check(Fault::Get)?;
         Ok(self
@@ -129,7 +133,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
         candidate: MemoryRecord<V>,
         condition: MemoryCondition<'_, V>,
         now: Timestamp,
-    ) -> std::result::Result<MemoryStorageWrite<V>, MemoryStorageError> {
+    ) -> StdResult<MemoryStorageWrite<V>, MemoryStorageError> {
         self.writes.fetch_add(1, Ordering::SeqCst);
         self.check(Fault::Insert)?;
         let gate = self.write_gate.lock().unwrap().take();
@@ -226,7 +230,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
         &self,
         key: &str,
         expected: Option<&Entry<V>>,
-    ) -> std::result::Result<Option<MemoryRecord<V>>, MemoryStorageError> {
+    ) -> StdResult<Option<MemoryRecord<V>>, MemoryStorageError> {
         self.removals.fetch_add(1, Ordering::SeqCst);
         self.check(Fault::Remove)?;
         let mut state = self.state.lock().unwrap();
@@ -243,7 +247,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
     fn clear_before(
         &self,
         barrier: &MemoryGeneration,
-    ) -> std::result::Result<Box<[MemoryRecord<V>]>, MemoryStorageError> {
+    ) -> StdResult<Box<[MemoryRecord<V>]>, MemoryStorageError> {
         self.check(Fault::Clear)?;
         let gate = self.clear_gate.lock().unwrap().take();
         if let Some(gate) = gate {
@@ -268,7 +272,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
     fn maintain(
         &self,
         now: Timestamp,
-    ) -> std::result::Result<Box<[MemoryRetirement<V>]>, MemoryStorageError> {
+    ) -> StdResult<Box<[MemoryRetirement<V>]>, MemoryStorageError> {
         self.check(Fault::Maintain)?;
         let mut state = self.state.lock().unwrap();
         let dead: Vec<_> = state
@@ -288,7 +292,7 @@ impl<V: Clone + Send + Sync + 'static> MemoryStorage<V> for MapStorage<V> {
         drop(state);
         Ok(retired)
     }
-    fn usage(&self) -> std::result::Result<MemoryUsage, MemoryStorageError> {
+    fn usage(&self) -> StdResult<MemoryUsage, MemoryStorageError> {
         self.check(Fault::Usage)?;
         let state = self.state.lock().unwrap();
         Ok(MemoryUsage {

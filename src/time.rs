@@ -22,6 +22,7 @@
 //! explicitly supplied clocks preserve their
 //! interoperable clock domain and elapsed backend deadlines. [`SystemClock`]
 //! always returns live system UTC when explicitly selected.
+use std::sync::Arc;
 
 pub(crate) mod coarse;
 pub(crate) mod local;
@@ -156,7 +157,7 @@ pub trait Clock: Send + Sync {
     }
 }
 
-impl<T: Clock + ?Sized> Clock for std::sync::Arc<T> {
+impl<T: Clock + ?Sized> Clock for Arc<T> {
     fn now(&self) -> Timestamp {
         (**self).now()
     }

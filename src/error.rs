@@ -4,7 +4,8 @@
 //! `thiserror`, every fallible boundary returns [`Error`]. Business outcomes
 //! that are *not* failures (a cache miss, a factory choosing to reuse a stale
 //! value) are modelled in the return *type*, never as errors.
-
+use std::fmt::{Formatter, Result as FmtResult};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Cache drainage operations that cannot await their own synchronous factory.
@@ -169,18 +170,18 @@ impl FactoryCancellationReason {
 pub struct SharedSource<
     E: std::error::Error + Send + Sync + ?Sized + 'static = dyn std::error::Error + Send + Sync,
 > {
-    source: std::sync::Arc<E>,
+    source: Arc<E>,
 }
 impl<E: std::error::Error + Send + Sync + ?Sized + 'static> SharedSource<E> {
     /// Shares the original cause without replacing its concrete identity.
-    pub fn from_arc(source: std::sync::Arc<E>) -> Self {
+    pub fn from_arc(source: Arc<E>) -> Self {
         Self { source }
     }
 }
 impl<E: std::error::Error + Send + Sync + ?Sized + 'static> Clone for SharedSource<E> {
     fn clone(&self) -> Self {
         Self {
-            source: std::sync::Arc::clone(&self.source),
+            source: Arc::clone(&self.source),
         }
     }
 }
@@ -196,7 +197,7 @@ impl<E: std::error::Error + Send + Sync + ?Sized + 'static> AsRef<E> for SharedS
     }
 }
 impl<E: std::error::Error + Send + Sync + ?Sized + 'static> std::fmt::Display for SharedSource<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         std::fmt::Display::fmt(self.as_ref(), f)
     }
 }
@@ -231,7 +232,7 @@ impl CloneError {
     /// Preserves a custom strategy's source error.
     pub fn from_source(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Custom {
-            source: SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: SharedSource::from_arc(Arc::new(source)),
         }
     }
 }
@@ -328,7 +329,7 @@ pub enum ShutdownFailure {
         task: ShutdownTask,
         /// The original join failure, distinct from origin failure.
         #[source]
-        source: std::sync::Arc<tokio::task::JoinError>,
+        source: Arc<tokio::task::JoinError>,
     },
     /// An awaited cleanup/backend operation failed.
     #[error(transparent)]
@@ -339,7 +340,7 @@ pub enum ShutdownFailure {
 /// original sources so every concurrent or repeated caller sees one report.
 #[derive(Debug, Clone)]
 pub struct ShutdownError {
-    failures: std::sync::Arc<[ShutdownFailure]>,
+    failures: Arc<[ShutdownFailure]>,
 }
 
 impl ShutdownError {
@@ -364,7 +365,7 @@ impl ShutdownError {
 }
 
 impl std::fmt::Display for ShutdownError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
         write!(
             formatter,
             "cache shutdown failed in {} stage(s): {}",
@@ -546,7 +547,7 @@ impl Error {
     /// Preserves an encoding failure instead of converting it into a message.
     pub fn serialization(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         CodecError::Serialization {
-            source: SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: SharedSource::from_arc(Arc::new(source)),
         }
         .into()
     }
@@ -554,7 +555,7 @@ impl Error {
     /// Preserves a decoding failure instead of converting it into a message.
     pub fn deserialization(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         CodecError::Deserialization {
-            source: SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: SharedSource::from_arc(Arc::new(source)),
         }
         .into()
     }
@@ -562,7 +563,7 @@ impl Error {
     /// Preserves a value-storage failure at the provider boundary.
     pub fn distributed(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         TransportError::Distributed {
-            source: SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: SharedSource::from_arc(Arc::new(source)),
         }
         .into()
     }
@@ -570,7 +571,7 @@ impl Error {
     /// Preserves a peer-notification failure at the provider boundary.
     pub fn backplane(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         TransportError::Backplane {
-            source: SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: SharedSource::from_arc(Arc::new(source)),
         }
         .into()
     }
@@ -594,7 +595,7 @@ enum FactoryErrorDetail {
     Message(String),
     Source {
         message: String,
-        source: std::sync::Arc<dyn std::error::Error + Send + Sync>,
+        source: Arc<dyn std::error::Error + Send + Sync>,
     },
     Cancelled(FactoryCancellationReason),
 }
@@ -618,7 +619,7 @@ impl FactoryError {
         Self {
             detail: FactoryErrorDetail::Source {
                 message: into_nonblank(source.to_string()),
-                source: std::sync::Arc::new(source),
+                source: Arc::new(source),
             },
         }
     }
@@ -630,7 +631,7 @@ impl FactoryError {
             Err(source) => Self {
                 detail: FactoryErrorDetail::Source {
                     message: into_nonblank(source.to_string()),
-                    source: std::sync::Arc::from(source),
+                    source: Arc::from(source),
                 },
             },
         }
@@ -666,7 +667,7 @@ impl FactoryError {
 }
 
 impl std::fmt::Display for FactoryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(self.message())
     }
 }

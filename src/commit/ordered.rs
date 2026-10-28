@@ -1,15 +1,17 @@
 //! Suspended mutations wait in shard queues. An uncontended claim uses only
 //! the key's scalar admission word; it creates neither a task nor a waiter.
-use super::KeyLane;
-use ahash::RandomState;
-use hashbrown::HashMap;
-use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, Waker};
+
+use ahash::RandomState;
+use hashbrown::HashMap;
+use parking_lot::Mutex;
+
+use super::KeyLane;
 
 const QUEUE_SHARDS: usize = 64;
 

@@ -1,6 +1,7 @@
 //! Operation spans and optional bounded cache-name metrics.
-
 use std::time::{Duration, Instant};
+
+use tracing::Span;
 
 use crate::events::{CacheEvent, CacheLevel, CacheOperation, Events, OperationOutcome};
 
@@ -11,7 +12,7 @@ pub fn operation_span(
     instance_id: &str,
     operation: CacheOperation,
     key: Option<&str>,
-) -> tracing::Span {
+) -> Span {
     tracing::debug_span!(
         "amalgam.operation",
         cache_name,
@@ -30,7 +31,7 @@ pub fn component_span(
     level: CacheLevel,
     action: &'static str,
     key: Option<&str>,
-) -> tracing::Span {
+) -> Span {
     tracing::debug_span!(
         "amalgam.component",
         cache_name,
@@ -72,7 +73,7 @@ struct Observation {
     operation: CacheOperation,
     level: Option<CacheLevel>,
     timing: OperationTiming,
-    span: tracing::Span,
+    span: Span,
     state: ObservationState,
 }
 impl Observation {
@@ -152,7 +153,7 @@ impl OperationObservation {
     }
     /// The span to instrument this operation's future.
     #[must_use]
-    pub fn span(&self) -> tracing::Span {
+    pub fn span(&self) -> Span {
         self.observation.span.clone()
     }
     /// Selects the servicing level where one level describes the final outcome.
@@ -190,7 +191,7 @@ impl<'a> ReadyObservation<'a> {
             observation: Observation::new(events, cache_name, instance_id, operation, key),
         }
     }
-    pub(crate) fn span(&self) -> tracing::Span {
+    pub(crate) fn span(&self) -> Span {
         self.observation.span.clone()
     }
     pub(crate) fn set_level(&mut self, level: CacheLevel) {
@@ -250,7 +251,7 @@ impl<'a> QuietObservation<'a> {
                 operation: self.operation,
                 level: None,
                 timing: OperationTiming::Unobserved,
-                span: tracing::Span::none(),
+                span: Span::none(),
                 state: ObservationState::Pending,
             },
         }
@@ -263,7 +264,7 @@ impl<'a> QuietObservation<'a> {
                 operation: self.operation,
                 level: None,
                 timing: OperationTiming::Unobserved,
-                span: tracing::Span::none(),
+                span: Span::none(),
                 state: ObservationState::Pending,
             },
         }
@@ -289,9 +290,11 @@ impl Drop for QuietObservation<'_> {
 
 #[cfg(feature = "metrics")]
 mod imp {
-    use super::labels::{CacheLabelBudget, process_budget};
+    use std::fmt::{Debug, Formatter, Result as FmtResult};
     use std::sync::{Arc, OnceLock};
 
+    use super::labels;
+    use super::labels::CacheLabelBudget;
     use crate::events::CacheEvent;
     use crate::plugins::{Plugin, PluginContext, PluginError, PluginSession};
 
@@ -308,7 +311,7 @@ mod imp {
         pub fn new() -> Self {
             Self {
                 name: "amalgam-metrics".to_owned(),
-                budget: process_budget(),
+                budget: labels::process_budget(),
                 legacy: OnceLock::new(),
             }
         }
@@ -330,8 +333,8 @@ mod imp {
         }
     }
 
-    impl std::fmt::Debug for MetricsPlugin {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    impl Debug for MetricsPlugin {
+        fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
             f.debug_struct("MetricsPlugin")
                 .field("name", &self.name)
                 .field("assigned_cache_names", &self.budget.assigned_names())

@@ -40,6 +40,14 @@ mod recovery;
 mod runtime;
 mod write;
 
+use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
 pub use blocking::{
     BlockingCache, BlockingCacheBuildError, BlockingCacheValue, BlockingCommitCompletion,
     BlockingCommitReceipt, BlockingDispatchError, BlockingGetOrSetRequest, BlockingMutationReceipt,
@@ -50,6 +58,8 @@ pub use builder::CacheBuilder;
 use origin::{CacheOrigin, FactoryOrigin, OriginCompletion, OriginKind};
 pub use plugin::{CachePlugin, CachePluginContext, PluginCache};
 use plugin::{InitialPlugin, PluginAccess, WorkAdmission};
+use tokio::sync::{broadcast, watch};
+use tracing::Instrument;
 
 use crate::backplane::{
     Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState, MarkerCommand,
@@ -65,7 +75,7 @@ use crate::distributed::{
 };
 use crate::distributed_lock::{
     AcquisitionPolicy, DistributedLease, DistributedLocker, LeaseError, LeaseState, LeaseTask,
-    LeaseTaskOwner, LeaseTtl, acquire_owned_supervised,
+    LeaseTaskOwner, LeaseTtl,
 };
 use crate::entry::{ContinuityStamp, Entry};
 use crate::error::{
@@ -78,7 +88,7 @@ use crate::events::{
 };
 use crate::execution::{
     CancellationSource, Execution, ExecutionCheckpoint, FactoryCancellation, InlinePermit,
-    LinkMode, Scopes, lock,
+    LinkMode, Scopes,
 };
 use crate::factory::{FactoryContext, FactoryProduct, ProductOrigin, StaleInfo};
 use crate::lifecycle::Tasks;
@@ -93,9 +103,7 @@ use crate::marker_snapshots::{
 };
 use crate::memory::{CacheMemory, MemoryAdmission, MemoryExpiry, MemoryLimits};
 use crate::memory_locker::{LocalGuard, LocalLocks};
-use crate::observability::{
-    OperationObservation, QuietObservation, ReadyObservation, component_span,
-};
+use crate::observability::{OperationObservation, QuietObservation, ReadyObservation};
 use crate::options::{
     EntryOptions, JitterSample, JitterSource, KeyModifierMode, RemoveByTagBehavior,
 };
@@ -112,15 +120,6 @@ use crate::tags::{
     TagRegistry, TagVerdict,
 };
 use crate::time::{Clock, ClockTiming, SystemClock, Timeout, Timestamp};
-use async_trait::async_trait;
-use std::borrow::Cow;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, watch};
-use tracing::Instrument;
 
 /// Cache-wide invalidation mode, replacing the legacy boolean parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -24,7 +24,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use amalgam::{Cache, CacheRegistry, EntryOptions, provider::DefaultEntryOptionsProvider};
+use amalgam::provider::DefaultEntryOptionsProvider;
+use amalgam::{Cache, CacheRegistry, EntryOptions, FactoryError};
 
 // ---------------------------------------------------------------------------
 // Pattern 1 — constructor injection of one shared cache.
@@ -54,7 +55,7 @@ impl UserService {
                 amalgam::source::factory({
                     let user_id = user_id.to_owned();
                     move |ctx| async move {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(format!("User #{user_id}")))
+                        Ok::<_, FactoryError>(ctx.value(format!("User #{user_id}")))
                     }
                 }),
             )
@@ -177,7 +178,7 @@ async fn main() -> amalgam::Result<()> {
         .get_or_set(
             "session:abc",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("session-token-for-abc".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("session-token-for-abc".to_owned()))
             }),
         )
         .await
@@ -203,7 +204,7 @@ async fn main() -> amalgam::Result<()> {
         .get_or_set(
             "config:feature_x",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("enabled".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("enabled".to_owned()))
             }),
         )
         .await

@@ -1,17 +1,24 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
-use std::future::Future;
-use std::future::IntoFuture;
+use std::future::{Future, IntoFuture};
 use std::pin::Pin;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::result::Result as StdResult;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
+
+use amalgam::advanced::{DistributedExpirePolicy, EffectOutcome};
+use amalgam::provider::{
+    AsyncDistributedSerializer, Clock, DistributedBytes, DistributedCache, DistributedEntry,
+    DistributedSerializer, DistributedSnapshot, InMemoryDistributedCache, InProcessBackplane,
+    InvalidationStore, JsonSerializer, ManualClock, SystemClock,
+};
+use amalgam::{
+    Cache, CancellationSource, EagerThreshold, EntryOptions, Error, FactoryCancellation,
+    FactoryCancellationReason, FactoryContext, FactoryError, RecoveryConfig, Result, Timeout,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,7 +154,7 @@ fn assert_cancelled(token: &FactoryCancellation, expected: FactoryCancellationRe
 async fn poll_pending<T>(future: &mut Pin<Box<impl Future<Output = T>>>) {
     std::future::poll_fn(|cx| {
         assert!(future.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
+        Poll::Ready(())
     })
     .await;
 }
@@ -254,9 +261,9 @@ async fn codec_cancellation_is_never_suppressed_as_a_miss_or_local_only_write() 
             Direction::Decode => cache
                 .get_or_set(
                     "key",
-                    amalgam::source::factory(|ctx| async move {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                    }),
+                    amalgam::source::factory(
+                        |ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) },
+                    ),
                 )
                 .await
                 .map(|_| ()),
@@ -303,9 +310,7 @@ async fn hard_factory_timeout_ends_the_owned_encoder_with_the_exact_reason() {
         cache
             .get_or_set(
                 "key",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
             )
             .await,
         Err(Error::FactoryTimeout { .. })
@@ -348,9 +353,9 @@ async fn permitted_background_encoder_survives_caller_completion_and_owns_shutdo
             cache
                 .get_or_set(
                     "key",
-                    amalgam::source::factory(|ctx| async move {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                    })
+                    amalgam::source::factory(
+                        |ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) }
+                    )
                 )
                 .await
                 .unwrap(),
@@ -410,9 +415,7 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
                 cache
                     .get_or_set(
                         "key",
-                        typed_factory(
-                            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) }
-                        )
+                        typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
                     )
                     .fail_safe_default(Some(1))
                     .await
@@ -528,7 +531,7 @@ struct FailFirstWrite {
 }
 #[async_trait]
 impl DistributedCache for FailFirstWrite {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.backend.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -671,9 +674,7 @@ async fn eager_encoder_outlives_the_hit_and_is_cancelled_by_shutdown() {
         cache
             .get_or_set(
                 "key",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
             )
             .await
             .unwrap(),
@@ -752,8 +753,8 @@ async fn cancellation_inside_synchronous_codec_callbacks_cannot_commit_or_return
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

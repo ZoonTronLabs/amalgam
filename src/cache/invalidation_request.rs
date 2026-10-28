@@ -1,12 +1,13 @@
 //! Lazy key and marker invalidation over the shared owned execution engine.
+use std::future::{Future, IntoFuture};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use super::observed_execution::ObservedExecution;
 use super::{
     Cache, CacheOperation, ClearMode, DistributedExpirePolicy, EntryOptions, FactoryCancellation,
     KeyMutation, MarkerKind, MutationReceipt, Result, Tag,
 };
-use std::future::{Future, IntoFuture};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 pub(super) enum Target<K> {
     Key {

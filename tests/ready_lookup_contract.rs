@@ -1,14 +1,22 @@
 //! Ready L1 work retains cancellation, observation and synchronous drainage.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
 use std::error::Error as _;
-use std::future::{Future, IntoFuture, pending, poll_fn};
+use std::future;
+use std::future::{Future, IntoFuture};
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::task::Poll;
 use std::time::Duration;
+
+use amalgam::provider::{Clock, ValueCloner};
+use amalgam::{
+    Cache, CacheEvent, CancellationSource, CloneError, CloseOutcome, ConfigError, EntryOptions,
+    Error, FactoryCancellationReason, FactoryContext, FactoryError, OperationOutcome, Plugin,
+    Timestamp,
+};
 use tokio::sync::{Notify, broadcast};
 
 #[derive(Default)]
@@ -65,7 +73,7 @@ async fn populated(cache: &Cache<i32>) {
         .unwrap();
     assert_eq!(cache.try_get("k").await.unwrap().unwrap_or(0), 7);
 }
-fn cancelled(result: std::result::Result<i32, Error>, reason: FactoryCancellationReason) {
+fn cancelled(result: StdResult<i32, Error>, reason: FactoryCancellationReason) {
     assert!(
         matches!(result, Err(Error::OperationCancelled { reason: actual }) if actual == reason)
     );
@@ -74,7 +82,7 @@ fn cancelled(result: std::result::Result<i32, Error>, reason: FactoryCancellatio
 async fn close_while_blocked<V: Clone + Send + Sync + 'static>(
     cache: &Cache<V>,
     gate: &Gate,
-    operation: tokio::task::JoinHandle<std::result::Result<i32, Error>>,
+    operation: tokio::task::JoinHandle<StdResult<i32, Error>>,
 ) {
     gate.wait_entered().await;
     let mut events = cache.events().subscribe();
@@ -254,7 +262,7 @@ async fn blocked_ready_clock_is_cancelled_and_drained_from_another_thread() {
 
 struct BlockingCloner(Arc<Gate>);
 impl ValueCloner<i32> for BlockingCloner {
-    fn clone_value(&self, value: &i32) -> std::result::Result<i32, CloneError> {
+    fn clone_value(&self, value: &i32) -> StdResult<i32, CloneError> {
         self.0.block_once();
         Ok(*value)
     }
@@ -332,13 +340,13 @@ async fn shutdown_waits_a_cancelled_parked_future_destructor_before_claiming_dra
                 typed_factory(move |ctx| async move {
                     let _drop = UnusedFactory(origin_gate);
                     origin_entered.store(true, Ordering::SeqCst);
-                    pending::<()>().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    future::pending::<()>().await;
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .into_future(),
     );
-    poll_fn(|cx| {
+    future::poll_fn(|cx| {
         assert!(operation.as_mut().poll(cx).is_pending());
         if entered.load(Ordering::SeqCst) {
             Poll::Ready(())
@@ -377,7 +385,7 @@ async fn unused_factory_destructor_remains_inside_ready_drainage() {
                 "k",
                 typed_factory(move |ctx| async move {
                     drop(unused);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .await
@@ -427,7 +435,7 @@ async fn ready_hit_plugin_explicit_cancellation_has_one_precise_observer() {
 
 struct ClosingCloner(Arc<Mutex<Option<Cache<i32>>>>);
 impl ValueCloner<i32> for ClosingCloner {
-    fn clone_value(&self, value: &i32) -> std::result::Result<i32, CloneError> {
+    fn clone_value(&self, value: &i32) -> StdResult<i32, CloneError> {
         let closing = self.0.lock().unwrap().take();
         if let Some(cache) = closing {
             cache.close();
@@ -512,9 +520,9 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
 
 struct FailingCloner(AtomicBool);
 impl ValueCloner<i32> for FailingCloner {
-    fn clone_value(&self, value: &i32) -> std::result::Result<i32, CloneError> {
+    fn clone_value(&self, value: &i32) -> StdResult<i32, CloneError> {
         if self.0.load(Ordering::SeqCst) {
-            Err(CloneError::from_source(std::io::Error::other(
+            Err(CloneError::from_source(IoError::other(
                 "original copy failure",
             )))
         } else {
@@ -573,8 +581,8 @@ async fn already_cancelled_ready_read_skips_user_copy() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

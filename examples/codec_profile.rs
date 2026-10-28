@@ -1,13 +1,14 @@
 //! Repeatable codec microbenchmark; compile first, then run without other workloads.
-use std::hint::black_box;
+
+use std::hint;
 use std::time::{Duration, Instant};
 
 use amalgam::entry::Entry;
-use amalgam::{
-    EntryOptions, EntryWeight, Priority, Timestamp, provider::DistributedEntry,
-    provider::DistributedSerializer, provider::DistributedSnapshot, provider::JitterSample,
-    provider::JsonSerializer, provider::SnapshotRetention,
+use amalgam::provider::{
+    DistributedEntry, DistributedSerializer, DistributedSnapshot, JitterSample, JsonSerializer,
+    SnapshotRetention,
 };
+use amalgam::{EntryOptions, EntryWeight, Priority, Timestamp};
 
 type Codec = (&'static str, Box<dyn DistributedSerializer<Vec<u8>>>);
 
@@ -77,10 +78,10 @@ impl Wire {
     ) -> amalgam::Result<()> {
         match self {
             Self::Legacy => {
-                black_box(codec.deserialize(bytes)?);
+                hint::black_box(codec.deserialize(bytes)?);
             }
             Self::V2 => {
-                black_box(codec.deserialize_snapshot(bytes)?);
+                hint::black_box(codec.deserialize_snapshot(bytes)?);
             }
         }
         Ok(())
@@ -104,13 +105,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ),
                 }
                 for _ in 0..30 {
-                    black_box(wire.encode(codec.as_ref(), &snapshot)?);
+                    hint::black_box(wire.encode(codec.as_ref(), &snapshot)?);
                     wire.decode(codec.as_ref(), &bytes)?;
                 }
                 for round in 0..5 {
                     let start = Instant::now();
                     for _ in 0..operations {
-                        black_box(wire.encode(codec.as_ref(), &snapshot)?);
+                        hint::black_box(wire.encode(codec.as_ref(), &snapshot)?);
                     }
                     let encode_ns = start.elapsed().as_nanos() as f64 / operations as f64;
                     let start = Instant::now();

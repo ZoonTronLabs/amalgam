@@ -1,13 +1,14 @@
 //! Physical data keys and reverse backplane decoding preserve every wire mode.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, EntryOptions, advanced::KeyModifierMode, provider::DistributedCache,
-    provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,
-    provider::SystemClock,
-};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use amalgam::advanced::KeyModifierMode;
+use amalgam::provider::{
+    DistributedCache, InMemoryDistributedCache, InProcessBackplane, JsonSerializer, SystemClock,
+};
+use amalgam::{Cache, EntryOptions};
 
 #[tokio::test]
 async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() {

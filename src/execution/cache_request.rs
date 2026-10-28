@@ -1,13 +1,13 @@
 //! A cache-bound cancellation view without an owned work scope. Reading a
 //! terminal reason never invokes listeners or destroys user work. Only an
 //! actual outgoing link subscribes this view for independent shutdown delivery.
-use super::{
-    CancelWork, CancellationState, Reason, Request, RequestOwner, Scopes, TrackedCancellation,
-    finish_tracking,
-};
 use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
+
+use super::{
+    CancelWork, CancellationState, Reason, Request, RequestOwner, Scopes, TrackedCancellation,
+};
 
 pub(crate) struct CacheBinding {
     pub(super) registry: Arc<Scopes>,
@@ -26,7 +26,7 @@ impl CacheBinding {
     }
     pub(super) fn finish(&self) {
         if let Some(tracking) = self.tracking.get() {
-            finish_tracking(tracking);
+            super::finish_tracking(tracking);
         }
     }
     pub(super) fn reason(&self) -> Option<Reason> {

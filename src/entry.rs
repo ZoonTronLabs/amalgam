@@ -2,10 +2,11 @@
 //! freshness, fail-safe and eager-refresh decisions.
 
 mod plain;
-pub(crate) use plain::{DefaultFreshPlan, PlainMetadata, PlainReplacement};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+pub(crate) use plain::{DefaultFreshPlan, PlainMetadata, PlainReplacement};
 
 use crate::error::{ConfigError, Result};
 use crate::options::{

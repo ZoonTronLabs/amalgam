@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use amalgam::{Cache, CacheEvent, EntryOptions, Plugin, provider::InProcessBackplane};
+use amalgam::provider::InProcessBackplane;
+use amalgam::{Cache, CacheEvent, EntryOptions, Plugin};
 
 #[derive(Default)]
 struct LifecycleCounts {

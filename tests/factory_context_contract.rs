@@ -1,11 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, EntryOptions, Tag, TagError, provider::Clock, provider::InMemoryDistributedCache,
-    provider::JsonSerializer, provider::ManualClock,
-};
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::provider::{Clock, InMemoryDistributedCache, JsonSerializer, ManualClock};
+use amalgam::{Cache, EagerThreshold, EntryOptions, FactoryContext, FactoryError, Tag, TagError};
 
 fn tags(values: &[&str]) -> Box<[Tag]> {
     values
@@ -30,7 +31,7 @@ async fn factory_exposes_raw_key_and_current_tags_without_decoding_the_prefix() 
                 assert_eq!(ctx.stale_tags(), None);
                 ctx.try_set_tags(["adapted"]).unwrap();
                 assert_eq!(ctx.tags().unwrap(), &*tags(&["adapted"]));
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
         .tags(tags(&["call"]))
@@ -62,7 +63,7 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
     first
         .get_or_set(
             "raw",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .tags(tags(&["stored"]))
         .await
@@ -108,7 +109,7 @@ async fn invalid_legacy_tags_are_visible_as_a_typed_error_and_cannot_be_committe
             amalgam::source::factory(|mut ctx| async move {
                 ctx.set_tags([" "]);
                 assert_eq!(ctx.tags(), Err(TagError::Blank));
-                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                Ok::<_, FactoryError>(ctx.value(1))
             }),
         )
         .await;
@@ -126,14 +127,14 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
         .key_prefix("scope:")
         .default_options(
             EntryOptions::new(Duration::from_secs(10))
-                .with_eager_refresh(Some(amalgam::EagerThreshold::new(0.5).unwrap())),
+                .with_eager_refresh(Some(EagerThreshold::new(0.5).unwrap())),
         )
         .try_build()
         .unwrap();
     cache
         .get_or_set(
             "scope:raw",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .tags(tags(&["stored"]))
         .await
@@ -150,7 +151,7 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
                     assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]));
                     assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]));
                     done.send(()).unwrap();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(8))
+                    Ok::<_, FactoryError>(ctx.value(8))
                 })
             )
             .tags(tags(&["new-call"]))
@@ -169,8 +170,8 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

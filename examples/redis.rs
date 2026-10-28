@@ -13,12 +13,11 @@
 mod demo {
     use std::sync::Arc;
 
-    use {
-        amalgam::Cache, amalgam::provider::Backplane, amalgam::provider::DistributedCache,
-        amalgam::provider::DistributedLocker, amalgam::provider::DistributedSerializer,
-        amalgam::provider::JsonSerializer, amalgam::provider::RedisBackplane,
-        amalgam::provider::RedisDistributedCache, amalgam::provider::RedisDistributedLocker,
+    use amalgam::provider::{
+        Backplane, DistributedCache, DistributedLocker, DistributedSerializer, JsonSerializer,
+        RedisBackplane, RedisDistributedCache, RedisDistributedLocker,
     };
+    use amalgam::{Cache, FactoryError};
 
     pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let url =
@@ -49,9 +48,7 @@ mod demo {
                 "greeting",
                 amalgam::source::factory(|ctx| async move {
                     println!("  factory ran (cache miss) — fetching from the source");
-                    Ok::<_, amalgam::FactoryError>(
-                        ctx.value("hello from a Redis-backed amalgam".to_owned()),
-                    )
+                    Ok::<_, FactoryError>(ctx.value("hello from a Redis-backed amalgam".to_owned()))
                 }),
             )
             .await?;
@@ -62,7 +59,7 @@ mod demo {
                 "greeting",
                 amalgam::source::factory(|ctx| async move {
                     println!("  (this should NOT print — served from cache/L2)");
-                    Ok::<_, amalgam::FactoryError>(ctx.value("unused".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("unused".to_owned()))
                 }),
             )
             .await?;

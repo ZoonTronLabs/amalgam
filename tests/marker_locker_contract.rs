@@ -1,12 +1,28 @@
 //! Public ownership, recheck and cancellation contracts for marker refresh.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::result::Result as StdResult;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, LeasePolicy, MarkerAdvanceOutcome, MarkerError, MarkerKind,
+    MarkerLifecyclePolicy, MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy, MarkerSnapshot,
+    MarkerSnapshotCache, MarkerSnapshotCacheError, MarkerSnapshotParticipation, MarkerSnapshotRead,
+    MarkerSnapshotRenewal, MarkerVersion, ReconciliationPolicy, RecoveryWork,
+};
+use amalgam::provider::{
+    Clock, DistributedLocker, InMemoryDistributedCache, InMemoryDistributedLocker,
+    InMemoryInvalidationStore, InvalidationStore, JsonSerializer, LeaseError, LeaseProof,
+    LeaseReceipt, LeaseSupport, LeaseToken, LeaseTtl, ManualClock, OwnershipCheck,
+    TokenAcquisition,
+};
+use amalgam::{
+    Cache, CacheEvent, CancellationSource, EagerThreshold, EntryOptions, Error,
+    FactoryCancellation, FactoryCancellationReason, FactoryError, RecoveryConfig, Result, Tag,
+    Timeout, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 fn time(seconds: i64) -> Timestamp {
@@ -106,7 +122,7 @@ impl Snapshots {
         kind: &MarkerKind,
         fenced: bool,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<(), MarkerSnapshotCacheError> {
+    ) -> StdResult<(), MarkerSnapshotCacheError> {
         self.writes.lock().unwrap().push((kind.clone(), fenced));
         if *kind == group() {
             self.tokens.lock().unwrap().push(cancellation);
@@ -129,7 +145,7 @@ impl MarkerSnapshotCache for Snapshots {
         kind: &MarkerKind,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRead, MarkerSnapshotCacheError> {
         self.reads.lock().unwrap().push(kind.clone());
         if *kind == group() {
             self.read_tokens.lock().unwrap().push(cancellation.clone());
@@ -152,7 +168,7 @@ impl MarkerSnapshotCache for Snapshots {
         snapshot: MarkerSnapshot,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         self.before_write(kind, false, cancellation.clone()).await?;
         self.inner
             .renew_snapshot(scope, kind, snapshot, now, cancellation)
@@ -166,7 +182,7 @@ impl MarkerSnapshotCache for Snapshots {
         now: Timestamp,
         proof: &LeaseProof,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         self.before_write(kind, true, cancellation.clone()).await?;
         self.inner
             .renew_snapshot_with_lease(scope, kind, snapshot, now, proof, cancellation)
@@ -185,7 +201,7 @@ impl InvalidationStore for Store {
         &self,
         scope: &CacheScope,
         kind: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.snapshots.inner.read(scope, kind).await
     }
     async fn advance(
@@ -193,7 +209,7 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         kind: MarkerKind,
         candidate: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.snapshots.inner.advance(scope, kind, candidate).await
     }
 }
@@ -282,7 +298,7 @@ impl DistributedLocker for Locker {
         token: &LeaseToken,
         ttl: LeaseTtl,
         timeout: Timeout,
-    ) -> std::result::Result<Option<LeaseReceipt>, LeaseError> {
+    ) -> StdResult<Option<LeaseReceipt>, LeaseError> {
         self.acquired
             .lock()
             .unwrap()
@@ -712,9 +728,7 @@ async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
             .cache
             .get_or_set(
                 "new-value",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(11))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(11)) })
             )
             .await
             .unwrap(),

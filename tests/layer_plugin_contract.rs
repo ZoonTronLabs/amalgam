@@ -1,13 +1,26 @@
 //! Selected layer hooks are counted and dispatched after cache coordination.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    BlockingRuntime, CachePlugin, CachePluginContext, CacheScope, ComponentRead, KeyModifierMode,
+    LayerEvent, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, MarkerVersion, MemoryEvent,
+    PluginHost, PluginObservations,
+};
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, JsonSerializer, ManualClock,
+};
+use amalgam::{
+    BlockingCache, Cache, CacheEvent, CacheOperation, EntryOptions, Error, Events, FactoryContext,
+    FactoryError, Plugin, PluginContext, PluginError, PluginSession, PluginStage,
+    PluginStopOutcome, Result, Tag, Timeout, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 #[derive(Default)]
@@ -150,7 +163,7 @@ impl CachePlugin<u64> for Reentrant {
     fn attach(
         &self,
         context: &CachePluginContext<u64>,
-    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+    ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         Ok(Box::new(ReentrantSession {
             context: context.clone(),
             runtime: self.runtime.clone(),
@@ -162,10 +175,10 @@ impl PluginSession for ReentrantSession {
     fn observations(&self) -> PluginObservations {
         PluginObservations::All
     }
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
-    fn on_layer_event(&self, event: &LayerEvent) -> std::result::Result<(), PluginError> {
+    fn on_layer_event(&self, event: &LayerEvent) -> StdResult<(), PluginError> {
         if let LayerEvent::Memory(MemoryEvent::Set { key }) = event
             && key.as_ref() == "caller"
         {
@@ -226,7 +239,7 @@ struct GatedBackend {
 }
 #[async_trait]
 impl DistributedCache for GatedBackend {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {
@@ -295,11 +308,11 @@ async fn detach_waits_for_captured_layer_callbacks_and_cancellation_does_not_los
 }
 
 struct Failing {
-    source: Arc<std::io::Error>,
+    source: Arc<IoError>,
     stops: Arc<AtomicUsize>,
 }
 struct FailureSession {
-    source: Arc<std::io::Error>,
+    source: Arc<IoError>,
     stops: Arc<AtomicUsize>,
 }
 impl Plugin for Failing {
@@ -307,10 +320,7 @@ impl Plugin for Failing {
         "failing-layer"
     }
     fn on_event(&self, _: &CacheEvent) {}
-    fn attach(
-        &self,
-        _: &PluginContext,
-    ) -> std::result::Result<Option<Box<dyn PluginSession>>, PluginError> {
+    fn attach(&self, _: &PluginContext) -> StdResult<Option<Box<dyn PluginSession>>, PluginError> {
         Ok(Some(Box::new(FailureSession {
             source: self.source.clone(),
             stops: self.stops.clone(),
@@ -321,17 +331,17 @@ impl PluginSession for FailureSession {
     fn observations(&self) -> PluginObservations {
         PluginObservations::All
     }
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
-    fn on_layer_event(&self, _: &LayerEvent) -> std::result::Result<(), PluginError> {
+    fn on_layer_event(&self, _: &LayerEvent) -> StdResult<(), PluginError> {
         Err(PluginError::from_source(
             "failing-layer",
             PluginStage::Event,
             self.source.clone(),
         ))
     }
-    fn stop(&self) -> std::result::Result<(), PluginError> {
+    fn stop(&self) -> StdResult<(), PluginError> {
         self.stops.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -340,7 +350,7 @@ impl PluginSession for FailureSession {
 #[test]
 fn checked_layer_emission_retains_the_original_failure_and_still_sends_the_stream() {
     let events = Events::default();
-    let source = Arc::new(std::io::Error::other("original layer failure"));
+    let source = Arc::new(IoError::other("original layer failure"));
     let stops = Arc::new(AtomicUsize::new(0));
     let plugin = Arc::new(Failing {
         source: source.clone(),
@@ -366,7 +376,7 @@ fn checked_layer_emission_retains_the_original_failure_and_still_sends_the_strea
         panic!("original handler cause must be retained")
     };
     assert!(Arc::ptr_eq(
-        original.downcast_ref::<Arc<std::io::Error>>().unwrap(),
+        original.downcast_ref::<Arc<IoError>>().unwrap(),
         &source
     ));
     assert!(host.stop_all().is_empty());
@@ -380,10 +390,10 @@ impl PluginSession for PanickingInterest {
     fn observations(&self) -> PluginObservations {
         panic!("observer contract failure")
     }
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
-    fn stop(&self) -> std::result::Result<(), PluginError> {
+    fn stop(&self) -> StdResult<(), PluginError> {
         self.stops.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -396,10 +406,7 @@ impl Plugin for BadInterest {
         "bad-interest"
     }
     fn on_event(&self, _: &CacheEvent) {}
-    fn attach(
-        &self,
-        _: &PluginContext,
-    ) -> std::result::Result<Option<Box<dyn PluginSession>>, PluginError> {
+    fn attach(&self, _: &PluginContext) -> StdResult<Option<Box<dyn PluginSession>>, PluginError> {
         Ok(Some(Box::new(PanickingInterest {
             stops: self.stops.clone(),
         })))
@@ -456,7 +463,7 @@ impl CachePlugin<u64> for MarkerReentrant {
     fn attach(
         &self,
         context: &CachePluginContext<u64>,
-    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+    ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         Ok(Box::new(MarkerSession {
             context: context.clone(),
             runtime: self.runtime.clone(),
@@ -470,7 +477,7 @@ impl PluginSession for MarkerSession {
     fn observations(&self) -> PluginObservations {
         PluginObservations::All
     }
-    fn on_event(&self, event: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, event: &CacheEvent) -> StdResult<(), PluginError> {
         if self.fact.selects(event) && self.seen.fetch_add(1, Ordering::SeqCst) == 0 {
             let value = self
                 .context
@@ -561,7 +568,7 @@ fn marker_observer_after_value_commit(fact: MarkerFact) {
         cache
             .get_or_set(
                 "caller",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(29)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(29)))
             )
             .execute()
             .unwrap(),
@@ -591,7 +598,7 @@ fn selected_marker_snapshot_observer_runs_after_the_ordinary_value_flight_and_co
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }

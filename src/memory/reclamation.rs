@@ -1,7 +1,8 @@
 //! An operation retains retired values until its coordination guards are gone.
+use std::sync::{Arc, Mutex};
+
 use crate::entry::Entry;
 use crate::plugins::PendingPluginEvent;
-use std::sync::{Arc, Mutex};
 
 pub(crate) trait ReclamationFence: Send + Sync {}
 pub(super) struct Garbage<V> {
@@ -132,13 +133,13 @@ impl<G> std::ops::Deref for ReclamationGuard<G> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        EntryOptions, Events, Timestamp, provider::ManualClock, provider::MemoryLimits,
-        provider::MemoryStore,
-    };
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Context;
+
+    use super::*;
+    use crate::provider::{ManualClock, MemoryLimits, MemoryStore};
+    use crate::{EntryOptions, Events, Timestamp};
     #[derive(Clone)]
     struct Probe {
         lock: Arc<tokio::sync::Mutex<()>>,
@@ -192,7 +193,7 @@ mod tests {
             if polled {
                 assert!(
                     work.as_mut()
-                        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                        .poll(&mut Context::from_waker(std::task::Waker::noop()))
                         .is_pending()
                 );
             }

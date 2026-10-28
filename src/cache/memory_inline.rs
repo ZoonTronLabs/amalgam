@@ -1,5 +1,9 @@
 //! Synchronous built-in L1 commits. Payloads are prepared before coordination;
 //! observations and destruction follow the short revision/storage critical section.
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use super::{
     Arc, Cache, CacheEvent, CacheOperation, CommitReport, EffectOutcome, Entry, EntryOptions,
     FactoryCancellation, KeyMutation, LocalEffect, MemoryAdmission, MutationReceipt,
@@ -9,20 +13,17 @@ use crate::memory::{CacheMemory, MemoryStore};
 
 pub(super) enum MutationStart<'a, T = MutationReceipt> {
     Ready(Result<T>),
-    Pending(std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send + 'a>>),
+    Pending(Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>),
     Done,
 }
-impl<T: Unpin> std::future::Future for MutationStart<'_, T> {
+impl<T: Unpin> Future for MutationStart<'_, T> {
     type Output = Result<T>;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        context: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let state = self.get_mut();
         match state {
             Self::Pending(work) => work.as_mut().poll(context),
             Self::Ready(_) => match std::mem::replace(state, Self::Done) {
-                Self::Ready(result) => std::task::Poll::Ready(result),
+                Self::Ready(result) => Poll::Ready(result),
                 Self::Pending(_) | Self::Done => {
                     unreachable!("ready mutation changed without polling")
                 }

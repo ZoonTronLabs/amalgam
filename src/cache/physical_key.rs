@@ -5,6 +5,7 @@
 //! `String` for every access; longer keys allocate once. A ready L1 hit with a
 //! prefixed key of that size allocates nothing, and an owned copy is made only
 //! when work outlives the call.
+use std::fmt::{Formatter, Result as FmtResult};
 use std::sync::Arc;
 
 pub(super) const INLINE_KEY: usize = 64;
@@ -59,7 +60,7 @@ impl std::ops::Deref for PhysicalKey<'_> {
     }
 }
 impl std::fmt::Display for PhysicalKey<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
         formatter.write_str(self)
     }
 }

@@ -1,11 +1,13 @@
 //! Typed plugin access to the owning cache without a public lifetime cycle.
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::ops::Deref;
+use std::sync::Mutex;
+
 use super::{
     Arc, BlockingCache, BlockingRuntime, Cache, CacheInner, InlinePermit, MemoryAcquireRoute,
     NativeMemoryWork, PublicLifetime, Scopes, Weak, Worker,
 };
 use crate::plugins::{Plugin, PluginContext, PluginError, PluginSession};
-use std::ops::Deref;
-use std::sync::Mutex;
 
 /// Open plugin behavior with access to the same typed cache as its caller.
 /// Legacy [`Plugin`] implementations remain supported independently.
@@ -42,8 +44,8 @@ impl<V: Clone + Send + Sync + 'static> Clone for CachePluginContext<V> {
         }
     }
 }
-impl<V: Clone + Send + Sync + 'static> std::fmt::Debug for CachePluginContext<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<V: Clone + Send + Sync + 'static> Debug for CachePluginContext<V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("CachePluginContext")
             .field("context", &self.context)
             .finish_non_exhaustive()

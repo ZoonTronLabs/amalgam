@@ -1,19 +1,38 @@
 //! External provider contracts, independent of the built-in memory algorithms.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::entry::Entry;
-use amalgam::locking::KeyedLock;
-use amalgam::provider::*;
-use amalgam::*;
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
+use amalgam::advanced::{
+    EvictionCapture, EvictionReceiveError, LayerEvent, LocalEffect, MemoryEvent,
+    MemoryEvictionReason, PluginObservations, ValidatorUpdate,
+};
+use amalgam::entry::Entry;
+use amalgam::locking::KeyedLock;
+use amalgam::provider::{
+    CapacityRejection, Clock, DistributedCache, InMemoryDistributedCache, InvalidationStore,
+    JsonSerializer, ManualClock, MemoryAdmission, MemoryCondition, MemoryGeneration,
+    MemoryNamespace, MemoryRecord, MemoryStorage, MemoryStorageEpoch, MemoryStorageError,
+    MemoryStorageWrite, MemoryUsage, SystemClock,
+};
+use amalgam::{
+    BlockingCache, Cache, CacheEvent, CancellationSource, ClearMode, ConfigError, EagerThreshold,
+    EntryOptions, Error, FactoryCancellationReason, OperationOutcome, Plugin, Priority, Result,
+    Timeout, Timestamp,
+};
+
 #[path = "support/memory_storage_fixture.rs"]
 mod storage_fixture;
+use std::future::Future;
+use std::result::Result as StdResult;
+
+use amalgam::provider::DistributedBytes;
+use amalgam::{FactoryContext, FactoryError};
 use storage_fixture::{ClearGate, Fault, Limit, MapStorage};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 fn opts() -> EntryOptions {
     EntryOptions::new(Duration::from_secs(60))
@@ -123,9 +142,7 @@ async fn disabled_store_returns_computed_value_with_rejected_admission() {
     assert_eq!(
         c.get_or_set(
             "key",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(12)) }
-            )
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(12)) })
         )
         .await
         .unwrap(),
@@ -242,7 +259,7 @@ async fn supplied_memory_preserves_same_key_single_flight() {
                 amalgam::source::factory(move |ctx| async move {
                     runs.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(20)).await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(19))
+                    Ok::<_, FactoryError>(ctx.value(19))
                 }),
             )
             .await
@@ -268,7 +285,7 @@ async fn unrelated_factories_enter_before_either_completes() {
                 key,
                 amalgam::source::factory(move |ctx| async move {
                     barrier.wait().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(23))
+                    Ok::<_, FactoryError>(ctx.value(23))
                 }),
             )
             .await
@@ -348,9 +365,7 @@ async fn fail_safe_keeps_the_supplied_representation() {
         .unwrap();
     c.get_or_set(
         "stale",
-        amalgam::source::factory(
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(37)) },
-        ),
+        amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(37)) }),
     )
     .await
     .unwrap();
@@ -393,9 +408,7 @@ async fn eager_refresh_updates_the_supplied_store_in_the_background() {
     assert_eq!(
         c.get_or_set(
             "eager",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(43)) }
-            )
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(43)) })
         )
         .await
         .unwrap(),
@@ -645,7 +658,7 @@ fn native_and_async_views_use_the_same_supplied_store_and_typed_failure() {
             .unwrap(),
         89
     );
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -672,7 +685,7 @@ async fn skipped_memory_options_do_not_touch_the_provider() {
     assert_eq!(
         c.get_or_set(
             "skip",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(97)) })
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(97)) })
         )
         .options(|_| skipped.clone())
         .await
@@ -715,7 +728,7 @@ impl MemoryStorage<u64> for Unstable {
     fn epoch(&self, _: &MemoryNamespace) -> MemoryStorageEpoch {
         MemoryStorageEpoch::new()
     }
-    fn get(&self, _: &str) -> std::result::Result<Option<MemoryRecord<u64>>, MemoryStorageError> {
+    fn get(&self, _: &str) -> StdResult<Option<MemoryRecord<u64>>, MemoryStorageError> {
         panic!("invalid provider reached lookup")
     }
     fn insert(
@@ -723,23 +736,23 @@ impl MemoryStorage<u64> for Unstable {
         _: MemoryRecord<u64>,
         _: MemoryCondition<'_, u64>,
         _: Timestamp,
-    ) -> std::result::Result<MemoryStorageWrite<u64>, MemoryStorageError> {
+    ) -> StdResult<MemoryStorageWrite<u64>, MemoryStorageError> {
         panic!("invalid provider reached write")
     }
     fn remove(
         &self,
         _: &str,
         _: Option<&Entry<u64>>,
-    ) -> std::result::Result<Option<MemoryRecord<u64>>, MemoryStorageError> {
+    ) -> StdResult<Option<MemoryRecord<u64>>, MemoryStorageError> {
         panic!("invalid provider reached remove")
     }
     fn clear_before(
         &self,
         _: &MemoryGeneration,
-    ) -> std::result::Result<Box<[MemoryRecord<u64>]>, MemoryStorageError> {
+    ) -> StdResult<Box<[MemoryRecord<u64>]>, MemoryStorageError> {
         panic!("invalid provider reached clear")
     }
-    fn usage(&self) -> std::result::Result<MemoryUsage, MemoryStorageError> {
+    fn usage(&self) -> StdResult<MemoryUsage, MemoryStorageError> {
         panic!("invalid provider reached usage")
     }
 }
@@ -801,7 +814,7 @@ struct PausedL2 {
 }
 #[async_trait::async_trait]
 impl DistributedCache for PausedL2 {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let bytes = self.backend.get(key).await?;
         if key.ends_with("value") {
             self.entered.notify_one();
@@ -911,7 +924,7 @@ async fn soft_timeout_retains_background_completion_in_supplied_storage() {
             amalgam::source::factory(move |ctx| async move {
                 started.notify_one();
                 waiting.acquire().await.unwrap().forget();
-                Ok::<_, amalgam::FactoryError>(ctx.value(131))
+                Ok::<_, FactoryError>(ctx.value(131))
             })
         )
         .await
@@ -941,7 +954,7 @@ async fn hard_timeout_does_not_admit_a_late_value_in_supplied_storage() {
             "key",
             amalgam::source::factory(|ctx| async move {
                 tokio::time::sleep(Duration::from_millis(80)).await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(137))
+                Ok::<_, FactoryError>(ctx.value(137))
             }),
         )
         .await
@@ -1013,9 +1026,9 @@ async fn original_value_destruction_follows_provider_and_factory_guards() {
     let value = c
         .get_or_set(
             "key",
-            amalgam::source::factory(move |ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(next))
-            }),
+            amalgam::source::factory(
+                move |ctx| async move { Ok::<_, FactoryError>(ctx.value(next)) },
+            ),
         )
         .await
         .unwrap();
@@ -1119,7 +1132,7 @@ async fn conditional_refresh_preserves_replaced_validators_in_supplied_records()
     c.get_or_set(
         "conditional",
         amalgam::source::factory(|ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.modified(151).etag("v1").done())
+            Ok::<_, FactoryError>(ctx.modified(151).etag("v1").done())
         }),
     )
     .await
@@ -1129,7 +1142,7 @@ async fn conditional_refresh_preserves_replaced_validators_in_supplied_records()
         c.get_or_set(
             "conditional",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(
+                Ok::<_, FactoryError>(
                     ctx.not_modified_builder()?
                         .etag(ValidatorUpdate::Replace("v2".into()))
                         .done(),
@@ -1230,15 +1243,15 @@ fn native_warm_unused_factory_drop_precedes_final_cancellation_check() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }

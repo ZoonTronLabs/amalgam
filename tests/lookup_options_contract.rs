@@ -1,15 +1,16 @@
 //! Lookup defaults stay immutable across L2 and adaptive owned origin work.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::{
-    DefaultEntryOptionsProvider, DistributedCache, InMemoryDistributedCache, InvalidationStore,
-    JsonSerializer, ManualClock,
-};
-use amalgam::{Cache, EntryOptions, Result, source};
-use async_trait::async_trait;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::provider::{
+    DefaultEntryOptionsProvider, DistributedBytes, DistributedCache, InMemoryDistributedCache,
+    InvalidationStore, JsonSerializer, ManualClock,
+};
+use amalgam::{Cache, EntryOptions, Result, source};
+use async_trait::async_trait;
 
 #[derive(Default)]
 struct DefaultsProvider(Mutex<Vec<(String, Duration)>>);
@@ -106,7 +107,7 @@ async fn l2_lookup_preserves_raw_provider_context_and_explicit_options_precedenc
 struct YieldingBackend(Arc<InMemoryDistributedCache>);
 #[async_trait]
 impl DistributedCache for YieldingBackend {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         tokio::task::yield_now().await;
         self.0.get(key).await
     }

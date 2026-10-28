@@ -1,15 +1,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
 use std::future::IntoFuture;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::Poll;
 use std::time::Duration;
+
+use amalgam::advanced::CancellationRequest;
+use amalgam::provider::{
+    AsyncDistributedSerializer, DistributedCache, DistributedEntry, DistributedSerializer,
+    DistributedSnapshot, InMemoryDistributedCache, JsonSerializer, ManualClock, SerializationMode,
+    SystemClock,
+};
+use amalgam::{Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason, Result};
+use async_trait::async_trait;
 
 #[derive(Default)]
 struct Counts {
@@ -196,7 +200,7 @@ async fn cancelling_a_parked_async_codec_releases_it_without_committing_either_l
     );
     std::future::poll_fn(|cx| {
         assert!(operation.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
+        Poll::Ready(())
     })
     .await;
     entered.notified().await;

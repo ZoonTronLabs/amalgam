@@ -1,7 +1,8 @@
 //! Build-selected data-key encoding preserves the configured wire namespace.
+use std::sync::Arc;
+
 use super::physical_key::PhysicalKey;
 use crate::options::KeyModifierMode;
-use std::sync::Arc;
 
 pub(super) enum DistributedKey {
     Prefix(Arc<str>),

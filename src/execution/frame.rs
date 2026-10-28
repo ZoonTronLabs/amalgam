@@ -1,11 +1,12 @@
 //! First-poll ownership: count and pin work, promote only a real suspension.
 //! The transferable admission remains until work retirement or subscribed scope
 //! ownership. No thread-bound guard is stored in a future.
-use super::{CancellationSource, OwnedInlinePermit, Reason, Scope, Scopes, Work};
-use crate::error::{Error, Result};
 use std::future::Future;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+use super::{CancellationSource, OwnedInlinePermit, Reason, Scope, Scopes, Work};
+use crate::error::{Error, Result};
 
 enum Ownership<T> {
     Held(Work<T>),

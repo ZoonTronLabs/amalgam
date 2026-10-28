@@ -6,13 +6,16 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use amalgam::provider::{Clock, ManualClock};
 use amalgam::{
-    Cache, CacheEvent, EagerThreshold, EntryOptions, Error, FactoryContext, Tag, Timeout,
-    provider::Clock, provider::ManualClock,
+    Cache, CacheEvent, EagerThreshold, EntryOptions, Error, FactoryContext, FactoryError, Tag,
+    Timeout,
 };
 
 fn build<V: Clone + Send + Sync + 'static>() -> (Cache<V>, Arc<ManualClock>) {
@@ -48,7 +51,7 @@ async fn stampede_runs_factory_once() {
                     amalgam::source::factory(move |ctx| async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         tokio::time::sleep(Duration::from_millis(30)).await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                        Ok::<_, FactoryError>(ctx.value(42))
                     }),
                 )
                 .await
@@ -72,9 +75,9 @@ async fn fail_safe_serves_stale_on_factory_error() {
     let primed = cache
         .get_or_set(
             "k",
-            typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("fresh".to_owned()))
-            }),
+            typed_factory(
+                |ctx| async move { Ok::<_, FactoryError>(ctx.value("fresh".to_owned())) },
+            ),
         )
         .options(|_| opts.clone())
         .await
@@ -141,9 +144,7 @@ async fn soft_timeout_returns_stale_then_completes_in_background() {
     cache
         .get_or_set(
             "k",
-            typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned()))
-            }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value("v1".to_owned())) }),
         )
         .options(|_| opts.clone())
         .await
@@ -155,7 +156,7 @@ async fn soft_timeout_returns_stale_then_completes_in_background() {
             "k",
             typed_factory(|ctx| async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("v2".to_owned()))
             }),
         )
         .options(|_| opts)
@@ -186,7 +187,7 @@ async fn hard_timeout_without_fallback_errors() {
             "k",
             typed_factory(|ctx| async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                Ok::<_, amalgam::FactoryError>(ctx.value("v".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("v".to_owned()))
             }),
         )
         .options(|_| opts)
@@ -208,7 +209,7 @@ async fn eager_refresh_triggers_background_update() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    Ok::<_, FactoryError>(ctx.value(1))
                 }),
             )
             .options(|_| opts.clone())
@@ -225,7 +226,7 @@ async fn eager_refresh_triggers_background_update() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 }),
             )
             .options(|_| opts)
@@ -259,7 +260,7 @@ async fn expired_entry_without_fail_safe_reruns_factory() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    Ok::<_, FactoryError>(ctx.value(1))
                 }),
             )
             .options(|_| opts.clone())
@@ -275,7 +276,7 @@ async fn expired_entry_without_fail_safe_reruns_factory() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 }),
             )
             .options(|_| opts)
@@ -297,7 +298,7 @@ async fn adaptive_caching_overrides_duration() {
             "k",
             typed_factory(|mut ctx: FactoryContext<i32>| async move {
                 ctx.adapt(|o| o.with_duration(Duration::from_secs(2)));
-                Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                Ok::<_, FactoryError>(ctx.value(42))
             }),
         )
         .options(|_| long())
@@ -308,7 +309,7 @@ async fn adaptive_caching_overrides_duration() {
     let cached = cache
         .get_or_set(
             "k",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(999)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(999)) }),
         )
         .options(|_| long())
         .await
@@ -319,7 +320,7 @@ async fn adaptive_caching_overrides_duration() {
     let refreshed = cache
         .get_or_set(
             "k",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .options(|_| long())
         .await
@@ -339,9 +340,7 @@ async fn conditional_refresh_not_modified_reuses_stale_and_bumps_expiration() {
         .get_or_set(
             "k",
             typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(
-                    ctx.modified("data-v1".to_owned()).etag("abc").done(),
-                )
+                Ok::<_, FactoryError>(ctx.modified("data-v1".to_owned()).etag("abc").done())
             }),
         )
         .options(|_| opts.clone())
@@ -387,9 +386,7 @@ async fn conditional_refresh_modified_replaces_value() {
         .get_or_set(
             "k",
             typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(
-                    ctx.modified("data-v1".to_owned()).etag("abc").done(),
-                )
+                Ok::<_, FactoryError>(ctx.modified("data-v1".to_owned()).etag("abc").done())
             }),
         )
         .options(|_| opts.clone())
@@ -401,9 +398,7 @@ async fn conditional_refresh_modified_replaces_value() {
         .get_or_set(
             "k",
             typed_factory(|ctx: FactoryContext<String>| async move {
-                Ok::<_, amalgam::FactoryError>(
-                    ctx.modified("data-v2".to_owned()).etag("def").done(),
-                )
+                Ok::<_, FactoryError>(ctx.modified("data-v2".to_owned()).etag("def").done())
             }),
         )
         .options(|_| opts)
@@ -426,7 +421,7 @@ async fn remove_by_tag_invalidates_matching_entries() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    Ok::<_, FactoryError>(ctx.value(1))
                 }),
             )
             .options(|_| long())
@@ -446,7 +441,7 @@ async fn remove_by_tag_invalidates_matching_entries() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 }),
             )
             .options(|_| long())
@@ -478,7 +473,7 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    Ok::<_, FactoryError>(ctx.value(1))
                 }),
             )
             .options(|_| long())
@@ -501,7 +496,7 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 }),
             )
             .options(|_| long())
@@ -558,7 +553,7 @@ async fn allow_stale_on_read_only_serves_stale() {
     cache
         .get_or_set(
             "k",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(9)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(9)) }),
         )
         .options(|_| opts)
         .await
@@ -589,9 +584,7 @@ async fn events_are_emitted() {
     let _ = cache
         .get_or_set(
             "k",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(1)) },
-            ),
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(1)) }),
         )
         .await
         .unwrap();
@@ -613,8 +606,8 @@ async fn events_are_emitted() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

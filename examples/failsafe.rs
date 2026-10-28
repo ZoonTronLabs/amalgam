@@ -20,9 +20,11 @@
 //! cargo run --example failsafe
 //! ```
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::time::Duration;
 
-use amalgam::{Cache, CacheEvent, EntryOptions};
+use amalgam::{Cache, CacheEvent, EntryOptions, FactoryContext, FactoryError};
 
 #[tokio::main]
 async fn main() {
@@ -46,7 +48,7 @@ async fn main() {
         .get_or_set(
             "report",
             typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("GOOD report data".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("GOOD report data".to_owned()))
             }),
         )
         .options(|_| opts.clone())
@@ -96,8 +98,8 @@ async fn main() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

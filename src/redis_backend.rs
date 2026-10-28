@@ -5,7 +5,6 @@
 //! hashes and ownership keys consequently cannot be overwritten by ordinary data.
 //! V2 backplane frames accept legacy pipe input; old readers require namespace
 //! migration. The subscriber owns bounded push delivery and explicit reconnect ACKs.
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,8 +15,9 @@ use redis::{Client, Msg, ProtocolVersion, PushInfo, PushKind};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
+use crate::backplane;
 use crate::backplane::{
-    Backplane, BackplaneAction, BackplaneMessage, BackplaneState, ContinuityEpoch, encode_hex,
+    Backplane, BackplaneAction, BackplaneMessage, BackplaneState, ContinuityEpoch,
 };
 use crate::distributed::{DistributedCache, InvalidationStore, LeasedMutation, LeasedWriteOutcome};
 use crate::distributed_lock::{
@@ -212,23 +212,29 @@ async fn connect_manager(
 
 fn value_key(key: &str) -> String {
     if key.starts_with(PRIVATE_AREA) {
-        format!("{PRIVATE_AREA}data/{}", encode_hex(key.as_bytes()))
+        format!(
+            "{PRIVATE_AREA}data/{}",
+            backplane::encode_hex(key.as_bytes())
+        )
     } else {
         key.to_owned()
     }
 }
 fn lease_key(key: &str) -> String {
-    format!("{PRIVATE_AREA}lease/{}", encode_hex(key.as_bytes()))
+    format!(
+        "{PRIVATE_AREA}lease/{}",
+        backplane::encode_hex(key.as_bytes())
+    )
 }
 fn marker_key(scope: &CacheScope) -> String {
     format!(
         "{PRIVATE_AREA}markers/{}",
-        encode_hex(scope.storage_id().as_bytes())
+        backplane::encode_hex(scope.storage_id().as_bytes())
     )
 }
 fn marker_field(kind: &MarkerKind) -> String {
     match kind {
-        MarkerKind::Tag(tag) => format!("t:{}", encode_hex(tag.as_str().as_bytes())),
+        MarkerKind::Tag(tag) => format!("t:{}", backplane::encode_hex(tag.as_str().as_bytes())),
         MarkerKind::ClearExpire => "e".into(),
         MarkerKind::ClearRemove => "r".into(),
     }
@@ -237,7 +243,7 @@ fn marker_field(kind: &MarkerKind) -> String {
 fn marker_snapshot_key(scope: &CacheScope, kind: &MarkerKind) -> String {
     format!(
         "{PRIVATE_AREA}marker-snapshots/{}/{}",
-        encode_hex(scope.storage_id().as_bytes()),
+        backplane::encode_hex(scope.storage_id().as_bytes()),
         marker_field(kind)
     )
 }
@@ -1632,8 +1638,10 @@ fn duration_to_millis(duration: Duration) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::error::Error as _;
+    use std::sync::Arc;
+
+    use super::*;
 
     mod fixture {
         include!(concat!(
@@ -1641,7 +1649,6 @@ mod tests {
             "/tests/support/redis_fixture.rs"
         ));
     }
-    use fixture::redis_url;
 
     fn disconnected_inner() -> BackplaneInner {
         let (sender, _) = broadcast::channel(1);
@@ -1784,7 +1791,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_set_get_remove_round_trip() {
-        let Some(url) = redis_url() else {
+        let Some(url) = fixture::redis_url() else {
             return;
         };
         let cache = RedisDistributedCache::connect(url)
@@ -1809,7 +1816,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_honours_px_expiry() {
-        let Some(url) = redis_url() else {
+        let Some(url) = fixture::redis_url() else {
             return;
         };
         let cache = RedisDistributedCache::connect(url)
@@ -1833,7 +1840,7 @@ mod tests {
 
     #[tokio::test]
     async fn locker_is_exclusive_until_released() {
-        let Some(url) = redis_url() else {
+        let Some(url) = fixture::redis_url() else {
             return;
         };
         let locker = RedisDistributedLocker::connect(url)
@@ -1878,7 +1885,7 @@ mod tests {
 
     #[tokio::test]
     async fn release_with_wrong_token_is_noop() {
-        let Some(url) = redis_url() else {
+        let Some(url) = fixture::redis_url() else {
             return;
         };
         let locker = RedisDistributedLocker::connect(url)
@@ -1909,7 +1916,7 @@ mod tests {
 
     #[tokio::test]
     async fn backplane_publish_is_received_by_subscriber() {
-        let Some(url) = redis_url() else {
+        let Some(url) = fixture::redis_url() else {
             return;
         };
         let backplane = RedisBackplane::connect(url)
@@ -1920,7 +1927,7 @@ mod tests {
         // Give the background SUBSCRIBE a moment to register on the server.
         tokio::time::sleep(Duration::from_millis(150)).await;
 
-        let key: std::sync::Arc<str> = unique_key("backplane").into();
+        let key: Arc<str> = unique_key("backplane").into();
         let sent = BackplaneMessage {
             source_id: "publisher".into(),
             timestamp: Timestamp::from_ticks(987_654_321),

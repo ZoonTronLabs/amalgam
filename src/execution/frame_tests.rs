@@ -1,5 +1,3 @@
-use super::{CancellationSource, Execution, FactoryCancellation, LinkMode, Scopes};
-use crate::error::{Error, FactoryCancellationReason as Reason, Result};
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::pin::Pin;
@@ -7,6 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Poll};
 use std::time::Duration;
+
+use super::{CancellationSource, Execution, FactoryCancellation, LinkMode, Scopes};
+use crate::error::{Error, FactoryCancellationReason as Reason, Result};
 
 struct Retirement {
     token: FactoryCancellation,

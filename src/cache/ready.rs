@@ -1,4 +1,6 @@
 //! A ready lookup borrows state unless startup or health can retire values.
+use tokio::runtime::Handle;
+
 use super::{
     Cache, CacheEvent, CacheInner, ConfigError, Entry, EntryOptions, MarkerAccess, MarkerKind,
     MarkerReadOutcome, MarkerReadPolicy, MarkerReads, OptionsTarget, Ordering, Result,
@@ -33,7 +35,7 @@ impl RuntimeRequirement {
     pub(super) fn validate(self) -> Result<()> {
         match self {
             Self::Inline => Ok(()),
-            Self::Runtime if tokio::runtime::Handle::try_current().is_ok() => Ok(()),
+            Self::Runtime if Handle::try_current().is_ok() => Ok(()),
             Self::Runtime => Err(ConfigError::MissingRuntime {
                 component: RuntimeComponent::Execution,
             }
@@ -74,8 +76,8 @@ impl<V: Clone + Send + Sync + 'static> ReadyContext<'_, V> {
 
 impl<V: Clone + Send + Sync + 'static> Cache<V> {
     pub(super) fn ready_context(&self) -> ReadyContext<'_, V> {
-        let starts_maintenance = !self.inner.maintenance.load(Ordering::Acquire)
-            && tokio::runtime::Handle::try_current().is_ok();
+        let starts_maintenance =
+            !self.inner.maintenance.load(Ordering::Acquire) && Handle::try_current().is_ok();
         if self.inner.backplane.is_some() || starts_maintenance {
             let worker = self.worker();
             worker.start_maintenance();
@@ -102,9 +104,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         self.validate_runtime_options(opts, target)
     }
     fn validate_runtime_options(&self, opts: &EntryOptions, target: OptionsTarget) -> Result<()> {
-        if self.options_require_runtime(opts, target)
-            && tokio::runtime::Handle::try_current().is_err()
-        {
+        if self.options_require_runtime(opts, target) && Handle::try_current().is_err() {
             return Err(ConfigError::MissingRuntime {
                 component: RuntimeComponent::Execution,
             }

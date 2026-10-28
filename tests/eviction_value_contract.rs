@@ -1,13 +1,21 @@
 //! Original stored values, bounded cursors and producer reentrancy boundaries.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::entry::Entry;
-use amalgam::provider::*;
-use amalgam::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
+
+use amalgam::advanced::{EvictionCapture, EvictionReceiveError, MemoryEvictionReason};
+use amalgam::entry::Entry;
+use amalgam::provider::{
+    Clock, DistributedBytes, DistributedCache, DistributedEntry, DistributedSerializer,
+    ManualClock, MemoryLimits, MemoryStore,
+};
+use amalgam::{
+    BlockingCache, Cache, CacheBuilder, CancellationSource, ClearMode, EntryOptions, Error, Events,
+    FactoryError, RecoveryConfig, Result, Tag, Timestamp,
+};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 fn clock() -> Arc<ManualClock> {
     Arc::new(ManualClock::new(Timestamp::from_ticks(10_000_000)))
@@ -491,9 +499,7 @@ fn factory_replacement_releases_origin_coordination_before_old_value_destructor(
             cache
                 .get_or_set(
                     "k",
-                    amalgam::source::factory(|ctx| {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(quiet()))
-                    }),
+                    amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(quiet()))),
                 )
                 .execute()
                 .unwrap();
@@ -634,7 +640,7 @@ fn standalone_store_preserves_original_entry_identity() {
                 None,
                 None,
             );
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = RuntimeBuilder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
@@ -651,7 +657,7 @@ struct PausedWrite {
 }
 #[async_trait::async_trait]
 impl DistributedCache for PausedWrite {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {
@@ -725,7 +731,7 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
                 .unwrap()
                 .wait()
                 .unwrap();
-            let runtime = tokio::runtime::Builder::new_multi_thread()
+            let runtime = RuntimeBuilder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
                 .build()

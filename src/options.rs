@@ -7,7 +7,7 @@
 //! * timeouts are a [`Timeout`] enum rather than a `-1ms` negative sentinel;
 //! * the eager-refresh threshold is an [`EagerThreshold`] newtype that can only
 //!   hold a value in the open interval `(0, 1)`.
-
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::error::ConfigError;
@@ -43,10 +43,10 @@ impl JitterSource for RandomJitterSource {
 /// remain open behavior, including when their requested maximum is zero.
 pub(crate) enum JitterPlan {
     Standard,
-    Configured(std::sync::Arc<dyn JitterSource>),
+    Configured(Arc<dyn JitterSource>),
 }
 impl JitterPlan {
-    pub(crate) fn select(source: Option<std::sync::Arc<dyn JitterSource>>) -> Self {
+    pub(crate) fn select(source: Option<Arc<dyn JitterSource>>) -> Self {
         match source {
             None => Self::Standard,
             Some(source) => Self::Configured(source),

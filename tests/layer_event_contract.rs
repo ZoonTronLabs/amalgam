@@ -1,13 +1,31 @@
 //! Component facts differ from logical acceptance, bypass and cancellation.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::future::Future;
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    BackplaneEvent, CacheScope, DistributedEvent, EffectOutcome, LayerEvent, LocalEffect,
+    MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerVersion, MemoryEvent,
+    ReconciliationPolicy, StoredMarker,
+};
+use amalgam::provider::{
+    Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState, Clock,
+    DistributedBytes, DistributedCache, DistributedEntry, DistributedSerializer,
+    InMemoryDistributedCache, InProcessBackplane, InvalidationStore, JsonSerializer, ManualClock,
+    MemoryAdmission,
+};
+#[cfg(feature = "redis")]
+use amalgam::provider::{RedisBackplane, RedisDistributedCache, RedisDistributedLocker};
+use amalgam::{
+    Cache, CacheEvent, CancellationSource, EntryOptions, Error, Events, FactoryCancellationReason,
+    FactoryContext, FactoryError, RecoveryConfig, Result, Tag, Timeout, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore, broadcast};
 
 fn options() -> EntryOptions {
@@ -52,7 +70,7 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
             "k",
             typed_factory(move |ctx| async move {
                 counter.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(17))
+                Ok::<_, FactoryError>(ctx.value(17))
             })
         )
         .await
@@ -328,14 +346,12 @@ impl Store {
 }
 #[async_trait]
 impl DistributedCache for Store {
-    async fn get(&self, k: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, k: &str) -> Result<Option<DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         match self.phase() {
             Phase::Healthy => {}
             Phase::Unavailable => {
-                return Err(Error::distributed(std::io::Error::other(
-                    "original unavailable",
-                )));
+                return Err(Error::distributed(IoError::other("original unavailable")));
             }
             Phase::Gated => {
                 self.entered.notify_one();
@@ -472,7 +488,7 @@ async fn caller_cancellation_does_not_become_a_layer_miss_or_codec_failure() {
 struct RejectEncode;
 impl DistributedSerializer<u64> for RejectEncode {
     fn serialize(&self, _: &DistributedEntry<u64>) -> Result<Vec<u8>> {
-        Err(Error::serialization(std::io::Error::other(
+        Err(Error::serialization(IoError::other(
             "original codec failure",
         )))
     }
@@ -709,7 +725,7 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
     assert_eq!(
         a.get_or_set::<_, _>(
             "k",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(19)) })
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(19)) })
         )
         .await
         .unwrap(),
@@ -789,7 +805,7 @@ struct FaultingBackplane {
 impl Backplane for FaultingBackplane {
     async fn publish(&self, message: BackplaneMessage) -> Result<()> {
         if self.fail.swap(false, Ordering::SeqCst) {
-            return Err(Error::backplane(std::io::Error::other(
+            return Err(Error::backplane(IoError::other(
                 "original notification fault",
             )));
         }
@@ -878,7 +894,7 @@ impl InvalidationStore for PendingMarkers {
         &self,
         _: &CacheScope,
         _: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         std::future::pending().await
     }
     async fn advance(
@@ -886,7 +902,7 @@ impl InvalidationStore for PendingMarkers {
         _: &CacheScope,
         kind: MarkerKind,
         version: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         Ok(MarkerAdvanceOutcome::Advanced(StoredMarker::new(
             kind, version,
         )))
@@ -941,16 +957,14 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
 }
 
 #[cfg(feature = "redis")]
-async fn forbidden_factory(
-    message: &'static str,
-) -> std::result::Result<u64, amalgam::FactoryError> {
+async fn forbidden_factory(message: &'static str) -> StdResult<u64, FactoryError> {
     panic!("{message}");
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

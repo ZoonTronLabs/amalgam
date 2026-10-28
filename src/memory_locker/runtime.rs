@@ -1,4 +1,10 @@
 //! Cache-owned acquisition budgets, cancellation and provider selection.
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
+use std::time::Duration;
+
 use super::{
     Arc, BlockingMemoryLocker, CancellationSource, FactoryCancellation, KeyGuard, KeyedLock,
     MemoryLock, MemoryLockKind, MemoryLockOutcome, MemoryLockRequest, MemoryLocker,
@@ -7,10 +13,6 @@ use super::{
 use crate::events::Events;
 use crate::lifecycle::Tasks;
 use crate::{Error, Result};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll};
 
 #[allow(dead_code, reason = "variants own RAII guards released on enum drop")]
 pub(crate) enum LocalGuard {
@@ -100,7 +102,7 @@ impl LocalLocks {
                 let request = locker.request(
                     key,
                     kind,
-                    Timeout::After(std::time::Duration::ZERO),
+                    Timeout::After(Duration::ZERO),
                     wait.source.token(),
                 );
                 let result = locker.provider.try_acquire(request);
@@ -191,7 +193,7 @@ impl ConfiguredLocker {
         route: crate::cache::MemoryAcquireRoute<'_>,
     ) -> Result<Option<LocalGuard>> {
         crate::cache::validate_budget(timeout)?;
-        if timeout == Timeout::After(std::time::Duration::ZERO) {
+        if timeout == Timeout::After(Duration::ZERO) {
             return Ok(None);
         }
         let dropped = match timeout {

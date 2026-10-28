@@ -21,9 +21,11 @@
 //! cargo run --example adaptive_conditional
 //! ```
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::time::Duration;
 
-use amalgam::{Cache, EntryOptions, FactoryContext};
+use amalgam::{Cache, EntryOptions, FactoryContext, FactoryError};
 
 #[tokio::main]
 async fn main() {
@@ -52,7 +54,7 @@ async fn adaptive_caching() {
                     ctx.adapt(|o| o.with_duration(Duration::from_millis(100)));
                     println!("  [factory] empty result → adapting duration down to 100ms");
                 }
-                Ok::<_, amalgam::FactoryError>(ctx.value(result))
+                Ok::<_, FactoryError>(ctx.value(result))
             }),
         )
         .options(|_| base.clone())
@@ -66,7 +68,7 @@ async fn adaptive_caching() {
             "search:zzz",
             typed_factory(|ctx| async move {
                 println!("  [factory] (should NOT run yet)");
-                Ok::<_, amalgam::FactoryError>(ctx.value("late".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("late".to_owned()))
             }),
         )
         .options(|_| base.clone())
@@ -81,7 +83,7 @@ async fn adaptive_caching() {
             "search:zzz",
             typed_factory(|ctx| async move {
                 println!("  [factory] adapted window elapsed → re-running");
-                Ok::<_, amalgam::FactoryError>(ctx.value("RESULTS NOW".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("RESULTS NOW".to_owned()))
             }),
         )
         .options(|_| base)
@@ -170,8 +172,8 @@ async fn conditional_refresh() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

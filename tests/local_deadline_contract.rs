@@ -1,8 +1,9 @@
 //! Standalone elapsed deadlines retain fail-safe and replacement semantics.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{BlockingCache, Cache, EntryOptions};
 use std::time::Duration;
+
+use amalgam::{BlockingCache, Cache, EntryOptions, FactoryError};
 
 #[tokio::test]
 async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
@@ -47,7 +48,7 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
             "k",
             amalgam::source::factory(|ctx| async move {
                 assert_eq!(ctx.stale_value(), None);
-                Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                Ok::<_, FactoryError>(ctx.value(9))
             }),
         )
         .await

@@ -127,6 +127,8 @@ impl CircuitBreaker {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -175,12 +177,12 @@ mod tests {
 
     #[test]
     fn concurrent_cooldown_has_one_transition_and_older_failures_do_not_shorten_reopen() {
-        let cb = std::sync::Arc::new(CircuitBreaker::new(Duration::from_secs(1)));
+        let cb = Arc::new(CircuitBreaker::new(Duration::from_secs(1)));
         cb.trip(Timestamp::from_ticks(0));
         let now = Timestamp::from_ticks(20_000_000);
         let handles: Vec<_> = (0..32)
             .map(|_| {
-                let cb = std::sync::Arc::clone(&cb);
+                let cb = Arc::clone(&cb);
                 std::thread::spawn(move || cb.check(now))
             })
             .collect();

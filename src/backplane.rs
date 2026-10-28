@@ -386,8 +386,9 @@ impl Backplane for InProcessBackplane {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::error::Error as _;
+
+    use super::*;
 
     #[test]
     fn malformed_typed_control_keeps_the_original_json_error() {

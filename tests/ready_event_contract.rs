@@ -1,11 +1,16 @@
 //! Lazy ready-hit emission retains observers admitted by synchronous user work.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
+
+use amalgam::advanced::{LayerEvent, MemoryEvent};
+use amalgam::provider::ValueCloner;
+use amalgam::{
+    Cache, CacheEvent, CacheLevel, CloneError, EntryOptions, OperationOutcome, Plugin,
+    PluginRegistration,
+};
 
 #[derive(Default)]
 struct RecordingPlugin(Mutex<Vec<CacheEvent>>);
@@ -25,7 +30,7 @@ struct AttachingCloner {
     registrations: Mutex<Vec<PluginRegistration>>,
 }
 impl ValueCloner<u64> for AttachingCloner {
-    fn clone_value(&self, value: &u64) -> std::result::Result<u64, CloneError> {
+    fn clone_value(&self, value: &u64) -> StdResult<u64, CloneError> {
         if self.armed.swap(false, Ordering::SeqCst) {
             let cache = self.cache.lock().unwrap().upgrade().unwrap();
             let registration = cache.register_plugin(self.plugin.clone()).unwrap();
@@ -127,7 +132,7 @@ struct SubscribingCloner {
 }
 
 impl ValueCloner<u64> for SubscribingCloner {
-    fn clone_value(&self, value: &u64) -> std::result::Result<u64, CloneError> {
+    fn clone_value(&self, value: &u64) -> StdResult<u64, CloneError> {
         if self.armed.swap(false, Ordering::SeqCst) {
             let cache = self.cache.lock().unwrap().upgrade().unwrap();
             *self.observers.lock().unwrap() = Some(CloneObservers {

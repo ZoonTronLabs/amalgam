@@ -1,17 +1,35 @@
 //! Actual SDK aggregation/export proves native metrics without a facade recorder.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "opentelemetry")]
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::io::Error as IoError;
+use std::num::NonZeroUsize;
+use std::result::Result as StdResult;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+#[cfg(feature = "opentelemetry")]
+use amalgam::OtelMetricsPlugin;
+#[cfg(any(feature = "metrics", feature = "opentelemetry"))]
+use amalgam::advanced::CacheLabelBudget;
+#[cfg(feature = "opentelemetry")]
+use amalgam::advanced::{MetricTags, OtelInitError};
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, InProcessBackplane,
+    JsonSerializer, ManualClock, SystemClock,
+};
+use amalgam::{
+    Cache, EagerThreshold, EntryOptions, Error, FactoryContext, FactoryError, Result, Tag, Timeout,
+    Timestamp, TransportError, advanced,
+};
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
-use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 #[derive(Clone, Debug)]
 enum Value {
@@ -356,7 +374,7 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
     cache
         .get_or_set(
             "failure",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(17)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(17)) }),
         )
         .options(|_| opts.clone())
         .await
@@ -381,7 +399,7 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
     cache
         .get_or_set(
             "soft",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(23)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(23)) }),
         )
         .options(|_| soft.clone())
         .await
@@ -398,7 +416,7 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
                 typed_factory(move |ctx| async move {
                     signal.notify_one();
                     gate.acquire().await.unwrap().forget();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(29))
+                    Ok::<_, FactoryError>(ctx.value(29))
                 })
             )
             .options(|_| soft)
@@ -469,7 +487,7 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
         .wait()
         .await
         .unwrap();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     loop {
         flush(&provider).await;
         if capture.counter("amalgam.backplane.receive", "backplane") == 1 {
@@ -494,19 +512,19 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
 #[test]
 fn otlp_metric_constructor_returns_typed_configuration_failures_without_global_installation() {
     assert!(matches!(
-        otlp_meter_provider("", "http://127.0.0.1:4317"),
+        advanced::otlp_meter_provider("", "http://127.0.0.1:4317"),
         Err(OtelInitError::BlankServiceName)
     ));
     assert!(matches!(
-        otlp_meter_provider("service", "http://127.0.0.1:4317"),
+        advanced::otlp_meter_provider("service", "http://127.0.0.1:4317"),
         Err(OtelInitError::MissingRuntime)
     ));
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     let error = runtime
-        .block_on(async { otlp_meter_provider("service", "http://[") })
+        .block_on(async { advanced::otlp_meter_provider("service", "http://[") })
         .unwrap_err();
     assert!(matches!(error, OtelInitError::Exporter(_)));
 }
@@ -532,7 +550,7 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
     cache
         .get_or_set::<_, _>(
             "key",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(17)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(17)) }),
         )
         .await
         .unwrap();
@@ -640,14 +658,12 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
     stop(provider).await;
 }
 
-struct Unavailable(std::sync::atomic::AtomicUsize);
+struct Unavailable(AtomicUsize);
 #[async_trait::async_trait]
 impl DistributedCache for Unavailable {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(Error::distributed(std::io::Error::other(
-            "private backend cause",
-        )))
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(Error::distributed(IoError::other("private backend cause")))
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {
         unreachable!("read-only fixture")
@@ -659,7 +675,7 @@ impl DistributedCache for Unavailable {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_do_not() {
     let (provider, capture) = sdk();
-    let backend = Arc::new(Unavailable(std::sync::atomic::AtomicUsize::new(0)));
+    let backend = Arc::new(Unavailable(AtomicUsize::new(0)));
     let cache = Cache::<u64>::builder()
         .name("failed-read")
         .distributed(backend.clone())
@@ -685,7 +701,7 @@ async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_d
             .is_none()
     );
     flush(&provider).await;
-    assert_eq!(backend.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(backend.0.load(Ordering::SeqCst), 1);
     assert_eq!(capture.counter("amalgam.distributed.get", "failed-read"), 1);
     assert_eq!(capture.counter("amalgam.distributed.hit", "failed-read"), 0);
     assert_eq!(
@@ -710,8 +726,8 @@ async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_d
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

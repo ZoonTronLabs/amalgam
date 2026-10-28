@@ -1,13 +1,21 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Mandatory native acceptance in CI: TTL namespace, atomic maxima and ownership.
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+
 use std::sync::Arc;
 use std::time::Duration;
-use {
-    amalgam::redis_backend::RedisDistributedCache, amalgam::redis_backend::RedisDistributedLocker,
+
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, MarkerError, MarkerKind, MarkerSnapshot, MarkerSnapshotCacheError,
+    MarkerSnapshotRead, MarkerSnapshotRenewal, MarkerVersion,
+};
+use amalgam::provider::{
+    AcquisitionPolicy, Clock, DistributedCache, LeaseError, LeaseTtl, SystemClock,
+};
+use amalgam::redis_backend::{RedisDistributedCache, RedisDistributedLocker};
+use amalgam::{
+    CancellationSource, EntryOptions, FactoryCancellation, FactoryCancellationReason, Tag, Timeout,
+    Timestamp, provider,
 };
 mod support {
     pub mod redis_fixture;
@@ -238,7 +246,7 @@ async fn native_snapshot_renewal_atomically_rejects_a_replaced_lease() {
     let scope = scope("lease");
     let locker = Arc::new(RedisDistributedLocker::connect(url).await.unwrap());
     let key: Arc<str> = Arc::from(format!("snapshot-lock-{}", scope.storage_id()));
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker.clone(),
         key.clone(),
         LeaseTtl::new(Duration::from_secs(5)).unwrap(),
@@ -263,7 +271,7 @@ async fn native_snapshot_renewal_atomically_rejects_a_replaced_lease() {
         MarkerSnapshotRenewal::Stored(_)
     ));
     lease.release().await.unwrap();
-    let replacement = acquire_owned(
+    let replacement = provider::acquire_owned(
         locker,
         key,
         LeaseTtl::new(Duration::from_secs(5)).unwrap(),

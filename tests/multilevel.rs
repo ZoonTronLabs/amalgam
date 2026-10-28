@@ -6,16 +6,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use amalgam::{
-    Cache, EntryOptions, Error, provider::Backplane, provider::Clock, provider::DistributedCache,
-    provider::DistributedEntry, provider::DistributedSerializer,
-    provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,
-    provider::ManualClock,
+use amalgam::provider::{
+    Backplane, Clock, DistributedCache, DistributedEntry, DistributedSerializer,
+    InMemoryDistributedCache, InProcessBackplane, JsonSerializer, ManualClock,
 };
+use amalgam::{Cache, EntryOptions, Error, FactoryContext, FactoryError};
 
 fn shared_l2(clock: Arc<dyn Clock>) -> Arc<dyn DistributedCache> {
     Arc::new(InMemoryDistributedCache::new(clock))
@@ -45,7 +46,7 @@ async fn l2_read_through_across_instances() {
                 "k",
                 amalgam::source::factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("from-factory".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("from-factory".to_owned()))
                 }),
             )
             .await
@@ -69,7 +70,7 @@ async fn l2_read_through_across_instances() {
                 "k",
                 amalgam::source::factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("should-not-run".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("should-not-run".to_owned()))
                 }),
             )
             .await
@@ -113,7 +114,7 @@ async fn backplane_remove_invalidates_peer() {
         .get_or_set(
             "k",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("x".to_owned()))
             }),
         )
         .await
@@ -164,7 +165,7 @@ async fn backplane_set_makes_peer_repull_new_value() {
                 "k",
                 amalgam::source::factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("x".to_owned()))
                 }),
             )
             .await
@@ -183,7 +184,7 @@ async fn backplane_set_makes_peer_repull_new_value() {
                 "k",
                 amalgam::source::factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("x".to_owned()))
                 }),
             )
             .await
@@ -228,7 +229,7 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
         .get_or_set(
             "k",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("x".to_owned()))
             }),
         )
         .await
@@ -281,7 +282,7 @@ async fn backplane_expire_marks_peer_stale_keeping_physical() {
         .get_or_set(
             "k",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("x".to_owned()))
             }),
         )
         .await
@@ -336,7 +337,7 @@ async fn backplane_clear_remove_propagates_to_peer() {
         .get_or_set(
             "k",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("x".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("x".to_owned()))
             }),
         )
         .await
@@ -402,7 +403,7 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
         .get_or_set(
             "k",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("factory".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("factory".to_owned()))
             }),
         )
         .await;
@@ -415,9 +416,9 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
     let v = reader
         .get_or_set(
             "k",
-            typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("factory".to_owned()))
-            }),
+            typed_factory(
+                |ctx| async move { Ok::<_, FactoryError>(ctx.value("factory".to_owned())) },
+            ),
         )
         .options(|_| lenient)
         .await
@@ -430,8 +431,8 @@ async fn l2_deserialize_error_rethrows_by_default_and_degrades_when_off() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

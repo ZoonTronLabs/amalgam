@@ -1,17 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use amalgam::provider::ValueCloner;
+use amalgam::{Cache, CloneError, EntryOptions, Error};
 
 struct UnexpectedCopy(Arc<AtomicUsize>);
 impl ValueCloner<Vec<String>> for UnexpectedCopy {
-    fn clone_value(&self, _: &Vec<String>) -> std::result::Result<Vec<String>, CloneError> {
+    fn clone_value(&self, _: &Vec<String>) -> StdResult<Vec<String>, CloneError> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Err(CloneError::from_source(std::io::Error::other(
+        Err(CloneError::from_source(IoError::other(
             "codec copy should be bypassed",
         )))
     }

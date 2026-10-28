@@ -21,11 +21,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use amalgam::{
-    Cache, EntryOptions, provider::Backplane, provider::Clock, provider::DistributedCache,
-    provider::DistributedSerializer, provider::InMemoryDistributedCache,
-    provider::InProcessBackplane, provider::JsonSerializer, provider::SystemClock,
+use amalgam::provider::{
+    Backplane, Clock, DistributedCache, DistributedSerializer, InMemoryDistributedCache,
+    InProcessBackplane, JsonSerializer, SystemClock,
 };
+use amalgam::{Cache, EntryOptions, FactoryError};
 
 #[tokio::main]
 async fn main() -> amalgam::Result<()> {
@@ -63,7 +63,7 @@ async fn main() -> amalgam::Result<()> {
                 amalgam::source::factory(move |ctx| async move {
                     runs.fetch_add(1, Ordering::SeqCst);
                     println!("  [node-1 factory] producing the value");
-                    Ok::<_, amalgam::FactoryError>(ctx.value("Alice".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("Alice".to_owned()))
                 }),
             )
             .await
@@ -81,7 +81,7 @@ async fn main() -> amalgam::Result<()> {
                 amalgam::source::factory(move |ctx| async move {
                     runs.fetch_add(1, Ordering::SeqCst);
                     println!("  [node-2 factory] (this should NOT run)");
-                    Ok::<_, amalgam::FactoryError>(ctx.value("should-not-run".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("should-not-run".to_owned()))
                 }),
             )
             .await

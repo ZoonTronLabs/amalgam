@@ -3,16 +3,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use amalgam::provider::{
+    Clock, DistributedCache, DistributedLocker, InMemoryDistributedCache,
+    InMemoryDistributedLocker, JsonSerializer, ManualClock, SystemClock,
+};
 use amalgam::{
-    Cache, CacheEvent, EagerThreshold, EntryOptions, RemoveByTagBehavior, Tag, Timeout,
-    provider::Clock, provider::DistributedCache, provider::DistributedLocker,
-    provider::InMemoryDistributedCache, provider::InMemoryDistributedLocker,
-    provider::JsonSerializer, provider::ManualClock,
+    Cache, CacheEvent, EagerThreshold, EntryOptions, FactoryContext, FactoryError,
+    RemoveByTagBehavior, Tag, Timeout,
 };
 use tokio::sync::{Semaphore, oneshot};
 
@@ -67,7 +71,7 @@ async fn cancelling_finite_factory_must_not_detach_it_and_release_singleflight()
                         let _running = Running::start(active);
                         let _ = started_tx.send(());
                         let _ = release_rx.await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                        Ok::<_, FactoryError>(ctx.value(1))
                     }),
                 )
                 .options(move |_| finite)
@@ -93,7 +97,7 @@ async fn cancelling_finite_factory_must_not_detach_it_and_release_singleflight()
             .get_or_set::<_, _>(
                 "k",
                 typed_factory(move |ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(active.load(Ordering::SeqCst) as i32))
+                    Ok::<_, FactoryError>(ctx.value(active.load(Ordering::SeqCst) as i32))
                 }),
             )
             .await
@@ -131,13 +135,11 @@ async fn unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide(
                 let nested = nested_cache
                     .get_or_set::<_, _>(
                         inner,
-                        typed_factory(|ctx| async move {
-                            Ok::<_, amalgam::FactoryError>(ctx.value(42))
-                        }),
+                        typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(42)) }),
                     )
                     .await
-                    .map_err(amalgam::FactoryError::from_source)?;
-                Ok::<_, amalgam::FactoryError>(ctx.value(nested))
+                    .map_err(FactoryError::from_source)?;
+                Ok::<_, FactoryError>(ctx.value(nested))
             }),
         ),
     )
@@ -160,7 +162,7 @@ async fn distinct_cold_keys_keep_independent_factory_progress() {
                     format!("independent-{index}"),
                     typed_factory(move |ctx| async move {
                         tokio::time::sleep(Duration::from_millis(10)).await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(index))
+                        Ok::<_, FactoryError>(ctx.value(index))
                     }),
                 )
                 .await
@@ -212,7 +214,7 @@ async fn foreground_factory_panics_propagate_and_release_the_flight() {
             LIVENESS,
             cache.get_or_set::<_, _>(
                 "k",
-                typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) }),
+                typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) }),
             ),
         )
         .await
@@ -263,7 +265,7 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
             LIVENESS,
             cache.get_or_set::<_, _>(
                 "k",
-                typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) })
+                typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
             )
         )
         .await
@@ -287,7 +289,7 @@ async fn a_configured_memory_lock_timeout_must_bound_a_cold_waiter() {
                     typed_factory(move |ctx| async move {
                         let _ = started_tx.send(());
                         let _ = release_rx.await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                        Ok::<_, FactoryError>(ctx.value(1))
                     }),
                 )
                 .await
@@ -306,7 +308,7 @@ async fn a_configured_memory_lock_timeout_must_bound_a_cold_waiter() {
         cache
             .get_or_set(
                 "k",
-                typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(2)) }),
+                typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) }),
             )
             .options(|_| finite),
     )
@@ -350,7 +352,7 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
                 "k",
                 typed_factory(move |ctx| async move {
                     let _ = release_rx.await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 })
             )
             .await
@@ -362,7 +364,7 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
         LIVENESS,
         cache.get_or_set::<_, _>(
             "k",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(3)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(3)) }),
         ),
     )
     .await;
@@ -406,7 +408,7 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
                     typed_factory(move |ctx| async move {
                         calls.fetch_add(1, Ordering::SeqCst);
                         gate.acquire().await.expect("gate open").forget();
-                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                        Ok::<_, FactoryError>(ctx.value(2))
                     })
                 )
                 .await
@@ -437,13 +439,13 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
 
 #[tokio::test]
 async fn distributed_locker_must_not_acquire_a_lease_after_the_wait_deadline() {
-    let locker = InMemoryDistributedLocker::new(Arc::new(amalgam::provider::SystemClock));
+    let locker = InMemoryDistributedLocker::new(Arc::new(SystemClock));
     let first = locker
         .acquire("k", Duration::from_millis(5), Timeout::Infinite)
         .await
         .expect("initial acquire")
         .expect("initial lease");
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let second = locker
         .acquire(
             "k",
@@ -496,7 +498,7 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
             "k",
             typed_factory(move |ctx| async move {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(3))
+                Ok::<_, FactoryError>(ctx.value(3))
             })
         )
         .await
@@ -530,7 +532,7 @@ async fn an_immediate_factory_deadline_must_not_invoke_the_factory() {
             "k",
             typed_factory(move |ctx| {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                async move { Ok::<_, amalgam::FactoryError>(ctx.value(1)) }
+                async move { Ok::<_, FactoryError>(ctx.value(1)) }
             }),
         )
         .options(|_| options)
@@ -562,7 +564,7 @@ async fn tag_invalidation_must_cover_a_factory_snapshot_started_before_its_marke
                         let database_snapshot = 1;
                         let _ = snapshot_tx.send(());
                         let _ = release_rx.await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(database_snapshot))
+                        Ok::<_, FactoryError>(ctx.value(database_snapshot))
                     }),
                 )
                 .tags(vec![Tag::new("group").expect("tag")].into_boxed_slice())
@@ -612,7 +614,7 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
                     typed_factory(move |ctx| async move {
                         let _ = started_tx.send(());
                         let _ = release_rx.await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                        Ok::<_, FactoryError>(ctx.value(2))
                     }),
                 )
                 .options(|_| options)
@@ -625,7 +627,7 @@ async fn shared_fc_lock_timeout_can_serve_a_previously_captured_stale_snapshot()
         cache
             .get_or_set(
                 "k",
-                typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(3)) }),
+                typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(3)) }),
             )
             .options(|_| options),
     )
@@ -669,7 +671,7 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
                 "k",
                 typed_factory(move |ctx| async move {
                     let _ = release_rx.await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 })
             )
             .await
@@ -700,8 +702,8 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

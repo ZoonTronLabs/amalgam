@@ -1,9 +1,10 @@
 //! Immutable control replay payloads with original policy and lifetime.
+use std::sync::Arc;
+
 use super::RecoveryError;
-use crate::{
-    EntryOptions, Result, Timestamp, advanced::CacheScope, advanced::MarkerKind,
-    advanced::MarkerSnapshot, provider::MarkerCommand,
-};
+use crate::advanced::{CacheScope, MarkerKind, MarkerSnapshot};
+use crate::provider::MarkerCommand;
+use crate::{EntryOptions, Result, Timestamp};
 
 /// Cluster authority which must be reacquired by an observation retry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +97,7 @@ pub struct MarkerMutationRecovery {
     command: MarkerCommand,
     phase: MarkerMutationPhase,
     // Legitimate independent debt from superseded work; factories cap depth at one.
-    compaction: Option<std::sync::Arc<MarkerMutationRecovery>>,
+    compaction: Option<Arc<MarkerMutationRecovery>>,
 }
 
 /// A borrowed view carries only the fields valid for the remaining stage.
@@ -146,7 +147,7 @@ impl MarkerMutationRecovery {
             return Err(RecoveryError::MarkerIdentityChanged);
         }
         let mut next = self.clone();
-        next.compaction = child.map(std::sync::Arc::new);
+        next.compaction = child.map(Arc::new);
         Ok(next)
     }
 

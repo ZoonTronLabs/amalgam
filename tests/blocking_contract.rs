@@ -1,13 +1,21 @@
 //! Caller-thread, deadline, cancellation, ownership and actual mutation evidence.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
+
+use amalgam::advanced::{
+    BlockingMutationReceipt, BlockingRuntime, DistributedExpirePolicy, FactoryInvocation,
+    ShutdownFailure, ShutdownTask,
+};
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock, SystemClock};
+use amalgam::{
+    BlockingCache, Cache, CancellationSource, ClearMode, EagerThreshold, EntryOptions, Error,
+    FactoryCancellationReason, FactoryContext, FactoryError, Tag, Timeout, Timestamp,
+};
 
 #[derive(Clone, Default)]
 struct Blocker(Arc<(Mutex<bool>, Condvar)>);
@@ -57,7 +65,7 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
             typed_blocking_factory(move |ctx| {
                 assert_eq!(thread::current().id(), caller);
                 assert_eq!(ctx.invocation(), FactoryInvocation::Foreground);
-                Ok::<_, amalgam::FactoryError>(ctx.value(None))
+                Ok::<_, FactoryError>(ctx.value(None))
             }),
         )
         .tags([tag.clone()])
@@ -120,7 +128,7 @@ fn same_key_native_callers_share_one_origin() {
                         amalgam::source::factory(move |ctx| {
                             calls.fetch_add(1, Ordering::SeqCst);
                             thread::sleep(Duration::from_millis(15));
-                            Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                            Ok::<_, FactoryError>(ctx.value(42))
                         }),
                     )
                     .execute()
@@ -150,7 +158,7 @@ fn hard_deadline_returns_before_callback_finishes_but_shutdown_owns_it() {
                 typed_blocking_factory(move |ctx| {
                     started_tx.send(ctx.cancellation().clone()).unwrap();
                     blocked.wait();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .options(|_| timed())
@@ -203,7 +211,7 @@ fn explicit_cancel_never_returns_failsafe_default_or_stores_late_product() {
                 typed_blocking_factory(move |ctx| {
                     started_tx.send(ctx.cancellation().clone()).unwrap();
                     blocked.wait();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .options(|_| {
@@ -266,7 +274,7 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
                     assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
                     started_tx.send(()).unwrap();
                     blocked.wait();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 })
             )
             .execute()
@@ -391,7 +399,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
                 "timed",
                 typed_blocking_factory(|ctx| {
                     thread::sleep(Duration::from_millis(2));
-                    Ok::<_, amalgam::FactoryError>(ctx.value(5))
+                    Ok::<_, FactoryError>(ctx.value(5))
                 })
             )
             .options(|_| timed())
@@ -415,7 +423,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }

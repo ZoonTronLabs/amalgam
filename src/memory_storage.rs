@@ -1,10 +1,12 @@
 //! Open, synchronous in-process storage for opaque cache-owned records.
-use crate::entry::Entry;
-use crate::{
-    Timestamp, advanced::MemoryEvictionReason, provider::CapacityRejection, provider::MemoryUsage,
-};
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::Timestamp;
+use crate::advanced::MemoryEvictionReason;
+use crate::entry::Entry;
+use crate::provider::{CapacityRejection, MemoryUsage};
 
 /// Expected storage failure; a failed lookup never represents an absent key.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -204,8 +206,8 @@ impl<V> Clone for MemoryRecord<V> {
         }
     }
 }
-impl<V> std::fmt::Debug for MemoryRecord<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<V> Debug for MemoryRecord<V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("MemoryRecord")
             .field("key", &self.key())
             .finish_non_exhaustive()

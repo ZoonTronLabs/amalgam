@@ -1,13 +1,28 @@
 //! Public expiring-observation contracts; permanent invalidations never expire.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, MarkerAdvanceOutcome, MarkerError, MarkerKind,
+    MarkerLifecyclePolicy, MarkerReadFailure, MarkerReadOutcome, MarkerReadPolicy, MarkerSnapshot,
+    MarkerSnapshotCache, MarkerSnapshotCacheError, MarkerSnapshotLimits, MarkerSnapshotRead,
+    MarkerSnapshotRenewal, MarkerSnapshotValidationError, MarkerSnapshotWriteOutcome,
+    MarkerStoreLimits, MarkerVersion, ReconciliationPolicy,
+};
+use amalgam::provider::{
+    AcquisitionPolicy, InMemoryDistributedCache, InMemoryDistributedLocker,
+    InMemoryInvalidationStore, InvalidationStore, JsonSerializer, LeaseError, LeaseTtl,
+    ManualClock,
+};
+use amalgam::{
+    Cache, CacheEvent, CancellationSource, ConfigError, EntryOptions, Error, FactoryCancellation,
+    FactoryCancellationReason, Tag, Timeout, Timestamp, provider,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 fn time(seconds: i64) -> Timestamp {
@@ -93,7 +108,7 @@ impl SnapshotCache {
     fn count(&self) -> usize {
         self.writes.lock().unwrap().len()
     }
-    async fn behavior(mode: Mode) -> std::result::Result<bool, MarkerSnapshotCacheError> {
+    async fn behavior(mode: Mode) -> StdResult<bool, MarkerSnapshotCacheError> {
         match mode {
             Mode::Pass => Ok(true),
             Mode::Miss => Ok(false),
@@ -115,7 +130,7 @@ impl MarkerSnapshotCache for SnapshotCache {
         selected: &MarkerKind,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRead, MarkerSnapshotCacheError> {
         if *selected == kind() {
             self.reads.fetch_add(1, Ordering::Relaxed);
             let mode = self.read_mode.lock().unwrap().clone();
@@ -136,7 +151,7 @@ impl MarkerSnapshotCache for SnapshotCache {
         snapshot: MarkerSnapshot,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         if *selected == kind() {
             self.writes.lock().unwrap().push(snapshot);
             let _witness = Witness {
@@ -177,7 +192,7 @@ impl InvalidationStore for Store {
         &self,
         scope: &CacheScope,
         kind: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.inner.read(scope, kind).await
     }
     async fn advance(
@@ -185,7 +200,7 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         kind: MarkerKind,
         candidate: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.inner.advance(scope, kind, candidate).await
     }
 }
@@ -708,7 +723,7 @@ async fn native_memory_snapshot_renewal_requires_current_atomic_lease_ownership(
     let clock = Arc::new(ManualClock::new(time(10)));
     let locker = Arc::new(InMemoryDistributedLocker::new(clock.clone()));
     let store = InMemoryInvalidationStore::default();
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker,
         "snapshot".into(),
         LeaseTtl::new(Duration::from_secs(1)).unwrap(),

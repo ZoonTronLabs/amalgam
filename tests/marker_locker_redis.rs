@@ -1,17 +1,32 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Native core acceptance: repair ownership, release and replaced-token rejection.
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{Notify, Semaphore};
-use {
-    amalgam::redis_backend::RedisDistributedCache, amalgam::redis_backend::RedisDistributedLocker,
+
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, LeasePolicy, MarkerAdvanceOutcome, MarkerError, MarkerKind,
+    MarkerLifecyclePolicy, MarkerReadPolicy, MarkerSnapshot, MarkerSnapshotCache,
+    MarkerSnapshotCacheError, MarkerSnapshotParticipation, MarkerSnapshotRead,
+    MarkerSnapshotRenewal, MarkerVersion, ReconciliationPolicy, RecoveryWork,
 };
+use amalgam::provider::{
+    AcquisitionPolicy, Clock, DistributedCache, DistributedLease, DistributedLocker,
+    InvalidationStore, JsonSerializer, LeaseError, LeaseProof, LeaseTtl, ManualClock,
+    RenewalOutcome, SystemClock,
+};
+use amalgam::redis_backend::{RedisDistributedCache, RedisDistributedLocker};
+use amalgam::{
+    Cache, CancellationSource, EagerThreshold, EntryOptions, Error, FactoryCancellation,
+    RecoveryConfig, Tag, Timeout, Timestamp, provider,
+};
+use async_trait::async_trait;
+use tokio::sync::{Notify, Semaphore};
+
 mod support {
     pub mod redis_fixture;
 }
@@ -74,7 +89,7 @@ impl MarkerSnapshotCache for Snapshots {
         marker: &MarkerKind,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRead, MarkerSnapshotCacheError> {
         if *marker == kind() {
             self.reads.fetch_add(1, Ordering::SeqCst);
         }
@@ -89,7 +104,7 @@ impl MarkerSnapshotCache for Snapshots {
         snapshot: MarkerSnapshot,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         self.inner
             .renew_snapshot(scope, marker, snapshot, now, cancellation)
             .await
@@ -102,14 +117,14 @@ impl MarkerSnapshotCache for Snapshots {
         now: Timestamp,
         proof: &LeaseProof,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         if *marker == kind() {
             self.proofs.lock().unwrap().push(proof.clone());
             let mode = self.write.lock().unwrap().clone();
             match mode {
                 Write::Pass => {}
                 Write::Backend => {
-                    return Err(MarkerError::backend(std::io::Error::other(
+                    return Err(MarkerError::backend(IoError::other(
                         "injected fenced population failure",
                     ))
                     .into());
@@ -135,7 +150,7 @@ impl InvalidationStore for Store {
         &self,
         scope: &CacheScope,
         marker: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.journal.read(scope, marker).await
     }
     async fn advance(
@@ -143,7 +158,7 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         marker: MarkerKind,
         candidate: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.journal.advance(scope, marker, candidate).await
     }
 }
@@ -244,7 +259,7 @@ async fn snapshot(f: &Fixture) -> MarkerSnapshotRead {
         .unwrap()
 }
 async fn replacement(f: &Fixture, proof: &LeaseProof) -> DistributedLease {
-    acquire_owned(
+    provider::acquire_owned(
         f.locker.clone(),
         Arc::from(proof.key()),
         LeaseTtl::new(Duration::from_secs(30)).unwrap(),

@@ -1,9 +1,11 @@
 //! A factory owns its starting version, rather than whichever version exists later.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{Cache, ClearMode, EntryOptions, Timestamp, provider::ManualClock};
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::provider::ManualClock;
+use amalgam::{Cache, ClearMode, EntryOptions, FactoryError, Timestamp};
 use tokio::sync::oneshot;
 
 #[derive(Clone, Copy)]
@@ -29,7 +31,7 @@ async fn paused_origin(mutation: LaterMutation) {
                 amalgam::source::factory(|ctx| async move {
                     started.send(()).unwrap();
                     resume.await.unwrap();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    Ok::<_, FactoryError>(ctx.value(1))
                 }),
             )
             .await

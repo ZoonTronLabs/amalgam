@@ -5,20 +5,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use amalgam::time::{TICKS_PER_SECOND, duration_to_ticks, ticks_to_duration};
-use amalgam::{
-    Timestamp, provider::Clock, provider::ClockTiming, provider::ManualClock, provider::SystemClock,
-};
+use amalgam::provider::{Clock, ClockTiming, ManualClock, SystemClock};
+use amalgam::time::TICKS_PER_SECOND;
+use amalgam::{Timestamp, time};
 
 #[test]
 fn representable_long_duration_roundtrips_without_nanosecond_truncation() {
     let years_1000 = Duration::from_secs(1000 * 365 * 24 * 60 * 60);
-    assert_eq!(ticks_to_duration(duration_to_ticks(years_1000)), years_1000);
     assert_eq!(
-        ticks_to_duration(i64::MAX),
+        time::ticks_to_duration(time::duration_to_ticks(years_1000)),
+        years_1000
+    );
+    assert_eq!(
+        time::ticks_to_duration(i64::MAX),
         Duration::new(922_337_203_685, 477_580_700)
     );
-    assert_eq!(ticks_to_duration(-1), Duration::ZERO);
+    assert_eq!(time::ticks_to_duration(-1), Duration::ZERO);
 }
 
 #[test]

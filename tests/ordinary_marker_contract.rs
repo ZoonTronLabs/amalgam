@@ -1,13 +1,19 @@
 //! Tag/clear over a genuine byte-only L2, with no atomic capability adapter.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::future::{Future, IntoFuture};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::task::{Context, Poll, Waker};
+use std::time::Duration;
+
 use amalgam::advanced::{
     EffectOutcome, LeasePolicy, MarkerError, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy,
     MarkerVersion,
 };
 use amalgam::provider::{
-    DistributedCache, DistributedSerializer, DistributedSnapshot, Entry, InMemoryDistributedCache,
-    JsonSerializer, ManualClock,
+    DistributedBytes, DistributedCache, DistributedSerializer, DistributedSnapshot, Entry,
+    InMemoryDistributedCache, JsonSerializer, ManualClock,
 };
 use amalgam::{
     Cache, ClearMode, ConfigError, EntryOptions, Error, FactoryError, RecoveryConfig,
@@ -15,9 +21,7 @@ use amalgam::{
 };
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 #[derive(Debug, thiserror::Error)]
 #[error("original byte-only backend failure")]
@@ -63,7 +67,7 @@ impl Bytes {
 }
 #[async_trait]
 impl DistributedCache for Bytes {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         self.check()?;
         self.inner.get(key).await
@@ -506,7 +510,7 @@ fn initialized_ordinary_hot_hit_does_not_require_a_runtime() {
     let clock = Arc::new(ManualClock::default());
     let bytes = Bytes::new(clock.clone());
     let cache = {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = RuntimeBuilder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
@@ -526,11 +530,11 @@ fn initialized_ordinary_hot_hit_does_not_require_a_runtime() {
     assert!(tokio::runtime::Handle::try_current().is_err());
     let reads = bytes.reads.load(Ordering::SeqCst);
     let request = cache.get_or_set("hot", |_| async { Err::<u64, _>(BackendDown) });
-    let mut work = std::pin::pin!(std::future::IntoFuture::into_future(request));
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let mut work = std::pin::pin!(IntoFuture::into_future(request));
+    let mut context = Context::from_waker(Waker::noop());
     assert!(matches!(
-        std::future::Future::poll(work.as_mut(), &mut context),
-        std::task::Poll::Ready(Ok(42))
+        Future::poll(work.as_mut(), &mut context),
+        Poll::Ready(Ok(42))
     ));
     assert_eq!(bytes.reads.load(Ordering::SeqCst), reads);
     cache.close();

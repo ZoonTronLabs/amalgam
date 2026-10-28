@@ -3,6 +3,12 @@
 //! Storage, serialization, backplanes, distributed/local locking and injected
 //! time remain extensible behavior. Their typed capabilities and outcomes live
 //! beside the corresponding interfaces. Import these when configuring a provider.
+#[cfg(feature = "redis")]
+pub use crate::redis_backend::{
+    RedisBackplane, RedisBackplaneStats, RedisClientId, RedisDistributedCache,
+    RedisDistributedLocker, RedisInvalidationStore, RedisIoOptions,
+};
+
 pub use crate::backplane::{
     Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, BackplaneState,
     ContinuityEpoch, InProcessBackplane, MarkerCommand,
@@ -43,10 +49,3 @@ pub use crate::serializers::MessagePackSerializer;
 pub use crate::serializers::PostcardSerializer;
 pub use crate::serializers::{ImmutableValue, ValueCloner};
 pub use crate::time::{Clock, ClockTiming, ManualClock, SystemClock};
-#[cfg(feature = "redis")]
-pub use {
-    crate::redis_backend::RedisBackplane, crate::redis_backend::RedisBackplaneStats,
-    crate::redis_backend::RedisClientId, crate::redis_backend::RedisDistributedCache,
-    crate::redis_backend::RedisDistributedLocker, crate::redis_backend::RedisInvalidationStore,
-    crate::redis_backend::RedisIoOptions,
-};

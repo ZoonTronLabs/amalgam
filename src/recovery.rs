@@ -3,12 +3,13 @@
 //! A successful old replay never removes, decrements, or evicts a replacement.
 //! The executor additionally holds the cache's same-key commit lane before any
 //! side effect: queue CAS alone cannot order an already-started backend mutation.
-
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::runtime::Handle;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -344,8 +345,8 @@ pub struct ReplayTicket {
     fence: Option<Arc<dyn RecoveryFence>>,
 }
 
-impl std::fmt::Debug for ReplayTicket {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for ReplayTicket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("ReplayTicket")
             .field("id", &self.id)
             .field("work", &self.work)
@@ -1089,8 +1090,7 @@ impl AutoRecoveryService {
         if *self.stop.borrow() {
             return Err(RecoveryError::Stopped);
         }
-        let runtime =
-            tokio::runtime::Handle::try_current().map_err(|_| RecoveryError::MissingRuntime)?;
+        let runtime = Handle::try_current().map_err(|_| RecoveryError::MissingRuntime)?;
         let mut worker = self
             .worker
             .lock()

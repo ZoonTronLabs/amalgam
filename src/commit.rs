@@ -1,13 +1,16 @@
 //! Typed commit receipts and pinned per-key mutation ordering.
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::oneshot;
+
 use crate::error::{Error, Result};
-use crate::execution::lock;
+use crate::execution;
 use crate::locking::{CoordinationPlan, WeakSlots};
 use crate::memory::MemoryAdmission;
 use crate::recovery::{OperationGeneration, RecoveryError, RecoveryFence};
 use crate::time::Timestamp;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
 
 mod ordered;
 pub(crate) use ordered::LaneGuard;
@@ -140,8 +143,8 @@ pub(crate) enum TaskResult<T> {
 pub struct CommitCompletion {
     pub(crate) receiver: oneshot::Receiver<TaskResult<CommitReport>>,
 }
-impl std::fmt::Debug for CommitCompletion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for CommitCompletion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("CommitCompletion").finish_non_exhaustive()
     }
 }
@@ -211,7 +214,7 @@ impl KeyLane {
         epoch: &Arc<AtomicU64>,
     ) -> Result<Arc<Fence>> {
         let generation = self.advance_revision()?.value();
-        let mut stamp = lock(&self.timestamp);
+        let mut stamp = execution::lock(&self.timestamp);
         *stamp = Some(stamp.map_or(at, |old| old.max(at)));
         drop(stamp);
         Ok(Arc::new(Fence {

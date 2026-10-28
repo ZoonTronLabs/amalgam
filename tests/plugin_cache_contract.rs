@@ -1,12 +1,28 @@
 //! Cache-aware plugins use the exact cache without keeping its public owner alive.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    BlockingMutationReceipt, BlockingRuntime, CachePlugin, CachePluginContext, DrainOperation,
+    PluginCache, ShutdownFailure,
+};
+#[cfg(feature = "redis")]
+use amalgam::provider::Backplane;
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, InvalidationStore,
+    JsonSerializer, SystemClock,
+};
+#[cfg(feature = "redis")]
+use amalgam::provider::{RedisBackplane, RedisDistributedCache, RedisDistributedLocker};
+use amalgam::{
+    BlockingCache, Cache, CacheBuilder, CacheEvent, EntryOptions, Error, FactoryCancellationReason,
+    FactoryError, Plugin, PluginError, PluginSession, PluginStage, Result, Tag,
+};
 
 #[derive(Default)]
 struct Record {
@@ -40,7 +56,7 @@ fn plugin(record: Arc<Record>) -> Arc<Probe> {
         stop: Stop::Succeed,
     })
 }
-fn boundary<T>(stage: PluginStage, result: Result<T>) -> std::result::Result<T, PluginError> {
+fn boundary<T>(stage: PluginStage, result: Result<T>) -> StdResult<T, PluginError> {
     result.map_err(|error| PluginError::from_source("operational-probe", stage, error))
 }
 impl CachePlugin<i32> for Probe {
@@ -50,7 +66,7 @@ impl CachePlugin<i32> for Probe {
     fn attach(
         &self,
         context: &CachePluginContext<i32>,
-    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+    ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         assert_eq!(context.cache_name(), context.cache()?.name());
         assert_eq!(context.instance_id(), context.cache()?.instance_id());
         let cache = context.cache()?.blocking(self.runtime.clone());
@@ -60,9 +76,7 @@ impl CachePlugin<i32> for Probe {
                 cache
                     .get_or_set(
                         "plugin-start",
-                        amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(
-                            ctx.value(17)
-                        ))
+                        amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(17)))
                     )
                     .execute()
             )?,
@@ -94,7 +108,7 @@ impl CachePlugin<i32> for Probe {
             Start::Fail => Err(PluginError::from_source(
                 self.name(),
                 PluginStage::Start,
-                std::io::Error::other("original start failure"),
+                IoError::other("original start failure"),
             )),
         }
     }
@@ -106,7 +120,7 @@ struct Session {
     stop: Stop,
 }
 impl PluginSession for Session {
-    fn on_event(&self, event: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, event: &CacheEvent) -> StdResult<(), PluginError> {
         if let CacheEvent::Set { key } = event
             && key.ends_with("caller")
         {
@@ -125,14 +139,14 @@ impl PluginSession for Session {
         }
         Ok(())
     }
-    fn stop(&self) -> std::result::Result<(), PluginError> {
+    fn stop(&self) -> StdResult<(), PluginError> {
         let cache = self.context.cache()?.blocking(self.runtime.clone());
         let value = boundary(
             PluginStage::Stop,
             cache
                 .get_or_set(
                     "plugin-stop-factory",
-                    amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(29))),
+                    amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(29))),
                 )
                 .execute(),
         )?;
@@ -171,7 +185,7 @@ impl PluginSession for Session {
             Stop::Fail => Err(PluginError::from_source(
                 "operational-probe",
                 PluginStage::Stop,
-                std::io::Error::other("original stop failure"),
+                IoError::other("original stop failure"),
             )),
         }
     }
@@ -334,7 +348,7 @@ fn dynamic_start_failure_preserves_source_and_writes_without_invented_stop() {
     });
     let error = cache.register_cache_plugin(failed).err().unwrap();
     assert!(
-        matches!(&error, Error::Plugin(PluginError::Failure { stage: PluginStage::Start, source, .. }) if source.downcast_ref::<std::io::Error>().unwrap().to_string() == "original start failure")
+        matches!(&error, Error::Plugin(PluginError::Failure { stage: PluginStage::Start, source, .. }) if source.downcast_ref::<IoError>().unwrap().to_string() == "original start failure")
     );
     assert_eq!(record.stops.load(Ordering::SeqCst), 0);
     assert_eq!(
@@ -358,7 +372,7 @@ fn stop_failure_is_preserved_and_cannot_skip_owned_shutdown() {
     let Error::Shutdown(error) = error else {
         panic!("expected owned shutdown failure")
     };
-    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::Plugin(PluginError::Failure { stage: PluginStage::Stop, source, .. }) if source.downcast_ref::<std::io::Error>().unwrap().to_string() == "original stop failure")));
+    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::Plugin(PluginError::Failure { stage: PluginStage::Stop, source, .. }) if source.downcast_ref::<IoError>().unwrap().to_string() == "original stop failure")));
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
     assert!(cache.shutdown().is_err());
     assert_eq!(record.stops.load(Ordering::SeqCst), 1);
@@ -413,7 +427,7 @@ impl CachePlugin<i32> for ParkedStart {
     fn attach(
         &self,
         context: &CachePluginContext<i32>,
-    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+    ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         let session = self.probe.attach(context)?;
         self.entered
             .lock()
@@ -475,7 +489,7 @@ struct TypedOrder {
 }
 struct Noop;
 impl PluginSession for Noop {
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
 }
@@ -486,7 +500,7 @@ impl CachePlugin<i32> for TypedOrder {
     fn attach(
         &self,
         context: &CachePluginContext<i32>,
-    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+    ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         let cache = context.cache()?.blocking(self.runtime.clone());
         match self.position {
             1 => assert!(cache.try_get("ordered").execute().unwrap().is_none()),
@@ -593,7 +607,7 @@ impl Drop for DropSignal<'_> {
 }
 #[async_trait::async_trait]
 impl DistributedCache for GatedStore {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -628,7 +642,7 @@ impl CachePlugin<i32> for BackgroundStop {
     fn attach(
         &self,
         context: &CachePluginContext<i32>,
-    ) -> std::result::Result<Box<dyn PluginSession>, PluginError> {
+    ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         Ok(Box::new(BackgroundSession {
             context: context.clone(),
             runtime: self.runtime.clone(),
@@ -637,10 +651,10 @@ impl CachePlugin<i32> for BackgroundStop {
     }
 }
 impl PluginSession for BackgroundSession {
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
-    fn stop(&self) -> std::result::Result<(), PluginError> {
+    fn stop(&self) -> StdResult<(), PluginError> {
         let cache = self.context.cache()?.blocking(self.runtime.clone());
         let receipt = cache
             .set("plugin-bg", 1)

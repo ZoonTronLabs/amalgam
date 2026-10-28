@@ -1,14 +1,13 @@
 //! Native lazy mutation requests use the shared asynchronous operation engine.
+use std::future::IntoFuture;
+
 use super::{BlockingCommitCompletion, BlockingMutationReceipt, BlockingRuntime};
+use crate::advanced::{DistributedExpirePolicy, MutationReceipt};
 use crate::cache::{
     ClearRequest, ExpireRequest, GetOrDefaultRequest, ReceiptInvalidationRequest,
     ReceiptSetRequest, RemoveRequest, SetRequest, TagInvalidationRequest,
 };
-use crate::{
-    EntryOptions, FactoryCancellation, Result, advanced::DistributedExpirePolicy,
-    advanced::MutationReceipt,
-};
-use std::future::IntoFuture;
+use crate::{EntryOptions, FactoryCancellation, Result};
 
 /// A lazy native mutation. Execute it explicitly after configuring the request.
 #[must_use = "a native cache request only executes through execute()"]

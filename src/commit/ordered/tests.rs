@@ -1,7 +1,11 @@
-use super::*;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::Wake;
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
+
+use super::{KeyLane, LaneAcquisition, LaneGuard, QueueMap, QueueRef, Shards};
 
 fn lane() -> Arc<KeyLane> {
     Arc::new(KeyLane::new(QueueMap::new().bind("key")))

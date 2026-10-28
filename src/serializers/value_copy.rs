@@ -1,8 +1,9 @@
 //! Copy capabilities are selected once, before invoking any value strategy.
+use std::sync::Arc;
+
 use super::ValueCloner;
 use crate::error::{ConfigError, Result};
 use crate::options::EntryOptions;
-use std::sync::Arc;
 
 enum Route<'a, V> {
     Ordinary,

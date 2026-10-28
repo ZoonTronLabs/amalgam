@@ -1,11 +1,13 @@
 //! API 0.4 factories return values and retain typed errors/adaptive metadata.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{BlockingCache, Cache, EntryOptions, Tag, provider::ManualClock};
 use std::convert::Infallible;
 use std::error::Error as _;
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::provider::ManualClock;
+use amalgam::{BlockingCache, Cache, EntryOptions, FactoryError, Tag};
 
 #[derive(Debug, thiserror::Error)]
 #[error("original raw factory failure")]
@@ -38,7 +40,7 @@ async fn plain_result_and_custom_error_keep_value_and_original_source() {
         &error
             .source()
             .unwrap()
-            .downcast_ref::<amalgam::FactoryError>()
+            .downcast_ref::<FactoryError>()
             .unwrap()
             .source()
             .unwrap()
@@ -77,7 +79,7 @@ fn blocking_factory_accepts_the_same_plain_value_and_custom_error() {
         &error
             .source()
             .unwrap()
-            .downcast_ref::<amalgam::FactoryError>()
+            .downcast_ref::<FactoryError>()
             .unwrap()
             .source()
             .unwrap()

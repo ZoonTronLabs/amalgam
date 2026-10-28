@@ -1,9 +1,10 @@
 //! Default writes carry only their required lifetime facts through commit.
+use std::sync::Arc;
+
 use super::{
     Eligibility, Entry, EntryInner, EntryOrigin, FreshPlan, FreshValue, Metadata, RetentionMetadata,
 };
 use crate::{EntryOptions, Result, Tag, Timestamp};
-use std::sync::Arc;
 
 pub(crate) enum DefaultFreshPlan {
     Plain(PlainPlan),
@@ -111,9 +112,10 @@ impl<V> Entry<V> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::{EagerThreshold, Priority};
-    use std::time::Duration;
 
     fn rich_source() -> Entry<u64> {
         let options = EntryOptions::new(Duration::from_secs(10))

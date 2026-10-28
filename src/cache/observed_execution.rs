@@ -1,8 +1,9 @@
 //! A movable observer handle; cache-owned work stays behind its stable pointer.
-use super::{Error, Execution, FactoryCancellation, LinkMode, Result};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use super::{Error, Execution, FactoryCancellation, LinkMode, Result};
 
 enum State<T: Send + 'static> {
     Unlinked {
@@ -79,14 +80,15 @@ impl<T: Send + 'static> Future for ObservedExecution<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::ObservedExecution;
-    use crate::error::{Error, FactoryCancellationReason as Reason, Result};
-    use crate::execution::{CancellationSource, FactoryCancellation, Scopes};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll};
     use std::time::Duration;
+
+    use super::ObservedExecution;
+    use crate::error::{Error, FactoryCancellationReason as Reason, Result};
+    use crate::execution::{CancellationSource, FactoryCancellation, Scopes};
 
     struct Retirement {
         token: FactoryCancellation,

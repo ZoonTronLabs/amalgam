@@ -1,4 +1,6 @@
 //! Cache configuration, validation and construction.
+use tokio::runtime::Handle;
+
 use super::{
     Arc, AtomicBool, AtomicU64, AutoRecoveryService, Backplane, Cache, CacheInner, CacheScope,
     CircuitBreaker, Clock, ConfigError, DefaultEntryOptionsProvider, DistributedCache,
@@ -8,7 +10,7 @@ use super::{
     MarkerLifecyclePolicy, MarkerObservations, MarkerReadPolicy, MarkerReads, MemoryLimits, Plugin,
     PluginContext, PluginHost, PublicLifetime, ReconciliationPolicy, RecoveryConfig,
     RecoveryExecutor, RemoveByTagBehavior, Result, RuntimeComponent, Scopes, Storage, TagRegistry,
-    Tasks, Timeout, ValueCloner, validate_budget,
+    Tasks, Timeout, ValueCloner,
 };
 
 #[derive(Clone, Copy)]
@@ -493,13 +495,13 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
         self.tags_default_options.validate()?;
         let recovery_enabled = self.recovery_config.enabled
             && (self.distributed.is_some() || self.backplane.is_some());
-        if self.backplane.is_some() && tokio::runtime::Handle::try_current().is_err() {
+        if self.backplane.is_some() && Handle::try_current().is_err() {
             return Err(ConfigError::MissingRuntime {
                 component: RuntimeComponent::Backplane,
             }
             .into());
         }
-        if recovery_enabled && tokio::runtime::Handle::try_current().is_err() {
+        if recovery_enabled && Handle::try_current().is_err() {
             return Err(ConfigError::MissingRuntime {
                 component: RuntimeComponent::Recovery,
             }
@@ -540,7 +542,7 @@ impl<V: Clone + Send + Sync + 'static> CacheBuilder<V> {
                 if interval.is_zero() {
                     return Err(ConfigError::ZeroReconciliationInterval.into());
                 }
-                validate_budget(Timeout::After(interval))?;
+                super::validate_budget(Timeout::After(interval))?;
             }
             ReconciliationPolicy::BackplaneBestEffort => {
                 if self.backplane.is_none() {

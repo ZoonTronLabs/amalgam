@@ -1,9 +1,10 @@
 //! Lazy read requests keep input separate from admitted execution.
-use super::observed_execution::ObservedExecution;
-use super::{Cache, EntryOptions, FactoryCancellation, Result};
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use super::observed_execution::ObservedExecution;
+use super::{Cache, EntryOptions, FactoryCancellation, Result};
 
 pub(super) enum ReadStart<T: Send + 'static> {
     Ready(Result<T>),

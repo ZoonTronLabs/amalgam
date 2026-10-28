@@ -25,11 +25,11 @@
 //!
 //! [Jaeger]: https://www.jaegertracing.io/
 //! [OpenTelemetry Collector]: https://opentelemetry.io/docs/collector/
-
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider};
+use tokio::runtime::Handle;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
@@ -134,7 +134,7 @@ where
     if service_name.trim().is_empty() {
         return Err(OtelInitError::BlankServiceName);
     }
-    if tokio::runtime::Handle::try_current().is_err() {
+    if Handle::try_current().is_err() {
         return Err(OtelInitError::MissingRuntime);
     }
     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -254,7 +254,7 @@ pub fn otlp_meter_provider(
     if service_name.trim().is_empty() {
         return Err(OtelInitError::BlankServiceName);
     }
-    if tokio::runtime::Handle::try_current().is_err() {
+    if Handle::try_current().is_err() {
         return Err(OtelInitError::MissingRuntime);
     }
     let exporter = opentelemetry_otlp::MetricExporter::builder()

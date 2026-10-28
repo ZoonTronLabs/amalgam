@@ -1,15 +1,15 @@
 //! Ready hits preserve raw-key options, eager ownership and local-only startup.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, EagerThreshold, EntryOptions, provider::DefaultEntryOptionsProvider,
-    provider::ManualClock,
-};
-use std::future::{Future, IntoFuture, poll_fn};
+use std::future;
+use std::future::{Future, IntoFuture};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::provider::{DefaultEntryOptionsProvider, ManualClock};
+use amalgam::{Cache, EagerThreshold, EntryOptions, FactoryError};
 use tokio::sync::Notify;
 
 #[derive(Default)]
@@ -39,7 +39,7 @@ async fn provider_runs_once_on_miss_and_hit_uses_raw_key_and_explicit_options_by
                     amalgam::source::factory(move |ctx| async move {
                         factories.fetch_add(1, Ordering::SeqCst);
                         assert_eq!(ctx.original_key(), "key");
-                        Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                        Ok::<_, FactoryError>(ctx.value(7))
                     })
                 )
                 .await
@@ -92,12 +92,12 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
                 amalgam::source::factory(move |ctx| async move {
                     began.notify_one();
                     released.notified().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(8))
+                    Ok::<_, FactoryError>(ctx.value(8))
                 }),
             )
             .into_future(),
     );
-    poll_fn(|cx| match hit.as_mut().poll(cx) {
+    future::poll_fn(|cx| match hit.as_mut().poll(cx) {
         Poll::Ready(value) => {
             assert_eq!(value.unwrap(), 7);
             Poll::Ready(())
@@ -162,9 +162,8 @@ fn native_and_async_ready_reads_copy_on_the_caller_without_entering_a_runtime() 
     armed.store(true, Ordering::Release);
     assert_eq!(cache.try_get("key").execute().unwrap().unwrap().value, 42);
     let mut lookup = std::pin::pin!(cache.as_async().try_get("key").into_future());
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-    let std::task::Poll::Ready(result) = std::future::Future::poll(lookup.as_mut(), &mut context)
-    else {
+    let mut context = Context::from_waker(Waker::noop());
+    let Poll::Ready(result) = Future::poll(lookup.as_mut(), &mut context) else {
         panic!("a fresh hit must complete without a runtime");
     };
     assert_eq!(result.unwrap().unwrap().value, 42);

@@ -1,11 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock, ValueCloner};
-use amalgam::{Cache, CloneError, EntryOptions};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock, ValueCloner};
+use amalgam::{Cache, CloneError, EntryOptions};
+use serde::{Deserialize, Serialize};
 
 static ORDINARY_CLONES: AtomicUsize = AtomicUsize::new(0);
 

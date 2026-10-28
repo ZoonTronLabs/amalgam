@@ -1,19 +1,22 @@
 //! Active computations, not per-key asynchronous lock lanes. A caller owns only
 //! a subscription; the table retains suspended work until completion or close.
-use crate::error::{Error, FactoryCancellationReason as Reason, Result};
-use crate::execution::{
-    CancelWork, CancellationSource, Request, RequestOwner, Retirement, Scopes, TrackedCancellation,
-    finish_tracking,
-};
-use ahash::RandomState;
-use hashbrown::HashMap;
-use parking_lot::Mutex;
 use std::any::Any;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll, Wake, Waker};
+
+use ahash::RandomState;
+use hashbrown::HashMap;
+use parking_lot::Mutex;
+
+use crate::error::{Error, FactoryCancellationReason as Reason, Result};
+use crate::execution;
+use crate::execution::{
+    CancelWork, CancellationSource, Request, RequestOwner, Retirement, Scopes, TrackedCancellation,
+};
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 pub(crate) type Panic = Box<dyn Any + Send + 'static>;
@@ -147,8 +150,8 @@ pub(crate) struct Flight<T: Send + Sync + 'static, K: FlightIdentity = Arc<str>>
     wakers: Mutex<Vec<Waker>>,
     tracking: Mutex<Option<TrackedCancellation>>,
 }
-impl<T: Send + Sync + 'static, K: FlightIdentity> std::fmt::Debug for Flight<T, K> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: Send + Sync + 'static, K: FlightIdentity> Debug for Flight<T, K> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("Flight")
             .field("key", self.key.key())
             .finish_non_exhaustive()
@@ -293,7 +296,7 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
         };
         drop(discarded);
         source.cancel_with(Reason::ScopeFinished);
-        finish_tracking(&self.tracking);
+        execution::finish_tracking(&self.tracking);
         self.notify();
     }
     fn abandon_start(&self) {

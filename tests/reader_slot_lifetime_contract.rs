@@ -1,13 +1,14 @@
 //! Reader slots release values deterministically and keep optional cloners outside locks.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, CloneError, EntryOptions, Error, FactoryCancellationReason, provider::ValueCloner,
-};
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+use amalgam::provider::ValueCloner;
+use amalgam::{Cache, CloneError, EntryOptions, Error, FactoryCancellationReason};
+use tokio::runtime::Builder as RuntimeBuilder;
 use tokio::sync::Notify;
 
 struct Value(u64);
@@ -108,7 +109,7 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
     gate.armed.store(true, Ordering::SeqCst);
     let reading = cache.clone();
     let read = tokio::task::spawn_blocking(move || {
-        tokio::runtime::Builder::new_current_thread()
+        RuntimeBuilder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()

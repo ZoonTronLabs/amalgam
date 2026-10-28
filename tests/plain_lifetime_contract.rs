@@ -1,9 +1,11 @@
 //! Default and call-specific lifetimes agree at precision and range boundaries.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{Cache, EntryOptions, Timestamp, provider::ManualClock, source};
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::provider::ManualClock;
+use amalgam::{Cache, EntryOptions, Timestamp, source};
 
 async fn compare_at_boundaries(
     duration: Duration,

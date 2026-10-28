@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::Duration;
 
-use amalgam::{Events, Timestamp, provider::Clock, provider::MemoryLimits, provider::MemoryStore};
+use amalgam::provider::{Clock, MemoryLimits, MemoryStore};
+use amalgam::{Events, Timestamp};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 struct ReentrantClock {
     store: Mutex<Weak<MemoryStore<i32>>>,
@@ -37,7 +39,7 @@ fn bounded_maintenance_samples_custom_clock_before_storage_lock() {
             clock.clone(),
         ));
         *clock.store.lock().unwrap() = Arc::downgrade(&store);
-        tokio::runtime::Builder::new_current_thread()
+        RuntimeBuilder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()

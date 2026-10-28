@@ -1,16 +1,30 @@
 //! Independent dual-method local locker, including uncooperative callbacks.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
 use std::collections::HashSet;
+use std::future::Future;
 use std::num::NonZeroUsize;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
+
+use amalgam::advanced::{
+    BlockingRuntime, DrainOperation, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy,
+    ShutdownFailure, ShutdownTask,
+};
+use amalgam::provider::{
+    BlockingMemoryLocker, InMemoryInvalidationStore, ManualClock, MemoryLock, MemoryLockGuard,
+    MemoryLockKind, MemoryLockOutcome, MemoryLockRequest, MemoryLocker, MemoryLockerContext,
+    MemoryLockerError,
+};
+use amalgam::{
+    BlockingCache, Cache, CacheBuilder, CacheEvent, CancellationSource, EagerThreshold,
+    EntryOptions, Error, FactoryCancellationReason, FactoryContext, FactoryError, Tag, Timeout,
+    Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::Notify;
 
 const WAIT: Duration = Duration::from_secs(3);
@@ -124,7 +138,7 @@ impl State {
     fn blocking(
         self: &Arc<Self>,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         // Publishing entry must mean the behavior for this call is fixed.
         // Otherwise the test can switch it before this callback snapshots it.
         let behavior = self.behavior.lock().unwrap().clone();
@@ -158,7 +172,7 @@ impl State {
     async fn asynchronous(
         self: &Arc<Self>,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         self.record(Method::Async, &request);
         loop {
             let changed = self.async_released.notified();
@@ -182,7 +196,7 @@ impl State {
         );
     }
 }
-fn check(request: &MemoryLockRequest) -> std::result::Result<(), MemoryLockerError> {
+fn check(request: &MemoryLockRequest) -> StdResult<(), MemoryLockerError> {
     match request.cancellation().check() {
         Ok(()) => Ok(()),
         Err(Error::OperationCancelled { reason }) => Err(MemoryLockerError::Cancelled { reason }),
@@ -194,7 +208,7 @@ struct Guard {
     key: String,
 }
 impl MemoryLockGuard for Guard {
-    fn release(self: Box<Self>) -> std::result::Result<(), MemoryLockerError> {
+    fn release(self: Box<Self>) -> StdResult<(), MemoryLockerError> {
         assert!(self.state.slots.lock().unwrap().remove(&self.key));
         self.state.returned.fetch_add(1, Ordering::SeqCst);
         self.state.released.notify_all();
@@ -211,7 +225,7 @@ impl BlockingMemoryLocker for Blocking {
     fn acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         self.0.blocking(request)
     }
 }
@@ -234,20 +248,20 @@ impl MemoryLocker for Provider {
     async fn acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         self.state.asynchronous(request).await
     }
     fn try_acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         self.state.record(Method::Try, &request);
         Ok(self
             .state
             .try_guard(request.coordination_key())
             .unwrap_or(MemoryLockOutcome::Unavailable))
     }
-    async fn shutdown(&self, _: MemoryLockerContext) -> std::result::Result<(), MemoryLockerError> {
+    async fn shutdown(&self, _: MemoryLockerContext) -> StdResult<(), MemoryLockerError> {
         self.state.drained();
         self.state.shutdowns.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -275,7 +289,7 @@ fn native(state: &Arc<State>) -> BlockingCache<u64> {
 }
 fn spawn<T: Send + 'static>(
     runtime: &BlockingRuntime,
-    work: impl std::future::Future<Output = T> + Send + 'static,
+    work: impl Future<Output = T> + Send + 'static,
 ) -> tokio::task::JoinHandle<T> {
     struct Started<T>(tokio::task::JoinHandle<T>);
     runtime.run(async { Started(tokio::spawn(work)) }).0
@@ -294,7 +308,7 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
         cache
             .get_or_set(
                 "native",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(1)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(1)))
             )
             .execute()
             .unwrap(),
@@ -305,9 +319,7 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
             .runtime()
             .run(cache.as_async().get_or_set(
                 "async",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
             ))
             .unwrap(),
         2
@@ -366,7 +378,7 @@ fn legacy_provider_without_blocking_capability_remains_compatible() {
         cache
             .get_or_set(
                 "old",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(7)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(7)))
             )
             .execute()
             .unwrap(),
@@ -394,7 +406,7 @@ fn mixed_callers_share_one_factory_and_owned_guards() {
                 typed_blocking_factory(move |ctx| {
                     n.fetch_add(1, Ordering::SeqCst);
                     thread::sleep(Duration::from_millis(40));
-                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                    Ok::<_, FactoryError>(ctx.value(42))
                 }),
             )
             .cancellation(token)
@@ -408,7 +420,7 @@ fn mixed_callers_share_one_factory_and_owned_guards() {
                 amalgam::source::factory(move |ctx| async move {
                     n.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(40)).await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                    Ok::<_, FactoryError>(ctx.value(42))
                 }),
             )
             .await
@@ -447,7 +459,7 @@ fn blocking_waiter_cannot_starve_the_factory_with_one_callback_slot() {
                 "shared",
                 typed_blocking_factory(move |ctx| {
                     n.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(17))
+                    Ok::<_, FactoryError>(ctx.value(17))
                 }),
             )
             .cancellation(token)
@@ -466,7 +478,7 @@ fn blocking_waiter_cannot_starve_the_factory_with_one_callback_slot() {
                 "shared",
                 typed_blocking_factory(move |ctx| {
                     n.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .cancellation(token)
@@ -526,7 +538,7 @@ fn distinct_keys_enter_inline_factories_before_either_is_released() {
                 amalgam::source::factory(move |ctx| {
                     s.send(()).unwrap();
                     g.wait();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                    Ok::<_, FactoryError>(ctx.value(7))
                 }),
             )
             .execute()
@@ -655,7 +667,7 @@ fn queued_cancelled_acquisition_never_invokes_the_provider() {
     let first = thread::spawn(move || {
         c.get_or_set(
             "holding-slot",
-            amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(1))),
+            amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(1))),
         )
         .execute()
     });
@@ -794,7 +806,7 @@ fn unavailable_blocking_provider_permits_the_ordinary_unlocked_factory() {
         cache
             .get_or_set(
                 "unlocked",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(4)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(4)))
             )
             .execute()
             .unwrap(),
@@ -819,7 +831,7 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
                     .run(child.get_or_set(
                         "inner",
                         amalgam::source::factory(|ctx| async move {
-                            Ok::<_, amalgam::FactoryError>(ctx.value(8))
+                            Ok::<_, FactoryError>(ctx.value(8))
                         })
                     ))
                     .map(|value| ctx.value(value + 1))
@@ -836,9 +848,7 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
         driver
             .run(asynchronous.get_or_set(
                 "after",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(11))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(11)) })
             ))
             .unwrap(),
         11
@@ -934,7 +944,7 @@ fn soft_timeout_background_keeps_the_blocking_acquired_guard_until_commit() {
                 amalgam::source::factory(move |ctx| {
                     send.send(()).unwrap();
                     blocked.wait();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 })
             )
             .execute()
@@ -965,7 +975,7 @@ fn eager_refresh_uses_nonblocking_try_and_never_blocking_acquisition() {
         cache
             .get_or_set(
                 "eager",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(1)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(1)))
             )
             .execute()
             .unwrap(),
@@ -976,7 +986,7 @@ fn eager_refresh_uses_nonblocking_try_and_never_blocking_acquisition() {
         cache
             .get_or_set(
                 "eager",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(2)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(2)))
             )
             .execute()
             .unwrap(),
@@ -1005,7 +1015,7 @@ fn native_marker_factories_use_the_blocking_provider_and_disjoint_keys() {
         cache
             .get_or_set(
                 "tagged",
-                typed_blocking_factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(7)))
+                typed_blocking_factory(|ctx| Ok::<_, FactoryError>(ctx.value(7)))
             )
             .tags(vec![tag.clone()].into_boxed_slice())
             .execute()
@@ -1057,9 +1067,7 @@ fn opposite_nested_native_calls_progress_with_one_slot_per_class() {
                         inner
                             .get_or_set(
                                 format!("child/{key}"),
-                                typed_blocking_factory(|ctx| {
-                                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                                }),
+                                typed_blocking_factory(|ctx| Ok::<_, FactoryError>(ctx.value(7))),
                             )
                             .cancellation(nested)
                             .execute()
@@ -1088,15 +1096,15 @@ fn opposite_nested_native_calls_progress_with_one_slot_per_class() {
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

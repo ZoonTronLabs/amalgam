@@ -5,12 +5,15 @@
 //! The cache enforces the wait budget even if the provider does not. The token
 //! ends before the pending provider future is dropped; it never owns the factory.
 //! Successful guards move into background completion and release exactly once.
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::sync::Arc;
 
+use async_trait::async_trait;
+
+use crate::advanced::MarkerKind;
 use crate::execution::{CancellationSource, FactoryCancellation};
 use crate::locking::{KeyGuard, KeyedLock};
-use crate::{FactoryCancellationReason as Reason, Timeout, advanced::MarkerKind};
-use async_trait::async_trait;
-use std::sync::Arc;
+use crate::{FactoryCancellationReason as Reason, Timeout};
 
 /// Failure of a custom local coordination provider.
 #[derive(Debug, thiserror::Error, Clone)]
@@ -145,8 +148,8 @@ impl MemoryLock {
         }
     }
 }
-impl std::fmt::Debug for MemoryLock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for MemoryLock {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("MemoryLock").finish_non_exhaustive()
     }
 }

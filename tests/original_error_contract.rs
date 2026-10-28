@@ -1,16 +1,28 @@
 //! Codec/provider boundaries retain concrete causes and the selected failure policy.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
-use serde::{Deserialize, Serialize};
 use std::error::Error as _;
+use std::result::Result as StdResult;
 use std::sync::Arc;
+use std::time::Duration;
+
+#[cfg(feature = "messagepack")]
+use amalgam::provider::MessagePackSerializer;
+#[cfg(feature = "postcard")]
+use amalgam::provider::PostcardSerializer;
+use amalgam::provider::{
+    DistributedCache, DistributedEntry, DistributedSerializer, InMemoryDistributedCache,
+    JsonSerializer, SystemClock,
+};
+#[cfg(feature = "redis")]
+use amalgam::provider::{RedisBackplane, RedisDistributedCache};
+use amalgam::{Cache, CacheEvent, CodecError, EntryOptions, Error, FactoryError, OperationOutcome};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize)]
 struct RejectedValue;
 impl Serialize for RejectedValue {
-    fn serialize<S: serde::Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, _: S) -> StdResult<S::Ok, S::Error> {
         Err(serde::ser::Error::custom("origin encoding rejected"))
     }
 }
@@ -78,7 +90,7 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
                 .with_rethrow_distributed_exceptions(true)
                 .with_rethrow_serialization_exceptions(false),
         )
-        .distributed_circuit_breaker(std::time::Duration::from_secs(60))
+        .distributed_circuit_breaker(Duration::from_secs(60))
         .try_build()
         .unwrap();
     let mut events = cache.events().subscribe();
@@ -99,9 +111,9 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
     let value = cache
         .get_or_set(
             "key",
-            amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.modified(7).done())
-            }),
+            amalgam::source::factory(
+                |ctx| async move { Ok::<_, FactoryError>(ctx.modified(7).done()) },
+            ),
         )
         .await
         .unwrap();

@@ -1,10 +1,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::advanced::ValidatorUpdate;
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock};
+use amalgam::{
+    Cache, ConditionalRefreshError, EntryOptions, Error, FactoryContext, FactoryError, Tag,
+    TagError, Timestamp,
+};
 
 fn options() -> EntryOptions {
     EntryOptions::new(Duration::from_secs(1)).with_fail_safe(
@@ -37,7 +43,7 @@ async fn conditional_builder_preserves_the_value_and_saved_tags_but_replaces_or_
             .get_or_set(
                 "key",
                 typed_factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(
+                    Ok::<_, FactoryError>(
                         ctx.modified(7)
                             .etag("old")
                             .last_modified(Timestamp::from_ticks(1))
@@ -91,7 +97,7 @@ async fn conditional_builder_preserves_the_value_and_saved_tags_but_replaces_or_
                             Some(Timestamp::from_ticks(2))
                         }
                     );
-                    Ok::<_, amalgam::FactoryError>(ctx.not_modified_builder()?.done())
+                    Ok::<_, FactoryError>(ctx.not_modified_builder()?.done())
                 }),
             )
             .await
@@ -113,7 +119,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
     cache
         .get_or_set(
             "key",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .tags(tags("old"))
         .await
@@ -123,7 +129,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .get_or_set(
             "key",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(
+                Ok::<_, FactoryError>(
                     ctx.not_modified_builder()?
                         .validated_tags(tags("new"))
                         .done(),
@@ -168,7 +174,7 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
             amalgam::source::factory(|ctx| async move {
                 let error = ctx.not_modified_builder().unwrap_err();
                 assert_eq!(error, ConditionalRefreshError::NoStaleSnapshot);
-                Err::<_, amalgam::FactoryError>(error.into())
+                Err::<_, FactoryError>(error.into())
             }),
         )
         .await
@@ -180,9 +186,7 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
     cache
         .get_or_set(
             "key",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
-            ),
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .await
         .unwrap();
@@ -192,7 +196,7 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
             "key",
             amalgam::source::factory(|mut ctx| async move {
                 ctx.set_tags([" "]);
-                Ok::<_, amalgam::FactoryError>(ctx.not_modified_builder()?.done())
+                Ok::<_, FactoryError>(ctx.not_modified_builder()?.done())
             }),
         )
         .await;
@@ -202,8 +206,8 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

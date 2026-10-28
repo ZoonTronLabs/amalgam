@@ -26,15 +26,6 @@
 //! RMW count. Counts are thread-bound. A writer serializes with one mutex and
 //! waits for existing short readers to leave; ordinary value Clone must not reenter
 //! the same cache. No user callback or value retirement is allowed under guards.
-#[cfg(loom)]
-use loom::cell::UnsafeCell;
-#[cfg(loom)]
-use loom::sync::atomic::{AtomicBool, AtomicUsize, Ordering, fence};
-#[cfg(loom)]
-use loom::sync::{Condvar, Mutex, MutexGuard};
-use parking_lot::lock_api::GuardNoSend;
-#[cfg(not(loom))]
-use parking_lot::{Condvar, Mutex, MutexGuard};
 use std::cell::Cell;
 #[cfg(not(loom))]
 use std::cell::UnsafeCell;
@@ -44,6 +35,16 @@ use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
 #[cfg(not(loom))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+#[cfg(loom)]
+use loom::cell::UnsafeCell;
+#[cfg(loom)]
+use loom::sync::atomic::{self, AtomicBool, AtomicUsize, Ordering};
+#[cfg(loom)]
+use loom::sync::{Condvar, Mutex, MutexGuard};
+use parking_lot::lock_api::GuardNoSend;
+#[cfg(not(loom))]
+use parking_lot::{Condvar, Mutex, MutexGuard};
 
 #[cfg(not(loom))]
 static NEXT_READER: AtomicUsize = AtomicUsize::new(0);
@@ -132,7 +133,7 @@ const HANDSHAKE: Ordering = Ordering::SeqCst;
 #[inline]
 fn model_fence() {
     #[cfg(loom)]
-    fence(Ordering::SeqCst);
+    atomic::fence(Ordering::SeqCst);
 }
 
 /// The writer admission gate. Closing pairs with a reader's count publication,
@@ -441,8 +442,9 @@ impl<T> DerefMut for WriteGuard<'_, T> {
 
 #[cfg(all(test, not(loom)))]
 mod tests {
-    use super::*;
     use std::sync::{Arc, Barrier};
+
+    use super::*;
 
     #[test]
     fn readers_never_see_torn_values_with_colliding_indices_and_competing_writers() {
@@ -505,8 +507,9 @@ mod tests {
 
 #[cfg(all(test, not(loom)))]
 mod compatibility_tests {
-    use super::*;
     use std::sync::{Arc, Barrier};
+
+    use super::*;
 
     #[test]
     fn slots_cover_available_parallelism() {

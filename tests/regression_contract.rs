@@ -2,14 +2,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
+use amalgam::provider::{
+    Clock, DistributedCache, InMemoryDistributedCache, JsonSerializer, ManualClock,
+};
 use amalgam::{
     Cache, CacheEvent, CacheRegistry, EntryOptions, FactoryError, Plugin, Priority, RecoveryConfig,
-    provider::Clock, provider::DistributedCache, provider::InMemoryDistributedCache,
-    provider::JsonSerializer, provider::ManualClock,
 };
 
 fn no_recovery() -> RecoveryConfig {
@@ -137,7 +140,7 @@ async fn auto_clone_isolates_mutable_arc_at_public_boundaries() {
         fn clone_value(
             &self,
             value: &Arc<AtomicI32>,
-        ) -> std::result::Result<Arc<AtomicI32>, amalgam::CloneError> {
+        ) -> StdResult<Arc<AtomicI32>, amalgam::CloneError> {
             Ok(Arc::new(AtomicI32::new(value.load(Ordering::SeqCst))))
         }
     }
@@ -246,7 +249,7 @@ async fn factory_error_source_survives_cache_boundary() {
         .get_or_set(
             "fail",
             amalgam::source::factory(|_ctx| async move {
-                Err(FactoryError::from_source(std::io::Error::other(
+                Err(FactoryError::from_source(IoError::other(
                     "upstream I/O failure",
                 )))
             }),

@@ -5,8 +5,9 @@ use super::{
     LeasePolicy, LocalParticipation, MarkerAccess, MarkerCommand, MarkerError, MarkerKind,
     MarkerReplay, MarkerSnapshot, MarkerWriteOutcome, PendingMutation, RecoveryAction,
     RecoveryExecutor, RecoveryItem, RecoveryWork, ReplayOutcome, ReplayTicket, Result, Storage,
-    StoredMarker, TagVerdict, Timestamp, Worker, acquire_owned_supervised, async_trait,
+    StoredMarker, TagVerdict, Timestamp, Worker, async_trait,
 };
+use crate::distributed_lock;
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     pub(super) fn replay_admitted(&self) -> Result<bool> {
@@ -169,7 +170,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     let Some(locker) = &self.inner.distributed_locker else {
                         return Err(LeaseError::UnsupportedFencing.into());
                     };
-                    let lease = acquire_owned_supervised(
+                    let lease = distributed_lock::acquire_owned_supervised(
                         Arc::clone(locker),
                         Arc::from(format!("amalgam:lock:{}", self.inner.l2_key(&item.key))),
                         self.inner.lease_ttl,

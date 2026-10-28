@@ -1,13 +1,13 @@
 //! The lazy query may contain an unpinned input that opts out of Unpin.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{Cache, Error};
-use std::future::Future;
-use std::future::IntoFuture;
+use std::future::{Future, IntoFuture};
 use std::marker::PhantomPinned;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
+
+use amalgam::{Cache, Error};
 
 struct PinnedKey {
     calls: Arc<AtomicUsize>,

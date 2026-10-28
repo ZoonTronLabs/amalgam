@@ -1,13 +1,17 @@
 //! A supplied value is not a user factory: deadlines, eager work and events differ.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::future::Future;
+use std::result::Result as StdResult;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::provider::ManualClock;
+use amalgam::{
+    BlockingCache, Cache, CacheEvent, EagerThreshold, EntryOptions, Error, FactoryContext,
+    FactoryError, Plugin, Timeout, Timestamp,
+};
 
 #[derive(Default)]
 struct OriginEvents(AtomicUsize);
@@ -51,7 +55,7 @@ async fn async_constant_ignores_factory_budget_and_does_not_report_factory_succe
     let factory = cache
         .get_or_set(
             "factory",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(99)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(99)) }),
         )
         .options(|_| zero_budget())
         .await;
@@ -147,8 +151,8 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

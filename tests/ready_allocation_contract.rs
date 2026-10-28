@@ -2,14 +2,15 @@
 //! Unsafe code is restricted to this test allocator forwarding System's contract.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use std::future::IntoFuture;
-
-use amalgam::{Cache, EntryOptions};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::future::Future;
+use std::future::{Future, IntoFuture};
+use std::result::Result as StdResult;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::{Cache, EntryOptions, FactoryContext, FactoryError};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 #[derive(Clone, Copy)]
 enum Measurement {
@@ -92,7 +93,7 @@ fn measure_allocations(work: impl FnOnce()) -> usize {
 
 #[test]
 fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -178,7 +179,7 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }

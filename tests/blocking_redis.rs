@@ -1,13 +1,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Native caller-thread contracts on actual Redis/Valkey storage and notifications.
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use {amalgam::redis_backend::RedisBackplane, amalgam::redis_backend::RedisDistributedCache};
+
+use amalgam::advanced::{
+    BlockingCommitReceipt, BlockingMutationReceipt, BlockingRuntime, DistributedExpirePolicy,
+};
+use amalgam::provider::{Clock, JsonSerializer, SystemClock};
+use amalgam::redis_backend::{RedisBackplane, RedisDistributedCache};
+use amalgam::{
+    BackplaneReadiness, BlockingCache, Cache, CancellationSource, ClearMode, EntryOptions, Error,
+    FactoryCancellationReason, Tag, Timeout,
+};
 mod support {
     pub mod redis_fixture;
 }

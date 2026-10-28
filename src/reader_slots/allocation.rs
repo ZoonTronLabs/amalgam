@@ -1,9 +1,13 @@
 //! A warmed reader must remain allocation-free when it first meets a writer.
-use super::*;
-use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, FilterOp};
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
+
+use parking_lot::Condvar;
+use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, FilterOp};
+
+use super::ReaderSlots;
 
 #[derive(Clone, Copy)]
 enum Measurement {

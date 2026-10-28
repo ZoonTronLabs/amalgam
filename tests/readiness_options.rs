@@ -2,20 +2,23 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    BackplaneReadiness, Cache, CacheEvent, CloseOutcome, EntryOptions, Error,
-    FactoryCancellationReason, RecoveryConfig, Result, advanced::EffectOutcome,
-    advanced::LocalEffect, advanced::SkipReason, provider::Backplane, provider::BackplaneMessage,
-    provider::BackplaneState, provider::ContinuityEpoch, provider::InProcessBackplane,
-    provider::MemoryAdmission,
-};
-use async_trait::async_trait;
-use std::future::IntoFuture;
-use std::future::{Future, poll_fn};
+use std::future;
+use std::future::{Future, IntoFuture};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use std::time::Duration;
+
+use amalgam::advanced::{EffectOutcome, LocalEffect, SkipReason};
+use amalgam::provider::{
+    Backplane, BackplaneMessage, BackplaneState, ContinuityEpoch, InMemoryDistributedCache,
+    InProcessBackplane, JsonSerializer, MemoryAdmission, SystemClock,
+};
+use amalgam::{
+    BackplaneReadiness, Cache, CacheEvent, CloseOutcome, EntryOptions, Error,
+    FactoryCancellationReason, FactoryError, RecoveryConfig, Result,
+};
+use async_trait::async_trait;
 use tokio::sync::{broadcast, watch};
 
 struct AwaitingAcknowledgement {
@@ -96,7 +99,7 @@ async fn default_initial_wait_allows_local_mutation_but_explicit_ready_still_nee
     assert_eq!(backplane.publications.load(Ordering::SeqCst), 0);
 
     let mut readiness = Box::pin(cache.ready());
-    poll_fn(|context| {
+    future::poll_fn(|context| {
         assert!(readiness.as_mut().poll(context).is_pending());
         Poll::Ready(())
     })
@@ -124,7 +127,7 @@ async fn close_cancels_initial_ack_admission_before_local_or_notification_effect
         .unwrap();
     let mut events = cache.events().subscribe();
     let mut mutation = Box::pin(cache.set("k", 42).with_receipt().into_future());
-    poll_fn(|context| {
+    future::poll_fn(|context| {
         assert!(mutation.as_mut().poll(context).is_pending());
         Poll::Ready(())
     })
@@ -145,12 +148,10 @@ async fn close_cancels_initial_ack_admission_before_local_or_notification_effect
 
 #[tokio::test]
 async fn initial_subscription_wait_admits_a_cold_l2_read_after_acknowledgement() -> Result<()> {
-    let backend = Arc::new(amalgam::provider::InMemoryDistributedCache::new(Arc::new(
-        amalgam::provider::SystemClock,
-    )));
+    let backend = Arc::new(InMemoryDistributedCache::new(Arc::new(SystemClock)));
     let writer = Cache::<i32>::builder()
         .distributed(backend.clone())
-        .serializer(Arc::new(amalgam::provider::JsonSerializer))
+        .serializer(Arc::new(JsonSerializer))
         .try_build()?;
     writer
         .set("shared", 42)
@@ -161,7 +162,7 @@ async fn initial_subscription_wait_admits_a_cold_l2_read_after_acknowledgement()
     let backplane = Arc::new(AwaitingAcknowledgement::new());
     let reader = Cache::<i32>::builder()
         .distributed(backend)
-        .serializer(Arc::new(amalgam::provider::JsonSerializer))
+        .serializer(Arc::new(JsonSerializer))
         .backplane(backplane.clone())
         .wait_for_initial_backplane_subscribe(true)
         .default_options(options().with_skip_memory(true, false))
@@ -171,7 +172,7 @@ async fn initial_subscription_wait_admits_a_cold_l2_read_after_acknowledgement()
         })
         .try_build()?;
     let mut read = Box::pin(reader.try_get("shared").into_future());
-    poll_fn(|context| {
+    future::poll_fn(|context| {
         assert!(read.as_mut().poll(context).is_pending());
         Poll::Ready(())
     })
@@ -200,7 +201,7 @@ async fn admitted_initial_subscription_is_not_awaited_again_after_a_gap_or_stop(
         })
         .try_build()?;
     let mut initial = Box::pin(cache.set("initial", 42).into_future());
-    poll_fn(|context| {
+    future::poll_fn(|context| {
         assert!(initial.as_mut().poll(context).is_pending());
         Poll::Ready(())
     })
@@ -222,9 +223,9 @@ async fn admitted_initial_subscription_is_not_awaited_again_after_a_gap_or_stop(
             cache
                 .get_or_set(
                     key,
-                    amalgam::source::factory(|ctx| async move {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(43))
-                    }),
+                    amalgam::source::factory(
+                        |ctx| async move { Ok::<_, FactoryError>(ctx.value(43)) },
+                    ),
                 )
                 .into_future(),
         )
@@ -258,7 +259,7 @@ async fn a_stopped_initial_subscription_preserves_its_error_without_running_the_
             "blocked-origin",
             amalgam::source::factory(move |ctx| async move {
                 called.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(43))
+                Ok::<_, FactoryError>(ctx.value(43))
             }),
         )
         .await;

@@ -1,19 +1,28 @@
 //! FusionCache-compatible availability defaults and explicit strict capabilities.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, DistributedLocker, InMemoryDistributedCache,
+    JsonSerializer, ManualClock,
+};
+use amalgam::{
+    Cache, ConfigError, EntryOptions, Error, FactoryContext, FactoryError, RecoveryConfig, Result,
+    Timeout,
+};
+use async_trait::async_trait;
 
 struct OrdinaryStore {
     calls: AtomicUsize,
 }
 #[async_trait]
 impl DistributedCache for OrdinaryStore {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     }
@@ -119,9 +128,9 @@ async fn default_l2_only_keeps_l1_until_expiration_instead_of_clearing_each_seco
             cache
                 .get_or_set(
                     "hot",
-                    amalgam::source::factory(|ctx| async move {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                    })
+                    amalgam::source::factory(
+                        |ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }
+                    )
                 )
                 .await
                 .unwrap(),
@@ -185,7 +194,7 @@ async fn a_fail_safe_default_without_a_stale_entry_does_not_enable_soft_timeout(
             "cold",
             typed_factory(|ctx| async move {
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
         .fail_safe_default(Some(99))
@@ -213,8 +222,8 @@ fn initial_subscription_wait_is_opt_in_or_selected_by_strict() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

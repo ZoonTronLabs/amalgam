@@ -1,14 +1,27 @@
 //! Independent user-supplied local coordination, including owned background work.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::locking::{KeyGuard, KeyedLock};
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy, ShutdownFailure, ShutdownTask,
+};
+use amalgam::locking::{KeyGuard, KeyedLock};
+use amalgam::provider::{
+    InMemoryDistributedCache, InMemoryInvalidationStore, JsonSerializer, ManualClock, MemoryLock,
+    MemoryLockGuard, MemoryLockKind, MemoryLockOutcome, MemoryLockRequest, MemoryLocker,
+    MemoryLockerContext, MemoryLockerError, SystemClock,
+};
+use amalgam::{
+    BlockingCache, Cache, CancellationSource, EagerThreshold, EntryOptions, Error,
+    FactoryCancellation, FactoryCancellationReason, FactoryContext, FactoryError, OperationOutcome,
+    Tag, Timeout, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +100,7 @@ struct Owned {
     result: Release,
 }
 impl MemoryLockGuard for Owned {
-    fn release(self: Box<Self>) -> std::result::Result<(), MemoryLockerError> {
+    fn release(self: Box<Self>) -> StdResult<(), MemoryLockerError> {
         let Self {
             guard,
             released,
@@ -123,7 +136,7 @@ impl MemoryLocker for Provider {
     async fn acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         self.requests.lock().unwrap().push(request.clone());
         let _witness = Witness {
             token: request.cancellation().clone(),
@@ -141,7 +154,7 @@ impl MemoryLocker for Provider {
     fn try_acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         self.tries.fetch_add(1, Ordering::SeqCst);
         self.requests.lock().unwrap().push(request.clone());
         Ok(match self.locks.try_lock(request.coordination_key()) {
@@ -149,10 +162,7 @@ impl MemoryLocker for Provider {
             None => MemoryLockOutcome::Unavailable,
         })
     }
-    async fn shutdown(
-        &self,
-        context: MemoryLockerContext,
-    ) -> std::result::Result<(), MemoryLockerError> {
+    async fn shutdown(&self, context: MemoryLockerContext) -> StdResult<(), MemoryLockerError> {
         self.drained();
         self.shutdowns
             .lock()
@@ -196,7 +206,7 @@ async fn same_key_shares_one_factory_and_fresh_hits_skip_the_provider() {
                 amalgam::source::factory(move |ctx| async move {
                     runs.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(10)).await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                    Ok::<_, FactoryError>(ctx.value(42))
                 }),
             )
             .await
@@ -247,7 +257,7 @@ async fn distinct_keys_enter_factories_before_either_is_released() {
                 amalgam::source::factory(move |ctx| async move {
                     entered.add_permits(1);
                     release.acquire().await.unwrap().forget();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                    Ok::<_, FactoryError>(ctx.value(7))
                 }),
             )
             .await
@@ -283,7 +293,7 @@ async fn finite_wait_signals_provider_before_drop_and_factory_token_stays_active
             "deadline",
             amalgam::source::factory(|ctx| async move {
                 assert!(ctx.cancellation().check().is_ok());
-                Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                Ok::<_, FactoryError>(ctx.value(9))
             })
         )
         .await
@@ -332,9 +342,7 @@ async fn unavailable_guard_and_lock_timeout_preserve_existing_fallback_rules() {
         assert_eq!(
             c.get_or_set(
                 "miss",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(19))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(19)) })
             )
             .await
             .unwrap(),
@@ -412,9 +420,7 @@ async fn release_errors_and_panics_do_not_replace_computed_values_or_double_rele
         assert_eq!(
             c.get_or_set(
                 "release",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(23))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(23)) })
             )
             .await
             .unwrap(),
@@ -473,7 +479,7 @@ async fn soft_completion_keeps_the_custom_guard_until_background_factory_finishe
             amalgam::source::factory(move |ctx| async move {
                 factory_release.acquire().await.unwrap().forget();
                 assert!(ctx.cancellation().check().is_ok());
-                Ok::<_, amalgam::FactoryError>(ctx.value(37))
+                Ok::<_, FactoryError>(ctx.value(37))
             })
         )
         .await
@@ -503,9 +509,7 @@ async fn eager_uses_nonblocking_custom_attempt_and_owned_guard() {
     assert_eq!(
         c.get_or_set(
             "eager",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(41)) }
-            )
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(41)) })
         )
         .await
         .unwrap(),
@@ -515,9 +519,7 @@ async fn eager_uses_nonblocking_custom_attempt_and_owned_guard() {
     assert_eq!(
         c.get_or_set(
             "eager",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(43)) }
-            )
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(43)) })
         )
         .await
         .unwrap(),
@@ -549,7 +551,7 @@ async fn marker_and_entry_equal_text_keys_have_disjoint_custom_coordination() {
         Duration::from_secs(1),
         c.get_or_set(
             "tag:group",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(47)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(47)) }),
         )
         .tags(vec![tag.clone()].into_boxed_slice()),
     )
@@ -599,7 +601,7 @@ fn native_and_async_views_use_one_custom_local_locker() {
         native
             .get_or_set(
                 "native",
-                amalgam::source::factory(|ctx| Ok::<_, amalgam::FactoryError>(ctx.value(53)))
+                amalgam::source::factory(|ctx| Ok::<_, FactoryError>(ctx.value(53)))
             )
             .execute()
             .unwrap(),
@@ -610,9 +612,7 @@ fn native_and_async_views_use_one_custom_local_locker() {
             .runtime()
             .run(native.as_async().get_or_set(
                 "async",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(59))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(59)) })
             ))
             .unwrap(),
         59
@@ -642,7 +642,7 @@ async fn cached_marker_eager_refresh_uses_the_same_custom_provider() {
         .unwrap();
     c.get_or_set(
         "marker-eager",
-        typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(61)) }),
+        typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(61)) }),
     )
     .tags(vec![Tag::new("eager-group").unwrap()].into_boxed_slice())
     .await
@@ -752,9 +752,7 @@ async fn provider_can_be_shared_without_one_cache_shutdown_closing_the_other() {
         .unwrap();
     a.get_or_set(
         "a",
-        amalgam::source::factory(
-            |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(67)) },
-        ),
+        amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(67)) }),
     )
     .await
     .unwrap();
@@ -762,9 +760,7 @@ async fn provider_can_be_shared_without_one_cache_shutdown_closing_the_other() {
     assert_eq!(
         b.get_or_set(
             "b",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(71)) }
-            )
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(71)) })
         )
         .await
         .unwrap(),
@@ -794,8 +790,8 @@ async fn interrupted_shutdown_reuses_the_already_owned_provider_teardown() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

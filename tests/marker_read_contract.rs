@@ -2,12 +2,27 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerReadFailure,
+    MarkerReadOutcome, MarkerReadPolicy, MarkerVersion, ReconciliationPolicy, StoredMarker,
+};
+use amalgam::provider::{
+    Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage, Clock,
+    DefaultEntryOptionsProvider, DistributedEntry, DistributedSerializer, DistributedSnapshot,
+    InMemoryDistributedCache, InMemoryInvalidationStore, InProcessBackplane, InvalidationStore,
+    JitterSource, JsonSerializer, ManualClock, MarkerCommand, MarkerReadError, MemoryLimits,
+};
+use amalgam::{
+    Cache, CacheEvent, CancellationSource, ConfigError, EagerThreshold, EntryOptions, Error,
+    FactoryCancellation, FactoryCancellationReason, FactoryContext, FactoryError, Plugin, Priority,
+    RemoveByTagBehavior, Result, Tag, Timeout, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 #[derive(Clone)]
@@ -110,7 +125,7 @@ impl InvalidationStore for Store {
         &self,
         scope: &CacheScope,
         kind: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.reads.lock().unwrap().push(kind.clone());
         let (selection, selected) = self.mode.lock().unwrap().clone();
         let selected_kind = match selection {
@@ -147,7 +162,7 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         kind: &MarkerKind,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerReadError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerReadError> {
         let _witness = Witness {
             token: cancellation.clone(),
             stopped: self.stopped.clone(),
@@ -162,7 +177,7 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         kind: MarkerKind,
         version: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.inner.advance(scope, kind, version).await
     }
 }
@@ -247,7 +262,7 @@ impl InvalidationStore for CancelledRead {
         &self,
         scope: &CacheScope,
         kind: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.0.read(scope, kind).await
     }
 
@@ -256,7 +271,7 @@ impl InvalidationStore for CancelledRead {
         scope: &CacheScope,
         kind: &MarkerKind,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerReadError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerReadError> {
         MarkerReadError::check_cancellation(&cancellation)?;
         if matches!(kind, MarkerKind::Tag(_)) {
             return Err(MarkerReadError::Cancelled {
@@ -271,7 +286,7 @@ impl InvalidationStore for CancelledRead {
         scope: &CacheScope,
         kind: MarkerKind,
         candidate: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.0.advance(scope, kind, candidate).await
     }
 }
@@ -1575,16 +1590,14 @@ async fn passive_marker_read_is_owned_by_refresh_and_shutdown() {
     );
 }
 
-async fn forbidden_factory(
-    message: &'static str,
-) -> std::result::Result<u64, amalgam::FactoryError> {
+async fn forbidden_factory(message: &'static str) -> StdResult<u64, FactoryError> {
     panic!("{message}");
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

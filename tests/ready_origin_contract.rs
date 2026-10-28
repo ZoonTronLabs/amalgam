@@ -1,13 +1,16 @@
 //! The plain origin hit preserves user callbacks and cleanup without an owned frame.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    BlockingCache, Cache, CacheEvent, CacheLevel, CacheOperation, EntryOptions, Error,
-    FactoryCancellationReason, OperationOutcome,
-};
+use std::future::{Future, IntoFuture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::{
+    BlockingCache, Cache, CacheEvent, CacheLevel, CacheOperation, EntryOptions, Error,
+    FactoryCancellationReason, FactoryError, OperationOutcome,
+};
 
 enum AfterSubscription {
     Continue,
@@ -46,7 +49,7 @@ async fn a_ready_origin_hit_reaches_an_observer_attached_by_the_unused_factory_d
                 "hit",
                 amalgam::source::factory(move |ctx| async move {
                     drop(capture);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 })
             )
             .await
@@ -86,7 +89,7 @@ async fn closing_from_the_unused_factory_drop_rejects_the_ready_value_once() {
                 "hit",
                 amalgam::source::factory(move |ctx| async move {
                     drop(capture);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 })
             )
             .await,
@@ -131,7 +134,7 @@ fn native_ready_origins_preserve_unused_capture_events_and_close() {
                 "hit",
                 amalgam::source::factory(move |ctx| {
                     drop(capture);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .execute();
@@ -215,11 +218,11 @@ async fn shutdown_drains_ready_clone_and_the_unused_origin_capture() {
                 Err(ctx.fail("the hot factory must not run"))
             }),
         );
-        let mut future = std::pin::pin!(std::future::IntoFuture::into_future(request));
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-        match std::future::Future::poll(future.as_mut(), &mut context) {
-            std::task::Poll::Ready(result) => result,
-            std::task::Poll::Pending => panic!("a ready hit must finish without a runtime"),
+        let mut future = std::pin::pin!(IntoFuture::into_future(request));
+        let mut context = Context::from_waker(Waker::noop());
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(result) => result,
+            Poll::Pending => panic!("a ready hit must finish without a runtime"),
         }
     });
     entry.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -258,7 +261,7 @@ async fn the_first_inline_factory_miss_starts_physical_cleanup() {
             .get_or_set(
                 "expires",
                 amalgam::source::factory(move |ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(source))
+                    Ok::<_, FactoryError>(ctx.value(source))
                 }),
             )
             .await
@@ -276,7 +279,9 @@ async fn the_first_inline_factory_miss_starts_physical_cleanup() {
 
 #[tokio::test]
 async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
-    use amalgam::{EagerThreshold, advanced::FactoryInvocation, provider::ManualClock};
+    use amalgam::EagerThreshold;
+    use amalgam::advanced::FactoryInvocation;
+    use amalgam::provider::ManualClock;
     let clock = Arc::new(ManualClock::default());
     let cache = Cache::builder().clock(clock.clone()).try_build().unwrap();
     cache
@@ -302,7 +307,7 @@ async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
                 "eager",
                 amalgam::source::factory(|ctx| async move {
                     assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 })
             )
             .await
@@ -355,11 +360,11 @@ async fn a_value_without_drop_can_still_have_a_user_clone() {
                 reader_cache.try_get("hit").execute()
             } else {
                 let request = reader_cache.as_async().try_get("hit");
-                let mut future = std::pin::pin!(std::future::IntoFuture::into_future(request));
-                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-                match std::future::Future::poll(future.as_mut(), &mut context) {
-                    std::task::Poll::Ready(result) => result,
-                    std::task::Poll::Pending => panic!("a ready hit needs no runtime"),
+                let mut future = std::pin::pin!(IntoFuture::into_future(request));
+                let mut context = Context::from_waker(Waker::noop());
+                match Future::poll(future.as_mut(), &mut context) {
+                    Poll::Ready(result) => result,
+                    Poll::Pending => panic!("a ready hit needs no runtime"),
                 }
             }
         });

@@ -7,14 +7,16 @@
 #[cfg(feature = "metrics")]
 #[test]
 fn named_metrics_attribute_sessions_and_bound_historical_labels() {
-    use amalgam::{
-        CacheEvent, CacheLevel, CacheOperation, Events, MetricsPlugin, OperationOutcome, Plugin,
-        PluginContext, advanced::CacheLabelBudget, advanced::PluginHost,
-    };
     use std::collections::BTreeSet;
     use std::num::NonZeroUsize;
     use std::sync::Arc;
     use std::time::Duration;
+
+    use amalgam::advanced::{CacheLabelBudget, PluginHost};
+    use amalgam::{
+        CacheEvent, CacheLevel, CacheOperation, Events, MetricsPlugin, OperationOutcome, Plugin,
+        PluginContext,
+    };
 
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
@@ -110,10 +112,12 @@ fn named_metrics_attribute_sessions_and_bound_historical_labels() {
 
 #[cfg(feature = "opentelemetry")]
 mod tracing_contract {
-    use amalgam::observability::{OperationObservation, component_span};
-    use amalgam::{CacheLevel, CacheOperation, Events, OperationOutcome};
+
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    use amalgam::observability::{self, OperationObservation};
+    use amalgam::{CacheLevel, CacheOperation, Events, OperationOutcome};
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
     use tracing_subscriber::layer::{Context, SubscriberExt as _};
@@ -173,7 +177,7 @@ mod tracing_contract {
                 Some("trace-key"),
             );
             observation.span().in_scope(|| {
-                let child = component_span(
+                let child = observability::component_span(
                     "named-cache",
                     CacheLevel::Distributed,
                     "read",

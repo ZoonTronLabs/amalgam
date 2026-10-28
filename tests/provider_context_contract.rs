@@ -1,9 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::provider::{DefaultEntryOptionsProvider, ManualClock};
+use amalgam::{Cache, EntryOptions};
 
 #[derive(Default)]
 struct ContextProvider(Mutex<Vec<(String, Duration)>>);

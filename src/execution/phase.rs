@@ -2,18 +2,18 @@
 //! future. Every production caller runs inside Execution: that parent owns and
 //! drains the pinned future. A first-poll parent uses admission; a suspended
 //! parent is registered for cancellation without another caller poll.
-use super::CacheBinding;
-use super::{
-    CancelWork, CancellationRequest, CancellationSource, FactoryCancellation, Reason, Request,
-    RequestOwner, Scopes, lock,
-};
-use crate::error::{Error, Result};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
+
+use super::{
+    CacheBinding, CancelWork, CancellationRequest, CancellationSource, FactoryCancellation, Reason,
+    Request, RequestOwner, Scopes,
+};
+use crate::error::{Error, Result};
 
 #[derive(Debug)]
 struct Control {
@@ -37,7 +37,7 @@ impl RequestOwner for Control {
 impl CancelWork for Control {
     fn cancel(&self, reason: Reason) {
         if RequestOwner::cancel_with(self, reason) == CancellationRequest::Cancelled {
-            let waker = lock(&self.waker).take();
+            let waker = super::lock(&self.waker).take();
             if let Some(waker) = waker {
                 waker.wake();
             }
@@ -114,7 +114,7 @@ impl<'a> BorrowedPhase<'a> {
             return Poll::Ready(Err(Error::OperationCancelled { reason }));
         }
         let waker = cx.waker().clone();
-        let previous = lock(&self.control.waker).replace(waker);
+        let previous = super::lock(&self.control.waker).replace(waker);
         drop(previous);
         let mut lease = PollRetirement {
             phase: self,
@@ -182,9 +182,11 @@ impl<'a, T> ExecutionCheckpoint<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{Mutex, mpsc};
     use std::time::Duration;
+
+    use super::*;
+    use crate::execution;
 
     struct ObserveDrop {
         token: FactoryCancellation,
@@ -209,7 +211,7 @@ mod tests {
         let parent = scopes.execution(
             async move {
                 let phase = BorrowedPhase::new(&worker_scopes, &parent);
-                *lock(&retained) = Some(phase.token());
+                *execution::lock(&retained) = Some(phase.token());
                 let mut work = std::pin::pin!(async move {
                     entered.send(()).unwrap();
                     released.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -224,7 +226,7 @@ mod tests {
         entry.await.unwrap();
         scopes.close();
         assert_eq!(
-            lock(&child_token).as_ref().unwrap().reason(),
+            execution::lock(&child_token).as_ref().unwrap().reason(),
             Some(Reason::CacheShutdown)
         );
         assert!(

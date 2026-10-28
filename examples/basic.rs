@@ -14,7 +14,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use amalgam::Cache;
+use amalgam::{Cache, FactoryError};
 
 #[tokio::main]
 async fn main() {
@@ -34,7 +34,7 @@ async fn main() {
                     runs.fetch_add(1, Ordering::SeqCst);
                     println!("  [factory] running — computing the value the slow way…");
                     // Imagine an HTTP call or a DB query here.
-                    Ok::<_, amalgam::FactoryError>(ctx.value("Hello from the factory".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("Hello from the factory".to_owned()))
                 }),
             )
             .await
@@ -51,7 +51,7 @@ async fn main() {
                 amalgam::source::factory(move |ctx| async move {
                     // This body should never execute — the value is already cached.
                     runs.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("(this should not appear)".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("(this should not appear)".to_owned()))
                 }),
             )
             .await

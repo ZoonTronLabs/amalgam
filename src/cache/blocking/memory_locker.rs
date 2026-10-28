@@ -1,15 +1,17 @@
 //! Explicit native provider dispatch without an ambient mode selector.
+use std::sync::Arc;
+
 use super::{BlockingRuntime, runtime};
+use crate::advanced::ShutdownTask;
 use crate::cache::{Cache, PublicLifetime, WorkAdmission};
 use crate::commit::TaskResult;
 use crate::execution::{CancellationSource, LinkMode, Scopes};
 use crate::lifecycle::Tasks;
-use crate::{
-    Error, Events, FactoryCancellationReason as Reason, advanced::ShutdownTask,
-    provider::BlockingMemoryLocker, provider::MemoryLock, provider::MemoryLockGuard,
-    provider::MemoryLockOutcome, provider::MemoryLockRequest, provider::MemoryLockerError,
+use crate::provider::{
+    BlockingMemoryLocker, MemoryLock, MemoryLockGuard, MemoryLockOutcome, MemoryLockRequest,
+    MemoryLockerError,
 };
-use std::sync::Arc;
+use crate::{Error, Events, FactoryCancellationReason as Reason};
 
 pub(in crate::cache) struct NativeMemoryView<V: Clone + Send + Sync + 'static> {
     source: Cache<V>,

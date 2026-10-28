@@ -1,18 +1,32 @@
 //! Public-API scaling fixture. Timings are aggregate elapsed / completed operations.
 //! Counting is thread-local; the instrumented allocator never shares a hot counter.
-use amalgam::{BlockingCache, Cache, EntryOptions};
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::future::IntoFuture;
-use std::hint::black_box;
+use std::hint;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
+
+use amalgam::{BlockingCache, Cache, EntryOptions};
 
 const OPERATIONS: usize = 300_000;
 const WARMUP: usize = 20_000;
 #[path = "scaling/warmup.rs"]
 mod warmup;
+use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Waker};
+use std::time::SystemTime;
+
+use amalgam::entry::Metadata;
+use amalgam::provider::{
+    Clock, ClockTiming, InMemoryDistributedCache, JitterSample, JsonSerializer, SystemClock,
+};
+use amalgam::{EagerThreshold, FactoryError, Tag, Timestamp};
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use warmup::{BATCH, Warmup};
+
 const SET_OPERATIONS: usize = 1_000_000;
 const COLD_OPERATIONS: usize = 100_000;
 #[derive(Clone, Copy)]
@@ -72,8 +86,8 @@ fn end_counting() -> usize {
         Measurement::Inactive => panic!("measurement was not enabled"),
     })
 }
-fn runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
+fn runtime() -> Runtime {
+    RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap_or_else(|error| panic!("benchmark runtime creation must succeed: {error:?}"))
@@ -154,7 +168,7 @@ fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same
                         begin_counting();
                         let mut checksum = 0_u64;
                         for _ in 0..OPERATIONS {
-                            checksum += black_box(H::value(cache, key).await);
+                            checksum += hint::black_box(H::value(cache, key).await);
                         }
                         let allocations = end_counting();
                         assert_eq!(checksum, OPERATIONS as u64 * (index as u64 + 1));
@@ -212,7 +226,7 @@ fn synchronous_hit<H: WarmHit>() {
     let began = Instant::now();
     let mut checksum = 0_u64;
     for _ in 0..OPERATIONS {
-        checksum += black_box(H::native(&cache, "sync"));
+        checksum += hint::black_box(H::native(&cache, "sync"));
     }
     let elapsed = began.elapsed();
     let allocations = end_counting();
@@ -226,7 +240,7 @@ fn synchronous_hit<H: WarmHit>() {
         .shutdown()
         .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
 }
-fn mutations(rt: &tokio::runtime::Runtime) {
+fn mutations(rt: &Runtime) {
     let writes = cache();
     rt.block_on(async {
         let mut warmup = Warmup::new("set");
@@ -276,7 +290,7 @@ fn mutations(rt: &tokio::runtime::Runtime) {
                     warm.get_or_set(
                         key,
                         amalgam::source::factory(|context| async move {
-                            Ok::<_, amalgam::FactoryError>(context.value(7))
+                            Ok::<_, FactoryError>(context.value(7))
                         })
                     )
                     .await
@@ -302,12 +316,12 @@ fn mutations(rt: &tokio::runtime::Runtime) {
         let began = Instant::now();
         for key in &keys {
             assert_eq!(
-                black_box(
+                hint::black_box(
                     writes
                         .get_or_set(
                             key,
                             amalgam::source::factory(|context| async move {
-                                Ok::<_, amalgam::FactoryError>(context.value(7))
+                                Ok::<_, FactoryError>(context.value(7))
                             })
                         )
                         .await
@@ -387,40 +401,38 @@ fn run<H: WarmHit>() {
 
 fn cost(label: &str, mut operation: impl FnMut() -> u64) {
     for _ in 0..WARMUP {
-        black_box(operation());
+        hint::black_box(operation());
     }
     let began = Instant::now();
     let mut checksum = 0_u64;
     for _ in 0..OPERATIONS {
-        checksum = checksum.wrapping_add(black_box(operation()));
+        checksum = checksum.wrapping_add(hint::black_box(operation()));
     }
-    black_box(checksum);
+    hint::black_box(checksum);
     println!(
         "{label},{:.3}",
         began.elapsed().as_nanos() as f64 / OPERATIONS as f64
     );
 }
-struct CostClock(amalgam::provider::ClockTiming);
-impl amalgam::provider::Clock for CostClock {
-    fn now(&self) -> amalgam::Timestamp {
-        amalgam::Timestamp::from_ticks(10_000_000_000)
+struct CostClock(ClockTiming);
+impl Clock for CostClock {
+    fn now(&self) -> Timestamp {
+        Timestamp::from_ticks(10_000_000_000)
     }
-    fn timing_model(&self) -> amalgam::provider::ClockTiming {
+    fn timing_model(&self) -> ClockTiming {
         self.0
     }
 }
 fn ready_costs() {
     use amalgam::provider::Clock;
     println!("component,ns_per_op");
-    cost("system_clock", || {
-        amalgam::provider::SystemClock.now().ticks() as u64
-    });
+    cost("system_clock", || SystemClock.now().ticks() as u64);
     cost("system_time", || {
-        black_box(std::time::SystemTime::now());
+        hint::black_box(SystemTime::now());
         1
     });
     cost("system_duration", || {
-        std::time::SystemTime::now()
+        SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_else(|error| {
                 panic!("benchmark clock must be after the Unix epoch: {error:?}")
@@ -430,37 +442,36 @@ fn ready_costs() {
     let hash = std::collections::hash_map::RandomState::new();
     cost("key_hash", || {
         use std::hash::BuildHasher;
-        hash.hash_one(black_box("key-0"))
+        hash.hash_one(hint::black_box("key-0"))
     });
     let keyed = ahash::RandomState::new();
-    cost("key_hash_ahash", || keyed.hash_one(black_box("key-0")));
-    let active = std::sync::atomic::AtomicUsize::new(0);
+    cost("key_hash_ahash", || {
+        keyed.hash_one(hint::black_box("key-0"))
+    });
+    let active = AtomicUsize::new(0);
     cost("counter_pair", || {
-        active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) as u64
+        active.fetch_add(1, Ordering::SeqCst);
+        active.fetch_sub(1, Ordering::SeqCst) as u64
     });
     cost("monotonic_clock", || {
-        black_box(Instant::now());
+        hint::black_box(Instant::now());
         1
     });
     let duration = Duration::new(1_790_000_000, 123_456_789);
     cost("duration_ticks", || {
-        amalgam::time::duration_to_ticks(black_box(duration)) as u64
+        amalgam::time::duration_to_ticks(hint::black_box(duration)) as u64
     });
     let rt = runtime();
     for (label, clock) in [
         (
             "controlled",
-            Some(Arc::new(CostClock(amalgam::provider::ClockTiming::Controlled)) as Arc<dyn Clock>),
+            Some(Arc::new(CostClock(ClockTiming::Controlled)) as Arc<dyn Clock>),
         ),
         (
             "physical",
-            Some(Arc::new(CostClock(amalgam::provider::ClockTiming::RealTime)) as Arc<dyn Clock>),
+            Some(Arc::new(CostClock(ClockTiming::RealTime)) as Arc<dyn Clock>),
         ),
-        (
-            "system",
-            Some(Arc::new(amalgam::provider::SystemClock) as Arc<dyn Clock>),
-        ),
+        ("system", Some(Arc::new(SystemClock) as Arc<dyn Clock>)),
         ("default", None),
     ] {
         let builder = || {
@@ -489,13 +500,13 @@ fn ready_costs() {
         rt.block_on(async {
             cost(&format!("{label}_async"), || {
                 let mut future = std::pin::pin!(cache.try_get("cost").into_future());
-                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-                match std::future::Future::poll(future.as_mut(), &mut context) {
-                    std::task::Poll::Ready(Ok(Some(value))) => value,
-                    std::task::Poll::Ready(result) => {
+                let mut context = Context::from_waker(Waker::noop());
+                match Future::poll(future.as_mut(), &mut context) {
+                    Poll::Ready(Ok(Some(value))) => value,
+                    Poll::Ready(result) => {
                         panic!("a warmed read must find the seeded value, got {result:?}")
                     }
-                    std::task::Poll::Pending => panic!("a warmed read must be ready"),
+                    Poll::Pending => panic!("a warmed read must be ready"),
                 }
             });
         });
@@ -545,10 +556,10 @@ impl MetadataCase {
         let options = EntryOptions::new(Duration::from_secs(3600));
         match self {
             Self::Plain | Self::Tagged => options,
-            Self::Eager => options.with_eager_refresh(amalgam::EagerThreshold::new(0.5)),
+            Self::Eager => options.with_eager_refresh(EagerThreshold::new(0.5)),
         }
     }
-    fn tags(self, tag: &amalgam::Tag) -> Box<[amalgam::Tag]> {
+    fn tags(self, tag: &Tag) -> Box<[Tag]> {
         match self {
             Self::Plain | Self::Eager => Box::new([]),
             Self::Tagged => Box::new([tag.clone()]),
@@ -578,13 +589,10 @@ fn metadata_cost(label: &str, mut operation: impl FnMut()) {
 fn metadata_costs() {
     use amalgam::entry::Entry;
     let rt = runtime();
-    let now = amalgam::Timestamp::from_ticks(1_000_000_000);
-    let tag = amalgam::Tag::new("measurement-group")
+    let now = Timestamp::from_ticks(1_000_000_000);
+    let tag = Tag::new("measurement-group")
         .unwrap_or_else(|error| panic!("benchmark tag literal must be valid: {error:?}"));
-    eprintln!(
-        "metadata_bytes={}",
-        std::mem::size_of::<amalgam::entry::Metadata>()
-    );
+    eprintln!("metadata_bytes={}", std::mem::size_of::<Metadata>());
     println!("scenario,operations,ns_per_op,allocations");
     for case in [
         MetadataCase::Plain,
@@ -598,7 +606,7 @@ fn metadata_costs() {
                 &options,
                 now,
                 now,
-                amalgam::provider::JitterSample::ZERO,
+                JitterSample::ZERO,
                 case.tags(&tag),
                 None,
                 None,
@@ -617,13 +625,13 @@ fn metadata_costs() {
             MetadataCase::Tagged => assert_eq!(source.meta().tags(), std::slice::from_ref(&tag)),
         }
         metadata_cost(&format!("entry_{}", case.label()), || {
-            drop(black_box(fresh()));
+            drop(hint::black_box(fresh()));
         });
         metadata_cost(&format!("snapshot_{}", case.label()), || {
-            drop(black_box(source.meta().clone()));
+            drop(hint::black_box(source.meta().clone()));
         });
         metadata_cost(&format!("expire_{}", case.label()), || {
-            drop(black_box(source.with_logical_expiration(now)));
+            drop(hint::black_box(source.with_logical_expiration(now)));
         });
         let cache = Cache::builder()
             .default_options(options)
@@ -644,10 +652,10 @@ fn metadata_costs() {
             };
             let mut replace = || {
                 let mut operation = std::pin::pin!(replacement());
-                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-                match std::future::Future::poll(operation.as_mut(), &mut context) {
-                    std::task::Poll::Ready(()) => {}
-                    std::task::Poll::Pending => panic!("standalone replacement must be ready"),
+                let mut context = Context::from_waker(Waker::noop());
+                match Future::poll(operation.as_mut(), &mut context) {
+                    Poll::Ready(()) => {}
+                    Poll::Pending => panic!("standalone replacement must be ready"),
                 }
             };
             metadata_cost(&format!("set_{}", case.label()), &mut replace);
@@ -675,10 +683,10 @@ fn distributed<H: WarmHit>() {
         let options = EntryOptions::new(Duration::from_secs(3600)).with_skip_memory(true, false);
         let cache = Cache::builder()
             .default_options(options.clone())
-            .distributed(Arc::new(amalgam::provider::InMemoryDistributedCache::new(
-                Arc::new(amalgam::provider::SystemClock),
-            )))
-            .serializer(Arc::new(amalgam::provider::JsonSerializer))
+            .distributed(Arc::new(InMemoryDistributedCache::new(Arc::new(
+                SystemClock,
+            ))))
+            .serializer(Arc::new(JsonSerializer))
             .try_build()
             .unwrap_or_else(|error| {
                 panic!("benchmark cache configuration must be valid: {error:?}")
@@ -718,7 +726,7 @@ fn distributed<H: WarmHit>() {
         let began = Instant::now();
         let mut checksum = 0_u64;
         for _ in 0..OPERATIONS {
-            checksum += black_box(H::value(&cache, "l2-json").await);
+            checksum += hint::black_box(H::value(&cache, "l2-json").await);
         }
         let elapsed = began.elapsed();
         let allocations = end_counting();

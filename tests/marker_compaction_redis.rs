@@ -1,12 +1,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Lower per-node limits must report the actual clear maximum after compaction.
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
+
 use std::sync::Arc;
 use std::time::Duration;
-use {amalgam::redis_backend::RedisDistributedCache, amalgam::redis_backend::RedisIoOptions};
+
+use amalgam::advanced::{
+    CacheScope, EffectOutcome, KeyModifierMode, MarkerAdvanceOutcome, MarkerKind,
+    MarkerLifecyclePolicy, MarkerMutationStage, MarkerReadPolicy, MarkerStoreLimits, MarkerVersion,
+    ReconciliationPolicy, RecoveryWork,
+};
+use amalgam::provider::{
+    Clock, DistributedCache, InvalidationStore, JsonSerializer, ManualClock, SystemClock,
+};
+use amalgam::redis_backend::{RedisDistributedCache, RedisIoOptions};
+use amalgam::{Cache, CancellationSource, ClearMode, EntryOptions, RecoveryConfig, Tag, Timestamp};
 mod support {
     pub mod redis_fixture;
 }

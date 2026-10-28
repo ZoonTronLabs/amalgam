@@ -1,9 +1,10 @@
 //! Lazy canonical writes; completion reports are an explicit input choice.
-use super::mutation_request::{Input, MutationRequest};
-use super::{Cache, EntryOptions, FactoryCancellation, MutationReceipt, Result};
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use super::mutation_request::{Input, MutationRequest};
+use super::{Cache, EntryOptions, FactoryCancellation, MutationReceipt, Result};
 
 /// A lazy value write returning `Result<()>` when awaited.
 #[must_use = "a cache request only executes when awaited"]

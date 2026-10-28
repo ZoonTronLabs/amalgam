@@ -1,12 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, CircuitComponent, EffectOutcome, KeyModifierMode, MarkerKind, SkipReason,
+};
+use amalgam::provider::{
+    Backplane, BackplaneMessage, BackplaneState, DistributedBytes, DistributedCache,
+    InMemoryDistributedCache, InProcessBackplane, InvalidationStore, JsonSerializer, ManualClock,
+};
+use amalgam::{Cache, ClearMode, EntryOptions, Error, RecoveryConfig, Result, Tag};
+use async_trait::async_trait;
 
 struct ToggleBackend {
     inner: InMemoryDistributedCache,
@@ -15,7 +21,7 @@ struct ToggleBackend {
 }
 #[async_trait]
 impl DistributedCache for ToggleBackend {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {

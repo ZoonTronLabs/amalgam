@@ -6,6 +6,10 @@
 //! pinned allocation, no registered scope and no observer future. Immediate
 //! providers promise not to suspend; an unexpected suspension still falls back
 //! to the owned pipeline, which repeats only in-process reads.
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
+
 use super::observed_execution::ObservedExecution;
 use super::read::{OriginLock, OriginLookup, OriginMiss};
 use super::{
@@ -15,9 +19,6 @@ use super::{
 };
 use crate::distributed::{ReadCompletion, SerializationMode};
 use crate::memory_locker::LocalLocks;
-use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
 
 /// How an L1 miss reaches distributed storage, fixed at construction.
 #[derive(Clone, Copy)]

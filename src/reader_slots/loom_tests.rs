@@ -1,6 +1,7 @@
 //! Exercise the production ReaderSlots algorithm, not a duplicated model.
-use super::*;
 use loom::sync::Arc;
+
+use super::ReaderSlots;
 
 fn check(model: impl Fn() + Send + Sync + 'static) {
     let mut builder = loom::model::Builder::new();

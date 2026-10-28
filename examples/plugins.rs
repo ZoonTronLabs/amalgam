@@ -18,7 +18,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use amalgam::{Cache, CacheEvent, Plugin};
+use amalgam::{Cache, CacheEvent, FactoryError, Plugin};
 
 /// A tiny plugin that prints every event and counts how many it saw.
 struct LoggingPlugin {
@@ -59,9 +59,7 @@ async fn main() -> amalgam::Result<()> {
     let hit = cache
         .get_or_set(
             "answer",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(0)) },
-            ),
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(0)) }),
         )
         .await
         .unwrap_or_else(|error| panic!("served from cache: {error:?}"));
@@ -71,9 +69,7 @@ async fn main() -> amalgam::Result<()> {
     let produced = cache
         .get_or_set(
             "fresh",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
-            ),
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .await
         .unwrap_or_else(|error| panic!("factory produces a value: {error:?}"));

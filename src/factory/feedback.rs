@@ -1,10 +1,11 @@
 //! Adaptive metadata shares the existing origin execution allocation.
 //! Plain factories never initialize or allocate a feedback container.
+use std::sync::OnceLock;
+
 use super::{
     EntryOptions, FactoryCancellation, FactoryOutput, FactoryProduct, StaleInfo, Tag, TagError,
     Timestamp,
 };
-use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub(crate) enum ProducedMetadata {

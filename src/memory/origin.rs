@@ -1,11 +1,12 @@
 //! Active origin revisions live beside the entries they protect. No idle
 //! tombstone is retained; explicit mutations advance only an active revision.
-use super::{Backend, Expected};
-use crate::Result;
-use crate::entry::Entry;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
+
+use super::{Backend, Expected};
+use crate::Result;
+use crate::entry::Entry;
 
 #[derive(Default)]
 pub(super) struct Origins {
@@ -204,12 +205,11 @@ impl<V> Expected<'_, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        EntryOptions, Events, Timestamp, provider::ManualClock, provider::MemoryLimits,
-        provider::MemoryStore,
-    };
     use std::time::Duration;
+
+    use super::*;
+    use crate::provider::{ManualClock, MemoryLimits, MemoryStore};
+    use crate::{EntryOptions, Events, Timestamp};
 
     fn store(bounded: bool) -> MemoryStore<u64> {
         MemoryStore::with_clock(

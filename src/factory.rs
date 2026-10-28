@@ -1,10 +1,12 @@
 //! Origin factory context, validated tag requests and closed product variants.
+use std::sync::Arc;
+
 use crate::error::FactoryError;
 use crate::execution::FactoryCancellation;
 use crate::options::EntryOptions;
-use crate::tags::{Tag, TagError, try_collect_tags};
+use crate::tags;
+use crate::tags::{Tag, TagError};
 use crate::time::Timestamp;
-use std::sync::Arc;
 mod feedback;
 pub(crate) use feedback::{
     FactoryAdaptation, FactoryCompletion, FactoryFeedback, ProducedMetadata,
@@ -216,7 +218,7 @@ impl<V> FactoryContext<V> {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.adaptive_tags = TagRequest::Valid(try_collect_tags(tags)?);
+        self.adaptive_tags = TagRequest::Valid(tags::try_collect_tags(tags)?);
         self.publish_adaptation();
         Ok(())
     }
@@ -227,7 +229,7 @@ impl<V> FactoryContext<V> {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.adaptive_tags = match try_collect_tags(tags) {
+        self.adaptive_tags = match tags::try_collect_tags(tags) {
             Ok(tags) => TagRequest::Valid(tags),
             Err(error) => {
                 tracing::warn!(%error,"invalid legacy factory tags");
@@ -437,7 +439,7 @@ impl<V> ModifiedBuilder<V> {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.tags = TagRequest::Valid(try_collect_tags(tags)?);
+        self.tags = TagRequest::Valid(tags::try_collect_tags(tags)?);
         Ok(self)
     }
     /// Diagnostic legacy raw-tag adapter. Invalid products fail at cache commit.
@@ -446,7 +448,7 @@ impl<V> ModifiedBuilder<V> {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.tags = match try_collect_tags(tags) {
+        self.tags = match tags::try_collect_tags(tags) {
             Ok(tags) => TagRequest::Valid(tags),
             Err(error) => {
                 tracing::warn!(%error,"invalid legacy modified tags");

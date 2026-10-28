@@ -2,13 +2,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use std::future::{Future, pending, poll_fn};
+use std::future;
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use amalgam::{Cache, CancellationSource, Error, FactoryCancellationReason};
+use amalgam::{
+    Cache, CancellationSource, Error, FactoryCancellationReason, FactoryContext, FactoryError,
+};
 
 struct OriginDrop(Arc<AtomicUsize>);
 
@@ -33,8 +37,8 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
                 typed_factory(move |ctx| async move {
                     let _lifetime = OriginDrop(dropped_factory);
                     entered_factory.fetch_add(1, Ordering::SeqCst);
-                    pending::<()>().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                    future::pending::<()>().await;
+                    Ok::<_, FactoryError>(ctx.value(42))
                 }),
             )
             .cancellation(source.token())
@@ -42,7 +46,7 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
     );
     tokio::time::timeout(
         Duration::from_secs(2),
-        poll_fn(|cx| {
+        future::poll_fn(|cx| {
             assert!(operation.as_mut().poll(cx).is_pending());
             if entered.load(Ordering::SeqCst) == 1 {
                 Poll::Ready(())
@@ -70,9 +74,7 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
         cache
             .get_or_set(
                 "parked",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) })
             )
             .await
             .expect("new origin owns released key"),
@@ -83,8 +85,8 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

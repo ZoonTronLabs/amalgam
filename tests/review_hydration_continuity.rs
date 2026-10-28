@@ -1,12 +1,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use serde::{Deserialize, Serialize};
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::ReconciliationPolicy;
+use amalgam::provider::{
+    Backplane, BackplaneAction, BackplaneMessage, Clock, InMemoryDistributedCache,
+    InProcessBackplane, JsonSerializer, ManualClock, ValueCloner,
+};
+use amalgam::{Cache, CloneError, EntryOptions, RecoveryConfig};
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 fn options() -> EntryOptions {
@@ -48,7 +53,7 @@ impl CopyBoundary {
     }
 }
 impl ValueCloner<i32> for CopyBoundary {
-    fn clone_value(&self, value: &i32) -> std::result::Result<i32, CloneError> {
+    fn clone_value(&self, value: &i32) -> StdResult<i32, CloneError> {
         self.block_once();
         Ok(*value)
     }
@@ -232,7 +237,7 @@ struct InsertionCloner {
     boundary: Arc<CopyBoundary>,
 }
 impl ValueCloner<Payload> for InsertionCloner {
-    fn clone_value(&self, value: &Payload) -> std::result::Result<Payload, CloneError> {
+    fn clone_value(&self, value: &Payload) -> StdResult<Payload, CloneError> {
         let insertion_copy = if self.armed.swap(false, Ordering::SeqCst) {
             // Force at_insertion to copy after hydration's final fence check.
             self.clock.advance(Duration::from_millis(1));

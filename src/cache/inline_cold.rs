@@ -1,5 +1,7 @@
 //! Ready standalone factories commit within borrowed admission. Only a genuinely
 //! Pending factory registers cache-owned work and an observer future.
+use tracing::Instrument;
+
 use super::observed_execution::ObservedExecution;
 use super::{
     Arc, Cache, CacheEvent, CacheInner, CacheLevel, CacheOrigin, CacheValue, CommitReceipt, Entry,
@@ -9,8 +11,8 @@ use super::{
 };
 use crate::execution::LinkMode;
 use crate::memory::CacheMemory;
+use crate::observability;
 use crate::single_flight::Completion;
-use tracing::Instrument;
 
 enum MemoryRead<V> {
     Fresh(V),
@@ -82,8 +84,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
                 OriginKind::Factory => "factory",
                 OriginKind::Constant => "constant",
             };
-            let component =
-                super::component_span(&inner.name, CacheLevel::Origin, action, Some(&keys.full));
+            let component = observability::component_span(
+                &inner.name,
+                CacheLevel::Origin,
+                action,
+                Some(&keys.full),
+            );
             flight.install(Box::pin(
                 async move {
                     inner

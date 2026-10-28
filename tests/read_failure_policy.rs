@@ -2,15 +2,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, CodecError, EntryOptions, Error, RecoveryConfig, Result, Timeout,
-    provider::DistributedCache, provider::InMemoryDistributedCache, provider::JsonSerializer,
-    provider::ManualClock,
-};
-use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, JsonSerializer, ManualClock,
+};
+use amalgam::{
+    Cache, CodecError, EntryOptions, Error, FactoryError, RecoveryConfig, Result, Timeout,
+};
+use async_trait::async_trait;
 
 #[derive(Default)]
 struct FailedStore {
@@ -19,7 +21,7 @@ struct FailedStore {
 
 #[async_trait]
 impl DistributedCache for FailedStore {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Err(Error::Distributed("original read failure".to_owned()))
     }
@@ -135,7 +137,7 @@ async fn configured_suppression_is_a_miss_without_discarding_typed_rethrow() {
                 "k",
                 amalgam::source::factory(move |context| async move {
                     factory_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(context.value(7))
+                    Ok::<_, FactoryError>(context.value(7))
                 })
             )
             .await
@@ -159,7 +161,7 @@ impl DistributedCache for PendingReadStore {
         ))
     }
 
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         std::future::pending().await
     }
 

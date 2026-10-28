@@ -3,8 +3,8 @@
 //! The inclusive comparison matches FusionCache 2.9: an entry whose revision is
 //! equal to an invalidation marker is invalidated. Markers use their own typed
 //! domain; an ordinary cache key never becomes an invalidation command.
-
 use std::collections::HashMap;
+use std::fmt::{Formatter, Result as FmtResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -50,7 +50,7 @@ impl AsRef<str> for Tag {
 }
 
 impl std::fmt::Display for Tag {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str(self.as_str())
     }
 }
@@ -139,14 +139,14 @@ impl MarkerError {
     /// Preserves a control-protocol parser or validation failure.
     pub fn protocol(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::ProtocolWithSource {
-            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: crate::error::SharedSource::from_arc(Arc::new(source)),
         }
     }
 
     /// Preserves an external storage cause.
     pub fn backend(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Backend {
-            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: crate::error::SharedSource::from_arc(Arc::new(source)),
         }
     }
 }

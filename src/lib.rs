@@ -72,39 +72,27 @@ pub use cache::{
     BackplaneReadiness, BlockingCache, BlockingCacheBuildError, Cache, CacheBuilder, ClearMode,
     CloseOutcome, ShutdownReport,
 };
-
 pub use error::{
     CloneError, CodecError, ConfigError, Error, FactoryCancellationReason, FactoryError, Result,
     ShutdownError, TransportError,
 };
-
 pub use events::{
     CacheEvent, CacheLevel, CacheOperation, EventStreamClosed, EventSubscription, Events,
     OperationOutcome,
 };
-
 pub use execution::{CancellationSource, FactoryCancellation};
-
 pub(crate) use factory::FactoryProduct;
 pub use factory::{ConditionalRefreshError, FactoryContext};
-
+#[cfg(feature = "metrics")]
+pub use observability::MetricsPlugin;
+#[cfg(feature = "opentelemetry")]
+pub use observability::OtelMetricsPlugin;
 pub use options::{EagerThreshold, EntryOptions, EntryWeight, Priority, RemoveByTagBehavior};
-
 pub use plugins::{
     Plugin, PluginContext, PluginError, PluginRegistration, PluginSession, PluginStage,
     PluginStopOutcome,
 };
-
 pub use recovery::RecoveryConfig;
-
 pub use registry::{CacheRegistry, RegistryError};
-
 pub use tags::{Tag, TagError};
-
 pub use time::{Timeout, Timestamp};
-
-#[cfg(feature = "metrics")]
-pub use observability::MetricsPlugin;
-
-#[cfg(feature = "opentelemetry")]
-pub use observability::OtelMetricsPlugin;

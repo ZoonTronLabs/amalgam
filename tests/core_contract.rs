@@ -1,15 +1,34 @@
 //! Canonical pipeline, lifecycle and boundary acceptance.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
-use std::future::{Future, IntoFuture, pending, poll_fn};
+use std::future;
+use std::future::{Future, IntoFuture};
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, DistributedExpirePolicy, EffectOutcome, KeyModifierMode, LeasePolicy, MarkerKind,
+    MarkerVersion, MutationReceipt, PendingMutation, RecoveryWork, RuntimeComponent,
+    ShutdownFailure, StoredMarker,
+};
+use amalgam::provider::{
+    Backplane, BackplaneCommand, BackplaneMessage, BackplaneState, Clock, ContinuityEpoch,
+    DistributedBytes, DistributedCache, DistributedLocker, DistributedSerializer,
+    DistributedSnapshot, FencedWriteSupport, InMemoryDistributedCache, InMemoryDistributedLocker,
+    InProcessBackplane, InvalidationStore, JsonSerializer, LeaseError, LeaseProof, LeaseReceipt,
+    LeaseSupport, LeaseToken, LeaseTtl, LeasedMutation, LeasedWriteOutcome, ManualClock,
+    MarkerCommand, OwnershipCheck, RenewalOutcome, SystemClock, TokenAcquisition,
+};
+use amalgam::{
+    BackplaneReadiness, Cache, CacheEvent, CacheOperation, CancellationSource, CloseOutcome,
+    ConfigError, EntryOptions, Error, FactoryCancellationReason, FactoryContext, FactoryError,
+    OperationOutcome, Plugin, RecoveryConfig, Result, TagError, Timeout, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
 fn opts() -> EntryOptions {
@@ -52,13 +71,13 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
                 amalgam::source::factory(move |ctx| async move {
                     let _drop = DropSignal(origin_drop);
                     token_tx.send(ctx.cancellation().clone()).unwrap();
-                    pending::<()>().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    future::pending::<()>().await;
+                    Ok::<_, FactoryError>(ctx.value(1))
                 }),
             )
             .into_future(),
     );
-    poll_fn(|cx| {
+    future::poll_fn(|cx| {
         assert!(operation.as_mut().poll(cx).is_pending());
         if token_rx.try_recv().is_ok() {
             Poll::Ready(())
@@ -131,8 +150,8 @@ async fn soft_timeout_disposes_origin_with_precise_reason_and_retains_failsafe()
             amalgam::source::factory(move |ctx| async move {
                 let _drop = DropSignal(origin_drop);
                 token_tx.send(ctx.cancellation().clone()).unwrap();
-                pending::<()>().await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                future::pending::<()>().await;
+                Ok::<_, FactoryError>(ctx.value(2))
             }),
         )
         .await
@@ -178,8 +197,8 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
                     "k",
                     typed_factory(move |ctx| async move {
                         entered_tx.send(()).unwrap();
-                        pending::<()>().await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                        future::pending::<()>().await;
+                        Ok::<_, FactoryError>(ctx.value(2))
                     }),
                 )
                 .cancellation(token)
@@ -207,7 +226,7 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
 struct FailingIo;
 #[async_trait]
 impl DistributedCache for FailingIo {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         Err(Error::Distributed("actual read cause".into()))
     }
     async fn set(&self, _: &str, _: Vec<u8>, _: Option<Duration>) -> Result<()> {
@@ -270,7 +289,7 @@ struct GatedWrite {
 }
 #[async_trait]
 impl DistributedCache for GatedWrite {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -422,7 +441,7 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
                 "k",
                 typed_factory(move |ctx| async move {
                     origin_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                    Ok::<_, FactoryError>(ctx.value(1))
                 })
             )
             .options(|_| huge.clone())
@@ -446,7 +465,7 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
             "bad-size",
             amalgam::source::factory(|mut ctx| async move {
                 ctx.adapt(|opts| opts.with_size(-1));
-                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                Ok::<_, FactoryError>(ctx.value(1))
             }),
         )
         .await;
@@ -459,7 +478,7 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
             "bad-tag",
             amalgam::source::factory(|mut ctx| async move {
                 ctx.set_tags(["valid", " "]);
-                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                Ok::<_, FactoryError>(ctx.value(1))
             }),
         )
         .await;
@@ -478,7 +497,7 @@ impl DistributedCache for LostAtWrite {
     fn fenced_write_support(&self) -> FencedWriteSupport {
         FencedWriteSupport::Atomic
     }
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -492,7 +511,7 @@ impl DistributedCache for LostAtWrite {
         _: &str,
         _: LeasedMutation,
         _: &LeaseProof,
-    ) -> std::result::Result<LeasedWriteOutcome, LeaseError> {
+    ) -> StdResult<LeasedWriteOutcome, LeaseError> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         Ok(LeasedWriteOutcome::LeaseLost)
     }
@@ -524,7 +543,7 @@ async fn native_backend_fence_loss_does_not_commit_l1_l2_or_publish() {
             "k",
             amalgam::source::factory(move |ctx| async move {
                 token_tx.send(ctx.cancellation().clone()).unwrap();
-                Ok::<_, amalgam::FactoryError>(ctx.value(1))
+                Ok::<_, FactoryError>(ctx.value(1))
             }),
         )
         .await;
@@ -596,7 +615,7 @@ impl RecoveryIo {
 }
 #[async_trait]
 impl DistributedCache for RecoveryIo {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         if self.read_down.load(Ordering::SeqCst) {
             Err(Error::Distributed("reconciliation unavailable".into()))
         } else {
@@ -828,7 +847,7 @@ impl DistributedCache for FencedFault {
     fn fenced_write_support(&self) -> FencedWriteSupport {
         FencedWriteSupport::Atomic
     }
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -843,12 +862,10 @@ impl DistributedCache for FencedFault {
         key: &str,
         mutation: LeasedMutation,
         proof: &LeaseProof,
-    ) -> std::result::Result<LeasedWriteOutcome, LeaseError> {
+    ) -> StdResult<LeasedWriteOutcome, LeaseError> {
         self.fenced.fetch_add(1, Ordering::SeqCst);
         if self.first.swap(false, Ordering::SeqCst) {
-            Err(LeaseError::backend(std::io::Error::other(
-                "fault before commit",
-            )))
+            Err(LeaseError::backend(IoError::other("fault before commit")))
         } else {
             self.replay_entered.notify_one();
             self.replay_release.notified().await;
@@ -987,11 +1004,11 @@ impl DistributedLocker for CleanupLocker {
         token: &LeaseToken,
         ttl: LeaseTtl,
         timeout: Timeout,
-    ) -> std::result::Result<Option<LeaseReceipt>, LeaseError> {
+    ) -> StdResult<Option<LeaseReceipt>, LeaseError> {
         let receipt = self.inner.acquire_receipt(key, token, ttl, timeout).await?;
         if self.acquire_gate.load(Ordering::SeqCst) {
             self.acquire_entered.notify_one();
-            pending::<()>().await;
+            future::pending::<()>().await;
         }
         Ok(receipt)
     }
@@ -1000,7 +1017,7 @@ impl DistributedLocker for CleanupLocker {
         key: &str,
         token: &LeaseToken,
         ttl: LeaseTtl,
-    ) -> std::result::Result<RenewalOutcome, LeaseError> {
+    ) -> StdResult<RenewalOutcome, LeaseError> {
         self.inner.renew(key, token, ttl).await
     }
     fn ownership_check(&self, key: &str, token: &LeaseToken) -> OwnershipCheck {
@@ -1059,8 +1076,8 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
                             finished: origin_finished,
                         };
                         token_tx.send(ctx.cancellation().clone()).unwrap();
-                        pending::<()>().await;
-                        Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                        future::pending::<()>().await;
+                        Ok::<_, FactoryError>(ctx.value(2))
                     })
                 )
                 .await
@@ -1132,13 +1149,13 @@ async fn cancelled_uncertain_acquisition_is_supervised_before_ownership_transfer
                 "k",
                 typed_factory(move |ctx| async move {
                     origin_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
+                    Ok::<_, FactoryError>(ctx.value(2))
                 }),
             )
             .cancellation(source.token())
             .into_future(),
     );
-    poll_fn(|cx| {
+    future::poll_fn(|cx| {
         assert!(caller.as_mut().poll(cx).is_pending());
         Poll::Ready(())
     })
@@ -1220,7 +1237,7 @@ fn runtime_dependent_options_are_rejected_before_effects_on_std_thread() {
                 .with_receipt()
                 .into_future(),
         );
-        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut context = Context::from_waker(Waker::noop());
         assert!(matches!(
             operation.as_mut().poll(&mut context),
             Poll::Ready(Err(Error::Config(ConfigError::MissingRuntime {
@@ -1460,7 +1477,7 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
         cache
             .get_or_set(
                 "factory",
-                typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(9)) })
+                typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(9)) })
             )
             .options(|_| repaired)
             .await
@@ -1472,8 +1489,8 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

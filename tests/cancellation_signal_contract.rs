@@ -1,9 +1,11 @@
 //! Cancellation remains first-wins and wakes all waiters around registration.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{CancellationSource, FactoryCancellationReason, advanced::CancellationRequest};
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::advanced::CancellationRequest;
+use amalgam::{CancellationSource, FactoryCancellationReason};
 use tokio::sync::Barrier;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

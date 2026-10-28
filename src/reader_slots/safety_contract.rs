@@ -1,6 +1,7 @@
 //! Small actual-guard contracts suitable for Miri and TSan.
-use super::*;
 use std::sync::Arc;
+
+use super::ReaderSlots;
 
 #[test]
 fn overlapping_guards_and_failed_try_write_preserve_borrowed_values() {

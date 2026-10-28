@@ -1,16 +1,18 @@
 //! Scalar hydration preserves source facts separately from the local limits.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::{
-    Clock, InMemoryDistributedCache, JsonSerializer, ManualClock, MemoryStorage, ValueCloner,
-};
-use amalgam::{Cache, CloneError, EntryOptions, EntryWeight, Priority, source};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use amalgam::provider::{
+    Clock, InMemoryDistributedCache, JsonSerializer, ManualClock, MemoryStorage, ValueCloner,
+};
+use amalgam::{Cache, CloneError, EntryOptions, EntryWeight, Priority, source};
+
 #[path = "support/memory_storage_fixture.rs"]
 mod storage_fixture;
+use amalgam::FactoryError;
 use storage_fixture::MapStorage;
 
 #[derive(Clone, Copy)]
@@ -62,7 +64,7 @@ async fn scalar_l2_lookup_returns_the_source_while_l1_keeps_its_shorter_limits()
                         source::factory(|_| async {
                             panic!("a fresh L2 source must not run the factory");
                             #[allow(unreachable_code)]
-                            Ok::<u64, amalgam::FactoryError>(99)
+                            Ok::<u64, FactoryError>(99)
                         }),
                     )
                     .options(|_| lookup)

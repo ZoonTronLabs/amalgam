@@ -6,8 +6,9 @@ use super::{
     MarkerMutationRecovery, MarkerProviderFault, MarkerReads, MarkerReplay, MarkerSnapshot,
     MarkerSnapshotCache, MarkerSnapshotCommit, MarkerSnapshotParticipation, MarkerSnapshotReplay,
     MarkerSnapshotWritePolicy, MarkerWriteOutcome, Ordering, Result, SkipReason, StoredMarker,
-    Timestamp, Worker, acquire_owned_supervised,
+    Timestamp, Worker,
 };
+use crate::distributed_lock;
 use crate::recovery::{MarkerMutationStage, RecoveryError, RecoveryStageTransition};
 
 enum CompactionReplay {
@@ -254,7 +255,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let timeout = work.options().distributed_lock_timeout();
         let execution = self.scopes().execution(
             async move {
-                acquire_owned_supervised(locker, key, ttl, timeout, policy, owner)
+                distributed_lock::acquire_owned_supervised(locker, key, ttl, timeout, policy, owner)
                     .await
                     .map_err(Error::from)
             },

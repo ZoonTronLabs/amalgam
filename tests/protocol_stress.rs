@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use amalgam::{
-    EntryWeight, Priority, Tag, Timestamp, advanced::CacheScope, advanced::KeyModifierMode,
-    advanced::MarkerKind, advanced::MarkerStoreLimits, advanced::MarkerVersion,
-    advanced::StoredMarker, provider::BackplaneAction, provider::BackplaneCommand,
-    provider::BackplaneMessage, provider::DistributedEntry, provider::DistributedSerializer,
-    provider::DistributedSnapshot, provider::InMemoryInvalidationStore,
-    provider::InvalidationStore, provider::JsonSerializer, provider::MarkerCommand,
-    provider::SnapshotRetention,
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, MarkerKind, MarkerStoreLimits, MarkerVersion, StoredMarker,
 };
+use amalgam::provider::{
+    BackplaneAction, BackplaneCommand, BackplaneMessage, DistributedEntry, DistributedSerializer,
+    DistributedSnapshot, InMemoryInvalidationStore, InvalidationStore, JsonSerializer,
+    MarkerCommand, SnapshotRetention,
+};
+use amalgam::{EntryWeight, Priority, Tag, Timestamp};
 
 struct Sequence(u64);
 

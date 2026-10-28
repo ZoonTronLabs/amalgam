@@ -1,14 +1,15 @@
 //! Inline L1 writes still own close attribution and deterministic reclamation.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{Cache, EntryOptions, advanced::MutationReceipt};
-use std::future::Future;
-use std::future::IntoFuture;
+use std::future::{Future, IntoFuture};
 use std::pin::pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::advanced::MutationReceipt;
+use amalgam::{Cache, EntryOptions};
 
 fn ready<T>(work: impl Future<Output = T>) -> T {
     let mut work = pin!(work);
@@ -110,15 +111,14 @@ fn retired_value_drop_can_reenter_the_same_key_after_the_commit() {
 
 #[test]
 fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
-    let cache = amalgam::Cache::<std::sync::Arc<u64>>::new();
-    let incoming = std::sync::Arc::new(17);
-    let weak = std::sync::Arc::downgrade(&incoming);
+    let cache = amalgam::Cache::<Arc<u64>>::new();
+    let incoming = Arc::new(17);
+    let weak = Arc::downgrade(&incoming);
     let pending = cache.set("lazy", incoming).with_receipt().into_future();
     assert!(weak.upgrade().is_some());
     let mut read = std::pin::pin!(cache.try_get("lazy").into_future());
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-    let std::task::Poll::Ready(Ok(value)) = std::future::Future::poll(read.as_mut(), &mut context)
-    else {
+    let mut context = Context::from_waker(Waker::noop());
+    let Poll::Ready(Ok(value)) = Future::poll(read.as_mut(), &mut context) else {
         panic!("a standalone miss must complete without a runtime");
     };
     assert!(
@@ -134,8 +134,10 @@ fn unpolled_standalone_set_keeps_its_input_and_never_mutates_storage() {
 
 #[tokio::test]
 async fn scalar_zero_jitter_callback_still_drains_before_shutdown_completes() {
-    use amalgam::{Error, FactoryCancellationReason, provider::JitterSource};
     use std::sync::mpsc;
+
+    use amalgam::provider::JitterSource;
+    use amalgam::{Error, FactoryCancellationReason};
 
     struct BlockingJitter {
         started: mpsc::Sender<()>,
@@ -164,11 +166,8 @@ async fn scalar_zero_jitter_callback_still_drains_before_shutdown_completes() {
         .try_build()
         .unwrap();
     let writing = cache.clone();
-    let writer = std::thread::spawn(move || {
-        ready(std::future::IntoFuture::into_future(
-            writing.set("key", 9_u64),
-        ))
-    });
+    let writer =
+        std::thread::spawn(move || ready(IntoFuture::into_future(writing.set("key", 9_u64))));
     entered.recv_timeout(Duration::from_secs(2)).unwrap();
     cache.close();
     let mut shutdown = Box::pin(cache.shutdown());

@@ -3,14 +3,15 @@
 //! Legacy acquire/release implementations compile unchanged. Their lifetime and
 //! cancellation semantics remain opaque unless they declare a capability. Native
 //! providers support caller-owned tokens, renewal, and atomic fenced mutations.
-
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::runtime::Handle;
 use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
@@ -76,7 +77,7 @@ impl LeaseError {
     /// Retains an external backend cause.
     pub fn backend(source: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self::Backend {
-            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: crate::error::SharedSource::from_arc(Arc::new(source)),
         }
     }
 }
@@ -210,13 +211,12 @@ pub trait LeaseTaskOwner: Send + Sync {
     fn supervise(&self, work: LeaseTask);
 }
 pub(crate) struct StandaloneLeaseOwner {
-    runtime: tokio::runtime::Handle,
+    runtime: Handle,
 }
 impl StandaloneLeaseOwner {
     pub(crate) fn current() -> std::result::Result<Arc<dyn LeaseTaskOwner>, LeaseError> {
         Ok(Arc::new(Self {
-            runtime: tokio::runtime::Handle::try_current()
-                .map_err(|_| LeaseError::MissingRuntime)?,
+            runtime: Handle::try_current().map_err(|_| LeaseError::MissingRuntime)?,
         }))
     }
 }
@@ -333,8 +333,8 @@ enum ProofAuthority {
     BackendAtomic,
 }
 
-impl std::fmt::Debug for LeaseProof {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for LeaseProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("LeaseProof")
             .field("key", &self.key)
             .finish_non_exhaustive()
@@ -885,7 +885,7 @@ pub async fn acquire_owned_supervised(
     policy: AcquisitionPolicy,
     owner: Arc<dyn LeaseTaskOwner>,
 ) -> std::result::Result<Option<DistributedLease>, LeaseError> {
-    if tokio::runtime::Handle::try_current().is_err() {
+    if Handle::try_current().is_err() {
         return Err(LeaseError::MissingRuntime);
     }
     if matches!(

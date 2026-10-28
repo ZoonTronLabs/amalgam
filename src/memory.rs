@@ -3,11 +3,19 @@
 mod custom;
 mod deadlines;
 mod origin;
-pub(crate) use origin::RevisionSource;
-pub(crate) use origin::{BorrowedMemoryOrigin, MemoryOrigin};
+pub(crate) use origin::{BorrowedMemoryOrigin, MemoryOrigin, RevisionSource};
 use origin::{Origins, RevisionSnapshot};
 mod reclamation;
 mod sharded;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
+
+pub(crate) use custom::{CacheMemory, MemoryInvalidation};
+use reclamation::Reclamation;
+pub(crate) use reclamation::{ReclamationFence, ReclamationGuard};
+use sharded::Sharded;
+
 use crate::entry::Entry;
 use crate::events::{
     CacheEvent, Events, EvictionCapture, LayerEvent, MemoryEvent, MemoryEvictionReason,
@@ -15,13 +23,6 @@ use crate::events::{
 };
 use crate::options::Priority;
 use crate::time::{Clock, Timestamp};
-pub(crate) use custom::{CacheMemory, MemoryInvalidation};
-use reclamation::Reclamation;
-pub(crate) use reclamation::{ReclamationFence, ReclamationGuard};
-use sharded::Sharded;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
 
 /// Independent entry-count and application-defined weight budgets.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

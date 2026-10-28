@@ -1,14 +1,15 @@
 //! Canonical set is lazy, fallible and keeps the cache's unedited defaults.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, EntryOptions, Error, TagError, advanced::MutationReceipt, provider::ManualClock,
-};
 use std::future::{Future, IntoFuture};
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::advanced::MutationReceipt;
+use amalgam::provider::ManualClock;
+use amalgam::{Cache, EntryOptions, Error, TagError};
 
 fn ready<T>(future: impl IntoFuture<Output = T>) -> T {
     let mut future = pin!(future.into_future());

@@ -1,12 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::future::Future;
+use std::result::Result as StdResult;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock};
+use amalgam::{Cache, EntryOptions, Error, FactoryContext, FactoryError};
 
 #[tokio::test]
 async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
@@ -43,7 +44,7 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
                 "null",
                 amalgam::source::factory(move |ctx| async move {
                     factory_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(Some("origin".to_owned())))
+                    Ok::<_, FactoryError>(ctx.value(Some("origin".to_owned())))
                 })
             )
             .await
@@ -72,7 +73,7 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
         .get_or_set(
             "null",
             amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.modified(None).etag("null-etag").done())
+                Ok::<_, FactoryError>(ctx.modified(None).etag("null-etag").done())
             }),
         )
         .await
@@ -147,8 +148,8 @@ async fn present_null_fallback_is_distinct_from_absent_fallback() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

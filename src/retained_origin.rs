@@ -1,13 +1,15 @@
 //! Retains only general factory/commit work. Caller policies remain independent.
-use crate::error::{Error, FactoryCancellationReason as Reason, Result};
-use crate::execution::{CancelWork, CancellationSource, FactoryCancellation, LinkMode, Scopes};
-use crate::single_flight::{Completion, Driver, FlightIdentity, Flights, Subscription};
-use parking_lot::Mutex;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+
+use parking_lot::Mutex;
+
+use crate::error::{Error, FactoryCancellationReason as Reason, Result};
+use crate::execution::{CancelWork, CancellationSource, FactoryCancellation, LinkMode, Scopes};
+use crate::single_flight::{Completion, Driver, FlightIdentity, Flights, Subscription};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Audience {

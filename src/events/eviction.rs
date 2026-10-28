@@ -1,10 +1,13 @@
 //! Typed original-value diagnostics with bounded delivery and explicit reclamation.
-use super::EventStreamClosed;
-use crate::entry::Entry;
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+
 use tokio::sync::Notify;
+
+use super::EventStreamClosed;
+use crate::entry::Entry;
 
 /// The actual physical retirement of a stored representation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,15 +268,15 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-impl<V> std::fmt::Debug for MemoryEvictions<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<V> Debug for MemoryEvictions<V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("MemoryEvictions")
             .field("capacity", &self.producer.capacity)
             .finish_non_exhaustive()
     }
 }
-impl<V> std::fmt::Debug for MemoryEvictionSubscription<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<V> Debug for MemoryEvictionSubscription<V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("MemoryEvictionSubscription")
             .field("lost", &self.lost)
             .finish_non_exhaustive()

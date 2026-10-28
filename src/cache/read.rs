@@ -1,4 +1,8 @@
 //! Value reads, same-key origin work, fail-safe and eager refresh.
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use super::{
     AcquisitionPolicy, Arc, CacheEvent, CacheLevel, CacheOrigin, CacheValue, CircuitComponent,
     CommitReceipt, DistributedEvent, DistributedLookup, Duration, Entry, EntryOptions, Error,
@@ -7,9 +11,9 @@ use super::{
     LayerEvent, LeaseError, LeasePolicy, LocalParticipation, LockOutcome, LookupKey,
     MarkerReadPolicy, MemoryEvent, Observed, OperationOutcome, Ordering, OriginCompletion,
     OriginKind, ReadStale, Reason, Result, ShutdownTask, SkipReason, Storage, Tag, TagVerdict,
-    Timeout, Timestamp, Worker, acquire_owned_supervised, bounded, component_span, lease_lost,
-    newer_of,
+    Timeout, Timestamp, Worker,
 };
+use crate::{distributed_lock, observability};
 
 // Physical completion remains visible after a later marker timeout. The
 // checkpoint borrows the child phase; the owned parent retains the whole frame.
@@ -276,18 +280,23 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     ) -> (L2ReadBudget<V>, bool) {
         let completed = std::sync::atomic::AtomicBool::new(false);
         let checkpoint = DistributedCheckpoint::borrowing(&completed);
-        let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
+        let span = observability::component_span(
+            &self.inner.name,
+            CacheLevel::Distributed,
+            "read",
+            Some(key),
+        );
         // A disabled span records nothing; skip entering it on every poll.
         // Each branch pins its future where it is built, without a move.
         let result = if span.is_disabled() {
             let mut work = std::pin::pin!(self.fetch_l2(key, cancellation, &checkpoint));
-            bounded(timeout, work.as_mut()).await
+            super::bounded(timeout, work.as_mut()).await
         } else {
             let mut work = std::pin::pin!(
                 self.fetch_l2(key, cancellation, &checkpoint)
                     .instrument(span)
             );
-            bounded(timeout, work.as_mut()).await
+            super::bounded(timeout, work.as_mut()).await
         };
         (
             L2ReadBudget::from_bounded(result),
@@ -304,14 +313,19 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let phase = crate::execution::BorrowedPhase::new(self.scopes(), cancellation);
         let phase_cancellation = phase.token();
         let checkpoint = phase.checkpoint();
-        let span = component_span(&self.inner.name, CacheLevel::Distributed, "read", Some(key));
+        let span = observability::component_span(
+            &self.inner.name,
+            CacheLevel::Distributed,
+            "read",
+            Some(key),
+        );
         let mut work = std::pin::pin!(
             self.fetch_l2(key, &phase_cancellation, &checkpoint)
                 .instrument(span)
         );
         // Publish the precise codec reason before its future is destroyed.
         let _retirement = phase.retirement();
-        let result = bounded(
+        let result = super::bounded(
             timeout,
             std::future::poll_fn(|cx| phase.poll(cx, work.as_mut())),
         )
@@ -621,7 +635,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 LeasePolicy::Cooperative => AcquisitionPolicy::LegacyBackendContract,
             };
             let lock_key: Arc<str> = Arc::from(format!("amalgam:lock:{}", self.inner.l2_key(key)));
-            match acquire_owned_supervised(
+            match distributed_lock::acquire_owned_supervised(
                 Arc::clone(locker),
                 lock_key,
                 self.inner.lease_ttl,
@@ -836,7 +850,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         )
                         .map(OriginLookup::Served);
                 }
-                stale = Some(newer_of(stale, entry.entry));
+                stale = Some(super::newer_of(stale, entry.entry));
             }
         }
         Ok(OriginLookup::Origin {
@@ -944,7 +958,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     let product = if let Some(mut state) = lease_state {
                         tokio::select! {
                             biased;
-                            () = lease_lost(&mut state) => {
+                            () = super::lease_lost(&mut state) => {
                                 cancelled.cancel_with(Reason::LeaseLost);
                                 return Err(Error::FactoryCancelled { reason: Reason::LeaseLost });
                             },
@@ -975,7 +989,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 worker.report_origin_result(flight_key, &result, audience);
                 result
             }
-            .instrument(component_span(
+            .instrument(observability::component_span(
                 &self.inner.name,
                 CacheLevel::Origin,
                 operation,
@@ -1177,7 +1191,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let execution=self.scopes().execution(async move {
             let mut guard=worker.flight_guard(&key,LocalParticipation::Held(worker.memory.guard(local)),None,worker.inner.lease_policy);
             if !opts.skip_distributed_locker()&&let Some(locker)=&worker.inner.distributed_locker {
-                let lease=acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::Cooperative=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;guard.lease=worker.cluster_participation(&key,lease,worker.inner.lease_policy);
+                let lease=distributed_lock::acquire_owned_supervised(Arc::clone(locker),Arc::from(format!("amalgam:lock:{}",worker.inner.l2_key(&key))),worker.inner.lease_ttl,opts.distributed_lock_timeout(),match worker.inner.lease_policy {LeasePolicy::Fenced=>AcquisitionPolicy::TokenOwned,LeasePolicy::Cooperative=>AcquisitionPolicy::LegacyBackendContract},worker.lease_owner(&key)).await?;guard.lease=worker.cluster_participation(&key,lease,worker.inner.lease_policy);
                 if guard.lease.is_local(){return Err(Error::LockTimeout {elapsed:opts.distributed_lock_timeout().as_duration().unwrap_or(Duration::ZERO)});}
             }
             if let Some(entry)=worker.read_l2(&key,&opts,FallbackAvailability::Available,&token).await?&&entry.entry.meta().created()>current.meta().created()&&worker.tags(&entry.entry)==TagVerdict::Valid&&entry.entry.freshness(worker.inner.clock.now()).is_fresh(){worker.hydrate(&key,&entry,&opts).await?.observe();return Ok(OriginCompletion::Distributed(CacheValue {value:worker.copy(entry.entry.value(),&opts)?,commit:CommitReceipt::Unchanged}));}
@@ -1187,7 +1201,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             let started=worker.inner.clock.now();
             let origin=origin.invoke(ctx);
             let product=if let Some(mut state)=lease_state {
-                tokio::select! {biased; ()=lease_lost(&mut state)=>return Err(Error::FactoryCancelled {reason:Reason::LeaseLost}),product=origin=>product}
+                tokio::select! {biased; ()=super::lease_lost(&mut state)=>return Err(Error::FactoryCancelled {reason:Reason::LeaseLost}),product=origin=>product}
             }else{origin.await};
             let product=product.map_err(Error::from)?;let result=worker.store_product(key,product,started,guard,&token).await;
             if matches!(&result,Err(Error::Lease(LeaseError::Lost))){cancelled.cancel_with(Reason::LeaseLost);}result
@@ -1200,15 +1214,12 @@ enum OriginProgress<V: Clone + Send + Sync + 'static> {
     General(crate::retained_origin::OriginProgress<OriginCompletion<V>>),
     Plain(crate::single_flight::Progress<super::inline_cold::Value<V>>),
 }
-impl<V: Clone + Send + Sync + 'static> std::future::Future for OriginProgress<V> {
+impl<V: Clone + Send + Sync + 'static> Future for OriginProgress<V> {
     type Output = Result<()>;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
-            Self::General(progress) => std::pin::Pin::new(progress).poll(cx),
-            Self::Plain(progress) => std::pin::Pin::new(progress).poll(cx),
+            Self::General(progress) => Pin::new(progress).poll(cx),
+            Self::Plain(progress) => Pin::new(progress).poll(cx),
         }
     }
 }
@@ -1221,7 +1232,7 @@ impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
     pub(super) async fn assist_origin<T>(
         &self,
         key: &str,
-        acquiring: impl std::future::Future<Output = Result<T>>,
+        acquiring: impl Future<Output = Result<T>>,
     ) -> Result<T> {
         // A plain flight cannot drive itself while holding its poll ownership.
         self.assist_acquisition(key, acquiring, Assistance::GeneralOnly)
@@ -1230,7 +1241,7 @@ impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
     pub(super) async fn assist_any_origin<T>(
         &self,
         key: &str,
-        acquiring: impl std::future::Future<Output = Result<T>>,
+        acquiring: impl Future<Output = Result<T>>,
     ) -> Result<T> {
         self.assist_acquisition(key, acquiring, Assistance::Any)
             .await
@@ -1252,7 +1263,7 @@ impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
     async fn assist_acquisition<T>(
         &self,
         key: &str,
-        acquiring: impl std::future::Future<Output = Result<T>>,
+        acquiring: impl Future<Output = Result<T>>,
         mode: Assistance,
     ) -> Result<T> {
         let mut helper = self.origin_progress(key, mode);
@@ -1261,15 +1272,15 @@ impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
         std::future::poll_fn(|cx| {
             loop {
                 if let Some(progress) = &mut helper {
-                    match std::pin::Pin::new(progress).poll(cx) {
-                        std::task::Poll::Ready(Err(error)) => {
-                            return std::task::Poll::Ready(Err(error));
+                    match Pin::new(progress).poll(cx) {
+                        Poll::Ready(Err(error)) => {
+                            return Poll::Ready(Err(error));
                         }
-                        std::task::Poll::Ready(Ok(())) => helper = None,
-                        std::task::Poll::Pending => {}
+                        Poll::Ready(Ok(())) => helper = None,
+                        Poll::Pending => {}
                     }
                 }
-                if let ready @ std::task::Poll::Ready(_) = acquiring.as_mut().poll(cx) {
+                if let ready @ Poll::Ready(_) = acquiring.as_mut().poll(cx) {
                     return ready;
                 }
                 if changed.is_none() {
@@ -1293,13 +1304,13 @@ impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
                     unreachable!("notification was installed");
                 };
                 match notification.as_mut().poll(cx) {
-                    std::task::Poll::Ready(()) => {
+                    Poll::Ready(()) => {
                         changed = None;
                         if helper.is_none() {
                             helper = self.origin_progress(key, mode);
                         }
                     }
-                    std::task::Poll::Pending => return std::task::Poll::Pending,
+                    Poll::Pending => return Poll::Pending,
                 }
             }
         })

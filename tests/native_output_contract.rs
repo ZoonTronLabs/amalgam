@@ -1,15 +1,18 @@
 //! Native output selection preserves actual commit ownership and evidence.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::convert::Infallible;
+use std::result::Result as StdResult;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
+
 use amalgam::advanced::{BlockingCommitReceipt, BlockingMutationReceipt, BlockingRuntime};
 use amalgam::provider::{
-    DistributedCache, InMemoryDistributedCache, InvalidationStore, JsonSerializer, SystemClock,
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, InvalidationStore,
+    JsonSerializer, SystemClock,
 };
 use amalgam::{BlockingCache, Cache, EntryOptions, Result, source};
 use async_trait::async_trait;
-use std::convert::Infallible;
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
 use tokio::sync::Semaphore;
 
 struct HeldWrites {
@@ -19,7 +22,7 @@ struct HeldWrites {
 }
 #[async_trait]
 impl DistributedCache for HeldWrites {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -106,7 +109,7 @@ fn native_origin_receipt_preserves_mutation_and_unchanged_evidence() {
     let hit = cache
         .get_or_set(
             "evidence",
-            source::factory(|_| -> std::result::Result<u64, Infallible> {
+            source::factory(|_| -> StdResult<u64, Infallible> {
                 panic!("an existing value must not invoke the factory");
             }),
         )
@@ -119,7 +122,7 @@ fn native_origin_receipt_preserves_mutation_and_unchanged_evidence() {
         cache
             .get_or_set(
                 "evidence",
-                source::factory(|_| -> std::result::Result<u64, Infallible> {
+                source::factory(|_| -> StdResult<u64, Infallible> {
                     panic!("value-only retrieval must not invoke the factory");
                 })
             )

@@ -1,10 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::advanced::{DistributedExpirePolicy, EffectOutcome, SkipReason};
+use amalgam::provider::{DistributedCache, InMemoryDistributedCache, JsonSerializer, ManualClock};
+use amalgam::{Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason};
 
 #[tokio::test]
 async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() {

@@ -9,15 +9,15 @@
 //! A Redis-backed backend is intentionally left to a feature-gated adapter; the
 //! [`InMemoryDistributedCache`] here is a faithful reference used by tests and
 //! single-process multi-instance scenarios.
+use crate::tags;
 
 mod bytes;
-pub use bytes::DistributedBytes;
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+pub use bytes::DistributedBytes;
 use dashmap::DashMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ use crate::marker_snapshots::{
 use crate::options::{EntryOptions, EntryWeight, Priority};
 use crate::tags::{
     CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerState, MarkerStoreLimits,
-    MarkerVersion, StoredMarker, try_collect_tags,
+    MarkerVersion, StoredMarker,
 };
 use crate::time::{Clock, Timestamp};
 
@@ -109,7 +109,7 @@ impl<V: Clone> DistributedEntry<V> {
         now: Timestamp,
         retention: RetentionMetadata,
     ) -> Result<Entry<V>> {
-        let tags = try_collect_tags(self.tags)?;
+        let tags = tags::try_collect_tags(self.tags)?;
         Entry::try_rehydrate_with_retention(
             self.value,
             Timestamp::from_ticks(self.created_ticks),

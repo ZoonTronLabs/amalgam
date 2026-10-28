@@ -2,13 +2,18 @@
 //!
 //! The default [`JsonSerializer`](crate::provider::JsonSerializer) lives in
 //! [`crate::distributed`]; this module hosts alternative formats.
+use std::sync::Arc;
 
 mod value_copy;
-use crate::error::{CloneError, ConfigError, Result};
-use crate::options::EntryOptions;
 pub(crate) use value_copy::{DefaultValueCopy, ValueCopy};
 
+use crate::error::{CloneError, ConfigError, Result};
+use crate::options::EntryOptions;
+
 mod immutable {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     pub trait Sealed {}
     macro_rules! scalars {
         ($($ty:ty),+ $(,)?) => { $(impl Sealed for $ty {})+ };
@@ -32,7 +37,7 @@ mod immutable {
         f32,
         f64,
         String,
-        std::time::Duration,
+        Duration,
         std::time::SystemTime
     );
     impl<T: super::ImmutableValue> Sealed for Option<T> {}
@@ -42,9 +47,9 @@ mod immutable {
     impl<T: super::ImmutableValue> Sealed for Box<T> {}
     impl<T: super::ImmutableValue> Sealed for Box<[T]> {}
     impl Sealed for Box<str> {}
-    impl<T: super::ImmutableValue> Sealed for std::sync::Arc<T> {}
-    impl<T: super::ImmutableValue> Sealed for std::sync::Arc<[T]> {}
-    impl Sealed for std::sync::Arc<str> {}
+    impl<T: super::ImmutableValue> Sealed for Arc<T> {}
+    impl<T: super::ImmutableValue> Sealed for Arc<[T]> {}
+    impl Sealed for Arc<str> {}
     impl<A: super::ImmutableValue, B: super::ImmutableValue> Sealed for (A, B) {}
     impl<A: super::ImmutableValue, B: super::ImmutableValue, C: super::ImmutableValue> Sealed
         for (A, B, C)
@@ -109,22 +114,23 @@ impl<V: serde::Serialize + serde::de::DeserializeOwned> ValueCloner<V>
 {
     fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
         let bytes = serde_json::to_vec(value).map_err(|source| CloneError::Serialization {
-            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: crate::error::SharedSource::from_arc(Arc::new(source)),
         })?;
         serde_json::from_slice(&bytes).map_err(|source| CloneError::Deserialization {
-            source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+            source: crate::error::SharedSource::from_arc(Arc::new(source)),
         })
     }
 }
 
 #[cfg(feature = "messagepack")]
 mod messagepack {
+    use std::sync::Arc;
+
     use serde::Serialize;
     use serde::de::DeserializeOwned;
 
     use crate::distributed::{DistributedEntry, DistributedSerializer};
-    use crate::error::CloneError;
-    use crate::error::{Error, Result};
+    use crate::error::{CloneError, Error, Result};
     use crate::serializers::ValueCloner;
 
     /// A compact MessagePack serializer (feature `messagepack`), backed by
@@ -136,10 +142,10 @@ mod messagepack {
     impl<V: Serialize + DeserializeOwned> ValueCloner<V> for MessagePackSerializer {
         fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
             let bytes = rmp_serde::to_vec(value).map_err(|source| CloneError::Serialization {
-                source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+                source: crate::error::SharedSource::from_arc(Arc::new(source)),
             })?;
             rmp_serde::from_slice(&bytes).map_err(|source| CloneError::Deserialization {
-                source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+                source: crate::error::SharedSource::from_arc(Arc::new(source)),
             })
         }
     }
@@ -148,8 +154,8 @@ mod messagepack {
     where
         V: Serialize + DeserializeOwned,
     {
-        fn value_cloner(&self) -> Option<std::sync::Arc<dyn ValueCloner<V>>> {
-            Some(std::sync::Arc::new(*self))
+        fn value_cloner(&self) -> Option<Arc<dyn ValueCloner<V>>> {
+            Some(Arc::new(*self))
         }
 
         fn serialize(&self, entry: &DistributedEntry<V>) -> Result<Vec<u8>> {
@@ -167,12 +173,13 @@ pub use messagepack::MessagePackSerializer;
 
 #[cfg(feature = "postcard")]
 mod postcard_serializer {
+    use std::sync::Arc;
+
     use serde::Serialize;
     use serde::de::DeserializeOwned;
 
     use crate::distributed::{DistributedEntry, DistributedSerializer};
-    use crate::error::CloneError;
-    use crate::error::{Error, Result};
+    use crate::error::{CloneError, Error, Result};
     use crate::serializers::ValueCloner;
 
     /// A compact, zero-dependency binary serializer (feature `postcard`), backed
@@ -187,10 +194,10 @@ mod postcard_serializer {
         fn clone_value(&self, value: &V) -> std::result::Result<V, CloneError> {
             let bytes =
                 postcard::to_allocvec(value).map_err(|source| CloneError::Serialization {
-                    source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+                    source: crate::error::SharedSource::from_arc(Arc::new(source)),
                 })?;
             postcard::from_bytes(&bytes).map_err(|source| CloneError::Deserialization {
-                source: crate::error::SharedSource::from_arc(std::sync::Arc::new(source)),
+                source: crate::error::SharedSource::from_arc(Arc::new(source)),
             })
         }
     }
@@ -199,8 +206,8 @@ mod postcard_serializer {
     where
         V: Serialize + DeserializeOwned,
     {
-        fn value_cloner(&self) -> Option<std::sync::Arc<dyn ValueCloner<V>>> {
-            Some(std::sync::Arc::new(*self))
+        fn value_cloner(&self) -> Option<Arc<dyn ValueCloner<V>>> {
+            Some(Arc::new(*self))
         }
 
         fn serialize(&self, entry: &DistributedEntry<V>) -> Result<Vec<u8>> {

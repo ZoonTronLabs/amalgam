@@ -9,8 +9,9 @@ use super::{
     MarkerReplay, MarkerSnapshot, MarkerSnapshotCache, MarkerSnapshotRead, MarkerSnapshotRenewal,
     MarkerVersion, MarkerWriteOutcome, MutationReceipt, Observed, OperationOutcome, OptionsTarget,
     Ordering, Reason, Result, ShutdownTask, SkipReason, StoredMarker, Tag, Timeout, Timestamp,
-    Worker, acquire_owned_supervised, bounded,
+    Worker,
 };
+use crate::distributed_lock;
 
 #[path = "marker_eager.rs"]
 mod eager;
@@ -507,7 +508,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             source,
         );
         execution.link(cancellation, LinkMode::Explicit);
-        match bounded(timeout, &mut execution).await? {
+        match super::bounded(timeout, &mut execution).await? {
             Some(result) => result,
             None => {
                 execution.cancel(if soft {
@@ -727,7 +728,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         };
         let owner = self.lease_owner(&key);
         let work = async move {
-            acquire_owned_supervised(locker, key, ttl, timeout, policy, owner)
+            distributed_lock::acquire_owned_supervised(locker, key, ttl, timeout, policy, owner)
                 .await
                 .map_err(Error::from)
         };
@@ -1323,7 +1324,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             source,
         );
         execution.link(cancellation, LinkMode::Explicit);
-        match bounded(timeout, &mut execution).await? {
+        match super::bounded(timeout, &mut execution).await? {
             Some(result) => result.map(|version| {
                 MarkerFetch::Observed(match version {
                     Some(version) => MarkerPresence::Present(version),

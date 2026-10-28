@@ -1,11 +1,12 @@
 //! Shared snapshots keep reads stable across provider replacement/removal.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use amalgam::provider::{
     DistributedBytes, DistributedCache, InMemoryDistributedCache, ManualClock,
 };
-use std::sync::Arc;
-use std::time::Duration;
 
 #[tokio::test]
 async fn immutable_reads_survive_replacement_removal_and_mutable_conversion() -> amalgam::Result<()>

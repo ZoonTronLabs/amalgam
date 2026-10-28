@@ -1,10 +1,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::*;
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{PluginHost, ShutdownFailure};
+use amalgam::{
+    Cache, CacheEvent, Error, Plugin, PluginContext, PluginError, PluginRegistration,
+    PluginSession, PluginStage, Result,
+};
 use tokio::sync::oneshot;
 
 #[derive(Clone, Copy)]
@@ -17,17 +23,17 @@ struct LateSession {
     teardown: Teardown,
 }
 impl PluginSession for LateSession {
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
-    fn stop(&self) -> std::result::Result<(), PluginError> {
+    fn stop(&self) -> StdResult<(), PluginError> {
         self.stopped.fetch_add(1, Ordering::SeqCst);
         match self.teardown {
             Teardown::Succeed => Ok(()),
             Teardown::Fail => Err(PluginError::from_source(
                 "late-session",
                 PluginStage::Stop,
-                std::io::Error::other("original late attachment stop failure"),
+                IoError::other("original late attachment stop failure"),
             )),
         }
     }
@@ -43,10 +49,7 @@ impl Plugin for LatePlugin {
         "late-session"
     }
     fn on_event(&self, _: &CacheEvent) {}
-    fn attach(
-        &self,
-        _: &PluginContext,
-    ) -> std::result::Result<Option<Box<dyn PluginSession>>, PluginError> {
+    fn attach(&self, _: &PluginContext) -> StdResult<Option<Box<dyn PluginSession>>, PluginError> {
         self.entered
             .lock()
             .unwrap()
@@ -223,10 +226,7 @@ impl Plugin for OwnedDropPlugin {
         "owned-drop"
     }
     fn on_event(&self, _: &CacheEvent) {}
-    fn attach(
-        &self,
-        _: &PluginContext,
-    ) -> std::result::Result<Option<Box<dyn PluginSession>>, PluginError> {
+    fn attach(&self, _: &PluginContext) -> StdResult<Option<Box<dyn PluginSession>>, PluginError> {
         Ok(Some(Box::new(OwnedDropSession {
             event: self.event.clone(),
             destruction: self.destruction.clone(),
@@ -236,7 +236,7 @@ impl Plugin for OwnedDropPlugin {
     }
 }
 impl PluginSession for OwnedDropSession {
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         if self.armed.swap(false, Ordering::SeqCst) {
             self.event.block();
         }

@@ -1,20 +1,24 @@
 //! Native and async handles must share values, coordination and final lifetime.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::*;
+use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-    mpsc,
+use std::result::Result as StdResult;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
+
+use amalgam::advanced::{
+    BlockingRuntime, BlockingRuntimeError, BlockingThreadPool, DrainOperation,
 };
-use std::time::Duration;
+use amalgam::{
+    BlockingCache, Cache, CacheEvent, CancellationSource, Error, FactoryContext, FactoryError,
+};
 
 // Launch must return before a task whose completion is released by its caller.
 fn spawn_driven<T: Send + 'static>(
     driver: &BlockingRuntime,
-    work: impl std::future::Future<Output = T> + Send + 'static,
+    work: impl Future<Output = T> + Send + 'static,
 ) -> tokio::task::JoinHandle<T> {
     struct Started<T>(tokio::task::JoinHandle<T>);
     driver.run(async { Started(tokio::spawn(work)) }).0
@@ -44,7 +48,7 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
             "after",
             amalgam::source::factory(|ctx| async move {
                 tokio::time::sleep(Duration::from_millis(2)).await;
-                Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                Ok::<_, FactoryError>(ctx.value(9))
             }),
         )
         .await
@@ -66,7 +70,7 @@ fn native_operations_progress_from_their_own_single_io_worker() {
                 "own-worker",
                 typed_blocking_factory(|ctx| {
                     std::thread::sleep(Duration::from_millis(2));
-                    Ok::<_, amalgam::FactoryError>(ctx.value(42))
+                    Ok::<_, FactoryError>(ctx.value(42))
                 }),
             )
             .cancellation(CancellationSource::new().token())
@@ -101,7 +105,7 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
                     first_calls.fetch_add(1, Ordering::SeqCst);
                     started_tx.send(()).unwrap();
                     release_rx.await.unwrap();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(17))
+                    Ok::<_, FactoryError>(ctx.value(17))
                 }),
             )
             .await
@@ -118,7 +122,7 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
                 "shared-flight",
                 amalgam::source::factory(move |ctx| {
                     second_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(99))
+                    Ok::<_, FactoryError>(ctx.value(99))
                 }),
             )
             .execute()
@@ -165,7 +169,7 @@ fn callbacks_cannot_drain_their_own_cache() {
             assert!(matches!(rejection,
                 Err(Error::ReentrantDrain { operation }) if operation == expected
             ));
-            Ok::<_, amalgam::FactoryError>(ctx.value(7))
+            Ok::<_, FactoryError>(ctx.value(7))
         };
         let answer = if case.starts_with("inline") {
             cache
@@ -199,12 +203,12 @@ fn callbacks_cannot_drain_their_own_cache() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(2);
         let completed = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break Some(status);
             }
-            if std::time::Instant::now() >= deadline {
+            if Instant::now() >= deadline {
                 break None;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -251,7 +255,7 @@ fn invalid_callback_count_is_rejected_before_any_factory_dispatch() {
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }

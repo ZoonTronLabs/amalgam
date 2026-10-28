@@ -10,13 +10,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use amalgam::advanced::{AutoRecoveryService, RecoveryAction, RecoveryItem};
+use amalgam::provider::{
+    Backplane, BackplaneAction, BackplaneMessage, Clock, DistributedBytes, DistributedCache,
+    DistributedEntry, DistributedSerializer, InMemoryDistributedCache, InProcessBackplane,
+    JsonSerializer, ManualClock, RecoveryExecutor,
+};
 use amalgam::{
     Cache, CacheEvent, EntryOptions, Error, FactoryError, RecoveryConfig, Result, Tag, Timeout,
-    Timestamp, advanced::AutoRecoveryService, advanced::RecoveryAction, advanced::RecoveryItem,
-    provider::Backplane, provider::BackplaneAction, provider::BackplaneMessage, provider::Clock,
-    provider::DistributedCache, provider::DistributedEntry, provider::DistributedSerializer,
-    provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,
-    provider::ManualClock, provider::RecoveryExecutor,
+    Timestamp,
 };
 use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
@@ -209,7 +211,7 @@ struct FailingRemove {
 
 #[async_trait]
 impl DistributedCache for FailingRemove {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -272,7 +274,7 @@ struct PausedRead {
 
 #[async_trait]
 impl DistributedCache for PausedRead {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let snapshot = self.inner.get(key).await?;
         if self.pause_next.swap(false, Ordering::SeqCst) {
             self.started.notify_one();
@@ -428,7 +430,7 @@ struct HangingL2;
 
 #[async_trait]
 impl DistributedCache for HangingL2 {
-    async fn get(&self, _key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _key: &str) -> Result<Option<DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _key: &str, _bytes: Vec<u8>, _ttl: Option<Duration>) -> Result<()> {
@@ -505,7 +507,7 @@ struct FailedWrite;
 
 #[async_trait]
 impl DistributedCache for FailedWrite {
-    async fn get(&self, _key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _key: &str) -> Result<Option<DistributedBytes>> {
         Ok(None)
     }
     async fn set(&self, _key: &str, _bytes: Vec<u8>, _ttl: Option<Duration>) -> Result<()> {
@@ -781,7 +783,7 @@ struct PausedWrite {
 
 #[async_trait]
 impl DistributedCache for PausedWrite {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let value = self.inner.get(key).await?;
         self.read.notify_one();
         Ok(value)

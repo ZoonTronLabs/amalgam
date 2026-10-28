@@ -1,9 +1,10 @@
 //! Mutation input is lazy; only an actual asynchronous write owns a future.
-use super::memory_inline::MutationStart;
-use super::{Cache, EntryOptions, FactoryCancellation, MutationReceipt, Result, Tag};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use super::memory_inline::MutationStart;
+use super::{Cache, EntryOptions, FactoryCancellation, MutationReceipt, Result, Tag};
 
 pub(super) struct Input<K, V> {
     pub(super) key: K,

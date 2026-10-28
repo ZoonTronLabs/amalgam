@@ -2,15 +2,15 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, ConfigError, EntryOptions, Error, RecoveryConfig, Timestamp, advanced::EffectOutcome,
-    advanced::KeyModifierMode, advanced::LocalEffect, advanced::SkipReason, provider::Clock,
-    provider::DefaultEntryOptionsProvider, provider::DistributedCache,
-    provider::DistributedSerializer, provider::InMemoryDistributedCache, provider::JsonSerializer,
-    provider::ManualClock,
-};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{EffectOutcome, KeyModifierMode, LocalEffect, SkipReason};
+use amalgam::provider::{
+    Clock, DefaultEntryOptionsProvider, DistributedCache, DistributedSerializer,
+    InMemoryDistributedCache, JsonSerializer, ManualClock,
+};
+use amalgam::{Cache, ConfigError, EntryOptions, Error, RecoveryConfig, Timestamp};
 
 struct RecordingProvider {
     options: EntryOptions,

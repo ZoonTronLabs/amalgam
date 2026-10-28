@@ -10,13 +10,14 @@
 //! The guard is an [`OwnedMutexGuard`] so it is `'static + Send` and can
 //! be moved into a spawned background task (needed for background factory
 //! completion and eager refresh).
-
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 use ahash::RandomState;
-use hashbrown::{HashMap, hash_map::RawEntryMut};
+use hashbrown::HashMap;
+use hashbrown::hash_map::RawEntryMut;
 use parking_lot::Mutex as ShardMutex;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -227,8 +228,8 @@ impl<T: ScalarControl> WeakSlots<T> {
         }
     }
 }
-impl<T: ScalarControl> std::fmt::Debug for WeakSlots<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: ScalarControl> Debug for WeakSlots<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("WeakSlots")
             .field("shards", &SLOT_SHARDS)
             .finish()
@@ -304,18 +305,19 @@ impl Default for KeyedLock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::Poll;
     use std::time::Duration;
+
+    use super::*;
 
     #[tokio::test]
     async fn free_key_acquisitions_never_suspend_for_an_exhausted_cooperative_budget() {
         let locks = KeyedLock::new();
         for _ in 0..512 {
             let mut work = std::pin::pin!(locks.lock("ready-key"));
-            let initial =
-                std::future::poll_fn(|cx| std::task::Poll::Ready(work.as_mut().poll(cx))).await;
+            let initial = std::future::poll_fn(|cx| Poll::Ready(work.as_mut().poll(cx))).await;
             assert!(
                 initial.is_ready(),
                 "a free key required scheduler participation"
@@ -329,8 +331,7 @@ mod tests {
         let locks = KeyedLock::new();
         let first = locks.lock("ordered-key").await;
         let mut queued = std::pin::pin!(locks.lock("ordered-key"));
-        let initial =
-            std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx))).await;
+        let initial = std::future::poll_fn(|cx| Poll::Ready(queued.as_mut().poll(cx))).await;
         assert!(initial.is_pending());
         drop(first);
         assert!(locks.try_lock("ordered-key").is_none());
@@ -415,8 +416,7 @@ mod tests {
         let first = locks.lock("held").await;
         let identity = Arc::downgrade(&locks.mutex_for("held"));
         let mut queued = std::pin::pin!(locks.lock("held"));
-        let initial =
-            std::future::poll_fn(|cx| std::task::Poll::Ready(queued.as_mut().poll(cx))).await;
+        let initial = std::future::poll_fn(|cx| Poll::Ready(queued.as_mut().poll(cx))).await;
         assert!(initial.is_pending());
         let shard = locks.locks.hash.hash_one("held") as usize & (SLOT_SHARDS - 1);
         for key in (0..)

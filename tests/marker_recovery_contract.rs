@@ -1,13 +1,27 @@
 //! Public contracts for tag/clear population and immutable automatic recovery.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, CommitReport, EffectOutcome, KeyModifierMode, MarkerAdvanceOutcome, MarkerError,
+    MarkerKind, MarkerLifecyclePolicy, MarkerMutationStage, MarkerReadPolicy, MarkerSnapshot,
+    MarkerSnapshotCache, MarkerSnapshotCacheError, MarkerSnapshotParticipation, MarkerSnapshotRead,
+    MarkerSnapshotRenewal, MarkerStoreLimits, MarkerVersion, ReconciliationPolicy, RecoveryWork,
+    ReplayTicket,
+};
+use amalgam::provider::{
+    Backplane, BackplaneCommand, BackplaneMessage, InMemoryInvalidationStore, InvalidationStore,
+    ManualClock,
+};
+use amalgam::{
+    Cache, CancellationSource, ClearMode, EntryOptions, Error, FactoryCancellation,
+    FactoryCancellationReason, RecoveryConfig, Result, Tag, Timestamp,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore, broadcast};
 
 fn time(seconds: i64) -> Timestamp {
@@ -70,7 +84,7 @@ impl MarkerSnapshotCache for Snapshots {
         kind: &MarkerKind,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRead, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRead, MarkerSnapshotCacheError> {
         self.inner
             .read_snapshot(scope, kind, now, cancellation)
             .await
@@ -82,7 +96,7 @@ impl MarkerSnapshotCache for Snapshots {
         snapshot: MarkerSnapshot,
         now: Timestamp,
         cancellation: FactoryCancellation,
-    ) -> std::result::Result<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
+    ) -> StdResult<MarkerSnapshotRenewal, MarkerSnapshotCacheError> {
         self.writes.lock().unwrap().push((kind.clone(), snapshot));
         self.signals.lock().unwrap().push(cancellation.clone());
         let mode = self.mode.lock().unwrap().clone();
@@ -113,7 +127,7 @@ impl InvalidationStore for Store {
         &self,
         scope: &CacheScope,
         kind: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.snapshots.inner.read(scope, kind).await
     }
     async fn advance(
@@ -121,7 +135,7 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         kind: MarkerKind,
         version: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.advances.fetch_add(1, Ordering::SeqCst);
         if self.advance_fails.load(Ordering::SeqCst) {
             return Err(MarkerError::backend(Cause));

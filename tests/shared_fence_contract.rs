@@ -1,16 +1,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{BlockingCache, Cache, Error, FactoryCancellationReason};
+use std::future::{Future, IntoFuture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-fn ready<T: std::future::IntoFuture>(request: T) -> T::Output {
+use amalgam::{BlockingCache, Cache, Error, FactoryCancellationReason};
+
+fn ready<T: IntoFuture>(request: T) -> T::Output {
     let mut future = std::pin::pin!(request.into_future());
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-    match std::future::Future::poll(future.as_mut(), &mut context) {
-        std::task::Poll::Ready(value) => value,
-        std::task::Poll::Pending => panic!("a ready local operation must finish without a runtime"),
+    let mut context = Context::from_waker(Waker::noop());
+    match Future::poll(future.as_mut(), &mut context) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("a ready local operation must finish without a runtime"),
     }
 }
 

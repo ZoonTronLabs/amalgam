@@ -2,31 +2,31 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::io::{Error as IoError, ErrorKind};
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use amalgam::advanced::{
+    AutoRecoveryService, CacheScope, DataMutation, EnqueueOutcome, KeyModifierMode,
+    MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerStoreLimits, MarkerVersion,
+    OperationGeneration, PendingMutation, RecoveryAction, RecoveryFence, RecoveryItem,
+    RecoveryStart, RecoveryWork, StoredMarker, SupersedeOutcome,
+};
 use amalgam::entry::Entry;
-use amalgam::tags::{TagRegistry, TagVerdict, try_collect_tags};
+use amalgam::provider::{
+    AcquisitionPolicy, Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage,
+    BackplaneState, DistributedCache, DistributedEntry, DistributedLocker, DistributedSerializer,
+    DistributedSnapshot, InMemoryDistributedCache, InMemoryDistributedLocker,
+    InMemoryInvalidationStore, InProcessBackplane, InvalidationStore, JsonSerializer, LeaseError,
+    LeaseSupport, LeaseToken, LeaseTtl, LeasedMutation, LeasedWriteOutcome, ManualClock,
+    MarkerCommand, RecoveryExecutor, SnapshotRetention, SystemClock, TokenAcquisition,
+};
+use amalgam::tags::{TagRegistry, TagVerdict};
 use amalgam::{
     EntryOptions, EntryWeight, Error, Priority, RecoveryConfig, RemoveByTagBehavior, Result, Tag,
-    TagError, Timeout, Timestamp, advanced::AutoRecoveryService, advanced::CacheScope,
-    advanced::DataMutation, advanced::EnqueueOutcome, advanced::KeyModifierMode,
-    advanced::MarkerAdvanceOutcome, advanced::MarkerError, advanced::MarkerKind,
-    advanced::MarkerStoreLimits, advanced::MarkerVersion, advanced::OperationGeneration,
-    advanced::PendingMutation, advanced::RecoveryAction, advanced::RecoveryFence,
-    advanced::RecoveryItem, advanced::RecoveryStart, advanced::RecoveryWork,
-    advanced::StoredMarker, advanced::SupersedeOutcome, provider::AcquisitionPolicy,
-    provider::Backplane, provider::BackplaneAction, provider::BackplaneCommand,
-    provider::BackplaneMessage, provider::BackplaneState, provider::DistributedCache,
-    provider::DistributedEntry, provider::DistributedLocker, provider::DistributedSerializer,
-    provider::DistributedSnapshot, provider::InMemoryDistributedCache,
-    provider::InMemoryDistributedLocker, provider::InMemoryInvalidationStore,
-    provider::InProcessBackplane, provider::InvalidationStore, provider::JsonSerializer,
-    provider::LeaseError, provider::LeaseSupport, provider::LeaseToken, provider::LeaseTtl,
-    provider::LeasedMutation, provider::LeasedWriteOutcome, provider::ManualClock,
-    provider::MarkerCommand, provider::RecoveryExecutor, provider::SnapshotRetention,
-    provider::SystemClock, provider::TokenAcquisition, provider::acquire_owned,
+    TagError, Timeout, Timestamp, provider, tags,
 };
 use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
@@ -63,7 +63,7 @@ fn work(ticks: i64) -> RecoveryWork {
 fn tags_reject_blank_at_every_typed_boundary_and_include_minimum_revision() {
     assert!(matches!(Tag::new("\t "), Err(TagError::Blank)));
     assert!(serde_json::from_str::<Tag>("\" \"").is_err());
-    assert!(try_collect_tags(["valid", ""]).is_err());
+    assert!(tags::try_collect_tags(["valid", ""]).is_err());
     let registry = TagRegistry::new();
     assert_eq!(
         registry.evaluate(Timestamp::MIN, &[], RemoveByTagBehavior::Expire),
@@ -484,7 +484,7 @@ async fn atomic_reference_fence_rejects_expired_and_replaced_owners() {
     let clock = Arc::new(ManualClock::new(at(0)));
     let locker = Arc::new(InMemoryDistributedLocker::new(clock.clone()));
     let backend = InMemoryDistributedCache::new(clock.clone());
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker.clone(),
         "key".into(),
         LeaseTtl::new(Duration::from_secs(1)).unwrap(),
@@ -552,7 +552,7 @@ async fn legacy_locker_is_source_compatible_without_inventing_a_lifetime() {
     let locker: Arc<dyn DistributedLocker> = Arc::new(LegacyLocker);
     assert_eq!(locker.lease_support(), LeaseSupport::OpaqueLegacy);
     assert!(matches!(
-        acquire_owned(
+        provider::acquire_owned(
             locker.clone(),
             "key".into(),
             LeaseTtl::new(Duration::from_secs(1)).unwrap(),
@@ -562,7 +562,7 @@ async fn legacy_locker_is_source_compatible_without_inventing_a_lifetime() {
         .await,
         Err(LeaseError::UnsupportedTokenAcquisition)
     ));
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker,
         "key".into(),
         LeaseTtl::new(Duration::from_secs(1)).unwrap(),
@@ -606,7 +606,7 @@ impl DistributedLocker for CancelledAcquire {
         token: &LeaseToken,
         _: LeaseTtl,
         _: Timeout,
-    ) -> std::result::Result<bool, LeaseError> {
+    ) -> StdResult<bool, LeaseError> {
         *self.token.lock().unwrap() = Some(token.clone());
         self.entered.notify_one();
         std::future::pending().await
@@ -622,7 +622,7 @@ async fn cancelled_owned_acquire_releases_the_preselected_token_without_a_reply(
     let task = {
         let locker = locker.clone();
         tokio::spawn(async move {
-            acquire_owned(
+            provider::acquire_owned(
                 locker,
                 "key".into(),
                 LeaseTtl::new(Duration::from_secs(10)).unwrap(),
@@ -664,10 +664,12 @@ fn invalid_distributed_payloads_are_rejected_before_hydration() {
 
 #[test]
 fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
-    use amalgam::{OperationOutcome, advanced::RecoveryError};
     use std::error::Error as _;
-    let marker: Error = MarkerError::backend(std::io::Error::new(
-        std::io::ErrorKind::ConnectionReset,
+
+    use amalgam::OperationOutcome;
+    use amalgam::advanced::RecoveryError;
+    let marker: Error = MarkerError::backend(IoError::new(
+        ErrorKind::ConnectionReset,
         "marker socket reset",
     ))
     .into();
@@ -679,13 +681,13 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
         marker
             .source()
             .unwrap()
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<IoError>()
             .unwrap()
             .kind(),
-        std::io::ErrorKind::ConnectionReset
+        ErrorKind::ConnectionReset
     );
-    let lease: Error = LeaseError::backend(std::io::Error::new(
-        std::io::ErrorKind::ConnectionRefused,
+    let lease: Error = LeaseError::backend(IoError::new(
+        ErrorKind::ConnectionRefused,
         "lease socket refused",
     ))
     .into();
@@ -697,10 +699,10 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
         lease
             .source()
             .unwrap()
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<IoError>()
             .unwrap()
             .kind(),
-        std::io::ErrorKind::ConnectionRefused
+        ErrorKind::ConnectionRefused
     );
     for rejected in [
         Error::Marker(MarkerError::ScopeCapacity { limit: 1 }),
@@ -717,7 +719,8 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
 
 #[tokio::test]
 async fn owned_worker_task_failures_distinguish_cancellation_and_contract_panic() {
-    use amalgam::{OperationOutcome, advanced::RecoveryError};
+    use amalgam::OperationOutcome;
+    use amalgam::advanced::RecoveryError;
     let cancelled = tokio::spawn(std::future::pending::<()>());
     cancelled.abort();
     let error: Error = RecoveryError::Task {

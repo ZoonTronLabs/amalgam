@@ -1,7 +1,8 @@
 //! One coherent elapsed-time sample for private local-cache lifetimes.
-use super::{Clock, ClockTiming, SystemClock, Timestamp};
 use std::sync::Arc;
 use std::time::Instant;
+
+use super::{Clock, ClockTiming, SystemClock, Timestamp};
 
 #[derive(Clone, Copy)]
 pub(crate) enum WriteTime {

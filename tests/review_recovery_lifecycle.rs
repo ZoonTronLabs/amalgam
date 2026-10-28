@@ -1,10 +1,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
 use std::sync::{Arc, Weak, mpsc};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    AutoRecoveryService, EnqueueOutcome, OperationGeneration, PendingMutation, RecoveryAction,
+    RecoveryError, RecoveryFence, RecoveryItem, RecoveryWork,
+};
+use amalgam::provider::ManualClock;
+use amalgam::{RecoveryConfig, Timestamp};
 
 struct ReentrantFence {
     service: Weak<AutoRecoveryService>,

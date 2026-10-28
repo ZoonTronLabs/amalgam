@@ -7,11 +7,10 @@ use super::{
     EntryOptions, Error, FactoryCancellation, FactoryProduct, Fence, FlightGuard, Future,
     Instrument, KeyMutation, LayerEvent, LeaseError, LeasedMutation, LeasedWriteOutcome,
     LocalCommit, LocalEffect, MutationReceipt, Observed, OperationOutcome, OriginCommit,
-    OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryItem,
-    RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker, lock,
-    recovery_action,
+    OriginCompletion, PendingMutation, PreparedData, ProductOrigin, RecoveryAction, RecoveryFence,
+    RecoveryItem, RecoveryWork, Result, ShutdownTask, SkipReason, Storage, Tag, Timestamp, Worker,
 };
-use super::{RecoveryFence, component_span};
+use crate::{execution, observability};
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     pub(super) async fn store_product(
@@ -361,11 +360,11 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             local,
             lane_guard,
         } = work;
-        let at = lock(&fence.lane.timestamp).unwrap_or(self.inner.clock.now());
+        let at = execution::lock(&fence.lane.timestamp).unwrap_or(self.inner.clock.now());
         let action = command
             .as_ref()
             .and_then(|command| match command {
-                BackplaneCommand::Data(message) => Some(recovery_action(message.action)),
+                BackplaneCommand::Data(message) => Some(super::recovery_action(message.action)),
                 BackplaneCommand::Marker(_) => None,
             })
             .unwrap_or(RecoveryAction::Set);
@@ -412,7 +411,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                     .is_some_and(|flight| flight.lease.is_fenced());
                 let result = if self.circuit(CircuitComponent::Distributed) {
                     self.write_data(&key, &data, flight.as_ref())
-                        .instrument(component_span(
+                        .instrument(observability::component_span(
                             &self.inner.name,
                             CacheLevel::Distributed,
                             "commit",
@@ -563,7 +562,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         let published = command.clone();
         backplane
             .publish_command(command)
-            .instrument(component_span(
+            .instrument(observability::component_span(
                 &self.inner.name,
                 CacheLevel::Backplane,
                 "publish",

@@ -1,19 +1,22 @@
 //! Supervised cache tasks, preserving panic/cleanup evidence without public
 //! Cache handles in worker futures.
-use crate::commit::TaskResult;
-use crate::error::{Error, FactoryCancellationReason, Result, ShutdownFailure, ShutdownTask};
-use crate::events::{CacheEvent, Events};
-use crate::execution::lock;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
+
+use tokio::runtime::Handle;
 use tokio::sync::{oneshot, watch};
+
+use crate::commit::TaskResult;
+use crate::error::{Error, FactoryCancellationReason, Result, ShutdownFailure, ShutdownTask};
+use crate::events::{CacheEvent, Events};
+use crate::execution;
 
 pub(crate) struct Tasks {
     handles: std::sync::Mutex<VecDeque<TrackedTask>>,
     failures: std::sync::Mutex<Vec<ShutdownFailure>>,
     join: tokio::sync::Mutex<()>,
-    runtime: std::sync::OnceLock<tokio::runtime::Handle>,
+    runtime: std::sync::OnceLock<Handle>,
 }
 struct TrackedTask {
     task: ShutdownTask,
@@ -23,7 +26,7 @@ struct TrackedTask {
 impl Tasks {
     pub(crate) fn new() -> Arc<Self> {
         let runtime = std::sync::OnceLock::new();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        if let Ok(handle) = Handle::try_current() {
             let _ = runtime.set(handle);
         }
         Arc::new(Self {
@@ -69,17 +72,17 @@ impl Tasks {
     }
     #[cfg(test)]
     pub(crate) fn tracked_count(&self) -> usize {
-        lock(&self.handles).len()
+        execution::lock(&self.handles).len()
     }
     pub(crate) fn can_execute(&self) -> bool {
-        self.runtime.get().is_some() || tokio::runtime::Handle::try_current().is_ok()
+        self.runtime.get().is_some() || Handle::try_current().is_ok()
     }
-    fn executor(&self) -> Result<tokio::runtime::Handle> {
+    fn executor(&self) -> Result<Handle> {
         let runtime = self
             .runtime
             .get()
             .cloned()
-            .or_else(|| tokio::runtime::Handle::try_current().ok())
+            .or_else(|| Handle::try_current().ok())
             .ok_or(crate::ConfigError::MissingRuntime {
                 component: crate::advanced::RuntimeComponent::Execution,
             })?;
@@ -93,7 +96,7 @@ impl Tasks {
     }
     fn supervise<T: Send + 'static>(
         self: &Arc<Self>,
-        runtime: tokio::runtime::Handle,
+        runtime: Handle,
         worker: impl Future<Output = std::result::Result<Result<T>, tokio::task::JoinError>>
         + Send
         + 'static,
@@ -144,7 +147,7 @@ impl Tasks {
                             message: error.to_string(),
                         }
                     });
-                    lock(&tasks.failures).push(ShutdownFailure::BackgroundTask {
+                    execution::lock(&tasks.failures).push(ShutdownFailure::BackgroundTask {
                         task,
                         source: Arc::clone(&error),
                     });
@@ -154,7 +157,7 @@ impl Tasks {
             let _ = sender.send(result);
             finished.send_replace(true);
         });
-        let mut handles = lock(&self.handles);
+        let mut handles = execution::lock(&self.handles);
         let count = handles.len().min(4);
         for _ in 0..count {
             if let Some(old) = handles.pop_front()
@@ -172,7 +175,7 @@ impl Tasks {
     }
     pub(crate) async fn flush(&self) {
         loop {
-            let pending: Vec<_> = lock(&self.handles)
+            let pending: Vec<_> = execution::lock(&self.handles)
                 .iter()
                 .filter(|task| {
                     matches!(
@@ -213,7 +216,7 @@ impl Tasks {
         work: impl Future<Output = Result<()>> + Send + 'static,
     ) {
         if let Err(error) = self.executor() {
-            lock(&self.failures).push(ShutdownFailure::Work(error));
+            execution::lock(&self.failures).push(ShutdownFailure::Work(error));
             return;
         }
         let tasks = Arc::clone(self);
@@ -224,7 +227,7 @@ impl Tasks {
                     key,
                     message: error.to_string(),
                 });
-                lock(&tasks.failures).push(ShutdownFailure::Work(error));
+                execution::lock(&tasks.failures).push(ShutdownFailure::Work(error));
             }
             Ok(())
         });
@@ -232,11 +235,11 @@ impl Tasks {
     pub(crate) async fn drain(&self) {
         let _join = self.join.lock().await;
         loop {
-            let handle = lock(&self.handles).pop_front();
+            let handle = execution::lock(&self.handles).pop_front();
             match handle {
                 Some(handle) => {
                     if let Err(error) = handle.join.await {
-                        lock(&self.failures).push(ShutdownFailure::BackgroundTask {
+                        execution::lock(&self.failures).push(ShutdownFailure::BackgroundTask {
                             task: handle.task,
                             source: Arc::new(error),
                         });
@@ -247,7 +250,7 @@ impl Tasks {
         }
     }
     pub(crate) fn take_failures(&self) -> Vec<ShutdownFailure> {
-        std::mem::take(&mut *lock(&self.failures))
+        std::mem::take(&mut *execution::lock(&self.failures))
     }
 }
 

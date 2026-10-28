@@ -1,4 +1,6 @@
 //! Build-selected plain L1 execution, without the optional observation envelope.
+use std::sync::Arc;
+
 use super::ready::RuntimeRequirement;
 use super::{
     Cache, EntryOptions, Error, FactoryCancellation, InlinePermit, LookupMode, QuietObservation,
@@ -8,7 +10,6 @@ use crate::events::{
     CacheEvent, CacheLevel, CacheOperation, LayerEvent, MemoryEvent, OperationOutcome,
 };
 use crate::memory::CacheMemory;
-use std::sync::Arc;
 
 // Exactly two ready strategies: the general counted path and the
 // build-proven primitive path. Neither depends on the target architecture.

@@ -1,12 +1,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::ReconciliationPolicy;
+use amalgam::provider::{
+    Backplane, BackplaneAction, BackplaneMessage, Clock, DistributedBytes, DistributedCache,
+    InMemoryDistributedCache, InProcessBackplane, InvalidationStore, JsonSerializer, ManualClock,
+};
+use amalgam::{
+    Cache, CacheEvent, EntryOptions, Error, Plugin, PluginContext, PluginError, PluginSession,
+    RecoveryConfig, Result,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore, oneshot};
 
 fn opts() -> EntryOptions {
@@ -26,7 +34,7 @@ struct PausedRead {
 }
 #[async_trait]
 impl DistributedCache for PausedRead {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let snapshot = self.inner.get(key).await?;
         if self.pause_next.swap(false, Ordering::SeqCst) {
             self.started.notify_one();
@@ -292,10 +300,10 @@ async fn origin_overlapping_hydration_preserves_newer_bounded_entry() {
 
 struct Session(Arc<AtomicUsize>);
 impl PluginSession for Session {
-    fn on_event(&self, _: &CacheEvent) -> std::result::Result<(), PluginError> {
+    fn on_event(&self, _: &CacheEvent) -> StdResult<(), PluginError> {
         Ok(())
     }
-    fn stop(&self) -> std::result::Result<(), PluginError> {
+    fn stop(&self) -> StdResult<(), PluginError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -310,10 +318,7 @@ impl Plugin for BlockingAttach {
         "blocked-attach"
     }
     fn on_event(&self, _: &CacheEvent) {}
-    fn attach(
-        &self,
-        _: &PluginContext,
-    ) -> std::result::Result<Option<Box<dyn PluginSession>>, PluginError> {
+    fn attach(&self, _: &PluginContext) -> StdResult<Option<Box<dyn PluginSession>>, PluginError> {
         self.entered
             .lock()
             .unwrap()
@@ -366,7 +371,7 @@ struct WriteFault {
 }
 #[async_trait]
 impl DistributedCache for WriteFault {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) -> Result<()> {

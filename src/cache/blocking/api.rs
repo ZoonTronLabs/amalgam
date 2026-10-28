@@ -6,7 +6,7 @@ use super::{
     CommitReceipt, DistributedCache, DistributedLocker, EntryOptions, Events, ExecutorOwnership,
     FactoryCancellation, FactoryContext, FactoryDispatch, FactoryError, FactoryOrigin, MarkerKind,
     MarkerLifecyclePolicy, MarkerReadPolicy, MutationReceipt, NativeMemoryView, Plugin,
-    PublicLifetime, ReplayTicket, Result, ShutdownReport, Tag, run_factory, thread,
+    PublicLifetime, ReplayTicket, Result, ShutdownReport, Tag, thread,
 };
 
 impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
@@ -150,7 +150,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
                 let seed = self.cache.worker_seed();
                 let runtime = self.runtime.clone();
                 FactoryOrigin::new(move |ctx: FactoryContext<V>| {
-                    run_factory(seed.worker(), runtime, dispatch, factory, ctx)
+                    super::run_factory(seed.worker(), runtime, dispatch, factory, ctx)
                 })
             },
             options,

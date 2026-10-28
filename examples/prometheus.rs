@@ -21,7 +21,7 @@ mod demo {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use amalgam::{Cache, MetricsPlugin};
+    use amalgam::{Cache, FactoryError, MetricsPlugin};
     use metrics_exporter_prometheus::PrometheusBuilder;
 
     /// Address the scrape endpoint binds to. `0.0.0.0` (not `127.0.0.1`) so the
@@ -69,7 +69,7 @@ mod demo {
                 .get_or_set(
                     key.clone(),
                     amalgam::source::factory(move |ctx| async move {
-                        Ok::<_, amalgam::FactoryError>(ctx.value(format!("value-for-{key}")))
+                        Ok::<_, FactoryError>(ctx.value(format!("value-for-{key}")))
                     }),
                 )
                 .await?;

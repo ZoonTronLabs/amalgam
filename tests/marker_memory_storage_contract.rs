@@ -1,16 +1,37 @@
 //! Marker storage uses an independent, externally owned public-protocol provider.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
 use std::future::IntoFuture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    KeyModifierMode, MarkerLifecyclePolicy, MarkerObservation, MarkerPresence, MarkerReadPolicy,
+};
+use amalgam::provider::{
+    Backplane, BackplaneMessage, BackplaneState, BlockingMemoryLocker, Clock, ContinuityEpoch,
+    InMemoryInvalidationStore, ManualClock, MemoryCondition, MemoryGeneration, MemoryLimits,
+    MemoryLockKind, MemoryLockOutcome, MemoryLockRequest, MemoryLocker, MemoryLockerError,
+    MemoryNamespace, MemoryNamespacePurpose, MemoryRecord, MemoryRecordViolation, MemoryStorage,
+    MemoryStorageEpoch, MemoryStorageError, MemoryStorageWrite, MemoryUsage,
+};
+#[cfg(feature = "redis")]
+use amalgam::provider::{JsonSerializer, SystemClock};
+#[cfg(feature = "redis")]
+use amalgam::provider::{RedisBackplane, RedisDistributedCache, RedisDistributedLocker};
+use amalgam::{
+    BlockingCache, Cache, CacheEvent, ClearMode, ConfigError, EagerThreshold, EntryOptions, Error,
+    Priority, Result, Tag, Timeout, Timestamp,
+};
 #[path = "support/memory_storage_fixture.rs"]
 mod storage_fixture;
+use std::future::Future;
+use std::result::Result as StdResult;
+
+use amalgam::{FactoryContext, FactoryError};
 use storage_fixture::{ClearGate, Fault, Limit, MapStorage};
+use tokio::runtime::Builder as RuntimeBuilder;
 
 fn options() -> EntryOptions {
     EntryOptions::new(Duration::from_secs(120))
@@ -124,7 +145,7 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
             "key",
             typed_factory(move |ctx| async move {
                 runs.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(17))
+                Ok::<_, FactoryError>(ctx.value(17))
             })
         )
         .tags([tag()])
@@ -338,7 +359,7 @@ async fn marker_lookup_and_admission_failures_keep_causes_and_do_not_run_origin(
                 "key",
                 typed_factory(move |ctx| async move {
                     runs.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value(43))
+                    Ok::<_, FactoryError>(ctx.value(43))
                 }),
             )
             .await
@@ -590,7 +611,7 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
         .wait()
         .unwrap();
     assert_eq!(c.try_get("key").execute().unwrap(), Some(79));
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -899,7 +920,7 @@ impl MemoryStorage<MarkerObservation> for BadEpoch {
     fn get(
         &self,
         _: &str,
-    ) -> std::result::Result<Option<MemoryRecord<MarkerObservation>>, MemoryStorageError> {
+    ) -> StdResult<Option<MemoryRecord<MarkerObservation>>, MemoryStorageError> {
         unreachable!("rejected before lookup")
     }
     fn insert(
@@ -907,23 +928,23 @@ impl MemoryStorage<MarkerObservation> for BadEpoch {
         _: MemoryRecord<MarkerObservation>,
         _: MemoryCondition<'_, MarkerObservation>,
         _: Timestamp,
-    ) -> std::result::Result<MemoryStorageWrite<MarkerObservation>, MemoryStorageError> {
+    ) -> StdResult<MemoryStorageWrite<MarkerObservation>, MemoryStorageError> {
         unreachable!("rejected before insertion")
     }
     fn remove(
         &self,
         _: &str,
         _: Option<&amalgam::entry::Entry<MarkerObservation>>,
-    ) -> std::result::Result<Option<MemoryRecord<MarkerObservation>>, MemoryStorageError> {
+    ) -> StdResult<Option<MemoryRecord<MarkerObservation>>, MemoryStorageError> {
         unreachable!("rejected before removal")
     }
     fn clear_before(
         &self,
         _: &MemoryGeneration,
-    ) -> std::result::Result<Box<[MemoryRecord<MarkerObservation>]>, MemoryStorageError> {
+    ) -> StdResult<Box<[MemoryRecord<MarkerObservation>]>, MemoryStorageError> {
         unreachable!("rejected before clearing")
     }
-    fn usage(&self) -> std::result::Result<MemoryUsage, MemoryStorageError> {
+    fn usage(&self) -> StdResult<MemoryUsage, MemoryStorageError> {
         unreachable!("rejected before usage")
     }
 }
@@ -959,16 +980,13 @@ impl MemoryLocker for ProbeLocker {
     async fn acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         assert!(matches!(request.kind(), MemoryLockKind::Marker(_)));
         assert!(request.coordination_key().contains("/local/"));
         self.asynchronous.fetch_add(1, Ordering::SeqCst);
         Ok(MemoryLockOutcome::Unavailable)
     }
-    fn try_acquire(
-        &self,
-        _: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    fn try_acquire(&self, _: MemoryLockRequest) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         Ok(MemoryLockOutcome::Unavailable)
     }
 }
@@ -977,7 +995,7 @@ impl BlockingMemoryLocker for ProbeNative {
     fn acquire(
         &self,
         request: MemoryLockRequest,
-    ) -> std::result::Result<MemoryLockOutcome, MemoryLockerError> {
+    ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
         assert!(matches!(request.kind(), MemoryLockKind::Marker(_)));
         assert!(request.coordination_key().contains("/local/"));
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -1006,7 +1024,7 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
     assert_eq!(locker.native.load(Ordering::SeqCst), 2);
     assert_eq!(locker.asynchronous.load(Ordering::SeqCst), 0);
     markers.state.lock().unwrap().records.clear();
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
@@ -1230,16 +1248,14 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
     }
 }
 
-async fn forbidden_factory(
-    message: &'static str,
-) -> std::result::Result<u64, amalgam::FactoryError> {
+async fn forbidden_factory(message: &'static str) -> StdResult<u64, FactoryError> {
     panic!("{message}");
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

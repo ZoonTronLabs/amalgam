@@ -1,18 +1,20 @@
 //! Independently locked unbounded storage; extraction precedes user reclamation.
 mod plain;
-use super::RetirementReason as Reason;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
+
+use ahash::RandomState;
+use hashbrown::HashMap;
+use hashbrown::hash_map::RawEntryMut;
+
 use super::{
     Arc, CapacityRejection, CaptureAdmission, Entry, Expected, MemoryAdmission, MemoryExpiry,
-    MemoryRead, MemoryUsage, MemoryWriteEvent, Retirement, Timestamp, entry_weight,
+    MemoryRead, MemoryUsage, MemoryWriteEvent, Retirement, RetirementReason as Reason, Timestamp,
 };
 use crate::entry::Freshness;
 use crate::reader_slots::{
     ReadGuard as RwLockReadGuard, ReaderSlots as RwLock, WriteGuard as RwLockWriteGuard,
 };
-use ahash::RandomState;
-use hashbrown::{HashMap, hash_map::RawEntryMut};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Instant;
 
 const SHARDS: usize = 64;
 pub(super) struct Sharded<V> {
@@ -217,7 +219,7 @@ impl<V> Sharded<V> {
             RawEntryMut::Occupied(_) | RawEntryMut::Vacant(_) => None,
         };
         if let Some((_, stored)) = &removed {
-            state.weight -= entry_weight(&stored.entry);
+            state.weight -= super::entry_weight(&stored.entry);
         }
         removed
     }
@@ -266,7 +268,7 @@ impl<V> Sharded<V> {
         let mut state = write(shard);
         state.origins.advance(key);
         let (key, stored) = state.entries.remove_entry(key)?;
-        state.weight -= entry_weight(&stored.entry);
+        state.weight -= super::entry_weight(&stored.entry);
         Some(stored.retire(key, Reason::Explicit))
     }
     pub(super) fn insert_prepared(
@@ -310,7 +312,7 @@ impl<V> Sharded<V> {
             (Some(old), MemoryWriteEvent::Expire) => old.capture,
             _ => capture,
         };
-        let old_weight = current.map_or(0, |stored| entry_weight(&stored.entry));
+        let old_weight = current.map_or(0, |stored| super::entry_weight(&stored.entry));
         let new_weight = entry.meta().size().map_or(1, |size| size.units()) as u128;
         if expected.changes_origin() {
             origins.advance(key);
@@ -409,7 +411,7 @@ impl<V> Sharded<V> {
             if stored.generation < generation {
                 retired.push(stored.retire(key, Reason::Explicit));
             } else {
-                state.weight += entry_weight(&stored.entry);
+                state.weight += super::entry_weight(&stored.entry);
                 state.entries.insert(key, stored);
             }
         }
@@ -433,7 +435,7 @@ impl<V> Sharded<V> {
         let mut retired = Vec::with_capacity(dead.len());
         for (key, reason) in dead {
             if let Some((key, stored)) = state.entries.remove_entry(&key) {
-                state.weight -= entry_weight(&stored.entry);
+                state.weight -= super::entry_weight(&stored.entry);
                 retired.push(stored.retire(key, reason));
             }
         }
@@ -475,6 +477,9 @@ fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use super::*;
     use crate::EntryOptions;
     fn entry(value: u64) -> Entry<u64> {
@@ -504,15 +509,15 @@ mod tests {
             let CacheClock::Local(clock) = CacheClock::local() else {
                 unreachable!()
             };
-            let store = std::sync::Arc::new(Sharded::with_local_clock(Arc::clone(&clock)));
+            let store = Arc::new(Sharded::with_local_clock(Arc::clone(&clock)));
             let before = clock.sample().0;
             store.insert(
                 Arc::from("k"),
                 Entry::fresh(
                     1,
-                    &EntryOptions::new(std::time::Duration::from_millis(10)).with_fail_safe(
+                    &EntryOptions::new(Duration::from_millis(10)).with_fail_safe(
                         true,
-                        Some(std::time::Duration::from_secs(60)),
+                        Some(Duration::from_secs(60)),
                         None,
                     ),
                     before,
@@ -547,7 +552,7 @@ mod tests {
                 }
             });
             started_rx.recv().unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::thread::sleep(Duration::from_millis(20));
             drop(writer);
             let sampled = sampled.join().unwrap();
             assert_eq!(sampled, crate::entry::Freshness::Stale);

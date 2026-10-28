@@ -1,13 +1,26 @@
 //! Lease admission and notification continuity have independent outage policies.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::future::Future;
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::advanced::{LeasePolicy, ReconciliationPolicy};
+use amalgam::provider::{
+    Backplane, BackplaneAction, BackplaneMessage, BackplaneState, Clock, ContinuityEpoch,
+    DistributedBytes, DistributedCache, DistributedLocker, FencedWriteSupport,
+    InMemoryDistributedCache, InProcessBackplane, InvalidationStore, JsonSerializer, LeaseError,
+    LeaseProof, LeaseSupport, LeaseToken, LeaseTtl, LeasedMutation, LeasedWriteOutcome,
+    ManualClock, TokenAcquisition,
+};
+use amalgam::{
+    Cache, CancellationSource, ClearMode, ConfigError, EntryOptions, Error,
+    FactoryCancellationReason, FactoryContext, FactoryError, RecoveryConfig, Result, Tag, Timeout,
+};
+use async_trait::async_trait;
 use tokio::sync::{broadcast, watch};
 
 struct Store {
@@ -25,16 +38,14 @@ impl DistributedCache for Store {
         key: &str,
         mutation: LeasedMutation,
         proof: &LeaseProof,
-    ) -> std::result::Result<LeasedWriteOutcome, LeaseError> {
+    ) -> StdResult<LeasedWriteOutcome, LeaseError> {
         if self.down.load(Ordering::SeqCst) {
-            Err(LeaseError::backend(std::io::Error::other(
-                "store unavailable",
-            )))
+            Err(LeaseError::backend(IoError::other("store unavailable")))
         } else {
             self.inner.write_with_lease(key, mutation, proof).await
         }
     }
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         if self.down.load(Ordering::SeqCst) {
             Err(Error::Distributed("store unavailable".into()))
@@ -80,11 +91,9 @@ impl DistributedLocker for FailedLocker {
         _: &LeaseToken,
         _: LeaseTtl,
         _: Timeout,
-    ) -> std::result::Result<bool, LeaseError> {
+    ) -> StdResult<bool, LeaseError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(LeaseError::backend(std::io::Error::other(
-            "locker unavailable",
-        )))
+        Err(LeaseError::backend(IoError::other("locker unavailable")))
     }
 }
 struct Notifications {
@@ -195,7 +204,7 @@ async fn origin(cache: &Cache<u64>, calls: Arc<AtomicUsize>) -> Result<u64> {
             "key",
             amalgam::source::factory(move |ctx| async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
         .await
@@ -503,7 +512,7 @@ async fn best_effort_does_not_serve_a_hot_value_to_an_explicitly_cancelled_calle
         .cache
         .get_or_set(
             "key",
-            typed_factory(|ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .cancellation(source.token())
         .await;
@@ -720,9 +729,7 @@ async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outag
             .cache
             .get_or_set(
                 "cold",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                })
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) })
             )
             .await
             .unwrap(),
@@ -734,8 +741,8 @@ async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outag
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

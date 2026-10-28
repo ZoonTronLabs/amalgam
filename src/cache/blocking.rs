@@ -3,7 +3,12 @@
 //! The executor stays driven while callers block. Timed, cancellable and eager
 //! factories run on its blocking pool and retain counted execution and join
 //! supervision until their actual callback, captures and result have finished.
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 pub(crate) mod origin_request;
+use std::thread::{self, ThreadId};
+
+pub use origin_request::{BlockingGetOrSetRequest, BlockingReceiptGetOrSetRequest};
+
 use super::{
     Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheValue, CancellationSource,
     ClearMode, CloseOutcome, CommitCompletion, CommitReceipt, CommitReport, DistributedCache,
@@ -14,8 +19,6 @@ use super::{
 };
 use crate::commit::TaskResult;
 use crate::factory::FactoryInvocation;
-pub use origin_request::{BlockingGetOrSetRequest, BlockingReceiptGetOrSetRequest};
-use std::thread::{self, ThreadId};
 mod api;
 mod requests;
 pub use requests::{BlockingReceiptRequest, BlockingRequest};
@@ -74,8 +77,8 @@ pub struct BlockingCommitCompletion {
     completion: CommitCompletion,
     runtime: BlockingRuntime,
 }
-impl std::fmt::Debug for BlockingCommitCompletion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for BlockingCommitCompletion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("BlockingCommitCompletion")
             .finish_non_exhaustive()
     }
@@ -207,12 +210,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::cache::Lifecycle;
-    use crate::execution::lock;
     use std::num::NonZeroUsize;
     use std::sync::Barrier;
     use std::time::Duration;
+
+    use super::*;
+    use crate::cache::Lifecycle;
+    use crate::execution;
     enum PublicHandle {
         Native(BlockingCache<u64>),
         Async(Cache<u64>),
@@ -259,7 +263,7 @@ mod tests {
             runtime.run(async {
                 tokio::time::timeout(Duration::from_secs(2), async {
                     loop {
-                        let closed = match &*lock(&inner.lifecycle) {
+                        let closed = match &*execution::lock(&inner.lifecycle) {
                             Lifecycle::Closed(result) => Some(result.clone()),
                             Lifecycle::Running | Lifecycle::Closing => None,
                         };

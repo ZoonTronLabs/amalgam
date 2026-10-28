@@ -1,12 +1,23 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Recovery through real Redis Lua failures, original lifetime and native TTL.
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::redis_backend::RedisDistributedCache;
-use amalgam::*;
+
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, CommitReport, EffectOutcome, KeyModifierMode, MarkerError, MarkerKind,
+    MarkerLifecyclePolicy, MarkerMutationStage, MarkerReadPolicy, MarkerVersion,
+    ReconciliationPolicy, RecoveryWork,
+};
+use amalgam::provider::{
+    Clock, DistributedCache, InvalidationStore, JsonSerializer, ManualClock, SystemClock,
+};
+use amalgam::redis_backend::RedisDistributedCache;
+use amalgam::{
+    Cache, CancellationSource, ClearMode, EntryOptions, Error, FactoryCancellation, RecoveryConfig,
+    Result, Tag, Timestamp,
+};
 mod support {
     pub mod redis_fixture;
 }

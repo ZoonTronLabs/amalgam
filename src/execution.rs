@@ -1,17 +1,20 @@
 //! Cache-owned cancellable execution scopes. User code is never polled or dropped
 //! while a registry/state lock is held.
-use crate::error::{Error, FactoryCancellationReason as Reason, Result};
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
+
 use tokio::sync::Notify;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
+
+use crate::error::{Error, FactoryCancellationReason as Reason, Result};
 
 type Work<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'static>>;
 
@@ -164,7 +167,7 @@ pub(crate) struct Request {
     factory_adaptation: crate::factory::FactoryFeedback,
 }
 /// Cancellation can share the allocation of its owning flight.
-pub(crate) trait RequestOwner: std::fmt::Debug + Send + Sync + 'static {
+pub(crate) trait RequestOwner: Debug + Send + Sync + 'static {
     fn request(&self) -> &Request;
     fn cache_binding(&self) -> Option<&CacheBinding> {
         None
@@ -256,8 +259,8 @@ struct Listener {
     target: Weak<dyn CancelWork>,
     mode: LinkMode,
 }
-impl std::fmt::Debug for Listener {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for Listener {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.write_str("CancellationListener")
     }
 }
@@ -922,9 +925,10 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use super::Scopes;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    use super::Scopes;
 
     #[tokio::test]
     async fn nested_local_and_colliding_work_must_all_exit_before_drain() {
@@ -991,9 +995,10 @@ mod tests {
 
 #[cfg(test)]
 mod close_drop_cause_tests {
-    use super::*;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    use super::*;
 
     struct ParkedDrop {
         entered: mpsc::Sender<()>,
@@ -1171,10 +1176,11 @@ mod close_drop_cause_tests {
 
 #[cfg(test)]
 mod tracker_contract_tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    use super::*;
 
     struct ReenterDrop {
         scopes: Weak<Scopes>,

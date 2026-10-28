@@ -5,6 +5,7 @@
 //! Rust equivalent is a broadcast channel: subscribers receive a stream of
 //! [`CacheEvent`]s without blocking the cache's hot path, and handler execution
 //! is naturally decoupled from the operation that produced the event.
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 mod eviction;
 pub use eviction::{
@@ -12,12 +13,11 @@ pub use eviction::{
     MemoryEvictionSubscription, MemoryEvictions,
 };
 mod layers;
-pub use layers::{BackplaneEvent, DistributedEvent, LayerEvent, MemoryEvent};
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+pub use layers::{BackplaneEvent, DistributedEvent, LayerEvent, MemoryEvent};
 use tokio::sync::broadcast;
 
 use crate::memory::CapacityRejection;
@@ -834,8 +834,8 @@ impl Events {
     }
 }
 
-impl std::fmt::Debug for Events {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for Events {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("Events")
             .field("subscribers", &self.inner.sender.receiver_count())
             .field("plugins_attached", &self.inner.plugins.get().is_some())

@@ -1,12 +1,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerVersion, StoredMarker,
+};
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, InvalidationStore,
+    JsonSerializer, ManualClock,
+};
+use amalgam::{Cache, CacheEvent, CacheLevel, EntryOptions, Error, FactoryError, Result, Timeout};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 struct PendingMarkers;
@@ -16,7 +23,7 @@ impl InvalidationStore for PendingMarkers {
         &self,
         _: &CacheScope,
         _: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         std::future::pending().await
     }
     async fn advance(
@@ -24,7 +31,7 @@ impl InvalidationStore for PendingMarkers {
         _: &CacheScope,
         kind: MarkerKind,
         version: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         Ok(MarkerAdvanceOutcome::Advanced(StoredMarker::new(
             kind, version,
         )))
@@ -80,7 +87,7 @@ struct CapturedRead {
 }
 #[async_trait]
 impl DistributedCache for CapturedRead {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let snapshot = self.inner.get(key).await?;
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -247,7 +254,7 @@ struct ParkedWriteBackend {
 }
 #[async_trait]
 impl DistributedCache for ParkedWriteBackend {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         let captured = self.inner.get(key).await?;
         if self.pause_read.swap(false, Ordering::SeqCst) {
             self.read_entered.notify_one();

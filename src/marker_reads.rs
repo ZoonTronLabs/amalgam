@@ -1,9 +1,10 @@
 //! Independent control-read policy and local observation retention.
 #![doc = include_str!("../docs/MARKER_READS.md")]
+use std::sync::{Arc, Mutex};
 
 use crate::entry::{ContinuityStamp, Entry};
 use crate::error::Result;
-use crate::execution::lock;
+use crate::execution;
 use crate::marker_snapshots::{MarkerLifecyclePolicy, MarkerSnapshotCache};
 use crate::memory::{
     CapacityRejection, MemoryAdmission, MemoryExpiry, MemoryInvalidation, MemoryLimits,
@@ -12,7 +13,6 @@ use crate::memory_locker::LocalLocks;
 use crate::options::{EntryOptions, JitterSample};
 use crate::tags::{MarkerKind, MarkerVersion};
 use crate::time::{Clock, Timestamp};
-use std::sync::{Arc, Mutex};
 
 mod memory;
 use memory::MarkerMemory;
@@ -262,7 +262,7 @@ impl MarkerObservations {
     }
 
     pub(crate) fn clear_status(&self, kind: &MarkerKind, epoch: u64) -> Option<MarkerReadOutcome> {
-        let clears = lock(&self.clears);
+        let clears = execution::lock(&self.clears);
         let observed = match kind {
             MarkerKind::ClearRemove => &clears.remove,
             MarkerKind::ClearExpire => &clears.expire,
@@ -283,7 +283,7 @@ impl MarkerObservations {
         epoch: u64,
         outcome: MarkerReadOutcome,
     ) {
-        let mut clears = lock(&self.clears);
+        let mut clears = execution::lock(&self.clears);
         let target = match kind {
             MarkerKind::ClearRemove => &mut clears.remove,
             MarkerKind::ClearExpire => &mut clears.expire,
@@ -532,7 +532,7 @@ impl MarkerObservations {
     }
 
     fn reset_clears(&self) {
-        let mut clears = lock(&self.clears);
+        let mut clears = execution::lock(&self.clears);
         clears.remove = ClearObservation::Unknown;
         clears.expire = ClearObservation::Unknown;
     }

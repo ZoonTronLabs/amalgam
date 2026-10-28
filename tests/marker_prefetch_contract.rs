@@ -2,12 +2,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::result::Result as StdResult;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{
+    CacheScope, MarkerAdvanceOutcome, MarkerError, MarkerKind, MarkerVersion, StoredMarker,
+};
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, InMemoryInvalidationStore,
+    InvalidationStore, JsonSerializer, MarkedRead, SystemClock,
+};
+use amalgam::{Cache, ClearMode, EntryOptions, Result, Tag};
+use async_trait::async_trait;
 
 /// Durable marker storage recording every separate batch read.
 struct Store {
@@ -20,7 +27,7 @@ impl InvalidationStore for Store {
         &self,
         scope: &CacheScope,
         kind: &MarkerKind,
-    ) -> std::result::Result<Option<MarkerVersion>, MarkerError> {
+    ) -> StdResult<Option<MarkerVersion>, MarkerError> {
         self.inner.read(scope, kind).await
     }
     async fn advance(
@@ -28,14 +35,14 @@ impl InvalidationStore for Store {
         scope: &CacheScope,
         kind: MarkerKind,
         candidate: MarkerVersion,
-    ) -> std::result::Result<MarkerAdvanceOutcome, MarkerError> {
+    ) -> StdResult<MarkerAdvanceOutcome, MarkerError> {
         self.inner.advance(scope, kind, candidate).await
     }
     async fn read_many(
         &self,
         scope: &CacheScope,
         kinds: &[MarkerKind],
-    ) -> std::result::Result<Box<[StoredMarker]>, MarkerError> {
+    ) -> StdResult<Box<[StoredMarker]>, MarkerError> {
         self.reads.lock().unwrap().push(kinds.to_vec());
         self.inner.read_many(scope, kinds).await
     }

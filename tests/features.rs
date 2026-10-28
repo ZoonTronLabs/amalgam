@@ -13,20 +13,23 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
-
-use amalgam::{
-    Cache, CacheEvent, CacheRegistry, EntryOptions, Plugin, RecoveryConfig, Result, Tag,
-    advanced::CircuitComponent, provider::Backplane, provider::Clock,
-    provider::DefaultEntryOptionsProvider, provider::DistributedCache, provider::DistributedLocker,
-    provider::DistributedSerializer, provider::InMemoryDistributedCache,
-    provider::InMemoryDistributedLocker, provider::InProcessBackplane, provider::JsonSerializer,
-    provider::ManualClock,
+use amalgam::advanced::CircuitComponent;
+use amalgam::provider::{
+    Backplane, Clock, DefaultEntryOptionsProvider, DistributedBytes, DistributedCache,
+    DistributedLocker, DistributedSerializer, InMemoryDistributedCache, InMemoryDistributedLocker,
+    InProcessBackplane, JsonSerializer, ManualClock,
 };
+use amalgam::{
+    Cache, CacheEvent, CacheRegistry, EntryOptions, FactoryContext, FactoryError, Plugin,
+    RecoveryConfig, Result, Tag,
+};
+use async_trait::async_trait;
 
 // ---------------------------------------------------------------------------
 // 1. Plugins: a plugin receives Set and Hit events.
@@ -83,9 +86,7 @@ async fn plugin_receives_set_and_hit_events() {
     let v = cache
         .get_or_set(
             "k",
-            amalgam::source::factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value(999))
-            }),
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(999)) }),
         )
         .await
         .unwrap();
@@ -134,12 +135,12 @@ async fn distributed_locker_enforces_cross_instance_single_flight() {
     let calls = Arc::new(AtomicUsize::new(0));
 
     let slow_factory = |calls: Arc<AtomicUsize>| {
-        move |ctx: amalgam::FactoryContext<String>| async move {
+        move |ctx: FactoryContext<String>| async move {
             calls.fetch_add(1, Ordering::SeqCst);
             // Hold the single-flight long enough that the second instance is
             // guaranteed to be waiting on the *distributed* lock when we finish.
             tokio::time::sleep(Duration::from_millis(50)).await;
-            Ok::<_, amalgam::FactoryError>(ctx.value("from-factory".to_owned()))
+            Ok::<_, FactoryError>(ctx.value("from-factory".to_owned()))
         }
     };
 
@@ -186,7 +187,7 @@ struct FlakyL2 {
 
 #[async_trait]
 impl DistributedCache for FlakyL2 {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         if self.down.load(Ordering::SeqCst) {
             return Err(amalgam::Error::Distributed("down".into()));
         }
@@ -326,7 +327,7 @@ async fn remove_by_tag_propagates_across_nodes() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("v1".to_owned()))
                 }),
             )
             .options(|_| long())
@@ -358,7 +359,7 @@ async fn remove_by_tag_propagates_across_nodes() {
                 "k",
                 typed_factory(move |ctx| async move {
                     calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("v2".to_owned()))
                 }),
             )
             .options(|_| long())
@@ -472,7 +473,7 @@ async fn default_options_provider_applies_per_key_duration() {
                     key,
                     amalgam::source::factory(move |ctx| async move {
                         counter.fetch_add(1, Ordering::SeqCst);
-                        Ok::<_, amalgam::FactoryError>(ctx.value(val))
+                        Ok::<_, FactoryError>(ctx.value(val))
                     }),
                 )
                 .await
@@ -509,8 +510,8 @@ async fn default_options_provider_applies_per_key_duration() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

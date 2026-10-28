@@ -1,11 +1,12 @@
 //! A recipient arriving inside ordinary Clone sees the same terminal operation.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{Cache, CacheEvent, Events, OperationOutcome};
-use std::future::Future;
-use std::future::IntoFuture;
+use std::future::{Future, IntoFuture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Waker};
+
+use amalgam::{Cache, CacheEvent, Events, OperationOutcome};
 use tokio::sync::broadcast;
 
 #[derive(Default)]
@@ -43,7 +44,7 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     state.armed.store(true, Ordering::SeqCst);
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut read = std::pin::pin!(cache.try_get("key").into_future());
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut cx = Context::from_waker(Waker::noop());
         read.as_mut().poll(&mut cx)
     }));
     assert!(panicked.is_err());

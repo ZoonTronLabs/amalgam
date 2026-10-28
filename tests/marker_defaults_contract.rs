@@ -1,13 +1,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use amalgam::advanced::{EffectOutcome, MutationReceipt, SkipReason};
+use amalgam::provider::{
+    DefaultEntryOptionsProvider, InMemoryDistributedCache, JsonSerializer, SystemClock,
+};
+use amalgam::{Cache, ClearMode, ConfigError, EntryOptions, Error, Priority, Tag};
 
 struct Provider(Arc<AtomicUsize>);
 impl DefaultEntryOptionsProvider for Provider {

@@ -1,12 +1,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
-use async_trait::async_trait;
+use std::io::Error as IoError;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use amalgam::advanced::{LeasePolicy, ShutdownFailure};
+use amalgam::provider::{
+    AcquisitionPolicy, DistributedLocker, InMemoryDistributedCache, JsonSerializer, LeaseError,
+    LeaseSupport, LeaseToken, LeaseTtl, ManualClock, TokenAcquisition,
+};
+use amalgam::{
+    Cache, EntryOptions, Error, FactoryError, RecoveryConfig, Result, Timeout, provider,
+};
+use async_trait::async_trait;
 use tokio::sync::{Notify, Semaphore};
 
 #[derive(Clone, Copy)]
@@ -50,11 +58,11 @@ impl DistributedLocker for ReplyLostLocker {
         token: &LeaseToken,
         _: LeaseTtl,
         _: Timeout,
-    ) -> std::result::Result<bool, LeaseError> {
+    ) -> StdResult<bool, LeaseError> {
         match self.acquisition {
             Acquisition::LostReply => {
                 *self.held.lock().unwrap() = Some(token.clone());
-                Err(LeaseError::backend(std::io::Error::other(
+                Err(LeaseError::backend(IoError::other(
                     "original lost acquisition reply",
                 )))
             }
@@ -95,7 +103,7 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
             "key",
             amalgam::source::factory(move |ctx| async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
         .await;
@@ -130,7 +138,7 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
 #[tokio::test]
 async fn a_contended_receipt_does_not_fabricate_uncertain_ownership_cleanup() {
     let locker = locker(Acquisition::Contended);
-    let receipt = acquire_owned(
+    let receipt = provider::acquire_owned(
         locker.clone(),
         Arc::from("key"),
         LeaseTtl::new(Duration::from_secs(1)).unwrap(),

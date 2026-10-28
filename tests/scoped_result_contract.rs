@@ -1,16 +1,19 @@
 //! Original receipt causes may reenter shutdown; retire scope admission first.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::{CommitReceipt, MutationReceipt};
-use amalgam::provider::{
-    DistributedCache, InMemoryDistributedCache, InvalidationStore, JsonSerializer, SystemClock,
-};
-use amalgam::{Cache, EntryOptions, Error, RecoveryConfig, Result, source};
-use async_trait::async_trait;
 use std::convert::Infallible;
 use std::fmt;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
+
+use amalgam::advanced::{CommitReceipt, MutationReceipt};
+use amalgam::provider::{
+    DistributedBytes, DistributedCache, InMemoryDistributedCache, InvalidationStore,
+    JsonSerializer, SystemClock,
+};
+use amalgam::{Cache, EntryOptions, Error, RecoveryConfig, Result, source};
+use async_trait::async_trait;
+use tokio::runtime::Builder as RuntimeBuilder;
 use tokio::sync::{Notify, Semaphore};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -47,7 +50,7 @@ impl Drop for DrainCause {
             .expect("one original cause owns drainage");
         let (sent, completed) = mpsc::channel();
         let thread = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = RuntimeBuilder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
@@ -69,7 +72,7 @@ struct FailingWrite {
 }
 #[async_trait]
 impl DistributedCache for FailingWrite {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {
@@ -174,7 +177,7 @@ struct PendingWrite {
 }
 #[async_trait]
 impl DistributedCache for PendingWrite {
-    async fn get(&self, key: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, key: &str) -> Result<Option<DistributedBytes>> {
         self.inner.get(key).await
     }
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) -> Result<()> {

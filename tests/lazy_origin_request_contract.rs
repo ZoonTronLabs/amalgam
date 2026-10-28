@@ -1,14 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason,
-    advanced::CommitReceipt, advanced::MutationReceipt, provider::ManualClock,
-};
 use std::future::{Future, IntoFuture};
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::advanced::{CommitReceipt, MutationReceipt};
+use amalgam::provider::ManualClock;
+use amalgam::{
+    Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason, FactoryContext,
+    FactoryError,
+};
 
 fn ready<F: IntoFuture>(request: F) -> F::Output {
     let mut future = std::pin::pin!(request.into_future());
@@ -28,9 +32,9 @@ fn an_abandoned_request_releases_its_capture_without_invoking_the_factory() {
     let weak = Arc::downgrade(&capture);
     let request = cache.get_or_set(
         "abandoned",
-        amalgam::source::factory(move |ctx| async move {
-            Ok::<_, amalgam::FactoryError>(ctx.value(*capture))
-        }),
+        amalgam::source::factory(
+            move |ctx| async move { Ok::<_, FactoryError>(ctx.value(*capture)) },
+        ),
     );
     assert!(weak.upgrade().is_some());
     assert!(ready(cache.try_get("abandoned")).unwrap().is_none());
@@ -46,9 +50,7 @@ fn receipts_are_completed_for_inline_factory_and_unchanged_for_a_ready_hit() {
         cache
             .get_or_set(
                 "receipt",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(7))
-                }),
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
             )
             .with_receipt(),
     )
@@ -86,9 +88,7 @@ async fn an_option_overlay_preserves_cache_fail_safe_and_keeps_its_defaults_immu
     let value = cache
         .get_or_set(
             "overlay",
-            amalgam::source::factory(
-                |ctx| async move { Ok::<_, amalgam::FactoryError>(ctx.value(7)) },
-            ),
+            amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(7)) }),
         )
         .options(|options| options.with_duration(Duration::from_millis(100)))
         .tags(["profile"])
@@ -119,7 +119,7 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
             "invalid",
             amalgam::source::factory(move |ctx| async move {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
         .tags(["valid", " "])
@@ -134,7 +134,7 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
             "cancelled",
             amalgam::source::factory(move |ctx| async move {
                 factory_calls.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, amalgam::FactoryError>(ctx.value(7))
+                Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
         .cancellation(cancellation.token())
@@ -152,8 +152,8 @@ async fn invalid_tags_and_explicit_cancellation_reject_before_the_factory_runs()
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

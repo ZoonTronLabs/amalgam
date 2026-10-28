@@ -1,13 +1,16 @@
 //! Driven I/O and bounded lineage-separated blocking callback pools.
-use crate::execution::{Scopes, lock};
 use std::cell::{Cell, RefCell};
 use std::future::{Future, IntoFuture};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
+
 use tokio::runtime::{Builder, Handle, Runtime, RuntimeFlavor};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use crate::execution;
+use crate::execution::Scopes;
 
 const MAX_CALLBACK_NESTING: usize = 32;
 const MAX_IO_WORKERS: usize = 64;
@@ -334,7 +337,7 @@ impl BlockingRuntime {
         depth: PoolDepth,
         class: CallbackClass,
     ) -> std::io::Result<(Handle, Arc<Semaphore>)> {
-        let mut groups = lock(&self.driver.pools);
+        let mut groups = execution::lock(&self.driver.pools);
         let pools = match class {
             CallbackClass::Factory => &mut groups.factories,
             CallbackClass::MemoryLock => &mut groups.memory_locks,

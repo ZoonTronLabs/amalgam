@@ -1,12 +1,17 @@
 //! Public progress and cancellation evidence for nested native factories.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::*;
 use std::num::NonZeroUsize;
-use std::sync::mpsc;
+use std::result::Result as StdResult;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
+
+use amalgam::advanced::{BlockingDispatchError, BlockingRuntime};
+use amalgam::{
+    BlockingCache, Cache, CancellationSource, FactoryCancellation, FactoryContext, FactoryError,
+    Result,
+};
 
 fn nested(cache: BlockingCache<u64>, remaining: u32, token: FactoryCancellation) -> Result<u64> {
     let child = cache.clone();
@@ -16,7 +21,7 @@ fn nested(cache: BlockingCache<u64>, remaining: u32, token: FactoryCancellation)
             format!("level/{remaining}"),
             typed_blocking_factory(move |ctx| {
                 if remaining == 0 {
-                    return Ok::<_, amalgam::FactoryError>(ctx.value(1));
+                    return Ok::<_, FactoryError>(ctx.value(1));
                 }
                 nested(child, remaining - 1, next)
                     .map(|value| ctx.value(value + 1))
@@ -66,7 +71,7 @@ fn opposite_cross_runtime_nested_calls_progress() {
     let make = || BlockingRuntime::with_workers(NonZeroUsize::MIN, NonZeroUsize::MIN).unwrap();
     let left = BlockingCache::<u64>::on_runtime(Cache::builder(), make()).unwrap();
     let right = BlockingCache::<u64>::on_runtime(Cache::builder(), make()).unwrap();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let barrier = Arc::new(std::sync::Barrier::new(2));
     let source = CancellationSource::new();
     let (sender, receiver) = mpsc::channel();
     let callers: Vec<_> = [
@@ -150,7 +155,7 @@ fn nested_dispatch_limit_returns_its_original_typed_error_and_drains() {
 
 fn typed_blocking_factory<V, F>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> std::result::Result<V, amalgam::FactoryError>,
+    F: FnOnce(FactoryContext<V>) -> StdResult<V, FactoryError>,
 {
     factory
 }

@@ -1,10 +1,9 @@
 //! Extensible plugins with per-cache sessions and deterministic teardown.
+use std::fmt::{Debug, Formatter, Result as FmtResult};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, Weak};
 
-use std::sync::{
-    Arc, Mutex, MutexGuard, RwLock, Weak,
-    atomic::{AtomicUsize, Ordering},
-};
-
+use tokio::runtime::Handle;
 use tokio::sync::{Notify, watch};
 
 use crate::error::{ConfigError, IdentityField};
@@ -788,7 +787,7 @@ impl PluginHost {
         }
         let requires_runtime =
             external(&name, PluginStage::Start, || Ok(plugin.requires_runtime()))?;
-        if requires_runtime && tokio::runtime::Handle::try_current().is_err() {
+        if requires_runtime && Handle::try_current().is_err() {
             return Err(PluginError::MissingRuntime { plugin: name });
         }
         // Attachment executes no user behavior under the host's registration lock.
@@ -921,8 +920,8 @@ impl Default for PluginHost {
     }
 }
 
-impl std::fmt::Debug for PluginHost {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for PluginHost {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("PluginHost")
             .field("cache_name", &self.inner.context.cache_name)
             .field("is_empty", &self.is_empty())

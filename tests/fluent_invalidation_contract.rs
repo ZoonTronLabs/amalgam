@@ -1,12 +1,15 @@
 //! API 0.4 invalidation requests remain lazy, typed and atomic on bad tag input.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    BlockingCache, Cache, CancellationSource, ClearMode, EntryOptions, Error,
-    FactoryCancellationReason, advanced::MutationReceipt, provider::ManualClock,
-};
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::advanced::MutationReceipt;
+use amalgam::provider::ManualClock;
+use amalgam::{
+    BlockingCache, Cache, CancellationSource, ClearMode, EntryOptions, Error,
+    FactoryCancellationReason,
+};
 
 #[tokio::test]
 async fn unpolled_mutations_do_nothing_and_receipts_are_explicit() {

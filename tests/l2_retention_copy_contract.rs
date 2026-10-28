@@ -1,16 +1,17 @@
 //! Attaching persisted retention to an owned L2 value must not clone it.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
 use amalgam::provider::{
     Clock, DistributedEntry, DistributedSnapshot, InMemoryDistributedCache, JsonSerializer,
     ManualClock, MemoryStorage, SnapshotRetention, ValueCloner,
 };
 use amalgam::{Cache, CloneError, EntryOptions, EntryWeight, Priority, Timestamp, source};
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 #[path = "support/memory_storage_fixture.rs"]
 mod storage_fixture;

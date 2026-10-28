@@ -1,9 +1,10 @@
 //! Build-selected primitive copies have no callback or owned work to drain.
 //! Storage admission still excludes writers and checks close before the copy.
 //! Any actual observer or input destructor retains ordinary counted admission.
+use std::any::TypeId;
+
 use super::plain_ready::{QuietCopy, QuietReady, QuietStart};
 use super::{Cache, CacheMemory, CacheOperation, Error, LookupMode, QuietObservation};
-use std::any::TypeId;
 
 pub(super) enum Inputs {
     NoCallbacks,

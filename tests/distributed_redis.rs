@@ -5,28 +5,25 @@
 #[path = "support/redis_fixture.rs"]
 mod fixture;
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use amalgam::advanced::{
+    CacheScope, KeyModifierMode, MarkerKind, MarkerStoreLimits, MarkerVersion,
+};
+use amalgam::provider::{
+    AcquisitionPolicy, Backplane, BackplaneAction, BackplaneCommand, BackplaneMessage,
+    BackplaneState, DistributedCache, DistributedLocker, InvalidationStore, LeaseError, LeaseState,
+    LeaseTtl, LeasedMutation, LeasedWriteOutcome, RedisBackplane, RedisDistributedCache,
+    RedisDistributedLocker, RedisInvalidationStore, RedisIoOptions,
+};
+use amalgam::{FactoryContext, FactoryError, Tag, Timeout, Timestamp, provider};
 use redis::aio::MultiplexedConnection;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Notify;
-use {
-    amalgam::Tag, amalgam::Timeout, amalgam::Timestamp, amalgam::advanced::CacheScope,
-    amalgam::advanced::KeyModifierMode, amalgam::advanced::MarkerKind,
-    amalgam::advanced::MarkerStoreLimits, amalgam::advanced::MarkerVersion,
-    amalgam::provider::AcquisitionPolicy, amalgam::provider::Backplane,
-    amalgam::provider::BackplaneAction, amalgam::provider::BackplaneCommand,
-    amalgam::provider::BackplaneMessage, amalgam::provider::BackplaneState,
-    amalgam::provider::DistributedCache, amalgam::provider::DistributedLocker,
-    amalgam::provider::InvalidationStore, amalgam::provider::LeaseError,
-    amalgam::provider::LeaseState, amalgam::provider::LeaseTtl, amalgam::provider::LeasedMutation,
-    amalgam::provider::LeasedWriteOutcome, amalgam::provider::RedisBackplane,
-    amalgam::provider::RedisDistributedCache, amalgam::provider::RedisDistributedLocker,
-    amalgam::provider::RedisInvalidationStore, amalgam::provider::RedisIoOptions,
-    amalgam::provider::acquire_owned,
-};
 
 fn unique(name: &str) -> String {
     format!("amalgam_protocol_{name}_{:016x}", fastrand::u64(..))
@@ -305,7 +302,7 @@ async fn live_lease_acquire_deadline_and_successful_attempt_receipt() {
             .is_none()
     );
     assert!(started.elapsed() < Duration::from_millis(70));
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker.clone(),
         key.clone().into(),
         LeaseTtl::new(Duration::from_millis(100)).unwrap(),
@@ -335,7 +332,7 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
     );
     let backend = RedisDistributedCache::connect(url).await.unwrap();
     let key = unique("renewal");
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker.clone(),
         key.clone().into(),
         LeaseTtl::new(Duration::from_millis(150)).unwrap(),
@@ -406,7 +403,7 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
         "old cleanup cannot delete a new token"
     );
     locker.release(&key, &newer).await.unwrap();
-    let lease = acquire_owned(
+    let lease = provider::acquire_owned(
         locker.clone(),
         key.clone().into(),
         LeaseTtl::new(Duration::from_secs(5)).unwrap(),
@@ -524,7 +521,7 @@ async fn live_acquisition_cancellation_and_deadline_clean_up_a_granted_but_unrep
             let locker = locker.clone();
             let key = key.clone();
             tokio::spawn(async move {
-                acquire_owned(
+                provider::acquire_owned(
                     locker,
                     key.into(),
                     LeaseTtl::new(Duration::from_secs(2)).unwrap(),
@@ -722,10 +719,9 @@ async fn live_bounded_push_overflow_and_malformed_wire_create_new_continuity_epo
 
 #[tokio::test]
 async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber_gap() {
-    use amalgam::{
-        Cache, EntryOptions, RecoveryConfig, advanced::ReconciliationPolicy,
-        provider::JsonSerializer,
-    };
+    use amalgam::advanced::ReconciliationPolicy;
+    use amalgam::provider::JsonSerializer;
+    use amalgam::{Cache, EntryOptions, RecoveryConfig};
     let Some(url) = fixture::redis_url() else {
         return;
     };
@@ -887,8 +883,8 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

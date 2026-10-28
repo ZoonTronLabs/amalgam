@@ -9,17 +9,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
 use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use amalgam::advanced::{AutoRecoveryService, RecoveryAction, RecoveryItem};
+use amalgam::provider::{Clock, ManualClock, RecoveryExecutor};
+use amalgam::{RecoveryConfig, Result, Timestamp};
 use async_trait::async_trait;
-
-use amalgam::{
-    RecoveryConfig, Result, Timestamp, advanced::AutoRecoveryService, advanced::RecoveryAction,
-    advanced::RecoveryItem, provider::Clock, provider::ManualClock, provider::RecoveryExecutor,
-};
 
 /// A configurable [`RecoveryExecutor`] mock.
 ///

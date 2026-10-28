@@ -7,11 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amalgam::entry::Entry;
-use amalgam::{
-    EntryOptions, EntryWeight, Events, Priority, Timestamp, provider::Clock,
-    provider::JitterSample, provider::ManualClock, provider::MemoryAdmission,
-    provider::MemoryLimits, provider::MemoryStore,
+use amalgam::provider::{
+    Clock, JitterSample, ManualClock, MemoryAdmission, MemoryLimits, MemoryStore,
 };
+use amalgam::{EntryOptions, EntryWeight, Events, Priority, Timestamp};
 
 async fn visible(store: &MemoryStore<u64>, now: Timestamp) -> HashMap<String, u64> {
     let mut values = HashMap::with_capacity(32);

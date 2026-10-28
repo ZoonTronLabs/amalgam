@@ -1,11 +1,12 @@
 //! Lazy origin requests. Input choices are separate from pinned execution.
-use super::inline_cold::Start;
-use super::observed_execution::ObservedExecution;
-use super::{Cache, CacheValue, EntryOptions, FactoryCancellation, Result, Tag};
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+use super::inline_cold::Start;
+use super::observed_execution::ObservedExecution;
+use super::{Cache, CacheValue, EntryOptions, FactoryCancellation, Result, Tag};
 
 struct Input<K, F, V> {
     key: K,

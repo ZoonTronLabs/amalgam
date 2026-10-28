@@ -21,9 +21,11 @@
 //! cargo run --example soft_timeout
 //! ```
 
+use std::future::Future;
+use std::result::Result as StdResult;
 use std::time::{Duration, Instant};
 
-use amalgam::{Cache, EntryOptions, Timeout};
+use amalgam::{Cache, EntryOptions, FactoryContext, FactoryError, Timeout};
 
 #[tokio::main]
 async fn main() {
@@ -49,9 +51,7 @@ async fn main() {
     cache
         .get_or_set(
             "feed",
-            typed_factory(|ctx| async move {
-                Ok::<_, amalgam::FactoryError>(ctx.value("v1".to_owned()))
-            }),
+            typed_factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value("v1".to_owned())) }),
         )
         .options(|_| opts.clone())
         .await
@@ -71,7 +71,7 @@ async fn main() {
                 println!("  [factory] started (will take 300ms)…");
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 println!("  [factory] finished in the background, producing \"v2\"");
-                Ok::<_, amalgam::FactoryError>(ctx.value("v2".to_owned()))
+                Ok::<_, FactoryError>(ctx.value("v2".to_owned()))
             }),
         )
         .options(|_| opts)
@@ -108,8 +108,8 @@ async fn main() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

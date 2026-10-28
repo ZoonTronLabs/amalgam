@@ -53,9 +53,11 @@ pub(crate) fn upper_bound() -> Option<Instant> {
 
 #[cfg(all(target_os = "linux", not(miri)))]
 mod linux {
-    use rustix::time::{ClockId, Timespec, clock_getres, clock_gettime};
     use std::sync::OnceLock;
     use std::time::{Duration, Instant};
+
+    use rustix::time;
+    use rustix::time::{ClockId, Timespec};
 
     const SLACK_TICKS: u32 = 8;
     const MIN_SLACK: Duration = Duration::from_secs(1);
@@ -90,7 +92,7 @@ mod linux {
             }
             let tick = tick().filter(|tick| (MIN_TICK..=MAX_TICK).contains(tick))?;
             // Coarse first: the precise reading taken after it cannot be earlier.
-            let coarse = duration(clock_gettime(ClockId::MonotonicCoarse))?;
+            let coarse = duration(time::clock_gettime(ClockId::MonotonicCoarse))?;
             Some(Self {
                 coarse,
                 precise: Instant::now(),
@@ -100,8 +102,8 @@ mod linux {
 
         #[inline]
         fn bound(&self) -> Option<Instant> {
-            let since =
-                duration(clock_gettime(ClockId::MonotonicCoarse))?.checked_sub(self.coarse)?;
+            let since = duration(time::clock_gettime(ClockId::MonotonicCoarse))?
+                .checked_sub(self.coarse)?;
             self.precise.checked_add(since.checked_add(self.slack)?)
         }
 
@@ -113,7 +115,7 @@ mod linux {
 
     /// The coarse clock's step as the kernel reports it.
     pub(super) fn tick() -> Option<Duration> {
-        duration(clock_getres(ClockId::MonotonicCoarse))
+        duration(time::clock_getres(ClockId::MonotonicCoarse))
     }
 
     /// Whether [`Anchor::probe`] accepts this tick.
@@ -140,8 +142,9 @@ mod linux {
 
 #[cfg(all(test, target_os = "linux", not(miri)))]
 mod tests {
-    use super::{linux, upper_bound};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    use super::linux;
 
     #[test]
     fn anchors_unless_cpus_run_tickless_or_the_tick_is_unusable() {
@@ -153,7 +156,7 @@ mod tests {
     #[test]
     fn slack_is_at_least_one_second() {
         if let Some(anchor) = linux::prepare() {
-            assert!(anchor.slack() >= std::time::Duration::from_secs(1));
+            assert!(anchor.slack() >= Duration::from_secs(1));
         }
     }
 
@@ -164,7 +167,7 @@ mod tests {
         }
         for _ in 0..10_000 {
             let before = Instant::now();
-            let bound = upper_bound().expect("a prepared anchor keeps producing bounds");
+            let bound = super::upper_bound().expect("a prepared anchor keeps producing bounds");
             assert!(
                 bound >= before,
                 "coarse bound fell behind the precise clock"
@@ -178,7 +181,7 @@ mod tests {
             return;
         };
         for _ in 0..1_000 {
-            let bound = upper_bound().expect("a prepared anchor keeps producing bounds");
+            let bound = super::upper_bound().expect("a prepared anchor keeps producing bounds");
             let after = Instant::now();
             // The anchor pair and the latest coarse reading each lag by at most
             // the slack, so the bound cannot run further ahead than twice it.

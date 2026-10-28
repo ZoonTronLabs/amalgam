@@ -1,12 +1,14 @@
 //! Backplane continuity, maintenance and deterministic shutdown.
+use tokio::runtime::Handle;
+
 use super::{
     Arc, BackplaneAction, BackplaneCommand, BackplaneEvent, BackplaneMessage, BackplaneReadiness,
     BackplaneState, CacheEvent, CacheInner, CancellationSource, CircuitComponent, CloseOutcome,
     Duration, Entry, Error, FallbackAvailability, Fence, Instant, LayerEvent, Lifecycle,
     MarkerReads, MemoryEvent, Ordering, ReconciliationPolicy, Result, ShutdownError,
-    ShutdownFailure, ShutdownReport, ShutdownTask, TagVerdict, Worker, broadcast, health_changed,
-    lock,
+    ShutdownFailure, ShutdownReport, ShutdownTask, TagVerdict, Worker, broadcast,
 };
+use crate::execution;
 
 impl<V: Clone + Send + Sync + 'static> Worker<V> {
     pub(super) async fn await_readiness(&self) -> Result<BackplaneReadiness> {
@@ -69,7 +71,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
             return Ok(());
         };
         let current = *health.borrow();
-        let mut seen = lock(&self.inner.health_seen);
+        let mut seen = execution::lock(&self.inner.health_seen);
         if seen.as_ref() == Some(&current) {
             return Ok(());
         }
@@ -137,9 +139,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
     }
 
     pub(super) fn start_maintenance(&self) {
-        if self.inner.maintenance.load(Ordering::Acquire)
-            || tokio::runtime::Handle::try_current().is_err()
-        {
+        if self.inner.maintenance.load(Ordering::Acquire) || Handle::try_current().is_err() {
             return;
         }
         if self
@@ -182,7 +182,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                             | ReconciliationPolicy::BackplaneBestEffort => Duration::ZERO,
                         };
                         let reconcile = {
-                            let mut last = lock(&inner.last_reconcile);
+                            let mut last = execution::lock(&inner.last_reconcile);
                             if last.elapsed() >= interval {
                                 *last = Instant::now();
                                 true
@@ -224,7 +224,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                             Err(broadcast::error::RecvError::Closed)=>{worker.continuity_gap()?;return Ok(());}
                         }
                     },
-                    ()=health_changed(&mut health)=>{
+                    ()=super::health_changed(&mut health)=>{
                         if let Some(inner)=weak.upgrade(){Worker::ordinary(inner).ensure_health()?;}else{return Ok(());}
                     }
                 }
@@ -290,7 +290,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 });
                 let lane = self.inner.lanes.get(&key);
                 let lane_guard = self.memory.guard(lane.lock().await);
-                if lock(&lane.timestamp).is_some_and(|at| at > message.timestamp) {
+                if execution::lock(&lane.timestamp).is_some_and(|at| at > message.timestamp) {
                     return Ok(());
                 }
                 let now = self.inner.clock.now();
@@ -422,7 +422,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
 impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
     pub(super) fn close(&self) -> CloseOutcome {
         let outcome = {
-            let mut lifecycle = lock(&self.lifecycle);
+            let mut lifecycle = execution::lock(&self.lifecycle);
             match &*lifecycle {
                 Lifecycle::Running => {
                     *lifecycle = Lifecycle::Closing;
@@ -448,7 +448,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
     }
     pub(super) async fn shutdown(&self) -> Result<ShutdownReport> {
         let _shutdown = self.shutdown_gate.lock().await;
-        if let Lifecycle::Closed(result) = &*lock(&self.lifecycle) {
+        if let Lifecycle::Closed(result) = &*execution::lock(&self.lifecycle) {
             return result.clone().map_err(Error::from);
         }
         self.close();
@@ -476,7 +476,7 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
                 None => unreachable!("nonempty failure collection"),
             }
         };
-        *lock(&self.lifecycle) = Lifecycle::Closed(result.clone());
+        *execution::lock(&self.lifecycle) = Lifecycle::Closed(result.clone());
         result.map_err(Error::from)
     }
 }

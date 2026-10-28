@@ -4,23 +4,25 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
 use std::error::Error as _;
+use std::io::Error as IoError;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, Weak};
 use std::time::Duration;
 
+use amalgam::advanced::PluginHost;
 use amalgam::entry::Entry;
 use amalgam::observability::OperationObservation;
-use amalgam::serializers::copy_value;
+use amalgam::provider::{
+    CapacityRejection, Clock, DistributedSerializer, JitterSample, JitterSource, JsonSerializer,
+    ManualClock, MemoryAdmission, MemoryLimits, MemoryStore, ValueCloner,
+};
 use amalgam::{
     Cache, CacheEvent, CacheLevel, CacheOperation, CacheRegistry, CloneError, ConfigError,
     EagerThreshold, EntryOptions, EntryWeight, Error, Events, FactoryCancellationReason,
     FactoryError, OperationOutcome, Plugin, PluginContext, PluginError, PluginSession, PluginStage,
-    PluginStopOutcome, Priority, RegistryError, Timestamp, advanced::PluginHost,
-    provider::CapacityRejection, provider::Clock, provider::DistributedSerializer,
-    provider::JitterSample, provider::JitterSource, provider::JsonSerializer,
-    provider::ManualClock, provider::MemoryAdmission, provider::MemoryLimits,
-    provider::MemoryStore, provider::ValueCloner,
+    PluginStopOutcome, Priority, RegistryError, Timestamp, serializers,
 };
+use tokio::runtime::Runtime;
 
 fn at(millis: u64) -> Timestamp {
     Timestamp::from_ticks(i64::try_from(millis * 10_000).unwrap())
@@ -74,7 +76,7 @@ fn same_name_registry_initializes_once_outside_runtime() {
         .collect();
     assert_eq!(builds.load(Ordering::SeqCst), 1);
     assert_eq!(registry.len(), 1);
-    tokio::runtime::Runtime::new().unwrap().block_on(async {
+    Runtime::new().unwrap().block_on(async {
         caches[0].set("shared", 42).await.unwrap();
         for cache in caches {
             assert_eq!(cache.try_get("shared").await.unwrap(), Some(42));
@@ -177,7 +179,7 @@ fn nonserde_cloner_isolates_input_and_every_read() {
     let opts = EntryOptions::default().with_enable_auto_clone(true);
     let input = Arc::new(AtomicI32::new(7));
     let cached = entry(
-        copy_value(&input, &opts, Some(&AtomicCloner)).unwrap(),
+        serializers::copy_value(&input, &opts, Some(&AtomicCloner)).unwrap(),
         &opts,
         at(0),
     );
@@ -193,10 +195,11 @@ fn nonserde_cloner_isolates_input_and_every_read() {
     assert_eq!(second.load(Ordering::SeqCst), 7);
     assert!(!Arc::ptr_eq(cached.value(), &first));
     assert!(matches!(
-        copy_value(&input, &opts, None),
+        serializers::copy_value(&input, &opts, None),
         Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
     ));
-    let legacy = copy_value(&input, &opts.with_enable_auto_clone(false), None).unwrap();
+    let legacy =
+        serializers::copy_value(&input, &opts.with_enable_auto_clone(false), None).unwrap();
     assert!(Arc::ptr_eq(&input, &legacy));
 }
 
@@ -206,18 +209,16 @@ fn copy_failures_preserve_source_and_invalid_options_skip_external_copy() {
     impl ValueCloner<i32> for Failing {
         fn clone_value(&self, _value: &i32) -> Result<i32, CloneError> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Err(CloneError::from_source(std::io::Error::other(
-                "copy graph failed",
-            )))
+            Err(CloneError::from_source(IoError::other("copy graph failed")))
         }
     }
     let cloner = Failing(AtomicUsize::new(0));
     let opts = EntryOptions::default().with_enable_auto_clone(true);
-    let error = copy_value(&1, &opts, Some(&cloner)).unwrap_err();
+    let error = serializers::copy_value(&1, &opts, Some(&cloner)).unwrap_err();
     assert!(matches!(error, Error::Clone(CloneError::Custom { .. })));
     assert_eq!(error.source().unwrap().to_string(), "copy graph failed");
     assert!(matches!(
-        copy_value(&1, &opts.with_size(-1), Some(&cloner)),
+        serializers::copy_value(&1, &opts.with_size(-1), Some(&cloner)),
         Err(Error::Config(ConfigError::NegativeEntryWeight { size: -1 }))
     ));
     assert_eq!(cloner.0.load(Ordering::SeqCst), 1);
@@ -266,7 +267,7 @@ fn postcard_codec_supplies_real_isolation() {
 
 #[test]
 fn factory_failure_and_cancellation_keep_distinct_typed_sources() {
-    let error: Error = FactoryError::from_source(std::io::Error::other("io cause")).into();
+    let error: Error = FactoryError::from_source(IoError::other("io cause")).into();
     assert_eq!(
         error.source().unwrap().source().unwrap().to_string(),
         "io cause"
@@ -758,7 +759,7 @@ impl Plugin for SessionPlugin {
             return Err(PluginError::from_source(
                 self.name(),
                 PluginStage::Start,
-                std::io::Error::other("attachment failed"),
+                IoError::other("attachment failed"),
             ));
         }
         Ok(Some(Box::new(ProbeSession {
@@ -784,7 +785,7 @@ impl PluginSession for ProbeSession {
             return Err(PluginError::from_source(
                 "session-probe",
                 PluginStage::Event,
-                std::io::Error::other("event failure"),
+                IoError::other("event failure"),
             ));
         }
         self.counts
@@ -1087,7 +1088,7 @@ fn retained_eviction_callbacks_and_value_destructors_reenter_after_unlock() {
                 self.drops.fetch_add(1, Ordering::SeqCst);
             }
         }
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
+        Runtime::new().unwrap().block_on(async {
             let clock = Arc::new(ManualClock::new(at(1_000)));
             let events = Events::default();
             let weak = Arc::new(Mutex::new(Weak::new()));
@@ -1260,7 +1261,7 @@ async fn owning_shutdown_waits_detached_draining_callbacks_and_retains_failures(
             Err(PluginError::from_source(
                 "blocking",
                 PluginStage::Stop,
-                std::io::Error::other("teardown source"),
+                IoError::other("teardown source"),
             ))
         }
     }
@@ -1305,7 +1306,7 @@ fn cloned_shutdown_report_keeps_the_same_nonempty_failure_sources() {
         amalgam::advanced::ShutdownFailure::Plugin(PluginError::from_source(
             "shutdown",
             PluginStage::Stop,
-            std::io::Error::other("retained source"),
+            IoError::other("retained source"),
         )),
         [],
     );
@@ -1370,9 +1371,7 @@ async fn configured_jitter_is_invoked_and_validated_even_with_zero_maximum() {
         let cold = cache
             .get_or_set(
                 "cold",
-                amalgam::source::factory(|ctx| async move {
-                    Ok::<_, amalgam::FactoryError>(ctx.value(2))
-                }),
+                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) }),
             )
             .await;
         if valid {

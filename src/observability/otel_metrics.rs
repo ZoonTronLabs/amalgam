@@ -1,11 +1,12 @@
 //! Native OpenTelemetry instruments. The application owns its meter provider.
-
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::sync::{Arc, OnceLock};
 
 use opentelemetry::metrics::{Counter, Histogram, Meter, MeterProvider};
 use opentelemetry::{InstrumentationScope, KeyValue};
 
-use super::labels::{CacheLabelBudget, process_budget};
+use super::labels;
+use super::labels::CacheLabelBudget;
 use crate::events::{
     BackplaneEvent, CacheEvent, CacheOperation, ComponentRead, DistributedEvent, LayerEvent,
     MemoryEvent,
@@ -106,7 +107,7 @@ impl OtelMetricsPlugin {
     pub fn with_meters(meters: OtelMetricMeters) -> Self {
         Self {
             meters,
-            budget: process_budget(),
+            budget: labels::process_budget(),
             tags: MetricTags::Exclude,
             legacy: OnceLock::new(),
         }
@@ -130,8 +131,8 @@ impl OtelMetricsPlugin {
         self.legacy.get_or_init(|| self.session("amalgam"))
     }
 }
-impl std::fmt::Debug for OtelMetricsPlugin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for OtelMetricsPlugin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("OtelMetricsPlugin")
             .field("meters", &self.meters)
             .field("tags", &self.tags)

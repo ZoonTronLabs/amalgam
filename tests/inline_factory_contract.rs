@@ -1,15 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::{
-    Cache, Error, FactoryCancellation, FactoryCancellationReason, FactoryContext, FactoryError,
-    advanced::MutationReceipt,
-};
 use std::future::{Future, IntoFuture};
+use std::io::{Error as IoError, ErrorKind};
 use std::pin::Pin;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::advanced::MutationReceipt;
+use amalgam::{
+    Cache, Error, FactoryCancellation, FactoryCancellationReason, FactoryContext, FactoryError,
+};
 
 fn once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
     future.poll(&mut Context::from_waker(Waker::noop()))
@@ -32,7 +35,7 @@ fn ready_factory_and_receipt_finish_without_a_runtime() {
                 "ready",
                 typed_factory(move |context| async move {
                     *saved.lock().unwrap() = Some(context.cancellation().clone());
-                    Ok::<_, amalgam::FactoryError>(context.value(7))
+                    Ok::<_, FactoryError>(context.value(7))
                 }),
             )
             .fail_safe_default(None)
@@ -156,8 +159,8 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
                 typed_factory(move |_| async move {
                     count.fetch_add(1, Ordering::SeqCst);
                     released.await.unwrap();
-                    Err(FactoryError::from_source(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
+                    Err(FactoryError::from_source(IoError::new(
+                        ErrorKind::PermissionDenied,
                         "source refused",
                     )))
                 }),
@@ -199,9 +202,9 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
         };
         let cause = std::error::Error::source(&source)
             .unwrap()
-            .downcast_ref::<std::io::Error>()
+            .downcast_ref::<IoError>()
             .unwrap();
-        assert_eq!(cause.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(cause.kind(), ErrorKind::PermissionDenied);
     }
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     cache.shutdown().await.unwrap();
@@ -275,7 +278,7 @@ fn a_retained_factory_token_does_not_pin_a_completed_value() {
         "drop",
         typed_factory(move |context| async move {
             *saved.lock().unwrap() = Some(context.cancellation().clone());
-            Ok::<_, amalgam::FactoryError>(context.value(Arc::new(Tracked(destroyed))))
+            Ok::<_, FactoryError>(context.value(Arc::new(Tracked(destroyed))))
         }),
     ))
     .unwrap();
@@ -302,7 +305,7 @@ async fn disabling_fail_safe_preserves_an_existing_conditional_snapshot() {
         .get_or_set(
             "conditional",
             typed_factory(|ctx| async {
-                Ok::<_, amalgam::FactoryError>(ctx.modified(7).etag("saved").done())
+                Ok::<_, FactoryError>(ctx.modified(7).etag("saved").done())
             }),
         )
         .options(|_| retained)
@@ -327,8 +330,8 @@ async fn disabling_fail_safe_preserves_an_existing_conditional_snapshot() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

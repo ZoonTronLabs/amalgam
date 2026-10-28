@@ -1,13 +1,14 @@
 //! Actual typed observation storage and qualified authority namespaces.
-use super::{Entry, MarkerKind, MarkerObservation};
-use crate::memory::{CacheMemory, MemoryInvalidation};
-use crate::{
-    Error, Events, Result, Timestamp, advanced::EvictionCapture, provider::Clock,
-    provider::MemoryAdmission, provider::MemoryExpiry, provider::MemoryLimits,
-    provider::MemoryNamespace, provider::MemoryStorage, provider::MemoryStorageError,
-    provider::MemoryUsage,
-};
 use std::sync::Arc;
+
+use super::{Entry, MarkerKind, MarkerObservation};
+use crate::advanced::EvictionCapture;
+use crate::memory::{CacheMemory, MemoryInvalidation};
+use crate::provider::{
+    Clock, MemoryAdmission, MemoryExpiry, MemoryLimits, MemoryNamespace, MemoryStorage,
+    MemoryStorageError, MemoryUsage,
+};
+use crate::{Error, Events, Result, Timestamp};
 
 pub(crate) enum MarkerMemoryNamespace {
     Local(Arc<str>),

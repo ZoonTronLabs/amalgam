@@ -1,12 +1,14 @@
 //! Native origin inputs retain the caller-thread factory path.
+use std::future;
+use std::future::Future;
+
 use super::{BlockingCache, BlockingCacheValue};
+use crate::advanced::CacheValue;
 use crate::cache::inline_cold::Start;
 use crate::cache::origin::{CacheOrigin, OriginKind};
 use crate::{
     EntryOptions, FactoryCancellation, FactoryContext, FactoryError, FactoryProduct, Result, Tag,
-    advanced::CacheValue,
 };
-use std::future::{Future, ready};
 
 #[doc(hidden)]
 pub trait NativeOrigin<V>: Send + 'static {
@@ -55,7 +57,7 @@ where
     ) -> impl Future<Output = std::result::Result<FactoryProduct<V>, FactoryError>> + Send + 'static
     {
         let completion = context.completion();
-        ready(NativeOrigin::invoke(self.0, context).map(|value| completion.complete(value)))
+        future::ready(NativeOrigin::invoke(self.0, context).map(|value| completion.complete(value)))
     }
 }
 struct Input<K, S, V> {

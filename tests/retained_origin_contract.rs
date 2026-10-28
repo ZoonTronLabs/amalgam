@@ -1,17 +1,25 @@
 //! Ownership contracts across the builtin and general factory paths.
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::advanced::*;
-use amalgam::provider::*;
-use amalgam::*;
 use std::cell::RefCell;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomPinned;
 use std::pin::Pin;
+use std::result::Result as StdResult;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
+
+use amalgam::advanced::{ShutdownFailure, ShutdownTask};
+use amalgam::provider::{
+    Clock, DistributedBytes, DistributedCache, InMemoryDistributedCache, InMemoryDistributedLocker,
+    InProcessBackplane, JsonSerializer, SystemClock,
+};
+use amalgam::{
+    Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason, FactoryContext,
+    FactoryError, RecoveryConfig, Result,
+};
 
 fn once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
     future.poll(&mut Context::from_waker(Waker::noop()))
@@ -34,7 +42,7 @@ struct PinnedOrigin {
     _pin: PhantomPinned,
 }
 impl Future for PinnedOrigin {
-    type Output = std::result::Result<u64, FactoryError>;
+    type Output = StdResult<u64, FactoryError>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_ref().get_ref();
         let address = this as *const Self as usize;
@@ -171,7 +179,7 @@ fn panic_is_preserved_for_the_leader_and_typed_for_waiters_across_option_paths()
             cache
                 .get_or_set::<_, _>(
                     "panic",
-                    typed_factory(|ctx| async { Ok::<_, amalgam::FactoryError>(ctx.value(7)) }),
+                    typed_factory(|ctx| async { Ok::<_, FactoryError>(ctx.value(7)) }),
                 )
                 .into_future(),
         );
@@ -234,7 +242,7 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
                     *saved.lock().unwrap() = Some(ctx.cancellation().clone());
                     released.acquire().await.unwrap().forget();
                     ctx.cancellation().check().unwrap();
-                    Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                    Ok::<_, FactoryError>(ctx.value(9))
                 }),
             )
             .into_future(),
@@ -312,7 +320,7 @@ async fn explicit_cancellation_still_releases_a_general_factory_without_failsafe
                     let _guard = guard;
                     count.fetch_add(1, Ordering::SeqCst);
                     std::future::pending::<()>().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                    Ok::<_, FactoryError>(ctx.value(9))
                 }),
             )
             .fail_safe_default(Some(99))
@@ -332,7 +340,7 @@ async fn explicit_cancellation_still_releases_a_general_factory_without_failsafe
         cache
             .get_or_set::<_, _>(
                 "explicit",
-                typed_factory(|ctx| async { Ok::<_, amalgam::FactoryError>(ctx.value(7)) })
+                typed_factory(|ctx| async { Ok::<_, FactoryError>(ctx.value(7)) })
             )
             .await
             .unwrap(),
@@ -347,7 +355,7 @@ struct ParkFirstRead {
 }
 #[async_trait::async_trait]
 impl DistributedCache for ParkFirstRead {
-    async fn get(&self, _: &str) -> Result<Option<amalgam::provider::DistributedBytes>> {
+    async fn get(&self, _: &str) -> Result<Option<DistributedBytes>> {
         if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
             std::future::poll_fn(|cx| {
                 if self.ready.load(Ordering::SeqCst) {
@@ -474,7 +482,7 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
                     *saved.lock().unwrap() = Some(ctx.cancellation().clone());
                     count.fetch_add(1, Ordering::SeqCst);
                     std::future::pending::<()>().await;
-                    Ok::<_, amalgam::FactoryError>(ctx.value(9))
+                    Ok::<_, FactoryError>(ctx.value(9))
                 }),
             )
             .cancellation(source.token())
@@ -495,7 +503,7 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
         cache
             .get_or_set::<_, _>(
                 "detached-explicit",
-                typed_factory(|ctx| async { Ok::<_, amalgam::FactoryError>(ctx.value(7)) })
+                typed_factory(|ctx| async { Ok::<_, FactoryError>(ctx.value(7)) })
             )
             .await
             .unwrap(),
@@ -539,8 +547,8 @@ async fn a_retained_background_panic_preserves_the_supervised_shutdown_cause() {
 
 fn typed_factory<V, F, Fut>(factory: F) -> F
 where
-    F: FnOnce(amalgam::FactoryContext<V>) -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<V, amalgam::FactoryError>>,
+    F: FnOnce(FactoryContext<V>) -> Fut,
+    Fut: Future<Output = StdResult<V, FactoryError>>,
 {
     factory
 }

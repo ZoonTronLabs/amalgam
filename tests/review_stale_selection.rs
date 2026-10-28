@@ -1,9 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
-use amalgam::provider::*;
-use amalgam::*;
 use std::sync::Arc;
 use std::time::Duration;
+
+use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock};
+use amalgam::{Cache, CacheEvent, CacheLevel, EntryOptions, RecoveryConfig};
 
 #[derive(Clone, Copy)]
 enum NewerSource {

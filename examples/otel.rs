@@ -16,7 +16,7 @@
 
 #[cfg(feature = "opentelemetry")]
 mod demo {
-    use amalgam::Cache;
+    use amalgam::{Cache, FactoryError};
 
     const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:4317";
 
@@ -37,7 +37,7 @@ mod demo {
                 "greeting",
                 amalgam::source::factory(|ctx| async move {
                     println!("  factory ran (cache miss)");
-                    Ok::<_, amalgam::FactoryError>(
+                    Ok::<_, FactoryError>(
                         ctx.value("hello from an OpenTelemetry-traced amalgam".to_owned()),
                     )
                 }),
@@ -50,7 +50,7 @@ mod demo {
                 "greeting",
                 amalgam::source::factory(|ctx| async move {
                     println!("  (should NOT print — served from cache)");
-                    Ok::<_, amalgam::FactoryError>(ctx.value("unused".to_owned()))
+                    Ok::<_, FactoryError>(ctx.value("unused".to_owned()))
                 }),
             )
             .await?;

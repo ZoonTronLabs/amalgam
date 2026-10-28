@@ -1,9 +1,10 @@
 //! Only a retained representation or a new slot constructs the full envelope.
 use super::{
     Arc, CapacityRejection, MemoryAdmission, Ordering, RandomState, RawEntryMut, Reason, Shard,
-    Sharded, Stored, entry_weight, write,
+    Sharded, Stored,
 };
 use crate::entry::{PlainMetadata, PlainReplacement};
+use crate::memory;
 
 impl<V: Clone> Sharded<V> {
     pub(in crate::memory) fn insert_plain(
@@ -21,7 +22,7 @@ impl<V: Clone> Sharded<V> {
             self.expiry,
         );
         let (hash, shard) = self.route(key);
-        let mut state = write(shard);
+        let mut state = super::write(shard);
         let generation = self.generation.load(Ordering::Acquire);
         if generation == u64::MAX {
             return super::super::RetentionCommit::rejected(
@@ -76,7 +77,7 @@ fn commit_slot<V>(
         }
         RawEntryMut::Occupied(mut slot) => {
             let previous = slot.get();
-            let weight = entry_weight(&previous.entry);
+            let weight = memory::entry_weight(&previous.entry);
             let replacing = previous.generation == generation;
             let reason = if replacing {
                 Reason::Replaced

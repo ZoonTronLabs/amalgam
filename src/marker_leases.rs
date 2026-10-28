@@ -1,10 +1,10 @@
 //! Closed ownership states for a secondary marker refresh.
+use std::sync::Arc;
 
-use crate::backplane::encode_hex;
+use crate::backplane;
 use crate::distributed_lock::{DistributedLease, LeaseError, LeaseProof, LeaseState};
 use crate::marker_reads::MarkerObservations;
 use crate::tags::{CacheScope, MarkerKind};
-use std::sync::Arc;
 
 /// A control lease identity cannot alias an ordinary value's lock identity.
 pub(crate) struct MarkerLeaseKey(Arc<str>);
@@ -13,8 +13,8 @@ impl MarkerLeaseKey {
     pub(crate) fn new(scope: &CacheScope, kind: &MarkerKind) -> Self {
         Self(Arc::from(format!(
             "\x1famalgam/v2/marker-locks/{}/{}",
-            encode_hex(scope.storage_id().as_bytes()),
-            encode_hex(MarkerObservations::key(kind).as_bytes()),
+            backplane::encode_hex(scope.storage_id().as_bytes()),
+            backplane::encode_hex(MarkerObservations::key(kind).as_bytes()),
         )))
     }
 
