@@ -151,7 +151,7 @@ impl BackplaneCommand {
                     MarkerKind::ClearRemove => WireMarker::ClearRemove,
                 };
                 let timestamp = command.marker().version().timestamp();
-                let source_id = encode_source(&SourceFrame::Marker {
+                let source_id: Arc<str> = encode_source(&SourceFrame::Marker {
                     source: command.source_id().into(),
                     prefix: scope.prefix().into(),
                     version: scope.wire_version().into(),

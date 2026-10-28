@@ -1,4 +1,5 @@
 //! A ready lookup borrows state unless startup or health can retire values.
+use crate::marker_reads::ClearShortcut;
 use tokio::runtime::Handle;
 
 use super::{
@@ -189,14 +190,14 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         }
         let options = &self.tags_default_options;
         let epoch = self.epoch.load(Ordering::Acquire);
+        let clear_shortcut = if self.marker_clear_shortcut() {
+            ClearShortcut::Allow
+        } else {
+            ClearShortcut::Bypass
+        };
         for kind in Worker::<V>::secondary_marker_kinds(entry.meta().tags()) {
-            let Some(probe) = observations.ready_value(
-                &kind,
-                options,
-                now,
-                epoch,
-                self.marker_clear_shortcut(),
-            )?
+            let Some(probe) =
+                observations.ready_value(&kind, options, now, epoch, clear_shortcut)?
             else {
                 return Ok(false);
             };
@@ -227,9 +228,13 @@ impl<V: Clone + Send + Sync + 'static> CacheInner<V> {
         }
         let epoch = self.epoch.load(Ordering::Acquire);
         for kind in Worker::<V>::secondary_marker_kinds(tags) {
-            if let Some(probe) =
-                observations.ready_value(&kind, &self.tags_default_options, now, epoch, false)?
-            {
+            if let Some(probe) = observations.ready_value(
+                &kind,
+                &self.tags_default_options,
+                now,
+                epoch,
+                ClearShortcut::Bypass,
+            )? {
                 self.marker_event(&kind, probe.outcome());
             }
         }

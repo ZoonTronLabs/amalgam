@@ -98,7 +98,7 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
         if rethrow {
             return Err(error.into());
         }
-        let cause = error.into();
+        let cause: Error = error.into();
         Ok(if queued {
             EffectOutcome::RecoveryQueued { cause }
         } else {
@@ -529,7 +529,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 snapshot,
                 additional,
             } => {
-                for command in std::iter::once(work.command()).chain(additional.iter()) {
+                let commands = std::iter::once(work.command()).chain(additional.iter());
+                for command in commands {
                     cancellation.check()?;
                     if !recovery.is_current(ticket) {
                         return Ok(crate::advanced::ReplayOutcome::Superseded);
@@ -559,7 +560,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 additional
             }
         };
-        for command in std::iter::once(work.command()).chain(additional.iter()) {
+        let commands = std::iter::once(work.command()).chain(additional.iter());
+        for command in commands {
             cancellation.check()?;
             if !recovery.is_current(ticket) {
                 return Ok(crate::advanced::ReplayOutcome::Superseded);

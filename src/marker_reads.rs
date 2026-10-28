@@ -136,6 +136,13 @@ impl MarkerObservation {
     }
 }
 
+/// Whether readiness may reuse an initialized clear observation for this epoch.
+#[derive(Clone, Copy)]
+pub(crate) enum ClearShortcut {
+    Allow,
+    Bypass,
+}
+
 pub(crate) enum MarkerReady {
     Cached(MarkerObservation),
     Shortcut(MarkerReadOutcome),
@@ -302,9 +309,13 @@ impl MarkerObservations {
         options: &EntryOptions,
         now: Timestamp,
         epoch: u64,
-        clear_shortcut: bool,
+        clear_shortcut: ClearShortcut,
     ) -> Result<Option<MarkerReady>> {
-        if clear_shortcut && let Some(outcome) = self.clear_status(kind, epoch) {
+        let clear_status = match clear_shortcut {
+            ClearShortcut::Allow => self.clear_status(kind, epoch),
+            ClearShortcut::Bypass => None,
+        };
+        if let Some(outcome) = clear_status {
             return Ok(Some(MarkerReady::Shortcut(outcome)));
         }
         let cached = if options.skip_memory_read() {

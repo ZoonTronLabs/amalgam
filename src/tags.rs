@@ -94,15 +94,14 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    tags.into_iter()
-        .filter_map(|tag| match Tag::new(tag) {
-            Ok(tag) => Some(tag),
-            Err(error) => {
-                tracing::warn!(%error, "legacy raw tag was rejected");
-                None
-            }
-        })
-        .collect()
+    let mut collected = Vec::new();
+    for tag in tags {
+        match Tag::new(tag) {
+            Ok(tag) => collected.push(tag),
+            Err(error) => tracing::warn!(%error, "legacy raw tag was rejected"),
+        }
+    }
+    collected.into_boxed_slice()
 }
 
 /// Failures in the invalidation protocol, separate from ordinary value I/O.

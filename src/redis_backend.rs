@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection};
-use redis::{Client, Msg, ProtocolVersion, PushInfo, PushKind};
+use redis::{Client, ConnectionInfo, Msg, ProtocolVersion, PushInfo, PushKind};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
@@ -129,7 +129,8 @@ fn backplane_err(error: impl std::error::Error + Send + Sync + 'static) -> Error
     Error::backplane(error)
 }
 fn open_client(connection: impl Into<String>) -> Result<Client> {
-    Client::open(connection.into()).map_err(distributed_err)
+    let connection: String = connection.into();
+    Client::open(connection).map_err(distributed_err)
 }
 
 /// Positive native connection/request budgets, independent of the injected domain clock.
@@ -1066,15 +1067,15 @@ impl RedisBackplane {
         capacity: usize,
         io: RedisIoOptions,
     ) -> Result<Self> {
-        let channel = channel.into();
-        let name = name.into();
+        let channel: String = channel.into();
+        let name: String = name.into();
         if channel.trim().is_empty() || name.trim().is_empty() || capacity == 0 {
             return Err(Error::Backplane(
                 "channel/name must be nonblank and push capacity positive".into(),
             ));
         }
-        let connection = connection.into();
-        let publish_client = Client::open(connection.clone()).map_err(backplane_err)?;
+        let connection: String = connection.into();
+        let publish_client = Client::open(connection.as_str()).map_err(backplane_err)?;
         let manager = connect_manager(&publish_client, io, ConnectionRole::Backplane).await?;
         let mut publisher = manager.clone();
         redis::cmd("CLIENT")
@@ -1083,9 +1084,7 @@ impl RedisBackplane {
             .query_async::<()>(&mut publisher)
             .await
             .map_err(backplane_err)?;
-        let info = connection
-            .parse::<redis::ConnectionInfo>()
-            .map_err(backplane_err)?;
+        let info: ConnectionInfo = connection.parse().map_err(backplane_err)?;
         let settings = info
             .redis_settings()
             .clone()
@@ -1609,11 +1608,11 @@ fn decode_legacy(text: &str) -> std::result::Result<BackplaneMessage, IncomingFr
     let source = fields
         .next()
         .ok_or(IncomingFrameError::Missing(LegacyField::Source))?;
-    let ticks = fields
+    let ticks: i64 = fields
         .next()
         .ok_or(IncomingFrameError::Missing(LegacyField::Timestamp))?
         .parse()?;
-    let action = fields
+    let action: u8 = fields
         .next()
         .ok_or(IncomingFrameError::Missing(LegacyField::Action))?
         .parse()?;
