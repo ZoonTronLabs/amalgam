@@ -45,26 +45,39 @@ async fn provider_gets_each_caches_defaults_and_raw_key_without_capturing_a_stal
     first.set("short", 2).with_receipt().await.unwrap();
     second.set("ordinary", 3).with_receipt().await.unwrap();
     clock.advance(Duration::from_secs(2));
-    assert!(first.try_get("short").await.unwrap().is_none());
+    assert!(
+        first.try_get("short").await.unwrap().is_none(),
+        "contract: provider gets each caches defaults and raw key without capturing a stale baseline"
+    );
     clock.advance(Duration::from_secs(9));
-    assert!(first.try_get("ordinary").await.unwrap().is_none());
-    assert_eq!(second.try_get("ordinary").await.unwrap().as_ref(), Some(&3));
+    assert!(
+        first.try_get("ordinary").await.unwrap().is_none(),
+        "contract: provider gets each caches defaults and raw key without capturing a stale baseline"
+    );
+    assert_eq!(
+        second.try_get("ordinary").await.unwrap().as_ref(),
+        Some(&3),
+        "contract: provider gets each caches defaults and raw key without capturing a stale baseline"
+    );
     {
         let observations = provider.0.lock().unwrap();
         assert!(
             observations
                 .iter()
-                .any(|(key, ttl)| key == "ordinary" && *ttl == Duration::from_secs(10))
+                .any(|(key, ttl)| key == "ordinary" && *ttl == Duration::from_secs(10)),
+            "contract: provider gets each caches defaults and raw key without capturing a stale baseline"
         );
         assert!(
             observations
                 .iter()
-                .any(|(key, ttl)| key == "ordinary" && *ttl == Duration::from_secs(30))
+                .any(|(key, ttl)| key == "ordinary" && *ttl == Duration::from_secs(30)),
+            "contract: provider gets each caches defaults and raw key without capturing a stale baseline"
         );
         assert!(
             observations
                 .iter()
-                .all(|(key, _)| !key.starts_with("tenant:"))
+                .all(|(key, _)| !key.starts_with("tenant:")),
+            "contract: provider gets each caches defaults and raw key without capturing a stale baseline"
         );
     }
     first.shutdown().await.unwrap();
@@ -91,9 +104,13 @@ async fn explicit_options_bypass_both_provider_hooks_and_legacy_providers_still_
             .await
             .unwrap()
             .as_ref(),
-        Some(&7)
+        Some(&7),
+        "contract: explicit options bypass both provider hooks and legacy providers still work"
     );
-    assert!(provider.0.lock().unwrap().is_empty());
+    assert!(
+        provider.0.lock().unwrap().is_empty(),
+        "contract: explicit options bypass both provider hooks and legacy providers still work"
+    );
     cache.shutdown().await.unwrap();
     struct LegacyProvider;
     impl DefaultEntryOptionsProvider for LegacyProvider {
@@ -106,6 +123,9 @@ async fn explicit_options_bypass_both_provider_hooks_and_legacy_providers_still_
         .try_build()
         .unwrap();
     cache.set("key", 7).with_receipt().await.unwrap();
-    assert!(cache.try_get("key").await.unwrap().is_none());
+    assert!(
+        cache.try_get("key").await.unwrap().is_none(),
+        "contract: explicit options bypass both provider hooks and legacy providers still work"
+    );
     cache.shutdown().await.unwrap();
 }

@@ -972,11 +972,25 @@ mod tests {
         let e = Entry::fresh(7i32, &opts(), created, Box::from([]), None, None);
         let before = created.saturating_add(Duration::from_secs(5));
         let after = created.saturating_add(Duration::from_secs(15));
-        assert_eq!(e.freshness(before), Freshness::Fresh);
-        assert_eq!(e.freshness(after), Freshness::Stale);
+        assert_eq!(
+            e.freshness(before),
+            Freshness::Fresh,
+            "contract: fresh entry is fresh then stale"
+        );
+        assert_eq!(
+            e.freshness(after),
+            Freshness::Stale,
+            "contract: fresh entry is fresh then stale"
+        );
         // physical boundary = max(10, 100) = 100s
-        assert!(!e.is_physically_expired(after));
-        assert!(e.is_physically_expired(created.saturating_add(Duration::from_secs(101))));
+        assert!(
+            !e.is_physically_expired(after),
+            "contract: fresh entry is fresh then stale"
+        );
+        assert!(
+            e.is_physically_expired(created.saturating_add(Duration::from_secs(101))),
+            "contract: fresh entry is fresh then stale"
+        );
     }
 
     #[test]
@@ -985,15 +999,20 @@ mod tests {
         let e = Entry::fresh(7i32, &opts(), created, Box::from([]), None, None);
         let now = created.saturating_add(Duration::from_secs(20)); // stale, still physical
         let t = Entry::throttled(&e, &opts(), now).expect("still physically alive");
-        assert!(t.meta().is_from_fail_safe());
+        assert!(
+            t.meta().is_from_fail_safe(),
+            "contract: throttled keeps physical boundary and resets logical"
+        );
         // logical = now + throttle(5s); fresh again for 5s.
         assert_eq!(
             t.freshness(now.saturating_add(Duration::from_secs(2))),
-            Freshness::Fresh
+            Freshness::Fresh,
+            "contract: throttled keeps physical boundary and resets logical"
         );
         assert_eq!(
             t.freshness(now.saturating_add(Duration::from_secs(6))),
-            Freshness::Stale
+            Freshness::Stale,
+            "contract: throttled keeps physical boundary and resets logical"
         );
     }
 
@@ -1002,6 +1021,9 @@ mod tests {
         let created = Timestamp::from_ticks(0);
         let e = Entry::fresh(7i32, &opts(), created, Box::from([]), None, None);
         let now = created.saturating_add(Duration::from_secs(200));
-        assert!(Entry::throttled(&e, &opts(), now).is_none());
+        assert!(
+            Entry::throttled(&e, &opts(), now).is_none(),
+            "contract: throttled none when physically dead"
+        );
     }
 }

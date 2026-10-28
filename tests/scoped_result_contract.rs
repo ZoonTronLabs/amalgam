@@ -122,7 +122,8 @@ fn assert_drained(probe: &Probe) {
     }
     assert_eq!(
         *probe.outcomes.lock().unwrap(),
-        vec![DrainOutcome::Complete]
+        vec![DrainOutcome::Complete],
+        "contract: assert drained"
     );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,13 +137,14 @@ async fn value_only_owned_completion_retires_original_causes_after_scope_admissi
             )
             .await
             .unwrap(),
-        17
+        17,
+        "contract: value only owned completion retires original causes after scope admission"
     );
     assert_drained(&probe);
-    assert!(matches!(
-        cache.try_get("scoped").await,
-        Err(Error::CacheClosed)
-    ));
+    assert!(
+        matches!(cache.try_get("scoped").await, Err(Error::CacheClosed)),
+        "contract: value only owned completion retires original causes after scope admission"
+    );
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requested_receipt_retains_original_causes_until_the_caller_retires_it() {
@@ -155,8 +157,14 @@ async fn requested_receipt_retains_original_causes_until_the_caller_retires_it()
         .with_receipt()
         .await
         .unwrap();
-    assert_eq!(result.value, 17);
-    assert!(probe.outcomes.lock().unwrap().is_empty());
+    assert_eq!(
+        result.value, 17,
+        "contract: requested receipt retains original causes until the caller retires it"
+    );
+    assert!(
+        probe.outcomes.lock().unwrap().is_empty(),
+        "contract: requested receipt retains original causes until the caller retires it"
+    );
     match result.commit {
         CommitReceipt::Mutation(MutationReceipt::Completed(report)) => std::mem::drop(report),
         CommitReceipt::Mutation(MutationReceipt::Scheduled(_)) | CommitReceipt::Unchanged => {
@@ -164,10 +172,10 @@ async fn requested_receipt_retains_original_causes_until_the_caller_retires_it()
         }
     }
     assert_drained(&probe);
-    assert!(matches!(
-        cache.try_get("scoped").await,
-        Err(Error::CacheClosed)
-    ));
+    assert!(
+        matches!(cache.try_get("scoped").await, Err(Error::CacheClosed)),
+        "contract: requested receipt retains original causes until the caller retires it"
+    );
 }
 
 struct PendingWrite {
@@ -231,13 +239,21 @@ async fn value_only_completion_retains_a_genuinely_pending_scheduled_l2_write() 
             )
             .await
             .unwrap(),
-        61
+        61,
+        "contract: value only completion retains a genuinely pending scheduled l2 write"
     );
     tokio::time::timeout(Duration::from_secs(2), started.notified())
         .await
         .expect("the background L2 write must start");
-    assert!(inner.get("pending").await.unwrap().is_none());
-    assert_eq!(cache.try_get("pending").await.unwrap(), Some(61));
+    assert!(
+        inner.get("pending").await.unwrap().is_none(),
+        "contract: value only completion retains a genuinely pending scheduled l2 write"
+    );
+    assert_eq!(
+        cache.try_get("pending").await.unwrap(),
+        Some(61),
+        "contract: value only completion retains a genuinely pending scheduled l2 write"
+    );
     release.0.add_permits(1);
     cache.flush_pending().await.unwrap();
     let peer = Cache::<u64>::builder()
@@ -245,7 +261,11 @@ async fn value_only_completion_retains_a_genuinely_pending_scheduled_l2_write() 
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    assert_eq!(peer.try_get("pending").await.unwrap(), Some(61));
+    assert_eq!(
+        peer.try_get("pending").await.unwrap(),
+        Some(61),
+        "contract: value only completion retains a genuinely pending scheduled l2 write"
+    );
     cache.shutdown().await.unwrap();
     peer.shutdown().await.unwrap();
 }

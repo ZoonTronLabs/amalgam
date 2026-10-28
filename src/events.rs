@@ -859,12 +859,18 @@ mod layer_tests {
     fn layer_payloads_are_lazy_and_late_subscription_sees_only_new_facts() {
         let hub = Events::default();
         hub.emit_layer_lazy(|| panic!("no receiver must not build a payload"));
-        assert!(hub.inner.layers.get().is_none());
+        assert!(
+            hub.inner.layers.get().is_none(),
+            "contract: layer payloads are lazy and late subscription sees only new facts"
+        );
         let mut receiver = hub.subscribe_layers();
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(broadcast::error::TryRecvError::Empty)
-        ));
+        assert!(
+            matches!(
+                receiver.try_recv(),
+                Err(broadcast::error::TryRecvError::Empty)
+            ),
+            "contract: layer payloads are lazy and late subscription sees only new facts"
+        );
         hub.emit_layer_lazy(|| {
             LayerEvent::Memory(MemoryEvent::Miss {
                 key: Arc::from("after"),
@@ -874,7 +880,8 @@ mod layer_tests {
             receiver.try_recv().unwrap(),
             LayerEvent::Memory(MemoryEvent::Miss {
                 key: Arc::from("after")
-            })
+            }),
+            "contract: layer payloads are lazy and late subscription sees only new facts"
         );
         std::mem::drop(receiver);
         hub.emit_layer_lazy(|| panic!("last receiver dropped must not build a payload"));

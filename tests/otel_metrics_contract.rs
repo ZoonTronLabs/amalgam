@@ -69,7 +69,11 @@ impl PushMetricExporter for Capture {
                         }
                     }
                     AggregatedMetrics::F64(MetricData::Histogram(histogram)) => {
-                        assert_eq!(metric.unit(), "s");
+                        assert_eq!(
+                            metric.unit(),
+                            "s",
+                            "contract: exported cache duration histograms use seconds"
+                        );
                         for point in histogram.data_points() {
                             points.push(Point {
                                 scope: scope.scope().name().to_owned(),
@@ -175,25 +179,54 @@ async fn native_sdk_counts_all_warm_reads_even_when_broadcast_loses_events() {
     for _ in 0..1000 {
         assert_eq!(
             cache.try_get("secret-key").await.unwrap().as_ref(),
-            Some(&17)
+            Some(&17),
+            "contract: native sdk counts all warm reads even when broadcast loses events"
         );
     }
-    assert!(matches!(
-        stream.try_recv(),
-        Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
-    ));
+    assert!(
+        matches!(
+            stream.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ),
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
     flush(&provider).await;
-    assert_eq!(capture.counter("amalgam.cache.try_get", "warm"), 1000);
-    assert_eq!(capture.counter("amalgam.cache.hit", "warm"), 1000);
-    assert_eq!(capture.counter("amalgam.memory.get", "warm"), 1000);
-    assert_eq!(capture.counter("amalgam.memory.hit", "warm"), 1000);
-    assert_eq!(capture.counter("amalgam.cache.set", "warm"), 1);
-    assert_eq!(capture.counter("amalgam.memory.set", "warm"), 1);
+    assert_eq!(
+        capture.counter("amalgam.cache.try_get", "warm"),
+        1000,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.hit", "warm"),
+        1000,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
+    assert_eq!(
+        capture.counter("amalgam.memory.get", "warm"),
+        1000,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
+    assert_eq!(
+        capture.counter("amalgam.memory.hit", "warm"),
+        1000,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.set", "warm"),
+        1,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
+    assert_eq!(
+        capture.counter("amalgam.memory.set", "warm"),
+        1,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
     let points = capture.points();
     assert!(
         points
             .iter()
-            .any(|p| p.scope == "amalgam.memory" && p.name == "amalgam.memory.hit")
+            .any(|p| p.scope == "amalgam.memory" && p.name == "amalgam.memory.hit"),
+        "contract: native sdk counts all warm reads even when broadcast loses events"
     );
     let histograms: u64 = points
         .iter()
@@ -202,14 +235,18 @@ async fn native_sdk_counts_all_warm_reads_even_when_broadcast_loses_events() {
             _ => None,
         })
         .sum();
-    assert_eq!(histograms, 1001);
+    assert_eq!(
+        histograms, 1001,
+        "contract: native sdk counts all warm reads even when broadcast loses events"
+    );
     assert!(
         points
             .iter()
             .flat_map(|p| p.attributes.iter())
             .all(|(key, value)| !key.contains("instance")
                 && !key.contains("key")
-                && !value.contains("secret"))
+                && !value.contains("secret")),
+        "contract: native sdk counts all warm reads even when broadcast loses events"
     );
     cache.shutdown().await.unwrap();
     stop(provider).await;
@@ -243,18 +280,42 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.try_get("secret-key").await.unwrap().as_ref(), Some(&23));
+    assert_eq!(
+        b.try_get("secret-key").await.unwrap().as_ref(),
+        Some(&23),
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
     flush(&provider).await;
-    assert_eq!(capture.counter("amalgam.cache.set", "l2"), 1);
+    assert_eq!(
+        capture.counter("amalgam.cache.set", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
     assert_eq!(
         capture.counter("amalgam.memory.set", "l2"),
         2,
         "hydration is a physical L1 set"
     );
-    assert_eq!(capture.counter("amalgam.distributed.set", "l2"), 1);
-    assert_eq!(capture.counter("amalgam.distributed.get", "l2"), 1);
-    assert_eq!(capture.counter("amalgam.distributed.hit", "l2"), 1);
-    assert_eq!(capture.counter("amalgam.cache.hit", "l2"), 1);
+    assert_eq!(
+        capture.counter("amalgam.distributed.set", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
+    assert_eq!(
+        capture.counter("amalgam.distributed.get", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
+    assert_eq!(
+        capture.counter("amalgam.distributed.hit", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.hit", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
     let _ = a
         .remove("secret-key")
         .with_receipt()
@@ -264,14 +325,27 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
         .await
         .unwrap();
     flush(&provider).await;
-    assert_eq!(capture.counter("amalgam.distributed.remove", "l2"), 1);
-    assert_eq!(capture.counter("amalgam.memory.evict", "l2"), 1);
-    assert_eq!(capture.counter("amalgam.cache.remove", "l2"), 1);
+    assert_eq!(
+        capture.counter("amalgam.distributed.remove", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
+    assert_eq!(
+        capture.counter("amalgam.memory.evict", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.remove", "l2"),
+        1,
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
+    );
     assert!(
         capture
             .points()
             .iter()
-            .any(|p| p.scope == "amalgam.distributed" && p.name == "amalgam.distributed.hit")
+            .any(|p| p.scope == "amalgam.distributed" && p.name == "amalgam.distributed.hit"),
+        "contract: cold l2 hydration and remove are separate from logical cache metrics"
     );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -308,17 +382,30 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             .await
             .unwrap();
         flush(&provider).await;
-        assert_eq!(capture.counter("amalgam.cache.remove_by_tag", "tagged"), 1);
+        assert_eq!(
+            capture.counter("amalgam.cache.remove_by_tag", "tagged"),
+            1,
+            "contract: individual tags are exported only when explicitly requested"
+        );
         let point = capture
             .points()
             .into_iter()
             .find(|p| p.name == "amalgam.cache.remove_by_tag")
             .unwrap();
         match tags {
-            MetricTags::Exclude => assert!(!point.attributes.contains_key("operation_tag")),
-            MetricTags::Include => assert_eq!(point.attributes["operation_tag"], "private-tag"),
+            MetricTags::Exclude => assert!(
+                !point.attributes.contains_key("operation_tag"),
+                "contract: individual tags are exported only when explicitly requested"
+            ),
+            MetricTags::Include => assert_eq!(
+                point.attributes["operation_tag"], "private-tag",
+                "contract: individual tags are exported only when explicitly requested"
+            ),
         }
-        assert!(cache.try_get("key").await.unwrap().is_none());
+        assert!(
+            cache.try_get("key").await.unwrap().is_none(),
+            "contract: individual tags are exported only when explicitly requested"
+        );
         cache.shutdown().await.unwrap();
         stop(provider).await;
     }
@@ -347,14 +434,33 @@ async fn cache_name_budget_is_historical_shared_and_does_not_mix_named_series() 
             .wait()
             .await
             .unwrap();
-        assert!(cache.try_get("private-key").await.unwrap().is_some());
+        assert!(
+            cache.try_get("private-key").await.unwrap().is_some(),
+            "contract: cache name budget is historical shared and does not mix named series"
+        );
         cache.shutdown().await.unwrap();
     }
     flush(&provider).await;
-    assert_eq!(budget.assigned_names(), 2);
-    assert_eq!(capture.counter("amalgam.cache.set", "one"), 1);
-    assert_eq!(capture.counter("amalgam.cache.set", "two"), 1);
-    assert_eq!(capture.counter("amalgam.cache.set", "other"), 2);
+    assert_eq!(
+        budget.assigned_names(),
+        2,
+        "contract: cache name budget is historical shared and does not mix named series"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.set", "one"),
+        1,
+        "contract: cache name budget is historical shared and does not mix named series"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.set", "two"),
+        1,
+        "contract: cache name budget is historical shared and does not mix named series"
+    );
+    assert_eq!(
+        capture.counter("amalgam.cache.set", "other"),
+        2,
+        "contract: cache name budget is historical shared and does not mix named series"
+    );
     stop(provider).await;
 }
 
@@ -391,7 +497,8 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
             .options(|_| opts.clone())
             .await
             .unwrap(),
-        17
+        17,
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
     );
     let soft = opts.with_factory_timeouts(
         Timeout::After(Duration::from_millis(20)),
@@ -424,7 +531,8 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
             .options(|_| soft)
             .await
             .unwrap(),
-        23
+        23,
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
     );
     entered.notified().await;
     release.add_permits(1);
@@ -435,29 +543,46 @@ async fn factory_failure_stale_hit_timeout_and_background_success_have_distinct_
         3,
         "two foreground seeds and one background completion"
     );
-    assert_eq!(capture.counter("amalgam.factory.error", "factory"), 1);
+    assert_eq!(
+        capture.counter("amalgam.factory.error", "factory"),
+        1,
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
+    );
     assert_eq!(
         capture.counter("amalgam.factory.synthetic_timeout", "factory"),
-        1
+        1,
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
     );
-    assert!(capture.counter("amalgam.failsafe_activate", "factory") >= 2);
+    assert!(
+        capture.counter("amalgam.failsafe_activate", "factory") >= 2,
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
+    );
     let points = capture.points();
     assert!(
         points.iter().any(|p| p.name == "amalgam.cache.hit"
-            && p.attributes.get("stale").is_some_and(|v| v == "true"))
+            && p.attributes.get("stale").is_some_and(|v| v == "true")),
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
     );
-    assert!(points.iter().any(|p| {
-        p.name == "amalgam.factory.success"
-            && p.attributes
-                .get("operation_background")
-                .is_some_and(|v| v == "true")
-    }));
+    assert!(
+        points.iter().any(|p| {
+            p.name == "amalgam.factory.success"
+                && p.attributes
+                    .get("operation_background")
+                    .is_some_and(|v| v == "true")
+        }),
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
+    );
     assert!(
         points
             .iter()
-            .all(|p| !p.attributes.values().any(|v| v.contains("private")))
+            .all(|p| !p.attributes.values().any(|v| v.contains("private"))),
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
     );
-    assert_eq!(cache.try_get("soft").await.unwrap().as_ref(), Some(&29));
+    assert_eq!(
+        cache.try_get("soft").await.unwrap().as_ref(),
+        Some(&29),
+        "contract: factory failure stale hit timeout and background success have distinct attributes"
+    );
     cache.shutdown().await.unwrap();
     stop(provider).await;
 }
@@ -496,16 +621,28 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
         if capture.counter("amalgam.backplane.receive", "backplane") == 1 {
             break;
         }
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "contract: backplane has its own scope and records only foreign receives"
+        );
         tokio::task::yield_now().await;
     }
-    assert_eq!(capture.counter("amalgam.backplane.publish", "backplane"), 1);
-    assert_eq!(capture.counter("amalgam.backplane.receive", "backplane"), 1);
+    assert_eq!(
+        capture.counter("amalgam.backplane.publish", "backplane"),
+        1,
+        "contract: backplane has its own scope and records only foreign receives"
+    );
+    assert_eq!(
+        capture.counter("amalgam.backplane.receive", "backplane"),
+        1,
+        "contract: backplane has its own scope and records only foreign receives"
+    );
     assert!(
         capture
             .points()
             .iter()
-            .any(|p| p.scope == "amalgam.backplane" && p.name == "amalgam.backplane.receive")
+            .any(|p| p.scope == "amalgam.backplane" && p.name == "amalgam.backplane.receive"),
+        "contract: backplane has its own scope and records only foreign receives"
     );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -514,14 +651,20 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
 
 #[test]
 fn otlp_metric_constructor_returns_typed_configuration_failures_without_global_installation() {
-    assert!(matches!(
-        advanced::otlp_meter_provider("", "http://127.0.0.1:4317"),
-        Err(OtelInitError::BlankServiceName)
-    ));
-    assert!(matches!(
-        advanced::otlp_meter_provider("service", "http://127.0.0.1:4317"),
-        Err(OtelInitError::MissingRuntime)
-    ));
+    assert!(
+        matches!(
+            advanced::otlp_meter_provider("", "http://127.0.0.1:4317"),
+            Err(OtelInitError::BlankServiceName)
+        ),
+        "contract: otlp metric constructor returns typed configuration failures without global installation"
+    );
+    assert!(
+        matches!(
+            advanced::otlp_meter_provider("service", "http://127.0.0.1:4317"),
+            Err(OtelInitError::MissingRuntime)
+        ),
+        "contract: otlp metric constructor returns typed configuration failures without global installation"
+    );
     let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
@@ -529,7 +672,10 @@ fn otlp_metric_constructor_returns_typed_configuration_failures_without_global_i
     let error = runtime
         .block_on(async { advanced::otlp_meter_provider("service", "http://[") })
         .unwrap_err();
-    assert!(matches!(error, OtelInitError::Exporter(_)));
+    assert!(
+        matches!(error, OtelInitError::Exporter(_)),
+        "contract: otlp metric constructor returns typed configuration failures without global installation"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -566,7 +712,8 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
             )
             .await
             .unwrap(),
-        17
+        17,
+        "contract: conditional success counts once in the actual foreground or eager context"
     );
     clock.advance(Duration::from_millis(101));
     assert_eq!(
@@ -577,12 +724,21 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
             )
             .await
             .unwrap(),
-        17
+        17,
+        "contract: conditional success counts once in the actual foreground or eager context"
     );
     cache.flush_pending().await.unwrap();
     flush(&provider).await;
-    assert_eq!(capture.counter("amalgam.factory.success", "conditional"), 3);
-    assert_eq!(capture.counter("amalgam.eager_refresh", "conditional"), 1);
+    assert_eq!(
+        capture.counter("amalgam.factory.success", "conditional"),
+        3,
+        "contract: conditional success counts once in the actual foreground or eager context"
+    );
+    assert_eq!(
+        capture.counter("amalgam.eager_refresh", "conditional"),
+        1,
+        "contract: conditional success counts once in the actual foreground or eager context"
+    );
     let mut modes = BTreeMap::new();
     for point in capture
         .points()
@@ -596,7 +752,8 @@ async fn conditional_success_counts_once_in_the_actual_foreground_or_eager_conte
     }
     assert_eq!(
         modes,
-        BTreeMap::from([("false".to_owned(), 2), ("true".to_owned(), 1)])
+        BTreeMap::from([("false".to_owned(), 2), ("true".to_owned(), 1)]),
+        "contract: conditional success counts once in the actual foreground or eager context"
     );
     cache.shutdown().await.unwrap();
     stop(provider).await;
@@ -650,14 +807,31 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
         )
         .await
         .unwrap(),
-        17
+        17,
+        "contract: eager refresh that reuses a newer l2 value does not fabricate factory success"
     );
     a.flush_pending().await.unwrap();
-    assert_eq!(a.try_get("key").await.unwrap().as_ref(), Some(&23));
+    assert_eq!(
+        a.try_get("key").await.unwrap().as_ref(),
+        Some(&23),
+        "contract: eager refresh that reuses a newer l2 value does not fabricate factory success"
+    );
     flush(&provider).await;
-    assert_eq!(capture.counter("amalgam.eager_refresh", "eager-reuse"), 1);
-    assert_eq!(capture.counter("amalgam.factory.success", "eager-reuse"), 0);
-    assert_eq!(capture.counter("amalgam.factory.error", "eager-reuse"), 0);
+    assert_eq!(
+        capture.counter("amalgam.eager_refresh", "eager-reuse"),
+        1,
+        "contract: eager refresh that reuses a newer l2 value does not fabricate factory success"
+    );
+    assert_eq!(
+        capture.counter("amalgam.factory.success", "eager-reuse"),
+        0,
+        "contract: eager refresh that reuses a newer l2 value does not fabricate factory success"
+    );
+    assert_eq!(
+        capture.counter("amalgam.factory.error", "eager-reuse"),
+        0,
+        "contract: eager refresh that reuses a newer l2 value does not fabricate factory success"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
     stop(provider).await;
@@ -689,41 +863,66 @@ async fn throwing_backend_read_counts_the_attempt_but_circuit_and_policy_skips_d
         .plugin(Arc::new(OtelMetricsPlugin::from_provider(&provider)))
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache
-            .try_get("first")
-            .options(|o| o.with_rethrow_distributed_exceptions(true))
-            .await,
-        Err(Error::Transport(TransportError::Distributed { .. }))
-    ));
-    assert_eq!(cache.get_or_default("open-circuit", 7).await.unwrap(), 7);
+    assert!(
+        matches!(
+            cache
+                .try_get("first")
+                .options(|o| o.with_rethrow_distributed_exceptions(true))
+                .await,
+            Err(Error::Transport(TransportError::Distributed { .. }))
+        ),
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
+    );
+    assert_eq!(
+        cache.get_or_default("open-circuit", 7).await.unwrap(),
+        7,
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
+    );
     assert!(
         cache
             .try_get("policy-skip")
             .options(|_| options().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
     );
     flush(&provider).await;
-    assert_eq!(backend.0.load(Ordering::SeqCst), 1);
-    assert_eq!(capture.counter("amalgam.distributed.get", "failed-read"), 1);
-    assert_eq!(capture.counter("amalgam.distributed.hit", "failed-read"), 0);
+    assert_eq!(
+        backend.0.load(Ordering::SeqCst),
+        1,
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
+    );
+    assert_eq!(
+        capture.counter("amalgam.distributed.get", "failed-read"),
+        1,
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
+    );
+    assert_eq!(
+        capture.counter("amalgam.distributed.hit", "failed-read"),
+        0,
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
+    );
     assert_eq!(
         capture.counter("amalgam.distributed.circuit_breaker_change", "failed-read"),
-        1
+        1,
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
     );
-    assert!(capture.points().iter().any(|p| {
-        p.name == "amalgam.operation.duration"
-            && p.attributes
-                .get("outcome")
-                .is_some_and(|v| v == "distributed_error")
-    }));
+    assert!(
+        capture.points().iter().any(|p| {
+            p.name == "amalgam.operation.duration"
+                && p.attributes
+                    .get("outcome")
+                    .is_some_and(|v| v == "distributed_error")
+        }),
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
+    );
     assert!(
         capture
             .points()
             .iter()
-            .all(|p| !p.attributes.values().any(|v| v.contains("private")))
+            .all(|p| !p.attributes.values().any(|v| v.contains("private"))),
+        "contract: throwing backend read counts the attempt but circuit and policy skips do not"
     );
     cache.shutdown().await.unwrap();
     stop(provider).await;

@@ -195,13 +195,21 @@ mod tests {
                 assert!(
                     work.as_mut()
                         .poll(&mut Context::from_waker(std::task::Waker::noop()))
-                        .is_pending()
+                        .is_pending(),
+                    "contract: both unpolled and suspended future drop release coordination before values"
                 );
             }
             std::mem::drop(work);
             std::mem::drop(runtime);
-            assert_eq!(drops.load(Ordering::SeqCst), 1);
-            assert!(lock.try_lock().is_ok());
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                1,
+                "contract: both unpolled and suspended future drop release coordination before values"
+            );
+            assert!(
+                lock.try_lock().is_ok(),
+                "contract: both unpolled and suspended future drop release coordination before values"
+            );
         }
     }
     #[test]
@@ -229,12 +237,25 @@ mod tests {
         let guard = memory.guard(runtime.block_on(lock.clone().lock_owned()));
         assert_eq!(
             runtime.block_on(memory.insert_at(Arc::from("k"), entry, Timestamp::from_ticks(10))),
-            crate::provider::MemoryAdmission::Admitted
+            crate::provider::MemoryAdmission::Admitted,
+            "contract: timestamp adjusted input and stored value survive the outer guard"
         );
-        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "contract: timestamp adjusted input and stored value survive the outer guard"
+        );
         std::mem::drop(memory);
-        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "contract: timestamp adjusted input and stored value survive the outer guard"
+        );
         std::mem::drop(guard);
-        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            2,
+            "contract: timestamp adjusted input and stored value survive the outer guard"
+        );
     }
 }

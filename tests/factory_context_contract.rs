@@ -25,12 +25,32 @@ async fn factory_exposes_raw_key_and_current_tags_without_decoding_the_prefix() 
         .get_or_set(
             "scope:raw",
             typed_factory(|mut ctx| async move {
-                assert_eq!(ctx.original_key(), "scope:raw");
-                assert_eq!(ctx.key(), "scope:scope:raw");
-                assert_eq!(ctx.tags().unwrap(), &*tags(&["call"]));
-                assert_eq!(ctx.stale_tags(), None);
+                assert_eq!(
+                    ctx.original_key(),
+                    "scope:raw",
+                    "contract: factory exposes raw key and current tags without decoding the prefix"
+                );
+                assert_eq!(
+                    ctx.key(),
+                    "scope:scope:raw",
+                    "contract: factory exposes raw key and current tags without decoding the prefix"
+                );
+                assert_eq!(
+                    ctx.tags().unwrap(),
+                    &*tags(&["call"]),
+                    "contract: factory exposes raw key and current tags without decoding the prefix"
+                );
+                assert_eq!(
+                    ctx.stale_tags(),
+                    None,
+                    "contract: factory exposes raw key and current tags without decoding the prefix"
+                );
                 ctx.try_set_tags(["adapted"]).unwrap();
-                assert_eq!(ctx.tags().unwrap(), &*tags(&["adapted"]));
+                assert_eq!(
+                    ctx.tags().unwrap(),
+                    &*tags(&["adapted"]),
+                    "contract: factory exposes raw key and current tags without decoding the prefix"
+                );
                 Ok::<_, FactoryError>(ctx.value(7))
             }),
         )
@@ -74,11 +94,31 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
         .get_or_set(
             "raw",
             typed_factory(|ctx| async move {
-                assert_eq!(ctx.original_key(), "raw");
-                assert_eq!(ctx.key(), "scope:raw");
-                assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]));
-                assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]));
-                assert_eq!(ctx.stale_value(), Some(&7));
+                assert_eq!(
+                    ctx.original_key(),
+                    "raw",
+                    "contract: hydrated stale tags remain distinct from current call tags"
+                );
+                assert_eq!(
+                    ctx.key(),
+                    "scope:raw",
+                    "contract: hydrated stale tags remain distinct from current call tags"
+                );
+                assert_eq!(
+                    ctx.tags().unwrap(),
+                    &*tags(&["new-call"]),
+                    "contract: hydrated stale tags remain distinct from current call tags"
+                );
+                assert_eq!(
+                    ctx.stale_tags().unwrap(),
+                    &*tags(&["stored"]),
+                    "contract: hydrated stale tags remain distinct from current call tags"
+                );
+                assert_eq!(
+                    ctx.stale_value(),
+                    Some(&7),
+                    "contract: hydrated stale tags remain distinct from current call tags"
+                );
                 ctx.not_modified()
             }),
         )
@@ -95,7 +135,10 @@ async fn hydrated_stale_tags_remain_distinct_from_current_call_tags() {
         .wait()
         .await
         .unwrap();
-    assert!(second.try_get("raw").await.unwrap().is_none());
+    assert!(
+        second.try_get("raw").await.unwrap().is_none(),
+        "contract: hydrated stale tags remain distinct from current call tags"
+    );
     first.shutdown().await.unwrap();
     second.shutdown().await.unwrap();
 }
@@ -108,13 +151,19 @@ async fn invalid_legacy_tags_are_visible_as_a_typed_error_and_cannot_be_committe
             "raw",
             amalgam::source::factory(|mut ctx| async move {
                 ctx.set_tags([" "]);
-                assert_eq!(ctx.tags(), Err(TagError::Blank));
+                assert_eq!(ctx.tags(), Err(TagError::Blank), "contract: invalid legacy tags are visible as a typed error and cannot be committed");
                 Ok::<_, FactoryError>(ctx.value(1))
             }),
         )
         .await;
-    assert!(matches!(result, Err(amalgam::Error::Tag(TagError::Blank))));
-    assert!(cache.try_get("raw").await.unwrap().is_none());
+    assert!(
+        matches!(result, Err(amalgam::Error::Tag(TagError::Blank))),
+        "contract: invalid legacy tags are visible as a typed error and cannot be committed"
+    );
+    assert!(
+        cache.try_get("raw").await.unwrap().is_none(),
+        "contract: invalid legacy tags are visible as a typed error and cannot be committed"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -146,10 +195,10 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
             .get_or_set(
                 "scope:raw",
                 typed_factory(|ctx| async move {
-                    assert_eq!(ctx.original_key(), "scope:raw");
-                    assert_eq!(ctx.key(), "scope:scope:raw");
-                    assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]));
-                    assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]));
+                    assert_eq!(ctx.original_key(), "scope:raw", "contract: eager factory preserves the original prefixed key and snapshot tags");
+                    assert_eq!(ctx.key(), "scope:scope:raw", "contract: eager factory preserves the original prefixed key and snapshot tags");
+                    assert_eq!(ctx.stale_tags().unwrap(), &*tags(&["stored"]), "contract: eager factory preserves the original prefixed key and snapshot tags");
+                    assert_eq!(ctx.tags().unwrap(), &*tags(&["new-call"]), "contract: eager factory preserves the original prefixed key and snapshot tags");
                     done.send(()).unwrap();
                     Ok::<_, FactoryError>(ctx.value(8))
                 })
@@ -157,14 +206,18 @@ async fn eager_factory_preserves_the_original_prefixed_key_and_snapshot_tags() {
             .tags(tags(&["new-call"]))
             .await
             .unwrap(),
-        7
+        7, "contract: eager factory preserves the original prefixed key and snapshot tags"
     );
     tokio::time::timeout(Duration::from_secs(2), finished)
         .await
         .unwrap()
         .unwrap();
     cache.flush_pending().await.unwrap();
-    assert_eq!(cache.try_get("scope:raw").await.unwrap().as_ref(), Some(&8));
+    assert_eq!(
+        cache.try_get("scope:raw").await.unwrap().as_ref(),
+        Some(&8),
+        "contract: eager factory preserves the original prefixed key and snapshot tags"
+    );
     cache.shutdown().await.unwrap();
 }
 

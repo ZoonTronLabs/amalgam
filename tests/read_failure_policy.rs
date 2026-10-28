@@ -84,12 +84,23 @@ async fn open_circuit_is_an_admission_skip_without_requerying_backend() {
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache.try_get("k").await,
-        Err(Error::Distributed(cause)) if cause == "original read failure"
-    ));
-    assert_eq!(cache.get_or_default("k", 42).await.unwrap(), 42);
-    assert_eq!(store.reads.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            cache.try_get("k").await,
+            Err(Error::Distributed(cause)) if cause == "original read failure"
+        ),
+        "contract: open circuit is an admission skip without requerying backend"
+    );
+    assert_eq!(
+        cache.get_or_default("k", 42).await.unwrap(),
+        42,
+        "contract: open circuit is an admission skip without requerying backend"
+    );
+    assert_eq!(
+        store.reads.load(Ordering::SeqCst),
+        1,
+        "contract: open circuit is an admission skip without requerying backend"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -109,14 +120,20 @@ async fn read_rethrow_preserves_codec_failure() {
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache.try_get("k").await,
-        Err(Error::Codec(CodecError::Deserialization { .. }))
-    ));
-    assert!(matches!(
-        cache.get_or_default("k", 42).await,
-        Err(Error::Codec(CodecError::Deserialization { .. }))
-    ));
+    assert!(
+        matches!(
+            cache.try_get("k").await,
+            Err(Error::Codec(CodecError::Deserialization { .. }))
+        ),
+        "contract: read rethrow preserves codec failure"
+    );
+    assert!(
+        matches!(
+            cache.get_or_default("k", 42).await,
+            Err(Error::Codec(CodecError::Deserialization { .. }))
+        ),
+        "contract: read rethrow preserves codec failure"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -142,12 +159,28 @@ async fn configured_suppression_is_a_miss_without_discarding_typed_rethrow() {
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: configured suppression is a miss without discarding typed rethrow"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(cache.try_get("k").await.unwrap(), Some(7));
-    assert!(cache.try_get("another").await.unwrap().is_none());
-    assert_eq!(cache.get_or_default("another", 42).await.unwrap(), 42);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: configured suppression is a miss without discarding typed rethrow"
+    );
+    assert_eq!(
+        cache.try_get("k").await.unwrap(),
+        Some(7),
+        "contract: configured suppression is a miss without discarding typed rethrow"
+    );
+    assert!(
+        cache.try_get("another").await.unwrap().is_none(),
+        "contract: configured suppression is a miss without discarding typed rethrow"
+    );
+    assert_eq!(
+        cache.get_or_default("another", 42).await.unwrap(),
+        42,
+        "contract: configured suppression is a miss without discarding typed rethrow"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -192,8 +225,16 @@ async fn soft_read_timeout_serves_the_eligible_captured_stale_value() {
         .unwrap();
     cache.set("k", 7).await.unwrap();
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.try_get("k").await.unwrap(), Some(7));
-    assert_eq!(cache.get_or_default("k", 42).await.unwrap(), 7);
+    assert_eq!(
+        cache.try_get("k").await.unwrap(),
+        Some(7),
+        "contract: soft read timeout serves the eligible captured stale value"
+    );
+    assert_eq!(
+        cache.get_or_default("k", 42).await.unwrap(),
+        7,
+        "contract: soft read timeout serves the eligible captured stale value"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -208,17 +249,21 @@ async fn canonical_hard_read_timeout_never_becomes_successful_default() {
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache.get_or_default("k", 42).await,
-        Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
-    ));
+    assert!(
+        matches!(
+            cache.get_or_default("k", 42).await,
+            Err(Error::DistributedTimeout { elapsed }) if elapsed == Duration::ZERO
+        ),
+        "contract: canonical hard read timeout never becomes successful default"
+    );
     assert_eq!(
         cache
             .get_or_default("k", 42)
             .options(|o| o.with_rethrow_distributed_exceptions(false))
             .await
             .unwrap(),
-        42
+        42,
+        "contract: canonical hard read timeout never becomes successful default"
     );
     cache.shutdown().await.unwrap();
 }
@@ -239,8 +284,13 @@ async fn explicit_skip_remains_successful_absence_without_querying_failed_backen
             .options(|_| options().with_skip_distributed(true, false))
             .await
             .unwrap(),
-        42
+        42,
+        "contract: explicit skip remains successful absence without querying failed backend"
     );
-    assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store.reads.load(Ordering::SeqCst),
+        0,
+        "contract: explicit skip remains successful absence without querying failed backend"
+    );
     cache.shutdown().await.unwrap();
 }

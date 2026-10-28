@@ -29,17 +29,32 @@ fn request_and_its_unpolled_future_retain_input_without_writing() {
         let value = Arc::new(42);
         let weak = Arc::downgrade(&value);
         let request = cache.set("lazy", value);
-        assert!(weak.upgrade().is_some());
-        assert!(ready(cache.try_get("lazy")).unwrap().is_none());
+        assert!(
+            weak.upgrade().is_some(),
+            "contract: request and its unpolled future retain input without writing"
+        );
+        assert!(
+            ready(cache.try_get("lazy")).unwrap().is_none(),
+            "contract: request and its unpolled future retain input without writing"
+        );
         if convert {
             let future = request.into_future();
-            assert!(weak.upgrade().is_some());
+            assert!(
+                weak.upgrade().is_some(),
+                "contract: request and its unpolled future retain input without writing"
+            );
             std::mem::drop(future);
         } else {
             std::mem::drop(request);
         }
-        assert!(weak.upgrade().is_none());
-        assert!(ready(cache.try_get("lazy")).unwrap().is_none());
+        assert!(
+            weak.upgrade().is_none(),
+            "contract: request and its unpolled future retain input without writing"
+        );
+        assert!(
+            ready(cache.try_get("lazy")).unwrap().is_none(),
+            "contract: request and its unpolled future retain input without writing"
+        );
     }
 }
 
@@ -47,26 +62,44 @@ fn request_and_its_unpolled_future_retain_input_without_writing() {
 fn plain_write_is_inline_and_receipt_is_an_explicit_completed_choice() {
     let cache = Cache::<u64>::new();
     ready(cache.set("value", 17)).unwrap();
-    assert_eq!(ready(cache.try_get("value")).unwrap().as_ref(), Some(&17));
+    assert_eq!(
+        ready(cache.try_get("value")).unwrap().as_ref(),
+        Some(&17),
+        "contract: plain write is inline and receipt is an explicit completed choice"
+    );
     let receipt = ready(cache.set("value", 19).with_receipt()).unwrap();
-    assert!(matches!(receipt, MutationReceipt::Completed(_)));
-    assert_eq!(ready(cache.try_get("value")).unwrap().as_ref(), Some(&19));
+    assert!(
+        matches!(receipt, MutationReceipt::Completed(_)),
+        "contract: plain write is inline and receipt is an explicit completed choice"
+    );
+    assert_eq!(
+        ready(cache.try_get("value")).unwrap().as_ref(),
+        Some(&19),
+        "contract: plain write is inline and receipt is an explicit completed choice"
+    );
     cache.close();
-    assert!(matches!(
-        ready(cache.set("value", 21)),
-        Err(Error::CacheClosed)
-    ));
+    assert!(
+        matches!(ready(cache.set("value", 21)), Err(Error::CacheClosed)),
+        "contract: plain write is inline and receipt is an explicit completed choice"
+    );
 }
 
 #[test]
 fn a_blank_tag_returns_a_typed_error_and_keeps_the_previous_value() {
     let cache = Cache::<u64>::new();
     ready(cache.set("value", 17)).unwrap();
-    assert!(matches!(
-        ready(cache.set("value", 19).tags(["valid", " "])),
-        Err(Error::Tag(TagError::Blank))
-    ));
-    assert_eq!(ready(cache.try_get("value")).unwrap().as_ref(), Some(&17));
+    assert!(
+        matches!(
+            ready(cache.set("value", 19).tags(["valid", " "])),
+            Err(Error::Tag(TagError::Blank))
+        ),
+        "contract: a blank tag returns a typed error and keeps the previous value"
+    );
+    assert_eq!(
+        ready(cache.try_get("value")).unwrap().as_ref(),
+        Some(&17),
+        "contract: a blank tag returns a typed error and keeps the previous value"
+    );
 }
 
 #[test]
@@ -89,7 +122,10 @@ fn duration_overlay_preserves_fail_safe_from_cache_defaults() {
     )
     .unwrap();
     clock.advance(Duration::from_secs(2));
-    assert!(ready(cache.try_get("value")).unwrap().is_none());
+    assert!(
+        ready(cache.try_get("value")).unwrap().is_none(),
+        "contract: duration overlay preserves fail safe from cache defaults"
+    );
     let fallback = ready(cache.get_or_set(
         "value",
         amalgam::source::factory(|context| {

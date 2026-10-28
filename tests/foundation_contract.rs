@@ -74,12 +74,24 @@ fn same_name_registry_initializes_once_outside_runtime() {
         .into_iter()
         .map(|thread| thread.join().unwrap())
         .collect();
-    assert_eq!(builds.load(Ordering::SeqCst), 1);
-    assert_eq!(registry.len(), 1);
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        1,
+        "contract: same name registry initializes once outside runtime"
+    );
+    assert_eq!(
+        registry.len(),
+        1,
+        "contract: same name registry initializes once outside runtime"
+    );
     Runtime::new().unwrap().block_on(async {
         caches[0].set("shared", 42).await.unwrap();
         for cache in caches {
-            assert_eq!(cache.try_get("shared").await.unwrap(), Some(42));
+            assert_eq!(
+                cache.try_get("shared").await.unwrap(),
+                Some(42),
+                "contract: same name registry initializes once outside runtime"
+            );
         }
     });
 }
@@ -105,7 +117,11 @@ fn registry_different_names_progress_independently() {
     for thread in threads {
         std::mem::drop(thread.join().unwrap());
     }
-    assert_eq!(registry.len(), 2);
+    assert_eq!(
+        registry.len(),
+        2,
+        "contract: registry different names progress independently"
+    );
 }
 
 #[test]
@@ -116,30 +132,49 @@ fn registry_failures_panics_and_recursion_release_initializer() {
         .err()
         .unwrap();
     assert!(
-        matches!(failure, RegistryError::Build { source, .. } if matches!(*source, Error::Config(ConfigError::AutoCloneWithoutCloner)))
+        matches!(failure, RegistryError::Build { source, .. } if matches!(*source, Error::Config(ConfigError::AutoCloneWithoutCloner))),
+        "contract: registry failures panics and recursion release initializer"
     );
-    assert!(registry.is_empty());
+    assert!(
+        registry.is_empty(),
+        "contract: registry failures panics and recursion release initializer"
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             registry.get_or_create("retry", || panic!("external builder contract"));
         }))
-        .is_err()
+        .is_err(),
+        "contract: registry failures panics and recursion release initializer"
     );
     let cache = registry
         .try_get_or_create("retry", || {
-            assert!(matches!(
-                registry.try_get_or_create("retry", || Ok(Cache::new())),
-                Err(RegistryError::RecursiveInitialization { .. })
-            ));
+            assert!(
+                matches!(
+                    registry.try_get_or_create("retry", || Ok(Cache::new())),
+                    Err(RegistryError::RecursiveInitialization { .. })
+                ),
+                "contract: registry failures panics and recursion release initializer"
+            );
             Ok(Cache::new())
         })
         .unwrap();
-    assert_eq!(registry.len(), 1);
-    assert_eq!(cache.name(), "amalgam");
-    assert!(matches!(
-        registry.try_register("  ", cache),
-        Err(RegistryError::BlankName)
-    ));
+    assert_eq!(
+        registry.len(),
+        1,
+        "contract: registry failures panics and recursion release initializer"
+    );
+    assert_eq!(
+        cache.name(),
+        "amalgam",
+        "contract: registry failures panics and recursion release initializer"
+    );
+    assert!(
+        matches!(
+            registry.try_register("  ", cache),
+            Err(RegistryError::BlankName)
+        ),
+        "contract: registry failures panics and recursion release initializer"
+    );
 }
 
 #[test]
@@ -163,8 +198,16 @@ fn explicit_registry_registration_supersedes_inflight_builder() {
         )
         .unwrap();
     resume_tx.send(()).unwrap();
-    assert_eq!(thread.join().unwrap().name(), "registered");
-    assert_eq!(registry.get("name").unwrap().name(), "registered");
+    assert_eq!(
+        thread.join().unwrap().name(),
+        "registered",
+        "contract: explicit registry registration supersedes inflight builder"
+    );
+    assert_eq!(
+        registry.get("name").unwrap().name(),
+        "registered",
+        "contract: explicit registry registration supersedes inflight builder"
+    );
 }
 
 struct AtomicCloner;
@@ -187,20 +230,37 @@ fn nonserde_cloner_isolates_input_and_every_read() {
     let first = cached
         .value_with_options(&opts, Some(&AtomicCloner))
         .unwrap();
-    assert_eq!(first.load(Ordering::SeqCst), 7);
+    assert_eq!(
+        first.load(Ordering::SeqCst),
+        7,
+        "contract: nonserde cloner isolates input and every read"
+    );
     first.store(200, Ordering::SeqCst);
     let second = cached
         .value_with_options(&opts, Some(&AtomicCloner))
         .unwrap();
-    assert_eq!(second.load(Ordering::SeqCst), 7);
-    assert!(!Arc::ptr_eq(cached.value(), &first));
-    assert!(matches!(
-        serializers::copy_value(&input, &opts, None),
-        Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
-    ));
+    assert_eq!(
+        second.load(Ordering::SeqCst),
+        7,
+        "contract: nonserde cloner isolates input and every read"
+    );
+    assert!(
+        !Arc::ptr_eq(cached.value(), &first),
+        "contract: nonserde cloner isolates input and every read"
+    );
+    assert!(
+        matches!(
+            serializers::copy_value(&input, &opts, None),
+            Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
+        ),
+        "contract: nonserde cloner isolates input and every read"
+    );
     let legacy =
         serializers::copy_value(&input, &opts.with_enable_auto_clone(false), None).unwrap();
-    assert!(Arc::ptr_eq(&input, &legacy));
+    assert!(
+        Arc::ptr_eq(&input, &legacy),
+        "contract: nonserde cloner isolates input and every read"
+    );
 }
 
 #[test]
@@ -215,13 +275,27 @@ fn copy_failures_preserve_source_and_invalid_options_skip_external_copy() {
     let cloner = Failing(AtomicUsize::new(0));
     let opts = EntryOptions::default().with_enable_auto_clone(true);
     let error = serializers::copy_value(&1, &opts, Some(&cloner)).unwrap_err();
-    assert!(matches!(error, Error::Clone(CloneError::Custom { .. })));
-    assert_eq!(error.source().unwrap().to_string(), "copy graph failed");
-    assert!(matches!(
-        serializers::copy_value(&1, &opts.with_size(-1), Some(&cloner)),
-        Err(Error::Config(ConfigError::NegativeEntryWeight { size: -1 }))
-    ));
-    assert_eq!(cloner.0.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(error, Error::Clone(CloneError::Custom { .. })),
+        "contract: copy failures preserve source and invalid options skip external copy"
+    );
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "copy graph failed",
+        "contract: copy failures preserve source and invalid options skip external copy"
+    );
+    assert!(
+        matches!(
+            serializers::copy_value(&1, &opts.with_size(-1), Some(&cloner)),
+            Err(Error::Config(ConfigError::NegativeEntryWeight { size: -1 }))
+        ),
+        "contract: copy failures preserve source and invalid options skip external copy"
+    );
+    assert_eq!(
+        cloner.0.load(Ordering::SeqCst),
+        1,
+        "contract: copy failures preserve source and invalid options skip external copy"
+    );
 }
 
 #[derive(Clone)]
@@ -246,8 +320,15 @@ fn codec_isolation(serializer: &dyn DistributedSerializer<SharedValue>) {
     let input = SharedValue(Arc::new(AtomicI32::new(11)));
     let output = cloner.clone_value(&input).unwrap();
     input.0.store(22, Ordering::SeqCst);
-    assert_eq!(output.0.load(Ordering::SeqCst), 11);
-    assert!(!Arc::ptr_eq(&input.0, &output.0));
+    assert_eq!(
+        output.0.load(Ordering::SeqCst),
+        11,
+        "contract: codec isolation"
+    );
+    assert!(
+        !Arc::ptr_eq(&input.0, &output.0),
+        "contract: codec isolation"
+    );
 }
 
 #[test]
@@ -270,11 +351,13 @@ fn factory_failure_and_cancellation_keep_distinct_typed_sources() {
     let error: Error = FactoryError::from_source(IoError::other("io cause")).into();
     assert_eq!(
         error.source().unwrap().source().unwrap().to_string(),
-        "io cause"
+        "io cause",
+        "contract: factory failure and cancellation keep distinct typed sources"
     );
     assert_eq!(
         OperationOutcome::from_error(&error),
-        OperationOutcome::FactoryError
+        OperationOutcome::FactoryError,
+        "contract: factory failure and cancellation keep distinct typed sources"
     );
     for reason in [
         FactoryCancellationReason::CallerCancelled,
@@ -283,10 +366,14 @@ fn factory_failure_and_cancellation_keep_distinct_typed_sources() {
         FactoryCancellationReason::LeaseLost,
     ] {
         let error: Error = FactoryError::cancelled(reason).into();
-        assert!(matches!(error, Error::FactoryCancelled { reason: actual } if actual == reason));
+        assert!(
+            matches!(error, Error::FactoryCancelled { reason: actual } if actual == reason),
+            "contract: factory failure and cancellation keep distinct typed sources"
+        );
         assert_eq!(
             OperationOutcome::from_error(&error),
-            OperationOutcome::Cancelled
+            OperationOutcome::Cancelled,
+            "contract: factory failure and cancellation keep distinct typed sources"
         );
     }
 }
@@ -306,35 +393,66 @@ fn snapshot_ordering_insertion_ttl_and_jitter_are_independent() {
         None,
     )
     .unwrap();
-    assert_eq!(value.meta().created(), at(1_000));
-    assert_eq!(value.meta().inserted_at(), at(7_000));
-    assert_eq!(value.meta().logical_expiration(), at(18_000));
-    assert_eq!(value.backend_ttl(), Duration::from_secs(11));
+    assert_eq!(
+        value.meta().created(),
+        at(1_000),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
+    assert_eq!(
+        value.meta().inserted_at(),
+        at(7_000),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
+    assert_eq!(
+        value.meta().logical_expiration(),
+        at(18_000),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
+    assert_eq!(
+        value.backend_ttl(),
+        Duration::from_secs(11),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
     let retried = value.at_insertion(at(12_000));
-    assert_eq!(retried.backend_ttl(), Duration::from_secs(6));
+    assert_eq!(
+        retried.backend_ttl(),
+        Duration::from_secs(6),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
     assert_eq!(
         retried.meta().physical_expiration(),
-        value.meta().physical_expiration()
+        value.meta().physical_expiration(),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
     );
-    assert_eq!(retried.meta().created(), at(1_000));
-    assert!(matches!(
-        JitterSample::new(Duration::from_secs(3), opts.jitter_max()),
-        Err(ConfigError::InvalidJitterSample { .. })
-    ));
-    let wrong_bound = JitterSample::new(Duration::from_secs(3), Duration::from_secs(4)).unwrap();
-    assert!(matches!(
-        Entry::try_fresh_with_jitter(
-            5,
-            &opts,
-            at(0),
-            at(0),
-            wrong_bound,
-            Box::from([]),
-            None,
-            None
+    assert_eq!(
+        retried.meta().created(),
+        at(1_000),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
+    assert!(
+        matches!(
+            JitterSample::new(Duration::from_secs(3), opts.jitter_max()),
+            Err(ConfigError::InvalidJitterSample { .. })
         ),
-        Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
-    ));
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
+    let wrong_bound = JitterSample::new(Duration::from_secs(3), Duration::from_secs(4)).unwrap();
+    assert!(
+        matches!(
+            Entry::try_fresh_with_jitter(
+                5,
+                &opts,
+                at(0),
+                at(0),
+                wrong_bound,
+                Box::from([]),
+                None,
+                None
+            ),
+            Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
+        ),
+        "contract: snapshot ordering insertion ttl and jitter are independent"
+    );
 }
 
 #[test]
@@ -361,12 +479,36 @@ fn hydration_caps_local_deadlines_recomputes_eager_and_keeps_retention() {
         .for_memory_hydration(&local, at(11_000))
         .unwrap()
         .unwrap();
-    assert_eq!(hydrated.meta().created(), at(1_000));
-    assert_eq!(hydrated.meta().logical_expiration(), at(16_000));
-    assert_eq!(hydrated.meta().physical_expiration(), at(21_000));
-    assert_eq!(hydrated.meta().eager_refresh_at(), Some(at(13_500)));
-    assert_eq!(hydrated.meta().size(), Some(EntryWeight::new(8)));
-    assert_eq!(hydrated.meta().priority(), Priority::High);
+    assert_eq!(
+        hydrated.meta().created(),
+        at(1_000),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        hydrated.meta().logical_expiration(),
+        at(16_000),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        hydrated.meta().physical_expiration(),
+        at(21_000),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        hydrated.meta().eager_refresh_at(),
+        Some(at(13_500)),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        hydrated.meta().size(),
+        Some(EntryWeight::new(8)),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        hydrated.meta().priority(),
+        Priority::High,
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
     let short_source = entry(
         1,
         &EntryOptions::new(Duration::from_secs(4)).with_fail_safe(
@@ -380,56 +522,93 @@ fn hydration_caps_local_deadlines_recomputes_eager_and_keeps_retention() {
         .for_memory_hydration(&local, at(11_000))
         .unwrap()
         .unwrap();
-    assert_eq!(stale.meta().logical_expiration(), at(5_000));
-    assert_eq!(stale.meta().eager_refresh_at(), None);
-    assert!(stale.is_logically_expired(at(11_000)));
+    assert_eq!(
+        stale.meta().logical_expiration(),
+        at(5_000),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        stale.meta().eager_refresh_at(),
+        None,
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert!(
+        stale.is_logically_expired(at(11_000)),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
     assert!(
         short_source
             .for_memory_hydration(&local, at(31_000))
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
     );
     let plain = entry(1, &EntryOptions::new(Duration::from_secs(60)), at(1_000));
     let adopted = plain
         .for_memory_hydration(&local, at(11_000))
         .unwrap()
         .unwrap();
-    assert_eq!(adopted.meta().size(), Some(EntryWeight::new(2)));
-    assert_eq!(adopted.meta().priority(), Priority::Low);
+    assert_eq!(
+        adopted.meta().size(),
+        Some(EntryWeight::new(2)),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        adopted.meta().priority(),
+        Priority::Low,
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
     let explicit_normal = source
         .with_retention(None, Priority::Normal)
         .for_memory_hydration(&local, at(11_000))
         .unwrap()
         .unwrap();
-    assert_eq!(explicit_normal.meta().priority(), Priority::Normal);
-    assert_eq!(explicit_normal.meta().size(), Some(EntryWeight::new(2)));
+    assert_eq!(
+        explicit_normal.meta().priority(),
+        Priority::Normal,
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
+    assert_eq!(
+        explicit_normal.meta().size(),
+        Some(EntryWeight::new(2)),
+        "contract: hydration caps local deadlines recomputes eager and keeps retention"
+    );
 }
 
 #[test]
 fn invalid_weights_and_deadline_order_are_typed_and_throttle_cannot_extend_physical_life() {
     let invalid = EntryOptions::default().with_size(-3);
-    assert!(matches!(
-        invalid.validate(),
-        Err(ConfigError::NegativeEntryWeight { size: -3 })
-    ));
-    assert!(matches!(
-        Entry::try_fresh_at(1, &invalid, at(0), at(0), Box::from([]), None, None),
-        Err(Error::Config(ConfigError::NegativeEntryWeight { .. }))
-    ));
-    assert!(matches!(
-        Entry::try_rehydrate(
-            1,
-            at(0),
-            at(20),
-            at(10),
-            false,
-            None,
-            None,
-            Box::from([]),
-            at(0)
+    assert!(
+        matches!(
+            invalid.validate(),
+            Err(ConfigError::NegativeEntryWeight { size: -3 })
         ),
-        Err(Error::Config(ConfigError::InvalidEntryDeadlines))
-    ));
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
+    assert!(
+        matches!(
+            Entry::try_fresh_at(1, &invalid, at(0), at(0), Box::from([]), None, None),
+            Err(Error::Config(ConfigError::NegativeEntryWeight { .. }))
+        ),
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
+    assert!(
+        matches!(
+            Entry::try_rehydrate(
+                1,
+                at(0),
+                at(20),
+                at(10),
+                false,
+                None,
+                None,
+                Box::from([]),
+                at(0)
+            ),
+            Err(Error::Config(ConfigError::InvalidEntryDeadlines))
+        ),
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
     let opts = EntryOptions::new(Duration::from_secs(1)).with_fail_safe(
         true,
         Some(Duration::from_secs(5)),
@@ -439,15 +618,31 @@ fn invalid_weights_and_deadline_order_are_typed_and_throttle_cannot_extend_physi
     let throttled = Entry::try_throttled(&source, &opts, at(4_000))
         .unwrap()
         .unwrap();
-    assert_eq!(throttled.meta().logical_expiration(), at(5_000));
-    assert_eq!(throttled.meta().physical_expiration(), at(5_000));
-    assert_eq!(throttled.meta().eager_refresh_at(), None);
+    assert_eq!(
+        throttled.meta().logical_expiration(),
+        at(5_000),
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
+    assert_eq!(
+        throttled.meta().physical_expiration(),
+        at(5_000),
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
+    assert_eq!(
+        throttled.meta().eager_refresh_at(),
+        None,
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
     assert!(
         Entry::try_throttled(&source, &opts, at(5_000))
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
     );
-    assert!(Entry::try_throttled(&source, &invalid, at(1_000)).is_err());
+    assert!(
+        Entry::try_throttled(&source, &invalid, at(1_000)).is_err(),
+        "contract: invalid weights and deadline order are typed and throttle cannot extend physical life"
+    );
 }
 
 #[tokio::test]
@@ -459,7 +654,8 @@ async fn weighted_limits_reject_oversized_without_affecting_count_budget() {
         store
             .insert_at(Arc::from("a"), entry(1, &opts, now), now)
             .await,
-        MemoryAdmission::Admitted
+        MemoryAdmission::Admitted,
+        "contract: weighted limits reject oversized without affecting count budget"
     );
     assert_eq!(
         store
@@ -469,10 +665,19 @@ async fn weighted_limits_reject_oversized_without_affecting_count_budget() {
                 now
             )
             .await,
-        MemoryAdmission::Rejected(CapacityRejection::Oversized)
+        MemoryAdmission::Rejected(CapacityRejection::Oversized),
+        "contract: weighted limits reject oversized without affecting count budget"
     );
-    assert_eq!(store.get("a").await.unwrap().value_cloned(), 1);
-    assert_eq!(store.usage().weight, 3);
+    assert_eq!(
+        store.get("a").await.unwrap().value_cloned(),
+        1,
+        "contract: weighted limits reject oversized without affecting count budget"
+    );
+    assert_eq!(
+        store.usage().weight,
+        3,
+        "contract: weighted limits reject oversized without affecting count budget"
+    );
     let (clock, count_only) = memory(MemoryLimits::new(Some(2), None));
     for key in ["a", "b"] {
         count_only
@@ -487,8 +692,16 @@ async fn weighted_limits_reject_oversized_without_affecting_count_budget() {
             )
             .await;
     }
-    assert_eq!(count_only.usage().entries, 2);
-    assert_eq!(count_only.usage().weight, u128::from(u64::MAX) * 2);
+    assert_eq!(
+        count_only.usage().entries,
+        2,
+        "contract: weighted limits reject oversized without affecting count budget"
+    );
+    assert_eq!(
+        count_only.usage().weight,
+        u128::from(u64::MAX) * 2,
+        "contract: weighted limits reject oversized without affecting count budget"
+    );
 }
 
 #[tokio::test]
@@ -505,7 +718,8 @@ async fn first_admitted_pin_survives_rejection_explicit_remove_and_physical_expi
                 clock.now()
             )
             .await,
-        MemoryAdmission::Admitted
+        MemoryAdmission::Admitted,
+        "contract: first admitted pin survives rejection explicit remove and physical expiry work"
     );
     for index in 0..20 {
         assert_eq!(
@@ -516,11 +730,20 @@ async fn first_admitted_pin_survives_rejection_explicit_remove_and_physical_expi
                     clock.now()
                 )
                 .await,
-            MemoryAdmission::Rejected(CapacityRejection::ProtectedCapacity)
+            MemoryAdmission::Rejected(CapacityRejection::ProtectedCapacity),
+            "contract: first admitted pin survives rejection explicit remove and physical expiry work"
         );
     }
-    assert_eq!(store.get("first").await.unwrap().value_cloned(), 42);
-    assert_eq!(store.usage().entries, 1);
+    assert_eq!(
+        store.get("first").await.unwrap().value_cloned(),
+        42,
+        "contract: first admitted pin survives rejection explicit remove and physical expiry work"
+    );
+    assert_eq!(
+        store.usage().entries,
+        1,
+        "contract: first admitted pin survives rejection explicit remove and physical expiry work"
+    );
     assert_eq!(
         store
             .insert_at(
@@ -529,11 +752,16 @@ async fn first_admitted_pin_survives_rejection_explicit_remove_and_physical_expi
                 clock.now()
             )
             .await,
-        MemoryAdmission::Rejected(CapacityRejection::Oversized)
+        MemoryAdmission::Rejected(CapacityRejection::Oversized),
+        "contract: first admitted pin survives rejection explicit remove and physical expiry work"
     );
     clock.advance(Duration::from_secs(1));
     store.run_pending_tasks().await;
-    assert_eq!(store.usage().entries, 0);
+    assert_eq!(
+        store.usage().entries,
+        0,
+        "contract: first admitted pin survives rejection explicit remove and physical expiry work"
+    );
     store
         .insert_at(
             Arc::from("explicit"),
@@ -541,7 +769,11 @@ async fn first_admitted_pin_survives_rejection_explicit_remove_and_physical_expi
             clock.now(),
         )
         .await;
-    assert_eq!(store.remove("explicit").await.unwrap().value_cloned(), 7);
+    assert_eq!(
+        store.remove("explicit").await.unwrap().value_cloned(),
+        7,
+        "contract: first admitted pin survives rejection explicit remove and physical expiry work"
+    );
 }
 
 #[tokio::test]
@@ -574,10 +806,19 @@ async fn incomplete_admission_plan_preserves_all_live_contents_and_replacements(
                 now
             )
             .await,
-        MemoryAdmission::Rejected(CapacityRejection::ProtectedCapacity)
+        MemoryAdmission::Rejected(CapacityRejection::ProtectedCapacity),
+        "contract: incomplete admission plan preserves all live contents and replacements"
     );
-    assert_eq!(store.get("normal").await.unwrap().value_cloned(), 1);
-    assert_eq!(store.get("pinned").await.unwrap().value_cloned(), 3);
+    assert_eq!(
+        store.get("normal").await.unwrap().value_cloned(),
+        1,
+        "contract: incomplete admission plan preserves all live contents and replacements"
+    );
+    assert_eq!(
+        store.get("pinned").await.unwrap().value_cloned(),
+        3,
+        "contract: incomplete admission plan preserves all live contents and replacements"
+    );
     assert_eq!(
         store
             .insert_at(
@@ -586,10 +827,19 @@ async fn incomplete_admission_plan_preserves_all_live_contents_and_replacements(
                 now
             )
             .await,
-        MemoryAdmission::Rejected(CapacityRejection::Oversized)
+        MemoryAdmission::Rejected(CapacityRejection::Oversized),
+        "contract: incomplete admission plan preserves all live contents and replacements"
     );
-    assert_eq!(store.get("normal").await.unwrap().value_cloned(), 1);
-    assert_eq!(store.usage().weight, 4);
+    assert_eq!(
+        store.get("normal").await.unwrap().value_cloned(),
+        1,
+        "contract: incomplete admission plan preserves all live contents and replacements"
+    );
+    assert_eq!(
+        store.usage().weight,
+        4,
+        "contract: incomplete admission plan preserves all live contents and replacements"
+    );
 }
 
 #[tokio::test]
@@ -610,12 +860,21 @@ async fn capacity_evicts_low_then_normal_then_high_using_lru_ties() {
             )
             .await;
     }
-    assert!(store.get("low-a").await.is_some());
+    assert!(
+        store.get("low-a").await.is_some(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
     store
         .insert_at(Arc::from("normal-d"), entry(1, &options, now), now)
         .await;
-    assert!(store.get("low-b").await.is_none());
-    assert!(store.get("low-a").await.is_some());
+    assert!(
+        store.get("low-b").await.is_none(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
+    assert!(
+        store.get("low-a").await.is_some(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
     store
         .insert_at(
             Arc::from("high-e"),
@@ -623,11 +882,17 @@ async fn capacity_evicts_low_then_normal_then_high_using_lru_ties() {
             now,
         )
         .await;
-    assert!(store.get("low-a").await.is_none());
+    assert!(
+        store.get("low-a").await.is_none(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
     store
         .insert_at(Arc::from("normal-f"), entry(1, &options, now), now)
         .await;
-    assert!(store.get("normal-d").await.is_none());
+    assert!(
+        store.get("normal-d").await.is_none(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
     assert_eq!(
         store
             .insert_at(
@@ -636,11 +901,21 @@ async fn capacity_evicts_low_then_normal_then_high_using_lru_ties() {
                 now
             )
             .await,
-        MemoryAdmission::Rejected(CapacityRejection::ProtectedCapacity)
+        MemoryAdmission::Rejected(CapacityRejection::ProtectedCapacity),
+        "contract: capacity evicts low then normal then high using lru ties"
     );
-    assert!(store.get("high-c").await.is_some());
-    assert!(store.get("high-e").await.is_some());
-    assert!(store.get("normal-f").await.is_some());
+    assert!(
+        store.get("high-c").await.is_some(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
+    assert!(
+        store.get("high-e").await.is_some(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
+    assert!(
+        store.get("normal-f").await.is_some(),
+        "contract: capacity evicts low then normal then high using lru ties"
+    );
 }
 
 #[tokio::test]
@@ -657,11 +932,22 @@ async fn frozen_clock_survives_real_ttl_in_both_storage_modes() {
             .await;
         tokio::time::sleep(Duration::from_millis(45)).await;
         store.run_pending_tasks().await;
-        assert_eq!(store.get("frozen").await.unwrap().value_cloned(), 42);
+        assert_eq!(
+            store.get("frozen").await.unwrap().value_cloned(),
+            42,
+            "contract: frozen clock survives real ttl in both storage modes"
+        );
         clock.advance(Duration::from_millis(10));
-        assert!(store.get("frozen").await.is_none());
+        assert!(
+            store.get("frozen").await.is_none(),
+            "contract: frozen clock survives real ttl in both storage modes"
+        );
         store.run_pending_tasks().await;
-        assert_eq!(store.usage().entries, 0);
+        assert_eq!(
+            store.usage().entries,
+            0,
+            "contract: frozen clock survives real ttl in both storage modes"
+        );
     }
 }
 
@@ -691,9 +977,19 @@ async fn exact_snapshot_cleanup_and_passive_commit_preserve_equal_timestamp_repl
             .insert_at(Arc::from("key"), replacement, clock.now())
             .await;
         let current = store.get("key").await.unwrap();
-        assert_eq!(current.meta().created(), old.meta().created());
-        assert!(!current.is_same_instance(&old));
-        assert!(store.remove_if_same("key", &old).await.is_none());
+        assert_eq!(
+            current.meta().created(),
+            old.meta().created(),
+            "contract: exact snapshot cleanup and passive commit preserve equal timestamp replacement"
+        );
+        assert!(
+            !current.is_same_instance(&old),
+            "contract: exact snapshot cleanup and passive commit preserve equal timestamp replacement"
+        );
+        assert!(
+            store.remove_if_same("key", &old).await.is_none(),
+            "contract: exact snapshot cleanup and passive commit preserve equal timestamp replacement"
+        );
         assert_eq!(
             store
                 .insert_if_unchanged(
@@ -703,7 +999,8 @@ async fn exact_snapshot_cleanup_and_passive_commit_preserve_equal_timestamp_repl
                     clock.now()
                 )
                 .await,
-            MemoryAdmission::Rejected(CapacityRejection::VersionChanged)
+            MemoryAdmission::Rejected(CapacityRejection::VersionChanged),
+            "contract: exact snapshot cleanup and passive commit preserve equal timestamp replacement"
         );
         assert_eq!(
             store
@@ -714,9 +1011,14 @@ async fn exact_snapshot_cleanup_and_passive_commit_preserve_equal_timestamp_repl
                     clock.now()
                 )
                 .await,
-            MemoryAdmission::Rejected(CapacityRejection::VersionChanged)
+            MemoryAdmission::Rejected(CapacityRejection::VersionChanged),
+            "contract: exact snapshot cleanup and passive commit preserve equal timestamp replacement"
         );
-        assert_eq!(store.get("key").await.unwrap().value_cloned(), 2);
+        assert_eq!(
+            store.get("key").await.unwrap().value_cloned(),
+            2,
+            "contract: exact snapshot cleanup and passive commit preserve equal timestamp replacement"
+        );
     }
 }
 
@@ -822,12 +1124,17 @@ fn shared_plugin_has_independent_sessions_and_event_handles_do_not_extend_lifecy
                 key: Arc::from("a")
             })
             .subscribers,
-        0
+        0,
+        "contract: shared plugin has independent sessions and event handles do not extend lifecycle"
     );
     events_b.emit(CacheEvent::Miss {
         key: Arc::from("b"),
     });
-    assert_eq!(counts.starts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        counts.starts.load(Ordering::SeqCst),
+        2,
+        "contract: shared plugin has independent sessions and event handles do not extend lifecycle"
+    );
     assert_eq!(
         counts
             .events
@@ -836,16 +1143,29 @@ fn shared_plugin_has_independent_sessions_and_event_handles_do_not_extend_lifecy
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        ["alpha", "beta"]
+        ["alpha", "beta"],
+        "contract: shared plugin has independent sessions and event handles do not extend lifecycle"
     );
     std::mem::drop(host_a);
-    assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        counts.stops.load(Ordering::SeqCst),
+        1,
+        "contract: shared plugin has independent sessions and event handles do not extend lifecycle"
+    );
     events_a.emit(CacheEvent::Miss {
         key: Arc::from("stopped"),
     });
-    assert_eq!(counts.events.lock().unwrap().len(), 2);
+    assert_eq!(
+        counts.events.lock().unwrap().len(),
+        2,
+        "contract: shared plugin has independent sessions and event handles do not extend lifecycle"
+    );
     std::mem::drop(host_b);
-    assert_eq!(counts.stops.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        counts.stops.load(Ordering::SeqCst),
+        2,
+        "contract: shared plugin has independent sessions and event handles do not extend lifecycle"
+    );
 }
 
 #[tokio::test]
@@ -859,24 +1179,44 @@ async fn registration_guard_detaches_once_and_stopped_host_has_no_new_start_side
     events.emit(CacheEvent::Set {
         key: Arc::from("k"),
     });
-    assert_eq!(registration.stop().unwrap(), PluginStopOutcome::Stopped);
     assert_eq!(
         registration.stop().unwrap(),
-        PluginStopOutcome::AlreadyStopped
+        PluginStopOutcome::Stopped,
+        "contract: registration guard detaches once and stopped host has no new start side effects"
+    );
+    assert_eq!(
+        registration.stop().unwrap(),
+        PluginStopOutcome::AlreadyStopped,
+        "contract: registration guard detaches once and stopped host has no new start side effects"
     );
     registration.wait_stopped().await.unwrap();
     std::mem::drop(registration);
     events.emit(CacheEvent::Set {
         key: Arc::from("after"),
     });
-    assert_eq!(counts.events.lock().unwrap().len(), 1);
-    assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        counts.events.lock().unwrap().len(),
+        1,
+        "contract: registration guard detaches once and stopped host has no new start side effects"
+    );
+    assert_eq!(
+        counts.stops.load(Ordering::SeqCst),
+        1,
+        "contract: registration guard detaches once and stopped host has no new start side effects"
+    );
     owner.stop_all();
-    assert!(matches!(
-        owner.register(Arc::new(SessionPlugin::healthy(counts.clone()))),
-        Err(PluginError::HostStopped)
-    ));
-    assert_eq!(counts.starts.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            owner.register(Arc::new(SessionPlugin::healthy(counts.clone()))),
+            Err(PluginError::HostStopped)
+        ),
+        "contract: registration guard detaches once and stopped host has no new start side effects"
+    );
+    assert_eq!(
+        counts.starts.load(Ordering::SeqCst),
+        1,
+        "contract: registration guard detaches once and stopped host has no new start side effects"
+    );
 }
 
 #[test]
@@ -893,10 +1233,25 @@ fn failed_attachment_stops_completed_sessions_and_preserves_cause() {
         ],
     )
     .unwrap_err();
-    assert_eq!(error.source().unwrap().to_string(), "attachment failed");
-    assert_eq!(counts.starts.load(Ordering::SeqCst), 1);
-    assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
-    assert!(context.is_stopped());
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "attachment failed",
+        "contract: failed attachment stops completed sessions and preserves cause"
+    );
+    assert_eq!(
+        counts.starts.load(Ordering::SeqCst),
+        1,
+        "contract: failed attachment stops completed sessions and preserves cause"
+    );
+    assert_eq!(
+        counts.stops.load(Ordering::SeqCst),
+        1,
+        "contract: failed attachment stops completed sessions and preserves cause"
+    );
+    assert!(
+        context.is_stopped(),
+        "contract: failed attachment stops completed sessions and preserves cause"
+    );
 }
 
 #[test]
@@ -919,22 +1274,36 @@ fn event_errors_and_panics_are_isolated_from_other_attachments() {
     let emitted = events.emit_checked(CacheEvent::Miss {
         key: Arc::from("key"),
     });
-    assert_eq!(emitted.plugin_errors.len(), 2);
-    assert!(matches!(
-        emitted.plugin_errors[0],
-        PluginError::Failure {
-            stage: PluginStage::Event,
-            ..
-        }
-    ));
-    assert!(matches!(
-        emitted.plugin_errors[1],
-        PluginError::Panicked {
-            stage: PluginStage::Event,
-            ..
-        }
-    ));
-    assert_eq!(counts.events.lock().unwrap().len(), 1);
+    assert_eq!(
+        emitted.plugin_errors.len(),
+        2,
+        "contract: event errors and panics are isolated from other attachments"
+    );
+    assert!(
+        matches!(
+            emitted.plugin_errors[0],
+            PluginError::Failure {
+                stage: PluginStage::Event,
+                ..
+            }
+        ),
+        "contract: event errors and panics are isolated from other attachments"
+    );
+    assert!(
+        matches!(
+            emitted.plugin_errors[1],
+            PluginError::Panicked {
+                stage: PluginStage::Event,
+                ..
+            }
+        ),
+        "contract: event errors and panics are isolated from other attachments"
+    );
+    assert_eq!(
+        counts.events.lock().unwrap().len(),
+        1,
+        "contract: event errors and panics are isolated from other attachments"
+    );
     std::mem::drop(owner);
 }
 
@@ -958,17 +1327,23 @@ fn plugin_diagnostic_panics_and_required_runtime_are_typed() {
         }
     }
     let context = || PluginContext::new("cache", "id", Events::default()).unwrap();
-    assert!(matches!(
-        PluginHost::try_new(context(), vec![Arc::new(PanickingName)]),
-        Err(PluginError::Panicked {
-            stage: PluginStage::Start,
-            ..
-        })
-    ));
-    assert!(matches!(
-        PluginHost::try_new(context(), vec![Arc::new(AsyncPlugin)]),
-        Err(PluginError::MissingRuntime { .. })
-    ));
+    assert!(
+        matches!(
+            PluginHost::try_new(context(), vec![Arc::new(PanickingName)]),
+            Err(PluginError::Panicked {
+                stage: PluginStage::Start,
+                ..
+            })
+        ),
+        "contract: plugin diagnostic panics and required runtime are typed"
+    );
+    assert!(
+        matches!(
+            PluginHost::try_new(context(), vec![Arc::new(AsyncPlugin)]),
+            Err(PluginError::MissingRuntime { .. })
+        ),
+        "contract: plugin diagnostic panics and required runtime are typed"
+    );
 }
 
 #[tokio::test]
@@ -1010,8 +1385,16 @@ async fn plugin_can_stop_its_own_registration_without_deadlocking() {
     events.emit(CacheEvent::Set {
         key: Arc::from("k"),
     });
-    assert_eq!(*outcomes.lock().unwrap(), [PluginStopOutcome::Pending]);
-    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *outcomes.lock().unwrap(),
+        [PluginStopOutcome::Pending],
+        "contract: plugin can stop its own registration without deadlocking"
+    );
+    assert_eq!(
+        stopped.load(Ordering::SeqCst),
+        1,
+        "contract: plugin can stop its own registration without deadlocking"
+    );
     let registration = guard.lock().unwrap().take().unwrap();
     registration.wait_stopped().await.unwrap();
 }
@@ -1041,10 +1424,18 @@ async fn storage_eviction_reaches_plugin_and_observer_once() {
         observer.try_recv().unwrap(),
         CacheEvent::Eviction {
             key: Arc::from("old")
-        }
+        },
+        "contract: storage eviction reaches plugin and observer once"
     );
-    assert!(observer.try_recv().is_err());
-    assert_eq!(counts.events.lock().unwrap().len(), 1);
+    assert!(
+        observer.try_recv().is_err(),
+        "contract: storage eviction reaches plugin and observer once"
+    );
+    assert_eq!(
+        counts.events.lock().unwrap().len(),
+        1,
+        "contract: storage eviction reaches plugin and observer once"
+    );
     std::mem::drop(owner);
 }
 
@@ -1070,7 +1461,8 @@ fn retained_eviction_callbacks_and_value_destructors_reenter_after_unlock() {
                             .unwrap()
                             .usage()
                             .entries,
-                        0
+                        0,
+                        "contract: retained eviction callbacks and value destructors reenter after unlock"
                     );
                     self.calls.fetch_add(1, Ordering::SeqCst);
                 }
@@ -1116,8 +1508,15 @@ fn retained_eviction_callbacks_and_value_destructors_reenter_after_unlock() {
                 )
                 .await;
             clock.advance(Duration::from_millis(1));
-            assert!(store.get("expired").await.is_none());
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert!(
+                store.get("expired").await.is_none(),
+                "contract: retained eviction callbacks and value destructors reenter after unlock"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "contract: retained eviction callbacks and value destructors reenter after unlock"
+            );
             std::mem::drop(owner);
             let drops = Arc::new(AtomicUsize::new(0));
             let store = Arc::new(MemoryStore::with_clock(
@@ -1138,7 +1537,11 @@ fn retained_eviction_callbacks_and_value_destructors_reenter_after_unlock() {
                 .await;
             clock.advance(Duration::from_millis(1));
             store.run_pending_tasks().await;
-            assert_eq!(drops.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                1,
+                "contract: retained eviction callbacks and value destructors reenter after unlock"
+            );
         });
         done_tx.send(()).unwrap();
     });
@@ -1160,14 +1563,20 @@ async fn resilient_observer_counts_lag_and_continues_to_live_events() {
         observer.recv().await.unwrap(),
         CacheEvent::Set {
             key: Arc::from("8")
-        }
+        },
+        "contract: resilient observer counts lag and continues to live events"
     );
-    assert_eq!(observer.lost_events(), 8);
+    assert_eq!(
+        observer.lost_events(),
+        8,
+        "contract: resilient observer counts lag and continues to live events"
+    );
     assert_eq!(
         observer.recv().await.unwrap(),
         CacheEvent::Set {
             key: Arc::from("9")
-        }
+        },
+        "contract: resilient observer counts lag and continues to live events"
     );
     events.emit(CacheEvent::Miss {
         key: Arc::from("live"),
@@ -1176,10 +1585,14 @@ async fn resilient_observer_counts_lag_and_continues_to_live_events() {
         observer.recv().await.unwrap(),
         CacheEvent::Miss {
             key: Arc::from("live")
-        }
+        },
+        "contract: resilient observer counts lag and continues to live events"
     );
     std::mem::drop(events);
-    assert!(observer.recv().await.is_err());
+    assert!(
+        observer.recv().await.is_err(),
+        "contract: resilient observer counts lag and continues to live events"
+    );
 }
 
 #[test]
@@ -1195,16 +1608,22 @@ fn operation_observation_finishes_once_and_drop_reports_cancellation() {
     );
     operation.set_level(CacheLevel::Distributed);
     operation.finish(OperationOutcome::Hit);
-    assert!(matches!(
-        observer.try_recv().unwrap(),
-        CacheEvent::OperationCompleted {
-            operation: CacheOperation::TryGet,
-            outcome: OperationOutcome::Hit,
-            level: Some(CacheLevel::Distributed),
-            ..
-        }
-    ));
-    assert!(observer.try_recv().is_err());
+    assert!(
+        matches!(
+            observer.try_recv().unwrap(),
+            CacheEvent::OperationCompleted {
+                operation: CacheOperation::TryGet,
+                outcome: OperationOutcome::Hit,
+                level: Some(CacheLevel::Distributed),
+                ..
+            }
+        ),
+        "contract: operation observation finishes once and drop reports cancellation"
+    );
+    assert!(
+        observer.try_recv().is_err(),
+        "contract: operation observation finishes once and drop reports cancellation"
+    );
     std::mem::drop(OperationObservation::new(
         events,
         "cache",
@@ -1212,15 +1631,21 @@ fn operation_observation_finishes_once_and_drop_reports_cancellation() {
         CacheOperation::Set,
         None,
     ));
-    assert!(matches!(
-        observer.try_recv().unwrap(),
-        CacheEvent::OperationCompleted {
-            operation: CacheOperation::Set,
-            outcome: OperationOutcome::Cancelled,
-            ..
-        }
-    ));
-    assert!(observer.try_recv().is_err());
+    assert!(
+        matches!(
+            observer.try_recv().unwrap(),
+            CacheEvent::OperationCompleted {
+                operation: CacheOperation::Set,
+                outcome: OperationOutcome::Cancelled,
+                ..
+            }
+        ),
+        "contract: operation observation finishes once and drop reports cancellation"
+    );
+    assert!(
+        observer.try_recv().is_err(),
+        "contract: operation observation finishes once and drop reports cancellation"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1283,21 +1708,41 @@ async fn owning_shutdown_waits_detached_draining_callbacks_and_retains_failures(
         })
     });
     entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert_eq!(registration.stop().unwrap(), PluginStopOutcome::Pending);
+    assert_eq!(
+        registration.stop().unwrap(),
+        PluginStopOutcome::Pending,
+        "contract: owning shutdown waits detached draining callbacks and retains failures"
+    );
     let closing = owner.clone();
     let shutdown = tokio::spawn(async move { closing.shutdown().await });
     tokio::time::sleep(Duration::from_millis(15)).await;
-    assert!(!shutdown.is_finished());
+    assert!(
+        !shutdown.is_finished(),
+        "contract: owning shutdown waits detached draining callbacks and retains failures"
+    );
     release_tx.send(()).unwrap();
     callback.join().unwrap();
     let errors = shutdown.await.unwrap();
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].source().unwrap().to_string(), "teardown source");
+    assert_eq!(
+        errors.len(),
+        1,
+        "contract: owning shutdown waits detached draining callbacks and retains failures"
+    );
+    assert_eq!(
+        errors[0].source().unwrap().to_string(),
+        "teardown source",
+        "contract: owning shutdown waits detached draining callbacks and retains failures"
+    );
     assert_eq!(
         owner.shutdown().await[0].source().unwrap().to_string(),
-        "teardown source"
+        "teardown source",
+        "contract: owning shutdown waits detached draining callbacks and retains failures"
     );
-    assert_eq!(stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        1,
+        "contract: owning shutdown waits detached draining callbacks and retains failures"
+    );
 }
 
 #[test]
@@ -1311,29 +1756,37 @@ fn cloned_shutdown_report_keeps_the_same_nonempty_failure_sources() {
         [],
     );
     let again = report.clone();
-    assert_eq!(report.failures().len(), 1);
-    assert!(std::ptr::eq(
-        report.failures().as_ptr(),
-        again.failures().as_ptr()
-    ));
+    assert_eq!(
+        report.failures().len(),
+        1,
+        "contract: cloned shutdown report keeps the same nonempty failure sources"
+    );
+    assert!(
+        std::ptr::eq(report.failures().as_ptr(), again.failures().as_ptr()),
+        "contract: cloned shutdown report keeps the same nonempty failure sources"
+    );
     let error: Error = report.into();
     assert_eq!(
         OperationOutcome::from_error(&error),
-        OperationOutcome::ShutdownError
+        OperationOutcome::ShutdownError,
+        "contract: cloned shutdown report keeps the same nonempty failure sources"
     );
     assert_eq!(
         error.source().unwrap().source().unwrap().to_string(),
-        "retained source"
+        "retained source",
+        "contract: cloned shutdown report keeps the same nonempty failure sources"
     );
     assert_eq!(
         OperationOutcome::from_error(&Error::CacheClosed),
-        OperationOutcome::CacheClosed
+        OperationOutcome::CacheClosed,
+        "contract: cloned shutdown report keeps the same nonempty failure sources"
     );
     assert_eq!(
         OperationOutcome::from_error(&Error::OperationCancelled {
             reason: FactoryCancellationReason::CallerCancelled
         }),
-        OperationOutcome::Cancelled
+        OperationOutcome::Cancelled,
+        "contract: cloned shutdown report keeps the same nonempty failure sources"
     );
 }
 
@@ -1349,7 +1802,11 @@ async fn configured_jitter_is_invoked_and_validated_even_with_zero_maximum() {
     }
     impl JitterSource for Source {
         fn sample(&self, maximum: Duration) -> Duration {
-            assert_eq!(maximum, Duration::ZERO);
+            assert_eq!(
+                maximum,
+                Duration::ZERO,
+                "contract: configured jitter is invoked and validated even with zero maximum"
+            );
             self.calls.fetch_add(1, Ordering::SeqCst);
             match self.answer {
                 Answer::Zero => Duration::ZERO,
@@ -1376,20 +1833,40 @@ async fn configured_jitter_is_invoked_and_validated_even_with_zero_maximum() {
             .await;
         if valid {
             set.unwrap();
-            assert_eq!(cold.unwrap(), 2);
+            assert_eq!(
+                cold.unwrap(),
+                2,
+                "contract: configured jitter is invoked and validated even with zero maximum"
+            );
         } else {
-            assert!(matches!(
-                set,
-                Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
-            ));
-            assert!(matches!(
-                cold,
-                Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
-            ));
-            assert!(cache.try_get("set").await.unwrap().is_none());
-            assert!(cache.try_get("cold").await.unwrap().is_none());
+            assert!(
+                matches!(
+                    set,
+                    Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
+                ),
+                "contract: configured jitter is invoked and validated even with zero maximum"
+            );
+            assert!(
+                matches!(
+                    cold,
+                    Err(Error::Config(ConfigError::InvalidJitterSample { .. }))
+                ),
+                "contract: configured jitter is invoked and validated even with zero maximum"
+            );
+            assert!(
+                cache.try_get("set").await.unwrap().is_none(),
+                "contract: configured jitter is invoked and validated even with zero maximum"
+            );
+            assert!(
+                cache.try_get("cold").await.unwrap().is_none(),
+                "contract: configured jitter is invoked and validated even with zero maximum"
+            );
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "contract: configured jitter is invoked and validated even with zero maximum"
+        );
         cache.shutdown().await.unwrap();
     }
 }

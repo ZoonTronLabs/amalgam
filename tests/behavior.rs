@@ -58,7 +58,11 @@ async fn stampede_runs_factory_once() {
         }));
     }
     for h in handles {
-        assert_eq!(h.await.unwrap().unwrap(), 42);
+        assert_eq!(
+            h.await.unwrap().unwrap(),
+            42,
+            "contract: stampede runs factory once"
+        );
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -82,7 +86,10 @@ async fn fail_safe_serves_stale_on_factory_error() {
         .options(|_| opts.clone())
         .await
         .unwrap();
-    assert_eq!(primed, "fresh");
+    assert_eq!(
+        primed, "fresh",
+        "contract: fail safe serves stale on factory error"
+    );
 
     clock.advance(Duration::from_secs(20)); // logically stale, physically alive
 
@@ -111,7 +118,10 @@ async fn fail_safe_default_used_when_no_stale() {
         .fail_safe_default(Some("default".to_owned()))
         .await
         .unwrap();
-    assert_eq!(served, "default");
+    assert_eq!(
+        served, "default",
+        "contract: fail safe default used when no stale"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -123,7 +133,10 @@ async fn factory_error_propagates_without_fail_safe() {
             amalgam::source::factory(|ctx| async move { Err(ctx.fail("boom")) }),
         )
         .await;
-    assert!(matches!(result, Err(Error::Factory { .. })));
+    assert!(
+        matches!(result, Err(Error::Factory { .. })),
+        "contract: factory error propagates without fail safe"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -192,7 +205,10 @@ async fn hard_timeout_without_fallback_errors() {
         )
         .options(|_| opts)
         .await;
-    assert!(matches!(result, Err(Error::FactoryTimeout { .. })));
+    assert!(
+        matches!(result, Err(Error::FactoryTimeout { .. })),
+        "contract: hard timeout without fallback errors"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -244,7 +260,11 @@ async fn eager_refresh_triggers_background_update() {
         2,
         "eager refresh ran the factory in background"
     );
-    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&2));
+    assert_eq!(
+        cache.try_get("k").await.unwrap().as_ref(),
+        Some(&2),
+        "contract: eager refresh triggers background update"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -283,8 +303,15 @@ async fn expired_entry_without_fail_safe_reruns_factory() {
             .await
             .unwrap()
     };
-    assert_eq!(v, 2);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        v, 2,
+        "contract: expired entry without fail safe reruns factory"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "contract: expired entry without fail safe reruns factory"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -369,11 +396,16 @@ async fn conditional_refresh_not_modified_reuses_stale_and_bumps_expiration() {
             .unwrap()
     };
     assert_eq!(served, "data-v1", "NotModified reuses the stale value");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: conditional refresh not modified reuses stale and bumps expiration"
+    );
     // Expiration was bumped ⇒ now fresh again at the current clock.
     assert_eq!(
         cache.try_get("k").await.unwrap().as_ref(),
-        Some(&"data-v1".to_owned())
+        Some(&"data-v1".to_owned()),
+        "contract: conditional refresh not modified reuses stale and bumps expiration"
     );
 }
 
@@ -404,7 +436,10 @@ async fn conditional_refresh_modified_replaces_value() {
         .options(|_| opts)
         .await
         .unwrap();
-    assert_eq!(served, "data-v2");
+    assert_eq!(
+        served, "data-v2",
+        "contract: conditional refresh modified replaces value"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -450,7 +485,11 @@ async fn remove_by_tag_invalidates_matching_entries() {
             .unwrap()
     };
     assert_eq!(v, 2, "tagged entry was invalidated and the factory re-ran");
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "contract: remove by tag invalidates matching entries"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -483,10 +522,13 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
     }
 
     clock.advance(Duration::from_secs(1));
-    assert!(matches!(
-        cache.remove_by_tag("group").await,
-        Err(Error::Marker(amalgam::advanced::MarkerError::Unsupported))
-    )); // The typed API exposes the error previously swallowed by the adapter.
+    assert!(
+        matches!(
+            cache.remove_by_tag("group").await,
+            Err(Error::Marker(amalgam::advanced::MarkerError::Unsupported))
+        ),
+        "contract: disabled tagging reports unsupported without invalidating values"
+    ); // The typed API exposes the error previously swallowed by the adapter.
     clock.advance(Duration::from_secs(1));
 
     let v = {
@@ -514,12 +556,18 @@ async fn disabled_tagging_reports_unsupported_without_invalidating_values() {
 #[test]
 fn strict_initial_subscription_wait_is_configurable() {
     let on: Cache<i32> = Cache::builder().strict().try_build().unwrap();
-    assert!(on.wait_for_initial_backplane_subscribe());
+    assert!(
+        on.wait_for_initial_backplane_subscribe(),
+        "contract: strict initial subscription wait is configurable"
+    );
     let off: Cache<i32> = Cache::builder()
         .wait_for_initial_backplane_subscribe(false)
         .try_build()
         .unwrap();
-    assert!(!off.wait_for_initial_backplane_subscribe());
+    assert!(
+        !off.wait_for_initial_backplane_subscribe(),
+        "contract: strict initial subscription wait is configurable"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -527,23 +575,48 @@ async fn clear_removes_everything() {
     let (cache, _clock) = build::<i32>();
     cache.set("a", 1).await.unwrap();
     cache.set("b", 2).await.unwrap();
-    assert_eq!(cache.try_get("a").await.unwrap().as_ref(), Some(&1));
+    assert_eq!(
+        cache.try_get("a").await.unwrap().as_ref(),
+        Some(&1),
+        "contract: clear removes everything"
+    );
 
     cache.clear(amalgam::ClearMode::Remove).await.unwrap(); // hard remove
     cache.run_pending_tasks().await.unwrap();
-    assert!(cache.try_get("a").await.unwrap().is_none());
-    assert!(cache.try_get("b").await.unwrap().is_none());
+    assert!(
+        cache.try_get("a").await.unwrap().is_none(),
+        "contract: clear removes everything"
+    );
+    assert!(
+        cache.try_get("b").await.unwrap().is_none(),
+        "contract: clear removes everything"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn try_get_and_get_or_default() {
     let cache: Cache<i32> = Cache::new();
-    assert!(cache.try_get("k").await.unwrap().is_none());
-    assert_eq!(cache.get_or_default("k", -1).await.unwrap(), -1);
+    assert!(
+        cache.try_get("k").await.unwrap().is_none(),
+        "contract: try get and get or default"
+    );
+    assert_eq!(
+        cache.get_or_default("k", -1).await.unwrap(),
+        -1,
+        "contract: try get and get or default"
+    );
 
     cache.set("k", 5).await.unwrap();
-    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&5));
-    assert_eq!(cache.get_or_default("k", -1).await.unwrap(), 5);
+    assert_eq!(
+        cache.try_get("k").await.unwrap().as_ref(),
+        Some(&5),
+        "contract: try get and get or default"
+    );
+    assert_eq!(
+        cache.get_or_default("k", -1).await.unwrap(),
+        5,
+        "contract: try get and get or default"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -561,7 +634,10 @@ async fn allow_stale_on_read_only_serves_stale() {
     clock.advance(Duration::from_secs(20)); // stale
 
     // Default read-only: stale hidden.
-    assert!(cache.try_get("k").await.unwrap().is_none());
+    assert!(
+        cache.try_get("k").await.unwrap().is_none(),
+        "contract: allow stale on read only serves stale"
+    );
     // With allow_stale_on_read_only: stale visible.
     let stale_opts = EntryOptions::new(Duration::from_secs(10)).with_allow_stale_on_read_only(true);
     assert_eq!(
@@ -571,7 +647,8 @@ async fn allow_stale_on_read_only_serves_stale() {
             .await
             .unwrap()
             .as_ref(),
-        Some(&9)
+        Some(&9),
+        "contract: allow stale on read only serves stale"
     );
 }
 

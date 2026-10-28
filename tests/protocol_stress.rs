@@ -48,11 +48,20 @@ fn codecs() -> Vec<Codec> {
 }
 
 fn assert_snapshot_same(left: &DistributedSnapshot<Vec<u8>>, right: &DistributedSnapshot<Vec<u8>>) {
-    assert_eq!(left.inserted_at(), right.inserted_at());
-    assert_eq!(left.retention(), right.retention());
+    assert_eq!(
+        left.inserted_at(),
+        right.inserted_at(),
+        "contract: assert snapshot same"
+    );
+    assert_eq!(
+        left.retention(),
+        right.retention(),
+        "contract: assert snapshot same"
+    );
     assert_eq!(
         serde_json::to_value(left.entry()).expect("serializable fixture"),
-        serde_json::to_value(right.entry()).expect("serializable fixture")
+        serde_json::to_value(right.entry()).expect("serializable fixture"),
+        "contract: assert snapshot same"
     );
 }
 
@@ -107,15 +116,32 @@ fn seeded_roundtrips_preserve_metadata_retention_and_remaining_lifetime() {
             let now = inserted.saturating_add(Duration::from_secs(1));
             assert_eq!(
                 decoded.backend_ttl_at(now),
-                physical.saturating_duration_since(now)
+                physical.saturating_duration_since(now),
+                "contract: seeded roundtrips preserve metadata retention and remaining lifetime"
             );
-            assert_eq!(decoded.backend_ttl_at(physical), Duration::ZERO);
-            assert_eq!(decoded.backend_ttl_at(Timestamp::MAX), Duration::ZERO);
+            assert_eq!(
+                decoded.backend_ttl_at(physical),
+                Duration::ZERO,
+                "contract: seeded roundtrips preserve metadata retention and remaining lifetime"
+            );
+            assert_eq!(
+                decoded.backend_ttl_at(Timestamp::MAX),
+                Duration::ZERO,
+                "contract: seeded roundtrips preserve metadata retention and remaining lifetime"
+            );
 
             let legacy = codec.serialize(snapshot.entry()).expect("encode legacy");
             let legacy = codec.deserialize_snapshot(&legacy).expect("read legacy");
-            assert_eq!(legacy.retention(), SnapshotRetention::Unspecified);
-            assert_eq!(legacy.entry().value, snapshot.entry().value);
+            assert_eq!(
+                legacy.retention(),
+                SnapshotRetention::Unspecified,
+                "contract: seeded roundtrips preserve metadata retention and remaining lifetime"
+            );
+            assert_eq!(
+                legacy.entry().value,
+                snapshot.entry().value,
+                "contract: seeded roundtrips preserve metadata retention and remaining lifetime"
+            );
         }
     }
 }
@@ -145,11 +171,17 @@ fn malformed_wire_never_panics_or_returns_an_invalid_snapshot() {
         for version in [0, 1, 3, 255] {
             let mut bytes = b"AMALGAM\0".to_vec();
             bytes.extend([version, 255, 255, 255, 255]);
-            assert!(codec.deserialize_snapshot(&bytes).is_err());
+            assert!(
+                codec.deserialize_snapshot(&bytes).is_err(),
+                "contract: malformed wire never panics or returns an invalid snapshot"
+            );
         }
         let mut huge_header = b"AMALGAM\0".to_vec();
         huge_header.extend([2, 255, 255, 255, 255]);
-        assert!(codec.deserialize_snapshot(&huge_header).is_err());
+        assert!(
+            codec.deserialize_snapshot(&huge_header).is_err(),
+            "contract: malformed wire never panics or returns an invalid snapshot"
+        );
     }
 }
 
@@ -186,10 +218,24 @@ fn seeded_notifications_preserve_data_control_separation_and_namespace() {
         .expect("data frame");
         match BackplaneCommand::from_message(envelope).expect("data decode") {
             BackplaneCommand::Data(message) => {
-                assert_eq!(message.source_id.as_ref(), source);
-                assert_eq!(message.key.as_ref(), key);
-                assert_eq!(message.timestamp, timestamp);
-                assert_eq!(message.action, action);
+                assert_eq!(
+                    message.source_id.as_ref(),
+                    source,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
+                assert_eq!(
+                    message.key.as_ref(),
+                    key,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
+                assert_eq!(
+                    message.timestamp, timestamp,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
+                assert_eq!(
+                    message.action, action,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
             }
             BackplaneCommand::Marker(_) => panic!("ordinary data became control"),
         }
@@ -216,10 +262,26 @@ fn seeded_notifications_preserve_data_control_separation_and_namespace() {
         .expect("marker frame");
         match BackplaneCommand::from_message(envelope.clone()).expect("marker decode") {
             BackplaneCommand::Marker(command) => {
-                assert_eq!(command.source_id(), source);
-                assert_eq!(command.scope(), &scope);
-                assert_eq!(command.marker().kind(), &kind);
-                assert_eq!(command.marker().version().timestamp(), timestamp);
+                assert_eq!(
+                    command.source_id(),
+                    source,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
+                assert_eq!(
+                    command.scope(),
+                    &scope,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
+                assert_eq!(
+                    command.marker().kind(),
+                    &kind,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
+                assert_eq!(
+                    command.marker().version().timestamp(),
+                    timestamp,
+                    "contract: seeded notifications preserve data control separation and namespace"
+                );
             }
             BackplaneCommand::Data(_) => panic!("control became data"),
         }
@@ -229,7 +291,10 @@ fn seeded_notifications_preserve_data_control_separation_and_namespace() {
         } else {
             Timestamp::MAX
         };
-        assert!(BackplaneCommand::from_message(inconsistent).is_err());
+        assert!(
+            BackplaneCommand::from_message(inconsistent).is_err(),
+            "contract: seeded notifications preserve data control separation and namespace"
+        );
     }
 }
 
@@ -276,7 +341,12 @@ async fn repeated_compaction_preserves_every_prior_tombstone_across_signed_revis
             .read(&other, &MarkerKind::ClearRemove)
             .await
             .expect("isolated read")
-            .is_none()
+            .is_none(),
+        "contract: repeated compaction preserves every prior tombstone across signed revisions"
     );
-    assert_eq!(store.scope_count(), 1);
+    assert_eq!(
+        store.scope_count(),
+        1,
+        "contract: repeated compaction preserves every prior tombstone across signed revisions"
+    );
 }

@@ -128,7 +128,7 @@ fn fence_retirement(case: Retirement) {
         Retirement::Stop | Retirement::Supersede | Retirement::Cancel => 0,
         Retirement::Replace | Retirement::CapacityEviction => 1,
     };
-    assert_eq!(remaining, expected);
+    assert_eq!(remaining, expected, "contract: fence retirement");
     service.stop();
 }
 #[test]
@@ -175,11 +175,14 @@ fn recovery_reads_extension_generation_outside_queue_mutex() {
             finished.send(admitted.unwrap()).unwrap();
         }
     });
-    assert!(matches!(
-        done.recv_timeout(Duration::from_secs(1))
-            .expect("generation callback ran under the queue mutex"),
-        EnqueueOutcome::Queued(_)
-    ));
+    assert!(
+        matches!(
+            done.recv_timeout(Duration::from_secs(1))
+                .expect("generation callback ran under the queue mutex"),
+            EnqueueOutcome::Queued(_)
+        ),
+        "contract: recovery reads extension generation outside queue mutex"
+    );
     worker.join().unwrap();
     service.stop();
 }
@@ -192,7 +195,10 @@ fn enabled_recovery_rejects_unrepresentable_reconnect_delay_before_start() {
         },
         Arc::new(ManualClock::new(Timestamp::from_ticks(0))),
     );
-    assert!(matches!(result, Err(RecoveryError::InvalidBarrier)));
+    assert!(
+        matches!(result, Err(RecoveryError::InvalidBarrier)),
+        "contract: enabled recovery rejects unrepresentable reconnect delay before start"
+    );
 }
 #[test]
 fn disabled_recovery_accepts_unused_delay_without_starting_work() {
@@ -206,18 +212,24 @@ fn disabled_recovery_accepts_unused_delay_without_starting_work() {
     )
     .unwrap();
     let (dropped, _received) = mpsc::channel();
-    assert!(matches!(
-        service
-            .enqueue_versioned(
-                work("key", 60),
-                Arc::new(ReentrantFence {
-                    service: Arc::downgrade(&service),
-                    generation: OperationGeneration::new(1),
-                    dropped
-                })
-            )
-            .unwrap(),
-        EnqueueOutcome::Disabled
-    ));
-    assert!(service.is_empty());
+    assert!(
+        matches!(
+            service
+                .enqueue_versioned(
+                    work("key", 60),
+                    Arc::new(ReentrantFence {
+                        service: Arc::downgrade(&service),
+                        generation: OperationGeneration::new(1),
+                        dropped
+                    })
+                )
+                .unwrap(),
+            EnqueueOutcome::Disabled
+        ),
+        "contract: disabled recovery accepts unused delay without starting work"
+    );
+    assert!(
+        service.is_empty(),
+        "contract: disabled recovery accepts unused delay without starting work"
+    );
 }

@@ -47,15 +47,45 @@ mod tests {
         let fits = "k".repeat(INLINE_KEY - 3);
         for key in ["", "key", "ключ ✓", fits.as_str(), long.as_str()] {
             let joined = prefix.physical(key);
-            assert_eq!(&*joined, format!("v2:{key}"));
-            assert_eq!(joined.to_string(), format!("v2:{key}"));
-            assert_eq!(prefix.logical(&joined), Some(key));
+            assert_eq!(
+                &*joined,
+                format!("v2:{key}"),
+                "contract: physical keys join inline and on the heap identically"
+            );
+            assert_eq!(
+                joined.to_string(),
+                format!("v2:{key}"),
+                "contract: physical keys join inline and on the heap identically"
+            );
+            assert_eq!(
+                prefix.logical(&joined),
+                Some(key),
+                "contract: physical keys join inline and on the heap identically"
+            );
             let joined = suffix.physical(key);
-            assert_eq!(&*joined, format!("{key}:v2"));
-            assert_eq!(suffix.logical(&joined), Some(key));
-            assert_eq!(&*plain.physical(key), key);
+            assert_eq!(
+                &*joined,
+                format!("{key}:v2"),
+                "contract: physical keys join inline and on the heap identically"
+            );
+            assert_eq!(
+                suffix.logical(&joined),
+                Some(key),
+                "contract: physical keys join inline and on the heap identically"
+            );
+            assert_eq!(
+                &*plain.physical(key),
+                key,
+                "contract: physical keys join inline and on the heap identically"
+            );
         }
-        assert!(matches!(prefix.physical(&fits), PhysicalKey::Inline { .. }));
-        assert!(matches!(prefix.physical(&long), PhysicalKey::Owned(_)));
+        assert!(
+            matches!(prefix.physical(&fits), PhysicalKey::Inline { .. }),
+            "contract: physical keys join inline and on the heap identically"
+        );
+        assert!(
+            matches!(prefix.physical(&long), PhysicalKey::Owned(_)),
+            "contract: physical keys join inline and on the heap identically"
+        );
     }
 }

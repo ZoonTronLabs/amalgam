@@ -110,7 +110,8 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
                 .await
                 .unwrap()
                 .as_ref(),
-            Some(&7)
+            Some(&7),
+            "contract: codec preference uses the available model for write read and expiration"
         );
         clock.advance(Duration::from_millis(1));
         let _ = cache
@@ -131,24 +132,63 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
             })
             .await
             .unwrap();
-        assert_eq!(stale.as_ref(), Some(&7));
+        assert_eq!(
+            stale.as_ref(),
+            Some(&7),
+            "contract: codec preference uses the available model for write read and expiration"
+        );
         if expected_async {
-            assert!(counts.async_encode.load(Ordering::SeqCst) >= 2);
-            assert!(counts.async_decode.load(Ordering::SeqCst) >= 2);
-            assert_eq!(counts.sync_encode.load(Ordering::SeqCst), 0);
-            assert_eq!(counts.sync_decode.load(Ordering::SeqCst), 0);
+            assert!(
+                counts.async_encode.load(Ordering::SeqCst) >= 2,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
+            assert!(
+                counts.async_decode.load(Ordering::SeqCst) >= 2,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
+            assert_eq!(
+                counts.sync_encode.load(Ordering::SeqCst),
+                0,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
+            assert_eq!(
+                counts.sync_decode.load(Ordering::SeqCst),
+                0,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
         } else {
-            assert!(counts.sync_encode.load(Ordering::SeqCst) >= 2);
-            assert!(counts.sync_decode.load(Ordering::SeqCst) >= 2);
-            assert_eq!(counts.async_encode.load(Ordering::SeqCst), 0);
-            assert_eq!(counts.async_decode.load(Ordering::SeqCst), 0);
+            assert!(
+                counts.sync_encode.load(Ordering::SeqCst) >= 2,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
+            assert!(
+                counts.sync_decode.load(Ordering::SeqCst) >= 2,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
+            assert_eq!(
+                counts.async_encode.load(Ordering::SeqCst),
+                0,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
+            assert_eq!(
+                counts.async_decode.load(Ordering::SeqCst),
+                0,
+                "contract: codec preference uses the available model for write read and expiration"
+            );
         }
         match mode {
             SerializationMode::AsyncPreferred => {
-                assert_eq!(counts.sync_queries.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    counts.sync_queries.load(Ordering::SeqCst),
+                    0,
+                    "contract: codec preference uses the available model for write read and expiration"
+                );
             }
             SerializationMode::SyncPreferred => {
-                assert!(counts.sync_queries.load(Ordering::SeqCst) >= 4);
+                assert!(
+                    counts.sync_queries.load(Ordering::SeqCst) >= 4,
+                    "contract: codec preference uses the available model for write read and expiration"
+                );
             }
         }
         cache.shutdown().await.unwrap();
@@ -199,32 +239,46 @@ async fn cancelling_a_parked_async_codec_releases_it_without_committing_either_l
             .into_future(),
     );
     std::future::poll_fn(|cx| {
-        assert!(operation.as_mut().poll(cx).is_pending());
+        assert!(
+            operation.as_mut().poll(cx).is_pending(),
+            "contract: cancelling a parked async codec releases it without committing either layer"
+        );
         Poll::Ready(())
     })
     .await;
     entered.notified().await;
-    assert_eq!(source.cancel(), CancellationRequest::Cancelled);
+    assert_eq!(
+        source.cancel(),
+        CancellationRequest::Cancelled,
+        "contract: cancelling a parked async codec releases it without committing either layer"
+    );
     assert_eq!(
         dropped.load(Ordering::SeqCst),
         1,
         "cancellation must drop the codec before a caller repolls"
     );
-    assert!(matches!(
-        operation.await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            operation.await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: cancelling a parked async codec releases it without committing either layer"
+    );
     assert!(
         cache
             .try_get("value")
             .options(|_| EntryOptions::default().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: cancelling a parked async codec releases it without committing either layer"
     );
-    assert!(backend.get("v2:value").await.unwrap().is_none());
+    assert!(
+        backend.get("v2:value").await.unwrap().is_none(),
+        "contract: cancelling a parked async codec releases it without committing either layer"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -271,7 +325,8 @@ async fn legacy_snapshot_overrides_keep_their_contract_even_with_async_preferenc
             .await
             .unwrap()
             .as_ref(),
-        Some(&7)
+        Some(&7),
+        "contract: legacy snapshot overrides keep their contract even with async preference"
     );
     cache.shutdown().await.unwrap();
 }

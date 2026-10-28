@@ -24,7 +24,8 @@ async fn plain_result_and_custom_error_keep_value_and_original_source() {
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: plain result and custom error keep value and original source"
     );
     let id = Arc::new(());
     let original = id.clone();
@@ -35,20 +36,26 @@ async fn plain_result_and_custom_error_keep_value_and_original_source() {
         )
         .await
         .unwrap_err();
-    assert!(Arc::ptr_eq(
-        &id,
-        &error
-            .source()
-            .unwrap()
-            .downcast_ref::<FactoryError>()
-            .unwrap()
-            .source()
-            .unwrap()
-            .downcast_ref::<OriginError>()
-            .unwrap()
-            .0
-    ));
-    assert!(cache.try_get("error").await.unwrap().is_none());
+    assert!(
+        Arc::ptr_eq(
+            &id,
+            &error
+                .source()
+                .unwrap()
+                .downcast_ref::<FactoryError>()
+                .unwrap()
+                .source()
+                .unwrap()
+                .downcast_ref::<OriginError>()
+                .unwrap()
+                .0
+        ),
+        "contract: plain result and custom error keep value and original source"
+    );
+    assert!(
+        cache.try_get("error").await.unwrap().is_none(),
+        "contract: plain result and custom error keep value and original source"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -63,7 +70,8 @@ fn blocking_factory_accepts_the_same_plain_value_and_custom_error() {
             )
             .execute()
             .unwrap(),
-        7
+        7,
+        "contract: blocking factory accepts the same plain value and custom error"
     );
     let id = Arc::new(());
     let original = id.clone();
@@ -74,19 +82,22 @@ fn blocking_factory_accepts_the_same_plain_value_and_custom_error() {
         )
         .execute()
         .unwrap_err();
-    assert!(Arc::ptr_eq(
-        &id,
-        &error
-            .source()
-            .unwrap()
-            .downcast_ref::<FactoryError>()
-            .unwrap()
-            .source()
-            .unwrap()
-            .downcast_ref::<OriginError>()
-            .unwrap()
-            .0
-    ));
+    assert!(
+        Arc::ptr_eq(
+            &id,
+            &error
+                .source()
+                .unwrap()
+                .downcast_ref::<FactoryError>()
+                .unwrap()
+                .source()
+                .unwrap()
+                .downcast_ref::<OriginError>()
+                .unwrap()
+                .0
+        ),
+        "contract: blocking factory accepts the same plain value and custom error"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -111,9 +122,16 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
         )
         .await
         .unwrap();
-    assert_eq!(value, 9);
+    assert_eq!(
+        value, 9,
+        "contract: raw pending factory retains mutated options and tags"
+    );
     clock.advance(Duration::from_secs(1));
-    assert_eq!(cache.try_get("adaptive").await.unwrap().as_ref(), Some(&9));
+    assert_eq!(
+        cache.try_get("adaptive").await.unwrap().as_ref(),
+        Some(&9),
+        "contract: raw pending factory retains mutated options and tags"
+    );
     let _ = cache
         .remove_by_tag(Tag::new("adapted").unwrap())
         .with_receipt()
@@ -122,6 +140,9 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
         .wait()
         .await
         .unwrap();
-    assert!(cache.try_get("adaptive").await.unwrap().is_none());
+    assert!(
+        cache.try_get("adaptive").await.unwrap().is_none(),
+        "contract: raw pending factory retains mutated options and tags"
+    );
     cache.shutdown().await.unwrap();
 }

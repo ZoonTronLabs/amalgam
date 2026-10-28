@@ -20,9 +20,9 @@ fn first_use_collisions_and_competing_writers_never_overlap_value_access() {
                 loom::thread::spawn(move || {
                     if id == 0 {
                         let value = slots.read();
-                        assert_eq!(value.0, value.1);
+                        assert_eq!(value.0, value.1, "contract: first use collisions and competing writers never overlap value access");
                         loom::thread::yield_now();
-                        assert_eq!(value.0, value.1);
+                        assert_eq!(value.0, value.1, "contract: first use collisions and competing writers never overlap value access");
                     } else if let Some(mut value) = slots.try_write() {
                         value.0 += 1;
                         loom::thread::yield_now();
@@ -35,7 +35,10 @@ fn first_use_collisions_and_competing_writers_never_overlap_value_access() {
             thread.join().unwrap();
         }
         let value = slots.read();
-        assert_eq!(value.0, value.1);
+        assert_eq!(
+            value.0, value.1,
+            "contract: first use collisions and competing writers never overlap value access"
+        );
     });
 }
 
@@ -48,9 +51,15 @@ fn colliding_readers_publish_their_slot_before_exclusive_access() {
                 let slots = slots.clone();
                 loom::thread::spawn(move || {
                     let value = slots.read();
-                    assert!(*value <= 1);
+                    assert!(
+                        *value <= 1,
+                        "contract: colliding readers publish their slot before exclusive access"
+                    );
                     loom::thread::yield_now();
-                    assert!(*value <= 1);
+                    assert!(
+                        *value <= 1,
+                        "contract: colliding readers publish their slot before exclusive access"
+                    );
                 })
             })
             .collect();
@@ -69,7 +78,13 @@ fn opening_writer_gate_does_not_lose_a_parked_reader() {
         let slots = Arc::new(ReaderSlots::with_slots(0, 1));
         let hold = slots.write();
         let reader = slots.clone();
-        let reader = loom::thread::spawn(move || assert_eq!(*reader.read(), 0));
+        let reader = loom::thread::spawn(move || {
+            assert_eq!(
+                *reader.read(),
+                0,
+                "contract: opening writer gate does not lose a parked reader"
+            )
+        });
         loom::thread::yield_now();
         std::mem::drop(hold);
         reader.join().unwrap();
@@ -82,11 +97,21 @@ fn rejected_writer_and_nested_read_release_actual_reservations() {
         let slots = ReaderSlots::new(7);
         let first = slots.read();
         let second = slots.read();
-        assert!(slots.try_write().is_none());
-        assert_eq!(*second, 7);
+        assert!(
+            slots.try_write().is_none(),
+            "contract: rejected writer and nested read release actual reservations"
+        );
+        assert_eq!(
+            *second, 7,
+            "contract: rejected writer and nested read release actual reservations"
+        );
         std::mem::drop(first);
         std::mem::drop(second);
         *slots.try_write().unwrap() = 9;
-        assert_eq!(*slots.read(), 9);
+        assert_eq!(
+            *slots.read(),
+            9,
+            "contract: rejected writer and nested read release actual reservations"
+        );
     });
 }

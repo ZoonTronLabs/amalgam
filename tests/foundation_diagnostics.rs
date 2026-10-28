@@ -63,29 +63,40 @@ fn named_metrics_attribute_sessions_and_bound_historical_labels() {
         });
         std::mem::drop(host);
     }
-    assert_eq!(budget.assigned_names(), 2);
-    assert_eq!(&*budget.label_for("unreasonably-long-name"), "other");
+    assert_eq!(
+        budget.assigned_names(),
+        2,
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
+    assert_eq!(
+        &*budget.label_for("unreasonably-long-name"),
+        "other",
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
     let rendered = handle.render();
     assert!(
         rendered
             .lines()
             .any(|line| line.starts_with("amalgam_hits_total{")
                 && line.contains("cache_name=\"alpha\"")
-                && line.ends_with(" 2"))
+                && line.ends_with(" 2")),
+        "contract: named metrics attribute sessions and bound historical labels"
     );
     assert!(
         rendered
             .lines()
             .any(|line| line.starts_with("amalgam_hits_total{")
                 && line.contains("cache_name=\"beta\"")
-                && line.ends_with(" 1"))
+                && line.ends_with(" 1")),
+        "contract: named metrics attribute sessions and bound historical labels"
     );
     assert!(
         rendered
             .lines()
             .any(|line| line.starts_with("amalgam_misses_total{")
                 && line.contains("cache_name=\"other\"")
-                && line.ends_with(" 1000"))
+                && line.ends_with(" 1000")),
+        "contract: named metrics attribute sessions and bound historical labels"
     );
     assert!(
         rendered
@@ -93,9 +104,13 @@ fn named_metrics_attribute_sessions_and_bound_historical_labels() {
             .any(|line| line.starts_with("amalgam_operations_total{")
                 && line.contains("operation=\"try_get\"")
                 && line.contains("outcome=\"miss\"")
-                && line.contains("level=\"memory\""))
+                && line.contains("level=\"memory\"")),
+        "contract: named metrics attribute sessions and bound historical labels"
     );
-    assert!(rendered.contains("amalgam_operation_duration_seconds"));
+    assert!(
+        rendered.contains("amalgam_operation_duration_seconds"),
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
     let labels: BTreeSet<_> = rendered
         .lines()
         .filter_map(|line| {
@@ -104,10 +119,23 @@ fn named_metrics_attribute_sessions_and_bound_historical_labels() {
                 .map(|value| value.split('"').next().unwrap())
         })
         .collect();
-    assert_eq!(labels, BTreeSet::from(["alpha", "beta", "other"]));
-    assert!(!rendered.contains("private-key"));
-    assert!(!rendered.contains("secret-key"));
-    assert!(!rendered.contains("instance"));
+    assert_eq!(
+        labels,
+        BTreeSet::from(["alpha", "beta", "other"]),
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
+    assert!(
+        !rendered.contains("private-key"),
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
+    assert!(
+        !rendered.contains("secret-key"),
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
+    assert!(
+        !rendered.contains("instance"),
+        "contract: named metrics attribute sessions and bound historical labels"
+    );
 }
 
 #[cfg(feature = "opentelemetry")]
@@ -189,9 +217,13 @@ mod tracing_contract {
         });
         assert_eq!(
             *captured.names.lock().unwrap(),
-            ["amalgam.operation", "amalgam.component"]
+            ["amalgam.operation", "amalgam.component"],
+            "contract: logical and component spans keep trace identity and final outcome"
         );
-        assert!(captured.parents.lock().unwrap()[1].is_some());
+        assert!(
+            captured.parents.lock().unwrap()[1].is_some(),
+            "contract: logical and component spans keep trace identity and final outcome"
+        );
         let fields = captured.fields.lock().unwrap();
         for (name, value) in [
             ("cache_name", "named-cache"),
@@ -211,14 +243,20 @@ mod tracing_contract {
 
     #[test]
     fn otlp_requires_runtime_deliberately_and_validates_identity() {
-        assert!(matches!(
-            amalgam::advanced::otlp_layer::<Registry>("service", "http://127.0.0.1:4317"),
-            Err(amalgam::advanced::OtelInitError::MissingRuntime)
-        ));
-        assert!(matches!(
-            amalgam::advanced::otlp_layer::<Registry>("  ", "http://127.0.0.1:4317"),
-            Err(amalgam::advanced::OtelInitError::BlankServiceName)
-        ));
+        assert!(
+            matches!(
+                amalgam::advanced::otlp_layer::<Registry>("service", "http://127.0.0.1:4317"),
+                Err(amalgam::advanced::OtelInitError::MissingRuntime)
+            ),
+            "contract: otlp requires runtime deliberately and validates identity"
+        );
+        assert!(
+            matches!(
+                amalgam::advanced::otlp_layer::<Registry>("  ", "http://127.0.0.1:4317"),
+                Err(amalgam::advanced::OtelInitError::BlankServiceName)
+            ),
+            "contract: otlp requires runtime deliberately and validates identity"
+        );
     }
 
     #[tokio::test]
@@ -235,12 +273,19 @@ mod tracing_contract {
             .with(CaptureLayer(captured.clone()))
             .with(layer);
         tracing::subscriber::with_default(subscriber, || tracing::debug!("application event"));
-        assert_eq!(captured.events.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            captured.events.load(Ordering::SeqCst),
+            1,
+            "contract: composable otlp layer preserves application subscriber and globals"
+        );
         let after = opentelemetry::global::tracer("after")
             .start("after")
             .span_context()
             .is_valid();
-        assert_eq!(after, before);
+        assert_eq!(
+            after, before,
+            "contract: composable otlp layer preserves application subscriber and globals"
+        );
         guard.shutdown().unwrap();
     }
 
@@ -280,12 +325,19 @@ mod tracing_contract {
             .build();
         opentelemetry::global::set_tracer_provider(original.clone());
         tracing::subscriber::set_global_default(Registry::default()).unwrap();
-        assert!(matches!(
-            amalgam::advanced::try_init_otlp("rejected", "http://127.0.0.1:4317"),
-            Err(amalgam::advanced::OtelInitError::Subscriber(_))
-        ));
+        assert!(
+            matches!(
+                amalgam::advanced::try_init_otlp("rejected", "http://127.0.0.1:4317"),
+                Err(amalgam::advanced::OtelInitError::Subscriber(_))
+            ),
+            "contract: failed otlp initialization retains original global provider"
+        );
         let span = opentelemetry::global::tracer("verify-original").start("verify-original");
-        assert_eq!(span.span_context().trace_id(), TraceId::from(42_u128));
+        assert_eq!(
+            span.span_context().trace_id(),
+            TraceId::from(42_u128),
+            "contract: failed otlp initialization retains original global provider"
+        );
         std::mem::drop(span);
         original.shutdown().unwrap();
     }

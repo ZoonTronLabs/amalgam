@@ -102,7 +102,8 @@ async fn main() -> amalgam::Result<()> {
             .await
             .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"))
             .as_ref(),
-        Some(&"Alice".to_owned())
+        Some(&"Alice".to_owned()),
+        "contract: distributed read through hydrates the receiving node's local cache"
     );
 
     // --- 3. node-1 removes the key. The backplane broadcasts a Remove, which

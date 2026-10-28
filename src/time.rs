@@ -327,7 +327,8 @@ mod tests {
         ] {
             assert_eq!(
                 duration_ticks_wide(duration),
-                (duration.as_nanos() / NANOS_PER_TICK as u128) as i128
+                (duration.as_nanos() / NANOS_PER_TICK as u128) as i128,
+                "contract: split tick conversion matches nanosecond division"
             );
         }
     }
@@ -335,57 +336,87 @@ mod tests {
     #[test]
     fn duration_round_trips_through_ticks() {
         let d = Duration::from_millis(1500);
-        assert_eq!(ticks_to_duration(duration_to_ticks(d)), d);
+        assert_eq!(
+            ticks_to_duration(duration_to_ticks(d)),
+            d,
+            "contract: duration round trips through ticks"
+        );
     }
 
     #[test]
     fn saturating_add_then_since_recovers_duration() {
         let now = Timestamp::from_ticks(5 * TICKS_PER_SECOND);
         let later = now.saturating_add(Duration::from_secs(3));
-        assert_eq!(later.saturating_duration_since(now), Duration::from_secs(3));
-        assert_eq!(now.saturating_duration_since(later), Duration::ZERO);
+        assert_eq!(
+            later.saturating_duration_since(now),
+            Duration::from_secs(3),
+            "contract: saturating add then since recovers duration"
+        );
+        assert_eq!(
+            now.saturating_duration_since(later),
+            Duration::ZERO,
+            "contract: saturating add then since recovers duration"
+        );
     }
 
     #[test]
     fn manual_clock_advances() {
         let clock = ManualClock::new(Timestamp::from_ticks(0));
-        assert_eq!(clock.now(), Timestamp::from_ticks(0));
+        assert_eq!(
+            clock.now(),
+            Timestamp::from_ticks(0),
+            "contract: manual clock advances"
+        );
         clock.advance(Duration::from_secs(2));
-        assert_eq!(clock.now(), Timestamp::from_ticks(2 * TICKS_PER_SECOND));
+        assert_eq!(
+            clock.now(),
+            Timestamp::from_ticks(2 * TICKS_PER_SECOND),
+            "contract: manual clock advances"
+        );
     }
 
     #[test]
     fn timeout_min_treats_infinite_as_longest() {
         assert_eq!(
             Timeout::Infinite.min(Timeout::After(Duration::from_secs(1))),
-            Timeout::After(Duration::from_secs(1))
+            Timeout::After(Duration::from_secs(1)),
+            "contract: timeout min treats infinite as longest"
         );
         assert_eq!(
             Timeout::After(Duration::from_secs(2)).min(Timeout::After(Duration::from_secs(1))),
-            Timeout::After(Duration::from_secs(1))
+            Timeout::After(Duration::from_secs(1)),
+            "contract: timeout min treats infinite as longest"
         );
-        assert_eq!(Timeout::Infinite.min(Timeout::Infinite), Timeout::Infinite);
+        assert_eq!(
+            Timeout::Infinite.min(Timeout::Infinite),
+            Timeout::Infinite,
+            "contract: timeout min treats infinite as longest"
+        );
     }
 
     #[test]
     fn system_time_before_epoch_is_a_negative_timestamp() {
         assert_eq!(
             timestamp_from_system_time(UNIX_EPOCH),
-            Timestamp::from_ticks(0)
+            Timestamp::from_ticks(0),
+            "contract: system time before epoch is a negative timestamp"
         );
         assert_eq!(
             timestamp_from_system_time(UNIX_EPOCH - Duration::from_secs(1)),
-            Timestamp::from_ticks(-TICKS_PER_SECOND)
+            Timestamp::from_ticks(-TICKS_PER_SECOND),
+            "contract: system time before epoch is a negative timestamp"
         );
         assert_eq!(
             timestamp_from_system_time(UNIX_EPOCH - Duration::from_nanos(100)),
-            Timestamp::from_ticks(-1)
+            Timestamp::from_ticks(-1),
+            "contract: system time before epoch is a negative timestamp"
         );
         // Windows SystemTime stores 100ns ticks and truncates a 1ns subtraction.
         #[cfg(not(windows))]
         assert_eq!(
             timestamp_from_system_time(UNIX_EPOCH - Duration::from_nanos(1)),
-            Timestamp::from_ticks(-1)
+            Timestamp::from_ticks(-1),
+            "contract: system time before epoch is a negative timestamp"
         );
     }
 }

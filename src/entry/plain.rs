@@ -146,47 +146,131 @@ mod tests {
     fn plain_replacement_resets_all_facts_and_preserves_an_owned_metadata_snapshot() {
         let mut entry = rich_source();
         let original = entry.meta().clone();
-        assert!(matches!(
-            entry.replace_plain(9, next_metadata()),
-            PlainReplacement::Replaced { retired: 7 }
-        ));
-        assert_eq!(entry.value(), &9);
-        assert_eq!(entry.meta().created(), Timestamp::from_ticks(30_000_000));
+        assert!(
+            matches!(
+                entry.replace_plain(9, next_metadata()),
+                PlainReplacement::Replaced { retired: 7 }
+            ),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            entry.value(),
+            &9,
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            entry.meta().created(),
+            Timestamp::from_ticks(30_000_000),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
         assert_eq!(
             entry.meta().logical_expiration(),
-            Timestamp::from_ticks(230_000_000)
+            Timestamp::from_ticks(230_000_000),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
         );
         assert_eq!(
             entry.meta().physical_expiration(),
-            Timestamp::from_ticks(230_000_000)
+            Timestamp::from_ticks(230_000_000),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
         );
-        assert_eq!(entry.backend_ttl(), Duration::from_secs(20));
-        assert!(entry.meta().tags().is_empty());
-        assert!(entry.meta().etag().is_none());
-        assert!(entry.meta().last_modified().is_none());
-        assert!(entry.meta().eager_refresh_at().is_none());
-        assert_eq!(entry.meta().priority(), Priority::Normal);
-        assert!(entry.meta().stored_priority().is_none());
-        assert!(entry.meta().size().is_none());
-        assert_eq!(original.etag(), Some("original-etag"));
-        assert_eq!(original.tags()[0].as_str(), "previous");
-        assert_eq!(original.priority(), Priority::High);
-        assert_eq!(original.size().unwrap().units(), 7);
-        assert_eq!(original.created(), Timestamp::from_ticks(0));
-        assert!(original.eager_refresh_at().is_some());
+        assert_eq!(
+            entry.backend_ttl(),
+            Duration::from_secs(20),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            entry.meta().tags().is_empty(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            entry.meta().etag().is_none(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            entry.meta().last_modified().is_none(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            entry.meta().eager_refresh_at().is_none(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            entry.meta().priority(),
+            Priority::Normal,
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            entry.meta().stored_priority().is_none(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            entry.meta().size().is_none(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            original.etag(),
+            Some("original-etag"),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            original.tags()[0].as_str(),
+            "previous",
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            original.priority(),
+            Priority::High,
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            original.size().unwrap().units(),
+            7,
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert_eq!(
+            original.created(),
+            Timestamp::from_ticks(0),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
+        assert!(
+            original.eager_refresh_at().is_some(),
+            "contract: plain replacement resets all facts and preserves an owned metadata snapshot"
+        );
     }
     #[test]
     fn shared_representation_refuses_reuse_without_consuming_or_changing_either_value() {
         let mut entry = rich_source();
         let retained = entry.clone();
-        assert!(matches!(
-            entry.replace_plain(9, next_metadata()),
-            PlainReplacement::Shared { incoming: 9 }
-        ));
-        assert!(entry.is_same_instance(&retained));
-        assert_eq!(entry.value(), &7);
-        assert_eq!(retained.meta().etag(), Some("original-etag"));
-        assert_eq!(entry.meta().tags(), retained.meta().tags());
-        assert_eq!(retained.meta().created(), Timestamp::from_ticks(0));
+        assert!(
+            matches!(
+                entry.replace_plain(9, next_metadata()),
+                PlainReplacement::Shared { incoming: 9 }
+            ),
+            "contract: shared representation refuses reuse without consuming or changing either value"
+        );
+        assert!(
+            entry.is_same_instance(&retained),
+            "contract: shared representation refuses reuse without consuming or changing either value"
+        );
+        assert_eq!(
+            entry.value(),
+            &7,
+            "contract: shared representation refuses reuse without consuming or changing either value"
+        );
+        assert_eq!(
+            retained.meta().etag(),
+            Some("original-etag"),
+            "contract: shared representation refuses reuse without consuming or changing either value"
+        );
+        assert_eq!(
+            entry.meta().tags(),
+            retained.meta().tags(),
+            "contract: shared representation refuses reuse without consuming or changing either value"
+        );
+        assert_eq!(
+            retained.meta().created(),
+            Timestamp::from_ticks(0),
+            "contract: shared representation refuses reuse without consuming or changing either value"
+        );
     }
 }

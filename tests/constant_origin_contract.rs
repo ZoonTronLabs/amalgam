@@ -60,8 +60,15 @@ async fn async_constant_ignores_factory_budget_and_does_not_report_factory_succe
         .options(|_| zero_budget())
         .await;
     cache.shutdown().await.unwrap();
-    assert_eq!(answer.unwrap(), 42);
-    assert!(matches!(factory, Err(Error::FactoryTimeout { .. })));
+    assert_eq!(
+        answer.unwrap(),
+        42,
+        "contract: async constant ignores factory budget and does not report factory success"
+    );
+    assert!(
+        matches!(factory, Err(Error::FactoryTimeout { .. })),
+        "contract: async constant ignores factory budget and does not report factory success"
+    );
     assert_eq!(
         events.0.load(Ordering::SeqCst),
         0,
@@ -79,8 +86,16 @@ fn native_constant_ignores_factory_budget_and_does_not_report_factory_success() 
         .options(|_| zero_budget())
         .execute();
     cache.shutdown().unwrap();
-    assert_eq!(answer.unwrap(), 42);
-    assert_eq!(events.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        answer.unwrap(),
+        42,
+        "contract: native constant ignores factory budget and does not report factory success"
+    );
+    assert_eq!(
+        events.0.load(Ordering::SeqCst),
+        0,
+        "contract: native constant ignores factory budget and does not report factory success"
+    );
 }
 
 #[tokio::test]
@@ -108,13 +123,22 @@ async fn async_warm_constant_never_eagerly_replaces_the_existing_value() {
             .options(|_| eager())
             .await
             .unwrap(),
-        1
+        1,
+        "contract: async warm constant never eagerly replaces the existing value"
     );
     cache.flush_pending().await.unwrap();
     let after = cache.try_get("warm").await.unwrap();
     cache.shutdown().await.unwrap();
-    assert_eq!(after, Some(1));
-    assert_eq!(events.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        after,
+        Some(1),
+        "contract: async warm constant never eagerly replaces the existing value"
+    );
+    assert_eq!(
+        events.0.load(Ordering::SeqCst),
+        0,
+        "contract: async warm constant never eagerly replaces the existing value"
+    );
 }
 
 #[test]
@@ -140,13 +164,22 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
             .options(|_| eager())
             .execute()
             .unwrap(),
-        1
+        1,
+        "contract: native warm constant never eagerly replaces the existing value"
     );
     cache.flush_pending().unwrap();
     let after = cache.try_get("warm").execute().unwrap();
     cache.shutdown().unwrap();
-    assert_eq!(after, Some(1));
-    assert_eq!(events.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        after,
+        Some(1),
+        "contract: native warm constant never eagerly replaces the existing value"
+    );
+    assert_eq!(
+        events.0.load(Ordering::SeqCst),
+        0,
+        "contract: native warm constant never eagerly replaces the existing value"
+    );
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F

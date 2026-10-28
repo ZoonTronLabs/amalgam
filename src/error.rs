@@ -724,7 +724,8 @@ mod tests {
     fn blank_factory_message_is_defaulted() {
         assert_eq!(
             FactoryError::new("   ").message(),
-            "an error occurred while running the factory"
+            "an error occurred while running the factory",
+            "contract: blank factory message is defaulted"
         );
     }
 
@@ -732,7 +733,14 @@ mod tests {
     fn factory_error_preserves_source() {
         let io = std::io::Error::other("boom");
         let err = FactoryError::from_source(io);
-        assert_eq!(err.message(), "boom");
-        assert!(std::error::Error::source(&err).is_some());
+        assert_eq!(
+            err.message(),
+            "boom",
+            "contract: factory error preserves source"
+        );
+        assert!(
+            std::error::Error::source(&err).is_some(),
+            "contract: factory error preserves source"
+        );
     }
 }

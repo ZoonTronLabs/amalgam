@@ -107,7 +107,11 @@ fn warmed_reader_does_not_allocate_on_its_first_contended_slot() {
             let barrier = barrier.clone();
             let warmed = warmed.clone();
             let thread = std::thread::spawn(move || {
-                assert_eq!(*lock.read(), 1);
+                assert_eq!(
+                    *lock.read(),
+                    1,
+                    "contract: warmed reader does not allocate on its first contended slot"
+                );
                 warmed.send(()).unwrap();
                 barrier.wait();
                 ALLOCATIONS.with(|counter| counter.set(Measurement::Counting(0)));

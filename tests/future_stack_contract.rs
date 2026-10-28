@@ -106,8 +106,16 @@ fn traced_read_and_refresh_compose_on_a_two_mebibyte_thread_stack() {
                 .unwrap()
                 .block_on(async {
                     let cache: Cache<u64> = Cache::builder().try_build().unwrap();
-                    assert_eq!(read_then_refresh(&cache, 1).await, 1);
-                    assert_eq!(read_then_refresh(&cache, 2).await, 2);
+                    assert_eq!(
+                        read_then_refresh(&cache, 1).await,
+                        1,
+                        "contract: traced read and refresh compose on a two mebibyte thread stack"
+                    );
+                    assert_eq!(
+                        read_then_refresh(&cache, 2).await,
+                        2,
+                        "contract: traced read and refresh compose on a two mebibyte thread stack"
+                    );
                     cache.remove("x").await.unwrap();
                     cache.shutdown().await.unwrap();
                 });

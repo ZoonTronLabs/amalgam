@@ -71,11 +71,19 @@ fn value_only_native_origin_retains_a_genuinely_pending_l2_commit() {
             .get_or_set("projected", source::factory(|_| Ok::<_, Infallible>(41)))
             .execute()
             .unwrap(),
-        41
+        41,
+        "contract: value only native origin retains a genuinely pending l2 commit"
     );
     began.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(runtime.run(inner.get("projected")).unwrap().is_none());
-    assert_eq!(cache.try_get("projected").execute().unwrap(), Some(41));
+    assert!(
+        runtime.run(inner.get("projected")).unwrap().is_none(),
+        "contract: value only native origin retains a genuinely pending l2 commit"
+    );
+    assert_eq!(
+        cache.try_get("projected").execute().unwrap(),
+        Some(41),
+        "contract: value only native origin retains a genuinely pending l2 commit"
+    );
     release.0.add_permits(1);
     cache.flush_pending().unwrap();
     let peer = BlockingCache::<u64>::on_runtime(
@@ -85,7 +93,11 @@ fn value_only_native_origin_retains_a_genuinely_pending_l2_commit() {
         runtime,
     )
     .unwrap();
-    assert_eq!(peer.try_get("projected").execute().unwrap(), Some(41));
+    assert_eq!(
+        peer.try_get("projected").execute().unwrap(),
+        Some(41),
+        "contract: value only native origin retains a genuinely pending l2 commit"
+    );
     cache.shutdown().unwrap();
     peer.shutdown().unwrap();
 }
@@ -98,10 +110,16 @@ fn native_origin_receipt_preserves_mutation_and_unchanged_evidence() {
         .with_receipt()
         .execute()
         .unwrap();
-    assert_eq!(first.value, 17);
+    assert_eq!(
+        first.value, 17,
+        "contract: native origin receipt preserves mutation and unchanged evidence"
+    );
     match first.commit {
         BlockingCommitReceipt::Mutation(receipt) => {
-            assert!(matches!(receipt, BlockingMutationReceipt::Completed(_)));
+            assert!(
+                matches!(receipt, BlockingMutationReceipt::Completed(_)),
+                "contract: native origin receipt preserves mutation and unchanged evidence"
+            );
             let _ = receipt.wait().unwrap();
         }
         BlockingCommitReceipt::Unchanged => panic!("the origin must retain its commit evidence"),
@@ -116,8 +134,14 @@ fn native_origin_receipt_preserves_mutation_and_unchanged_evidence() {
         .with_receipt()
         .execute()
         .unwrap();
-    assert_eq!(hit.value, 17);
-    assert!(matches!(hit.commit, BlockingCommitReceipt::Unchanged));
+    assert_eq!(
+        hit.value, 17,
+        "contract: native origin receipt preserves mutation and unchanged evidence"
+    );
+    assert!(
+        matches!(hit.commit, BlockingCommitReceipt::Unchanged),
+        "contract: native origin receipt preserves mutation and unchanged evidence"
+    );
     assert_eq!(
         cache
             .get_or_set(
@@ -128,7 +152,8 @@ fn native_origin_receipt_preserves_mutation_and_unchanged_evidence() {
             )
             .execute()
             .unwrap(),
-        17
+        17,
+        "contract: native origin receipt preserves mutation and unchanged evidence"
     );
     cache.shutdown().unwrap();
 }
@@ -141,7 +166,10 @@ fn native_supplied_values_preserve_constant_origin_and_receipt_semantics() {
         .with_receipt()
         .execute()
         .unwrap();
-    assert_eq!(first.value, 53);
+    assert_eq!(
+        first.value, 53,
+        "contract: native supplied values preserve constant origin and receipt semantics"
+    );
     match first.commit {
         BlockingCommitReceipt::Mutation(receipt) => {
             let _ = receipt.wait().unwrap();
@@ -153,15 +181,22 @@ fn native_supplied_values_preserve_constant_origin_and_receipt_semantics() {
             .get_or_set("constant", source::value(99))
             .execute()
             .unwrap(),
-        53
+        53,
+        "contract: native supplied values preserve constant origin and receipt semantics"
     );
     let hit = cache
         .get_or_set("constant", source::value(99))
         .with_receipt()
         .execute()
         .unwrap();
-    assert_eq!(hit.value, 53);
-    assert!(matches!(hit.commit, BlockingCommitReceipt::Unchanged));
+    assert_eq!(
+        hit.value, 53,
+        "contract: native supplied values preserve constant origin and receipt semantics"
+    );
+    assert!(
+        matches!(hit.commit, BlockingCommitReceipt::Unchanged),
+        "contract: native supplied values preserve constant origin and receipt semantics"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -198,7 +233,8 @@ fn dropping_an_unused_native_supplied_value_preserves_the_final_close_check() {
             .as_ref()
             .unwrap()
             .value,
-        7
+        7,
+        "contract: dropping an unused native supplied value preserves the final close check"
     );
     let result = cache
         .get_or_set(

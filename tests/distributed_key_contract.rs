@@ -40,8 +40,15 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
             .wait()
             .await
             .unwrap();
-        assert!(backend.get(physical).await.unwrap().is_some());
-        assert_eq!(b.try_get("订单:🙂").await.unwrap(), Some(1));
+        assert!(
+            backend.get(physical).await.unwrap().is_some(),
+            "contract: unicode data keys round trip and peer updates use the same namespace"
+        );
+        assert_eq!(
+            b.try_get("订单:🙂").await.unwrap(),
+            Some(1),
+            "contract: unicode data keys round trip and peer updates use the same namespace"
+        );
         let _ = a
             .set("订单:🙂", 2)
             .with_receipt()
@@ -70,7 +77,10 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
             .wait()
             .await
             .unwrap();
-        assert!(backend.get(physical).await.unwrap().is_none());
+        assert!(
+            backend.get(physical).await.unwrap().is_none(),
+            "contract: unicode data keys round trip and peer updates use the same namespace"
+        );
         a.shutdown().await.unwrap();
         b.shutdown().await.unwrap();
     }

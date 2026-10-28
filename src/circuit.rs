@@ -134,36 +134,87 @@ mod tests {
     #[test]
     fn closed_admission_needs_no_clock_and_close_is_idempotent() {
         let disabled = CircuitBreaker::new(Duration::ZERO);
-        assert!(disabled.is_closed_without_clock());
+        assert!(
+            disabled.is_closed_without_clock(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
         let breaker = CircuitBreaker::new(Duration::from_secs(1));
-        assert!(breaker.is_closed_without_clock());
-        assert!(!breaker.close());
-        assert!(breaker.trip(Timestamp::from_ticks(0)));
-        assert!(!breaker.is_closed_without_clock());
-        assert!(breaker.close());
-        assert!(breaker.is_closed_without_clock());
-        assert!(!breaker.close());
+        assert!(
+            breaker.is_closed_without_clock(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
+        assert!(
+            !breaker.close(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
+        assert!(
+            breaker.trip(Timestamp::from_ticks(0)),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
+        assert!(
+            !breaker.is_closed_without_clock(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
+        assert!(
+            breaker.close(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
+        assert!(
+            breaker.is_closed_without_clock(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
+        assert!(
+            !breaker.close(),
+            "contract: closed admission needs no clock and close is idempotent"
+        );
     }
 
     #[test]
     fn disabled_breaker_is_always_closed() {
         let cb = CircuitBreaker::new(Duration::ZERO);
-        assert!(cb.is_disabled());
-        assert!(cb.is_closed(Timestamp::from_ticks(0)));
-        assert!(!cb.trip(Timestamp::from_ticks(0)));
-        assert!(cb.is_closed(Timestamp::from_ticks(1_000_000)));
+        assert!(
+            cb.is_disabled(),
+            "contract: disabled breaker is always closed"
+        );
+        assert!(
+            cb.is_closed(Timestamp::from_ticks(0)),
+            "contract: disabled breaker is always closed"
+        );
+        assert!(
+            !cb.trip(Timestamp::from_ticks(0)),
+            "contract: disabled breaker is always closed"
+        );
+        assert!(
+            cb.is_closed(Timestamp::from_ticks(1_000_000)),
+            "contract: disabled breaker is always closed"
+        );
     }
 
     #[test]
     fn trip_opens_then_auto_closes_after_window() {
         let cb = CircuitBreaker::new(Duration::from_secs(10));
         let t0 = Timestamp::from_ticks(0);
-        assert!(cb.is_closed(t0));
-        assert!(cb.trip(t0)); // closed -> open transition
-        assert!(!cb.trip(t0)); // already open, no transition
-        assert!(!cb.is_closed(t0.saturating_add(Duration::from_secs(5))));
+        assert!(
+            cb.is_closed(t0),
+            "contract: trip opens then auto closes after window"
+        );
+        assert!(
+            cb.trip(t0),
+            "contract: trip opens then auto closes after window"
+        ); // closed -> open transition
+        assert!(
+            !cb.trip(t0),
+            "contract: trip opens then auto closes after window"
+        ); // already open, no transition
+        assert!(
+            !cb.is_closed(t0.saturating_add(Duration::from_secs(5))),
+            "contract: trip opens then auto closes after window"
+        );
         // After the window, it auto-closes.
-        assert!(cb.is_closed(t0.saturating_add(Duration::from_secs(11))));
+        assert!(
+            cb.is_closed(t0.saturating_add(Duration::from_secs(11))),
+            "contract: trip opens then auto closes after window"
+        );
     }
 
     #[test]
@@ -171,8 +222,8 @@ mod tests {
         let cb = CircuitBreaker::new(Duration::from_secs(10));
         let t0 = Timestamp::from_ticks(0);
         cb.trip(t0);
-        assert!(cb.close()); // open -> closed
-        assert!(!cb.close()); // already closed
+        assert!(cb.close(), "contract: close reports transition"); // open -> closed
+        assert!(!cb.close(), "contract: close reports transition"); // already closed
     }
 
     #[test]
@@ -192,22 +243,36 @@ mod tests {
                 .map(|handle| handle.join().unwrap())
                 .filter(|check| *check == CircuitCheck::ClosedAfterCooldown)
                 .count(),
-            1
+            1,
+            "contract: concurrent cooldown has one transition and older failures do not shorten reopen"
         );
-        assert!(cb.trip(now));
-        assert!(!cb.trip(Timestamp::from_ticks(0)));
-        assert!(matches!(
-            cb.check(Timestamp::from_ticks(25_000_000)),
-            CircuitCheck::Open { .. }
-        ));
+        assert!(
+            cb.trip(now),
+            "contract: concurrent cooldown has one transition and older failures do not shorten reopen"
+        );
+        assert!(
+            !cb.trip(Timestamp::from_ticks(0)),
+            "contract: concurrent cooldown has one transition and older failures do not shorten reopen"
+        );
+        assert!(
+            matches!(
+                cb.check(Timestamp::from_ticks(25_000_000)),
+                CircuitCheck::Open { .. }
+            ),
+            "contract: concurrent cooldown has one transition and older failures do not shorten reopen"
+        );
     }
 
     #[test]
     fn large_duration_saturates_at_upper_clock_bound() {
         let cb = CircuitBreaker::new(Duration::MAX);
-        assert!(cb.trip(Timestamp::MIN));
         assert!(
-            matches!(cb.check(Timestamp::from_ticks(0)),CircuitCheck::Open {until} if until==Timestamp::MAX)
+            cb.trip(Timestamp::MIN),
+            "contract: large duration saturates at upper clock bound"
+        );
+        assert!(
+            matches!(cb.check(Timestamp::from_ticks(0)),CircuitCheck::Open {until} if until==Timestamp::MAX),
+            "contract: large duration saturates at upper clock bound"
         );
     }
 }

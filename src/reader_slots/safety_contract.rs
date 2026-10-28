@@ -8,14 +8,27 @@ fn overlapping_guards_and_failed_try_write_preserve_borrowed_values() {
     let slots = ReaderSlots::with_slots(Box::new(7), 1);
     let first = slots.read();
     let second = slots.read();
-    assert!(slots.try_write().is_none());
-    assert_eq!(**first, 7);
-    assert_eq!(**second, 7);
+    assert!(
+        slots.try_write().is_none(),
+        "contract: overlapping guards and failed try write preserve borrowed values"
+    );
+    assert_eq!(
+        **first, 7,
+        "contract: overlapping guards and failed try write preserve borrowed values"
+    );
+    assert_eq!(
+        **second, 7,
+        "contract: overlapping guards and failed try write preserve borrowed values"
+    );
     std::mem::drop(first);
     std::mem::drop(second);
     let replacement = Box::new(9);
     *slots.write() = replacement;
-    assert_eq!(**slots.read(), 9);
+    assert_eq!(
+        **slots.read(),
+        9,
+        "contract: overlapping guards and failed try write preserve borrowed values"
+    );
 }
 
 // Native TSan exercises this parking stress. Miri's stricter C-variadic
@@ -36,9 +49,15 @@ fn colliding_readers_and_writers_use_the_real_unsafe_cell() {
                 for _ in 0..4 {
                     if id % 2 == 0 {
                         let value = slots.read();
-                        assert_eq!(value.0, value.1);
+                        assert_eq!(
+                            value.0, value.1,
+                            "contract: colliding readers and writers use the real unsafe cell"
+                        );
                         std::thread::yield_now();
-                        assert_eq!(value.0, value.1);
+                        assert_eq!(
+                            value.0, value.1,
+                            "contract: colliding readers and writers use the real unsafe cell"
+                        );
                     } else {
                         let mut value = slots.write();
                         value.0 += 1;
@@ -49,7 +68,11 @@ fn colliding_readers_and_writers_use_the_real_unsafe_cell() {
             });
         }
     });
-    assert_eq!(*slots.read(), (8, 8));
+    assert_eq!(
+        *slots.read(),
+        (8, 8),
+        "contract: colliding readers and writers use the real unsafe cell"
+    );
 }
 
 #[test]
@@ -65,21 +88,34 @@ fn colliding_native_read_guards_prevent_exclusive_value_access() {
             releases.push(release);
             scope.spawn(move || {
                 let value = slots.read();
-                assert_eq!(**value, 7);
+                assert_eq!(
+                    **value, 7,
+                    "contract: colliding native read guards prevent exclusive value access"
+                );
                 entered.send(()).unwrap();
                 release_rx.recv().unwrap();
-                assert_eq!(**value, 7);
+                assert_eq!(
+                    **value, 7,
+                    "contract: colliding native read guards prevent exclusive value access"
+                );
             });
             // Serialize first-use parking metadata; the read guards overlap.
             // Neither reader attempts admission under a closed writer gate.
             entered_rx.recv().unwrap();
         }
-        assert!(slots.try_write().is_none());
+        assert!(
+            slots.try_write().is_none(),
+            "contract: colliding native read guards prevent exclusive value access"
+        );
         for release in releases {
             release.send(()).unwrap();
         }
     });
     let replacement = Box::new(9);
     *slots.write() = replacement;
-    assert_eq!(**slots.read(), 9);
+    assert_eq!(
+        **slots.read(),
+        9,
+        "contract: colliding native read guards prevent exclusive value access"
+    );
 }

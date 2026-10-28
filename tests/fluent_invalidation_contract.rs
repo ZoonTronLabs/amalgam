@@ -16,13 +16,27 @@ async fn unpolled_mutations_do_nothing_and_receipts_are_explicit() {
     let cache = Cache::<u64>::new();
     cache.set("key", 7).await.unwrap();
     let request = cache.remove("key");
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: unpolled mutations do nothing and receipts are explicit"
+    );
     std::mem::drop(request);
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: unpolled mutations do nothing and receipts are explicit"
+    );
     let receipt = cache.remove("key").with_receipt().await.unwrap();
-    assert!(matches!(receipt, MutationReceipt::Completed(_)));
+    assert!(
+        matches!(receipt, MutationReceipt::Completed(_)),
+        "contract: unpolled mutations do nothing and receipts are explicit"
+    );
     let _ = receipt.wait().await.unwrap();
-    assert!(cache.try_get("key").await.unwrap().is_none());
+    assert!(
+        cache.try_get("key").await.unwrap().is_none(),
+        "contract: unpolled mutations do nothing and receipts are explicit"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -31,22 +45,39 @@ async fn invalid_string_tag_rejects_the_entire_batch_before_invalidation() {
     let cache = Cache::<u64>::new();
     cache.set("first", 1).tags(["first-tag"]).await.unwrap();
     cache.set("second", 2).tags(["second-tag"]).await.unwrap();
-    assert!(matches!(
-        cache
-            .remove_by_tag("first-tag")
-            .and_tags(["second-tag", " "])
-            .await,
-        Err(Error::Tag(_))
-    ));
-    assert_eq!(cache.try_get("first").await.unwrap().as_ref(), Some(&1));
-    assert_eq!(cache.try_get("second").await.unwrap().as_ref(), Some(&2));
+    assert!(
+        matches!(
+            cache
+                .remove_by_tag("first-tag")
+                .and_tags(["second-tag", " "])
+                .await,
+            Err(Error::Tag(_))
+        ),
+        "contract: invalid string tag rejects the entire batch before invalidation"
+    );
+    assert_eq!(
+        cache.try_get("first").await.unwrap().as_ref(),
+        Some(&1),
+        "contract: invalid string tag rejects the entire batch before invalidation"
+    );
+    assert_eq!(
+        cache.try_get("second").await.unwrap().as_ref(),
+        Some(&2),
+        "contract: invalid string tag rejects the entire batch before invalidation"
+    );
     cache
         .remove_by_tag("first-tag")
         .and_tags(["second-tag"])
         .await
         .unwrap();
-    assert!(cache.try_get("first").await.unwrap().is_none());
-    assert!(cache.try_get("second").await.unwrap().is_none());
+    assert!(
+        cache.try_get("first").await.unwrap().is_none(),
+        "contract: invalid string tag rejects the entire batch before invalidation"
+    );
+    assert!(
+        cache.try_get("second").await.unwrap().is_none(),
+        "contract: invalid string tag rejects the entire batch before invalidation"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -79,10 +110,14 @@ async fn expiration_options_overlay_preserves_default_fail_safe() {
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: expiration options overlay preserves default fail safe"
     );
     cache.clear(ClearMode::Remove).await.unwrap();
-    assert!(cache.try_get("key").await.unwrap().is_none());
+    assert!(
+        cache.try_get("key").await.unwrap().is_none(),
+        "contract: expiration options overlay preserves default fail safe"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -92,13 +127,20 @@ async fn cancelled_removal_keeps_the_value_and_returns_the_reason() {
     cache.set("key", 7).await.unwrap();
     let source = CancellationSource::new();
     source.cancel();
-    assert!(matches!(
-        cache.remove("key").cancellation(source.token()).await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert!(
+        matches!(
+            cache.remove("key").cancellation(source.token()).await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: cancelled removal keeps the value and returns the reason"
+    );
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: cancelled removal keeps the value and returns the reason"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -107,13 +149,21 @@ fn native_mutation_executes_only_when_requested_and_keeps_typed_failures() {
     let cache = BlockingCache::<u64>::new().unwrap();
     cache.set("key", 7).tags(["group"]).execute().unwrap();
     let request = cache.remove("key");
-    assert_eq!(cache.try_get("key").execute().unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").execute().unwrap().as_ref(),
+        Some(&7),
+        "contract: native mutation executes only when requested and keeps typed failures"
+    );
     std::mem::drop(request);
-    assert!(matches!(
-        cache.remove_by_tag(" ").execute(),
-        Err(Error::Tag(_))
-    ));
-    assert_eq!(cache.try_get("key").execute().unwrap().as_ref(), Some(&7));
+    assert!(
+        matches!(cache.remove_by_tag(" ").execute(), Err(Error::Tag(_))),
+        "contract: native mutation executes only when requested and keeps typed failures"
+    );
+    assert_eq!(
+        cache.try_get("key").execute().unwrap().as_ref(),
+        Some(&7),
+        "contract: native mutation executes only when requested and keeps typed failures"
+    );
     let _ = cache
         .remove_by_tag("group")
         .with_receipt()
@@ -121,6 +171,9 @@ fn native_mutation_executes_only_when_requested_and_keeps_typed_failures() {
         .unwrap()
         .wait()
         .unwrap();
-    assert!(cache.try_get("key").execute().unwrap().is_none());
+    assert!(
+        cache.try_get("key").execute().unwrap().is_none(),
+        "contract: native mutation executes only when requested and keeps typed failures"
+    );
     cache.shutdown().unwrap();
 }

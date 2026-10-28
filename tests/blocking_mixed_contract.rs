@@ -41,8 +41,16 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
     let asynchronous = native.as_async().clone();
     let identity = native.instance_id().to_owned();
     std::mem::drop(native);
-    assert_eq!(asynchronous.instance_id(), identity);
-    assert_eq!(asynchronous.try_get("before").await.unwrap(), Some(7));
+    assert_eq!(
+        asynchronous.instance_id(),
+        identity,
+        "contract: async handle keeps the executor and cache alive after native drop"
+    );
+    assert_eq!(
+        asynchronous.try_get("before").await.unwrap(),
+        Some(7),
+        "contract: async handle keeps the executor and cache alive after native drop"
+    );
     let value = asynchronous
         .get_or_set(
             "after",
@@ -53,7 +61,10 @@ async fn async_handle_keeps_the_executor_and_cache_alive_after_native_drop() {
         )
         .await
         .unwrap();
-    assert_eq!(value, 9);
+    assert_eq!(
+        value, 9,
+        "contract: async handle keeps the executor and cache alive after native drop"
+    );
     asynchronous.flush_pending().await.unwrap();
     asynchronous.shutdown().await.unwrap();
 }
@@ -82,7 +93,8 @@ fn native_operations_progress_from_their_own_single_io_worker() {
             .recv_timeout(Duration::from_secs(2))
             .unwrap()
             .unwrap(),
-        42
+        42,
+        "contract: native operations progress from their own single io worker"
     );
     driver.run(work).unwrap();
     cache.shutdown().unwrap();
@@ -142,9 +154,21 @@ fn async_origin_and_native_caller_share_one_inflight_value() {
     });
     release_tx.send(()).unwrap();
     miss.expect("native caller must enter the cold path while the async origin is blocked");
-    assert_eq!(driver.run(origin).unwrap().unwrap(), 17);
-    assert_eq!(caller.join().unwrap().unwrap(), 17);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        driver.run(origin).unwrap().unwrap(),
+        17,
+        "contract: async origin and native caller share one inflight value"
+    );
+    assert_eq!(
+        caller.join().unwrap().unwrap(),
+        17,
+        "contract: async origin and native caller share one inflight value"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: async origin and native caller share one inflight value"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -166,9 +190,12 @@ fn callbacks_cannot_drain_their_own_cache() {
             } else {
                 DrainOperation::FlushPending
             };
-            assert!(matches!(rejection,
-                Err(Error::ReentrantDrain { operation }) if operation == expected
-            ));
+            assert!(
+                matches!(rejection,
+                    Err(Error::ReentrantDrain { operation }) if operation == expected
+                ),
+                "contract: callbacks cannot drain their own cache"
+            );
             Ok::<_, FactoryError>(ctx.value(7))
         };
         let answer = if case.starts_with("inline") {
@@ -181,8 +208,16 @@ fn callbacks_cannot_drain_their_own_cache() {
                 .cancellation(CancellationSource::new().token())
                 .execute()
         };
-        assert_eq!(answer.unwrap(), 7);
-        assert_eq!(cache.try_get("self-drain").execute().unwrap(), Some(7));
+        assert_eq!(
+            answer.unwrap(),
+            7,
+            "contract: callbacks cannot drain their own cache"
+        );
+        assert_eq!(
+            cache.try_get("self-drain").execute().unwrap(),
+            Some(7),
+            "contract: callbacks cannot drain their own cache"
+        );
         cache.shutdown().unwrap();
         return;
     }
@@ -247,9 +282,12 @@ fn invalid_callback_count_is_rejected_before_any_factory_dispatch() {
             BlockingThreadPool::IoWorkers => workers,
             BlockingThreadPool::RootCallbacks => callbacks,
         };
-        assert!(matches!(error, BlockingRuntimeError::ThreadLimit {
+        assert!(
+            matches!(error, BlockingRuntimeError::ThreadLimit {
             pool: actual, requested, maximum: limit
-        } if actual == pool && requested.get() == requested_count && limit == maximum));
+        } if actual == pool && requested.get() == requested_count && limit == maximum),
+            "contract: invalid callback count is rejected before any factory dispatch"
+        );
     }
 }
 

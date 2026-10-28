@@ -78,7 +78,10 @@ impl Drop for MeasurementGuard {
 
 fn measure_allocations(work: impl FnOnce()) -> usize {
     MEASUREMENT.with(|state| {
-        assert!(matches!(state.get(), Measurement::Inactive));
+        assert!(
+            matches!(state.get(), Measurement::Inactive),
+            "contract: measure allocations"
+        );
         state.set(Measurement::Counting(0));
     });
     let guard = MeasurementGuard;
@@ -111,7 +114,11 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
             .await
             .unwrap();
         for _ in 0..1000 {
-            assert_eq!(cache.try_get("key").into_future().await.unwrap(), Some(17));
+            assert_eq!(
+                cache.try_get("key").into_future().await.unwrap(),
+                Some(17),
+                "contract: unobserved warmed scalar ready reads do not allocate"
+            );
         }
     });
     let mut context = Context::from_waker(Waker::noop());
@@ -119,7 +126,11 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
         for _ in 0..1000 {
             let mut lookup = std::pin::pin!(cache.try_get("key").into_future());
             match lookup.as_mut().poll(&mut context) {
-                Poll::Ready(result) => assert_eq!(result.unwrap(), Some(17)),
+                Poll::Ready(result) => assert_eq!(
+                    result.unwrap(),
+                    Some(17),
+                    "contract: unobserved warmed scalar ready reads do not allocate"
+                ),
                 Poll::Pending => panic!("warmed scalar L1 read must complete on its first poll"),
             }
         }
@@ -153,7 +164,8 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
                 )
                 .execute()
                 .unwrap(),
-            19
+            19,
+            "contract: unobserved warmed native scalar factories do not allocate"
         );
     }
     let allocations = measure_allocations(|| {
@@ -166,7 +178,8 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
                     )
                     .execute()
                     .unwrap(),
-                19
+                19,
+                "contract: unobserved warmed native scalar factories do not allocate"
             );
         }
     });

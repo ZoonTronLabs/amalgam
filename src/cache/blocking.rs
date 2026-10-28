@@ -380,16 +380,27 @@ mod tests {
         closer.join().unwrap();
         queued.shutdown().unwrap();
         busy.shutdown().unwrap();
-        assert!(matches!(
-            answer,
-            Err(Error::OperationCancelled {
-                reason: Reason::CallerCancelled
-            }) | Err(Error::FactoryCancelled {
-                reason: Reason::CallerCancelled
-            })
-        ));
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(
+                answer,
+                Err(Error::OperationCancelled {
+                    reason: Reason::CallerCancelled
+                }) | Err(Error::FactoryCancelled {
+                    reason: Reason::CallerCancelled
+                })
+            ),
+            "contract: queued cancel shutdown does not wait for another cache callback"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "contract: queued cancel shutdown does not wait for another cache callback"
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "contract: queued cancel shutdown does not wait for another cache callback"
+        );
         before_release
             .expect("cancelled queued work must drain while the other cache remains blocked")
             .unwrap();

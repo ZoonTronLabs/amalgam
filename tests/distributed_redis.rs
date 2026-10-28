@@ -113,10 +113,21 @@ async fn backplane_shutdown_remains_terminal_while_the_owned_subscriber_disconne
         };
         let (_, stopped) = tokio::join!(disconnect, backplane.shutdown());
         stopped.unwrap();
-        assert_eq!(*health.borrow(), BackplaneState::Stopped);
-        assert!(backplane.publish(message("closed")).await.is_err());
+        assert_eq!(
+            *health.borrow(),
+            BackplaneState::Stopped,
+            "contract: backplane shutdown remains terminal while the owned subscriber disconnects"
+        );
+        assert!(
+            backplane.publish(message("closed")).await.is_err(),
+            "contract: backplane shutdown remains terminal while the owned subscriber disconnects"
+        );
         backplane.shutdown().await.unwrap();
-        assert_eq!(*health.borrow(), BackplaneState::Stopped);
+        assert_eq!(
+            *health.borrow(),
+            BackplaneState::Stopped,
+            "contract: backplane shutdown remains terminal while the owned subscriber disconnects"
+        );
         await_no_clients(&mut connection, &backplane.subscriber_name()).await;
         await_no_clients(&mut connection, &format!("{name}:publish")).await;
     }
@@ -224,7 +235,11 @@ async fn live_atomic_markers_survive_new_provider_and_ordinary_private_area_keys
         (&"\u{1f}amalgam/v2/marker-scopes".to_owned(), vec![3]),
     ] {
         backend.set(key, value.clone(), None).await.unwrap();
-        assert_eq!(backend.get(key).await.unwrap(), Some(value.into()));
+        assert_eq!(
+            backend.get(key).await.unwrap(),
+            Some(value.into()),
+            "contract: live atomic markers survive new provider and ordinary private area keys"
+        );
     }
     assert_eq!(
         store.read(&scope, &kind).await.unwrap(),
@@ -299,9 +314,13 @@ async fn live_lease_acquire_deadline_and_successful_attempt_receipt() {
             )
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: live lease acquire deadline and successful attempt receipt"
     );
-    assert!(started.elapsed() < Duration::from_millis(70));
+    assert!(
+        started.elapsed() < Duration::from_millis(70),
+        "contract: live lease acquire deadline and successful attempt receipt"
+    );
     let lease = provider::acquire_owned(
         locker.clone(),
         key.clone().into(),
@@ -353,7 +372,8 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
             .acquire(&key, Duration::from_secs(1), Timeout::After(Duration::ZERO))
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: live renewal fences lost ownership and drop releases the current token"
     );
     assert_eq!(
         backend
@@ -367,7 +387,8 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
             )
             .await
             .unwrap(),
-        LeasedWriteOutcome::Committed
+        LeasedWriteOutcome::Committed,
+        "contract: live renewal fences lost ownership and drop releases the current token"
     );
     locker.release(&key, proof.token().as_str()).await.unwrap();
     let newer = locker
@@ -380,9 +401,14 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
             .write_with_lease(&key, LeasedMutation::Remove, &proof)
             .await
             .unwrap(),
-        LeasedWriteOutcome::LeaseLost
+        LeasedWriteOutcome::LeaseLost,
+        "contract: live renewal fences lost ownership and drop releases the current token"
     );
-    assert_eq!(backend.get(&key).await.unwrap(), Some(vec![1].into()));
+    assert_eq!(
+        backend.get(&key).await.unwrap(),
+        Some(vec![1].into()),
+        "contract: live renewal fences lost ownership and drop releases the current token"
+    );
     let mut state = lease.state();
     tokio::time::timeout(Duration::from_secs(1), async {
         while *state.borrow_and_update() != LeaseState::Lost {
@@ -391,7 +417,10 @@ async fn live_renewal_fences_lost_ownership_and_drop_releases_the_current_token(
     })
     .await
     .unwrap();
-    assert!(matches!(lease.proof(), Err(LeaseError::Lost)));
+    assert!(
+        matches!(lease.proof(), Err(LeaseError::Lost)),
+        "contract: live renewal fences lost ownership and drop releases the current token"
+    );
     std::mem::drop(lease);
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(
@@ -550,7 +579,10 @@ async fn live_acquisition_cancellation_and_deadline_clean_up_a_granted_but_unrep
         );
         if cancel {
             task.abort();
-            assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+            assert!(
+                matches!(task.await, Err(error) if error.is_cancelled()),
+                "contract: live acquisition cancellation and deadline clean up a granted but unreplied token"
+            );
         } else {
             let result = tokio::time::timeout(Duration::from_secs(1), task)
                 .await
@@ -612,7 +644,8 @@ async fn live_subscription_requires_ack_recovers_targeted_disconnects_and_releas
         let id = backplane.subscriber_client_id().unwrap();
         assert_eq!(
             client_count(&mut connection, &backplane.subscriber_name()).await,
-            1
+            1,
+            "contract: live subscription requires ack recovers targeted disconnects and releases clients"
         );
         acl(&mut connection, &user, &password, false).await;
         let killed: i64 = redis::cmd("CLIENT")
@@ -639,7 +672,11 @@ async fn live_subscription_requires_ack_recovers_targeted_disconnects_and_releas
         })
         .await
         .unwrap();
-        assert_eq!(backplane.subscriber_client_id(), None);
+        assert_eq!(
+            backplane.subscriber_client_id(),
+            None,
+            "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+        );
         tokio::time::sleep(Duration::from_millis(120)).await;
         assert!(
             matches!(*health.borrow(), BackplaneState::Disconnected { .. }),
@@ -647,7 +684,11 @@ async fn live_subscription_requires_ack_recovers_targeted_disconnects_and_releas
         );
         acl(&mut connection, &user, &password, true).await;
         epoch = await_connected(&mut health, epoch).await;
-        assert_ne!(backplane.subscriber_client_id().unwrap(), id);
+        assert_ne!(
+            backplane.subscriber_client_id().unwrap(),
+            id,
+            "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+        );
         backplane
             .publish_command(BackplaneCommand::Data(message("key|with|pipes")))
             .await
@@ -656,15 +697,38 @@ async fn live_subscription_requires_ack_recovers_targeted_disconnects_and_releas
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(received.source_id.as_ref(), "remote|source");
-        assert_eq!(received.key.as_ref(), "key|with|pipes");
+        assert_eq!(
+            received.source_id.as_ref(),
+            "remote|source",
+            "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+        );
+        assert_eq!(
+            received.key.as_ref(),
+            "key|with|pipes",
+            "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+        );
     }
-    assert_eq!(backplane.stats().acknowledged_connections, 4);
+    assert_eq!(
+        backplane.stats().acknowledged_connections,
+        4,
+        "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+    );
     backplane.shutdown().await.unwrap();
     backplane.shutdown().await.unwrap();
-    assert_eq!(*health.borrow(), BackplaneState::Stopped);
-    assert_eq!(backplane.subscriber_client_id(), None);
-    assert!(backplane.publish(message("stopped")).await.is_err());
+    assert_eq!(
+        *health.borrow(),
+        BackplaneState::Stopped,
+        "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+    );
+    assert_eq!(
+        backplane.subscriber_client_id(),
+        None,
+        "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+    );
+    assert!(
+        backplane.publish(message("stopped")).await.is_err(),
+        "contract: live subscription requires ack recovers targeted disconnects and releases clients"
+    );
     await_no_clients(&mut connection, &backplane.subscriber_name()).await;
     await_no_clients(&mut connection, &format!("{name}:publish")).await;
     std::mem::drop(backplane);
@@ -711,7 +775,10 @@ async fn live_bounded_push_overflow_and_malformed_wire_create_new_continuity_epo
         .await
         .unwrap();
     let _ = await_connected(&mut health, overflow_epoch).await;
-    assert!(backplane.stats().malformed_messages > 0);
+    assert!(
+        backplane.stats().malformed_messages > 0,
+        "contract: live bounded push overflow and malformed wire create new continuity epochs"
+    );
     std::mem::drop(backplane);
     await_no_clients(&mut connection, &format!("{name}:subscriber")).await;
     await_no_clients(&mut connection, &format!("{name}:publish")).await;
@@ -791,7 +858,8 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
             )
             .await
             .unwrap(),
-        41
+        41,
+        "contract: live best effort retains local and hydrated l1 over a native subscriber gap"
     );
     let mut health = backplane.connection_state().unwrap();
     let epoch = await_connected(&mut health, 0).await;
@@ -804,7 +872,10 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .query_async(&mut connection)
         .await
         .unwrap();
-    assert_eq!(killed, 1);
+    assert_eq!(
+        killed, 1,
+        "contract: live best effort retains local and hydrated l1 over a native subscriber gap"
+    );
     tokio::time::timeout(Duration::from_secs(1), async {
         while !matches!(
             *health.borrow_and_update(),
@@ -829,7 +900,8 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
                 )
                 .await
                 .unwrap(),
-            expected
+            expected,
+            "contract: live best effort retains local and hydrated l1 over a native subscriber gap"
         );
     }
     acl(&mut connection, &user, &password, true).await;
@@ -844,7 +916,8 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
                 )
                 .await
                 .unwrap(),
-            expected
+            expected,
+            "contract: live best effort retains local and hydrated l1 over a native subscriber gap"
         );
     }
     backplane

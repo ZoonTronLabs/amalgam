@@ -58,10 +58,13 @@ fn strict_rejects_opaque_ownership_before_acquisition() {
         .strict()
         .distributed_locker(Arc::new(OpaqueLocker))
         .try_build();
-    assert!(matches!(
-        result,
-        Err(Error::Config(ConfigError::FencedLockerWithoutOwnedLifetime))
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(Error::Config(ConfigError::FencedLockerWithoutOwnedLifetime))
+        ),
+        "contract: strict rejects opaque ownership before acquisition"
+    );
     let cache = Cache::<u64>::builder()
         .distributed_locker(Arc::new(OpaqueLocker))
         .try_build()
@@ -80,20 +83,31 @@ fn strict_rejects_ordinary_l2_before_any_effect() {
         .serializer(Arc::new(JsonSerializer))
         .auto_recovery(no_recovery())
         .try_build();
-    assert!(matches!(
-        result,
-        Err(Error::Config(
-            ConfigError::FencedDistributedWithoutAtomicWrites
-        ))
-    ));
-    assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    assert!(
+        matches!(
+            result,
+            Err(Error::Config(
+                ConfigError::FencedDistributedWithoutAtomicWrites
+            ))
+        ),
+        "contract: strict rejects ordinary l2 before any effect"
+    );
+    assert_eq!(
+        store.calls.load(Ordering::SeqCst),
+        0,
+        "contract: strict rejects ordinary l2 before any effect"
+    );
     let cache = Cache::<u64>::builder()
         .distributed(store.clone())
         .serializer(Arc::new(JsonSerializer))
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store.calls.load(Ordering::SeqCst),
+        0,
+        "contract: strict rejects ordinary l2 before any effect"
+    );
     cache.close();
 }
 
@@ -117,7 +131,8 @@ async fn default_l2_only_keeps_l1_until_expiration_instead_of_clearing_each_seco
             .get_or_set("hot", amalgam::source::value(99))
             .await
             .unwrap(),
-        42
+        42,
+        "contract: default l2 only keeps l1 until expiration instead of clearing each second"
     );
     let calls = store.calls.load(Ordering::SeqCst);
     for _ in 0..3 {
@@ -134,10 +149,15 @@ async fn default_l2_only_keeps_l1_until_expiration_instead_of_clearing_each_seco
                 )
                 .await
                 .unwrap(),
-            42
+            42,
+            "contract: default l2 only keeps l1 until expiration instead of clearing each second"
         );
     }
-    assert_eq!(store.calls.load(Ordering::SeqCst), calls);
+    assert_eq!(
+        store.calls.load(Ordering::SeqCst),
+        calls,
+        "contract: default l2 only keeps l1 until expiration instead of clearing each second"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -155,7 +175,10 @@ async fn default_expire_removes_l2_and_retains_the_eligible_l1_fallback() {
         .try_build()
         .unwrap();
     cache.set("hot", 42).await.unwrap();
-    assert!(store.get("v2:hot").await.unwrap().is_some());
+    assert!(
+        store.get("v2:hot").await.unwrap().is_some(),
+        "contract: default expire removes l2 and retains the eligible l1 fallback"
+    );
     let _ = cache
         .expire("hot")
         .with_receipt()
@@ -164,14 +187,19 @@ async fn default_expire_removes_l2_and_retains_the_eligible_l1_fallback() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(store.get("v2:hot").await.unwrap(), None);
+    assert_eq!(
+        store.get("v2:hot").await.unwrap(),
+        None,
+        "contract: default expire removes l2 and retains the eligible l1 fallback"
+    );
     assert_eq!(
         cache
             .try_get("hot")
             .options(|_| options.with_allow_stale_on_read_only(true))
             .await
             .unwrap(),
-        Some(42)
+        Some(42),
+        "contract: default expire removes l2 and retains the eligible l1 fallback"
     );
     cache.shutdown().await.unwrap();
 }
@@ -200,22 +228,39 @@ async fn a_fail_safe_default_without_a_stale_entry_does_not_enable_soft_timeout(
         .fail_safe_default(Some(99))
         .await
         .unwrap();
-    assert_eq!(value, 7);
-    assert_eq!(cache.try_get("cold").await.unwrap(), Some(7));
+    assert_eq!(
+        value, 7,
+        "contract: a fail safe default without a stale entry does not enable soft timeout"
+    );
+    assert_eq!(
+        cache.try_get("cold").await.unwrap(),
+        Some(7),
+        "contract: a fail safe default without a stale entry does not enable soft timeout"
+    );
     cache.shutdown().await.unwrap();
 }
 
 #[test]
 fn default_recovery_delay_is_five_seconds() {
-    assert_eq!(RecoveryConfig::default().delay, Duration::from_secs(5));
+    assert_eq!(
+        RecoveryConfig::default().delay,
+        Duration::from_secs(5),
+        "contract: default recovery delay is five seconds"
+    );
 }
 
 #[test]
 fn initial_subscription_wait_is_opt_in_or_selected_by_strict() {
     let ordinary = Cache::<u64>::builder().try_build().unwrap();
-    assert!(!ordinary.wait_for_initial_backplane_subscribe());
+    assert!(
+        !ordinary.wait_for_initial_backplane_subscribe(),
+        "contract: initial subscription wait is opt in or selected by strict"
+    );
     let strict = Cache::<u64>::builder().strict().try_build().unwrap();
-    assert!(strict.wait_for_initial_backplane_subscribe());
+    assert!(
+        strict.wait_for_initial_backplane_subscribe(),
+        "contract: initial subscription wait is opt in or selected by strict"
+    );
     let _ = ordinary.close();
     let _ = strict.close();
 }

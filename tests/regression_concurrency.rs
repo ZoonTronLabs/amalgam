@@ -83,12 +83,15 @@ async fn cancelling_finite_factory_must_not_detach_it_and_release_singleflight()
     // RS-3 retains a started factory on caller Drop. Explicit cancellation
     // retains the original disposal assertion of this regression instead.
     cancellation.cancel();
-    assert!(matches!(
-        first.await.expect("caller completed"),
-        Err(amalgam::Error::OperationCancelled {
-            reason: amalgam::FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            first.await.expect("caller completed"),
+            Err(amalgam::Error::OperationCancelled {
+                reason: amalgam::FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: cancelling finite factory must not detach it and release singleflight"
+    );
     tokio::task::yield_now().await;
     let still_active = active.load(Ordering::SeqCst);
     let observed_active = {
@@ -124,7 +127,10 @@ async fn unrelated_nested_cache_keys_must_not_deadlock_when_hash_shards_collide(
         .map(|i| format!("audit-inner-{i}"))
         .find(|key| shard(key) == shard(outer))
         .expect("find default-bank collision");
-    assert_ne!(inner, outer);
+    assert_ne!(
+        inner, outer,
+        "contract: unrelated nested cache keys must not deadlock when hash shards collide"
+    );
     let cache: Cache<i32> = Cache::new();
     let nested_cache = cache.clone();
     let result = tokio::time::timeout(
@@ -172,7 +178,8 @@ async fn distinct_cold_keys_keep_independent_factory_progress() {
         for (index, task) in tasks.into_iter().enumerate() {
             assert_eq!(
                 task.await.expect("factory task").expect("origin result"),
-                index as i32
+                index as i32,
+                "contract: distinct cold keys keep independent factory progress"
             );
         }
     })
@@ -208,7 +215,8 @@ async fn foreground_factory_panics_propagate_and_release_the_flight() {
             caller
                 .await
                 .expect_err("programmer panic propagates")
-                .is_panic()
+                .is_panic(),
+            "contract: foreground factory panics propagate and release the flight"
         );
         let next = tokio::time::timeout(
             LIVENESS,
@@ -220,7 +228,10 @@ async fn foreground_factory_panics_propagate_and_release_the_flight() {
         .await
         .expect("panic released owned flight")
         .expect("next factory succeeds");
-        assert_eq!(next, 2);
+        assert_eq!(
+            next, 2,
+            "contract: foreground factory panics propagate and release the flight"
+        );
     }
 }
 
@@ -245,14 +256,18 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
             )
             .await
             .expect("fresh eager hit"),
-        1
+        1,
+        "contract: background factory panics are observed and release the flight"
     );
     tokio::time::timeout(LIVENESS, async {
         loop {
             if let CacheEvent::BackgroundFactoryError { message, .. } =
                 events.recv().await.expect("background diagnostics")
             {
-                assert!(message.contains("panicked"));
+                assert!(
+                    message.contains("panicked"),
+                    "contract: background factory panics are observed and release the flight"
+                );
                 break;
             }
         }
@@ -271,7 +286,8 @@ async fn background_factory_panics_are_observed_and_release_the_flight() {
         .await
         .expect("panic released flight")
         .expect("next origin succeeds"),
-        2
+        2,
+        "contract: background factory panics are observed and release the flight"
     );
 }
 
@@ -357,7 +373,8 @@ async fn a_factory_soft_timeout_must_also_bound_waiting_for_a_stale_singleflight
             )
             .await
             .expect("first stale fallback"),
-        1
+        1,
+        "contract: a factory soft timeout must also bound waiting for a stale singleflight"
     );
     clock.advance(Duration::from_secs(1)); // Throttle expired while background factory still holds lock.
     let second = tokio::time::timeout(
@@ -413,7 +430,8 @@ async fn eager_refresh_must_obtain_the_configured_distributed_locker() {
                 )
                 .await
                 .expect("read returned"),
-            1
+            1,
+            "contract: eager refresh must obtain the configured distributed locker"
         );
     }
     // Wait for the first eager factory rather than a fixed 40 ms: on a slow
@@ -504,7 +522,8 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
         )
         .await
         .expect("fresh read"),
-        1
+        1,
+        "contract: eager refresh must prefer a newer l2 entry before running factory"
     );
     tokio::time::timeout(Duration::from_secs(3), a.flush_pending())
         .await
@@ -677,10 +696,14 @@ async fn background_completion_cannot_resurrect_an_awaited_remove() {
             )
             .await
             .expect("fail safe stale"),
-        1
+        1,
+        "contract: background completion cannot resurrect an awaited remove"
     );
     cache.remove("k").await.unwrap();
-    assert!(cache.try_get("k").await.unwrap().is_none());
+    assert!(
+        cache.try_get("k").await.unwrap().is_none(),
+        "contract: background completion cannot resurrect an awaited remove"
+    );
     let _ = release_tx.send(());
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {

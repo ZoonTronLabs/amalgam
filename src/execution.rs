@@ -957,13 +957,15 @@ mod tests {
         assert!(
             tokio::time::timeout(Duration::from_millis(5), &mut drain)
                 .await
-                .is_err()
+                .is_err(),
+            "contract: nested local and colliding work must all exit before drain"
         );
         std::mem::drop(inner);
         assert!(
             tokio::time::timeout(Duration::from_millis(5), &mut drain)
                 .await
-                .is_err()
+                .is_err(),
+            "contract: nested local and colliding work must all exit before drain"
         );
         std::mem::drop(collision);
         tokio::time::timeout(Duration::from_secs(1), drain)
@@ -988,7 +990,8 @@ mod tests {
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut drain)
                 .await
-                .is_err()
+                .is_err(),
+            "contract: transferred inline work drains only after its destination releases it"
         );
         release.send(()).unwrap();
         thread.join().unwrap();
@@ -1038,14 +1041,24 @@ mod close_drop_cause_tests {
         let registry = scopes.clone();
         let closer = std::thread::spawn(move || registry.close());
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(scopes.is_closed());
+        assert!(
+            scopes.is_closed(),
+            "contract: caller drop during close keeps shutdown cause before registry reaches it"
+        );
         std::mem::drop(target);
         let observed = token.reason();
         // Always unblock/join before asserting, including on the old failing code.
         release_tx.send(()).unwrap();
-        assert!(closer.join().unwrap());
+        assert!(
+            closer.join().unwrap(),
+            "contract: caller drop during close keeps shutdown cause before registry reaches it"
+        );
         std::mem::drop(blocker);
-        assert_eq!(observed, Some(Reason::CacheShutdown));
+        assert_eq!(
+            observed,
+            Some(Reason::CacheShutdown),
+            "contract: caller drop during close keeps shutdown cause before registry reaches it"
+        );
     }
 
     enum Finish {
@@ -1095,21 +1108,36 @@ mod close_drop_cause_tests {
             let result = execution
                 .as_mut()
                 .poll(&mut Context::from_waker(Waker::noop()));
-            assert!(matches!(
-                result,
-                Poll::Ready(Err(Error::OperationCancelled {
-                    reason: Reason::CacheShutdown
-                }))
-            ));
-            assert_eq!(token.reason(), Some(Reason::CacheShutdown));
-            assert_eq!(*lock(&dropped), [Some(Reason::CacheShutdown)]);
-            assert!(!scopes.close());
+            assert!(
+                matches!(
+                    result,
+                    Poll::Ready(Err(Error::OperationCancelled {
+                        reason: Reason::CacheShutdown
+                    }))
+                ),
+                "contract: ready during close publishes shutdown before retiring the future"
+            );
+            assert_eq!(
+                token.reason(),
+                Some(Reason::CacheShutdown),
+                "contract: ready during close publishes shutdown before retiring the future"
+            );
+            assert_eq!(
+                *lock(&dropped),
+                [Some(Reason::CacheShutdown)],
+                "contract: ready during close publishes shutdown before retiring the future"
+            );
+            assert!(
+                !scopes.close(),
+                "contract: ready during close publishes shutdown before retiring the future"
+            );
             let mut drain = std::pin::pin!(scopes.drained());
             assert!(
                 drain
                     .as_mut()
                     .poll(&mut Context::from_waker(Waker::noop()))
-                    .is_ready()
+                    .is_ready(),
+                "contract: ready during close publishes shutdown before retiring the future"
             );
         }
     }
@@ -1133,11 +1161,22 @@ mod close_drop_cause_tests {
                 std::mem::replace(&mut *current, state)
             };
             std::mem::drop(pending);
-            assert_eq!(token.reason(), None);
+            assert_eq!(
+                token.reason(),
+                None,
+                "contract: terminal state owns the reason before token notification"
+            );
             execution.cancel(Reason::CacheShutdown);
-            assert_eq!(token.reason(), Some(expected));
+            assert_eq!(
+                token.reason(),
+                Some(expected),
+                "contract: terminal state owns the reason before token notification"
+            );
             std::mem::drop(execution);
-            assert!(scopes.close());
+            assert!(
+                scopes.close(),
+                "contract: terminal state owns the reason before token notification"
+            );
         }
     }
 
@@ -1165,17 +1204,21 @@ mod close_drop_cause_tests {
             }))
         });
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(scopes.close());
+        assert!(
+            scopes.close(),
+            "contract: panic during a closed poll preserves the published shutdown cause"
+        );
         release_tx.send(()).unwrap();
         let panic = poller.join().unwrap().unwrap_err();
         assert_eq!(
             panic.downcast_ref::<&str>(),
-            Some(&"original factory panic")
+            Some(&"original factory panic"),
+            "contract: panic during a closed poll preserves the published shutdown cause"
         );
-        assert!(matches!(
-            *lock(&scope.state),
-            State::Cancelled(Reason::CacheShutdown)
-        ));
+        assert!(
+            matches!(*lock(&scope.state), State::Cancelled(Reason::CacheShutdown)),
+            "contract: panic during a closed poll preserves the published shutdown cause"
+        );
     }
 }
 
@@ -1210,7 +1253,10 @@ mod tracker_contract_tests {
                     CancellationSource::new(),
                 );
                 std::mem::drop(work);
-                assert!(!scopes.close());
+                assert!(
+                    !scopes.close(),
+                    "contract: cancellation drops can reenter an already closing scope"
+                );
             }
         }
     }
@@ -1232,15 +1278,27 @@ mod tracker_contract_tests {
             },
             source,
         );
-        assert!(scopes.close());
-        assert_eq!(drops.load(Ordering::SeqCst), 2);
-        assert_eq!(token.reason(), Some(Reason::CacheShutdown));
+        assert!(
+            scopes.close(),
+            "contract: closing unpolled work without runtime allows drop to reenter"
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            2,
+            "contract: closing unpolled work without runtime allows drop to reenter"
+        );
+        assert_eq!(
+            token.reason(),
+            Some(Reason::CacheShutdown),
+            "contract: closing unpolled work without runtime allows drop to reenter"
+        );
         let mut drain = std::pin::pin!(scopes.drained());
         assert!(
             drain
                 .as_mut()
                 .poll(&mut Context::from_waker(Waker::noop()))
-                .is_ready()
+                .is_ready(),
+            "contract: closing unpolled work without runtime allows drop to reenter"
         );
         std::mem::drop(work);
     }
@@ -1276,7 +1334,11 @@ mod tracker_contract_tests {
         let closer_scopes = scopes.clone();
         let closer = std::thread::spawn(move || closer_scopes.close());
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(token.reason(), Some(Reason::CacheShutdown));
+        assert_eq!(
+            token.reason(),
+            Some(Reason::CacheShutdown),
+            "contract: drainage waits for drop after terminal cancellation was published"
+        );
         let mut drain = std::pin::pin!(scopes.drained());
         let waited = tokio::time::timeout(Duration::from_millis(20), &mut drain)
             .await
@@ -1284,8 +1346,14 @@ mod tracker_contract_tests {
         // Release and join even if the assertion fails, so this test cannot
         // strand a user destructor or hide the underlying drainage failure.
         release_tx.send(()).unwrap();
-        assert!(closer.join().unwrap());
-        assert!(waited);
+        assert!(
+            closer.join().unwrap(),
+            "contract: drainage waits for drop after terminal cancellation was published"
+        );
+        assert!(
+            waited,
+            "contract: drainage waits for drop after terminal cancellation was published"
+        );
         tokio::time::timeout(Duration::from_secs(1), drain)
             .await
             .unwrap();
@@ -1326,14 +1394,23 @@ mod tracker_contract_tests {
         );
         let panic =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scopes.close())).unwrap_err();
-        assert_eq!(panic.downcast_ref::<u32>(), Some(&73));
-        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            panic.downcast_ref::<u32>(),
+            Some(&73),
+            "contract: a panicking destructor does not leave other shutdown work alive"
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "contract: a panicking destructor does not leave other shutdown work alive"
+        );
         let mut drain = std::pin::pin!(scopes.drained());
         assert!(
             drain
                 .as_mut()
                 .poll(&mut Context::from_waker(Waker::noop()))
-                .is_ready()
+                .is_ready(),
+            "contract: a panicking destructor does not leave other shutdown work alive"
         );
         std::mem::drop((first, second));
     }

@@ -189,10 +189,14 @@ impl State {
         }
     }
     fn drained(&self) {
-        assert!(self.slots.lock().unwrap().is_empty());
+        assert!(
+            self.slots.lock().unwrap().is_empty(),
+            "contract: drained native coordination returns every acquired slot exactly once"
+        );
         assert_eq!(
             self.acquired.load(Ordering::SeqCst),
-            self.returned.load(Ordering::SeqCst)
+            self.returned.load(Ordering::SeqCst),
+            "contract: drained native coordination returns every acquired slot exactly once"
         );
     }
 }
@@ -209,7 +213,10 @@ struct Guard {
 }
 impl MemoryLockGuard for Guard {
     fn release(self: Box<Self>) -> StdResult<(), MemoryLockerError> {
-        assert!(self.state.slots.lock().unwrap().remove(&self.key));
+        assert!(
+            self.state.slots.lock().unwrap().remove(&self.key),
+            "contract: a native coordination guard releases its owned live slot exactly once"
+        );
         self.state.returned.fetch_add(1, Ordering::SeqCst);
         self.state.released.notify_all();
         self.state.async_released.notify_waiters();
@@ -296,7 +303,8 @@ fn spawn<T: Send + 'static>(
 }
 fn reason(request: &MemoryLockRequest, expected: FactoryCancellationReason) {
     assert!(
-        matches!(request.cancellation().check(),Err(Error::OperationCancelled{reason}) if reason==expected)
+        matches!(request.cancellation().check(),Err(Error::OperationCancelled{reason}) if reason==expected),
+        "contract: native coordination propagates the requested cancellation reason"
     );
 }
 
@@ -312,7 +320,8 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
             )
             .execute()
             .unwrap(),
-        1
+        1,
+        "contract: native and async views select distinct methods and warm hits bypass both"
     );
     assert_eq!(
         cache
@@ -322,17 +331,27 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
                 amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
             ))
             .unwrap(),
-        2
+        2,
+        "contract: native and async views select distinct methods and warm hits bypass both"
     );
-    assert_eq!(state.count(Method::Blocking), 1);
-    assert_eq!(state.count(Method::Async), 1);
+    assert_eq!(
+        state.count(Method::Blocking),
+        1,
+        "contract: native and async views select distinct methods and warm hits bypass both"
+    );
+    assert_eq!(
+        state.count(Method::Async),
+        1,
+        "contract: native and async views select distinct methods and warm hits bypass both"
+    );
     for (key, value) in [("native", 1), ("async", 2)] {
         assert_eq!(
             cache
                 .get_or_set(key, typed_blocking_factory(|_| panic!("warm origin")))
                 .execute()
                 .unwrap(),
-            value
+            value,
+            "contract: native and async views select distinct methods and warm hits bypass both"
         );
         assert_eq!(
             cache
@@ -342,7 +361,8 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
                     typed_factory(|_| async { panic!("warm async origin") })
                 ))
                 .unwrap(),
-            value
+            value,
+            "contract: native and async views select distinct methods and warm hits bypass both"
         );
     }
     let requests = state.requests.lock().unwrap();
@@ -352,16 +372,25 @@ fn native_and_async_views_select_distinct_methods_and_warm_hits_bypass_both() {
             .all(|(_, r)| r.context().cache_name() == "native-profiles"
                 && r.context().instance_id() == "native-one"
                 && r.key().starts_with("p:")
-                && r.kind() == &MemoryLockKind::Entry)
+                && r.kind() == &MemoryLockKind::Entry),
+        "contract: native and async views select distinct methods and warm hits bypass both"
     );
-    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests.len(),
+        2,
+        "contract: native and async views select distinct methods and warm hits bypass both"
+    );
     for (_, request) in requests.iter() {
         reason(request, FactoryCancellationReason::ScopeFinished);
     }
     std::mem::drop(requests);
     cache.shutdown().unwrap();
     state.drained();
-    assert_eq!(state.shutdowns.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.shutdowns.load(Ordering::SeqCst),
+        1,
+        "contract: native and async views select distinct methods and warm hits bypass both"
+    );
 }
 #[test]
 fn legacy_provider_without_blocking_capability_remains_compatible() {
@@ -382,10 +411,19 @@ fn legacy_provider_without_blocking_capability_remains_compatible() {
             )
             .execute()
             .unwrap(),
-        7
+        7,
+        "contract: legacy provider without blocking capability remains compatible"
     );
-    assert_eq!(state.count(Method::Blocking), 0);
-    assert_eq!(state.count(Method::Async), 1);
+    assert_eq!(
+        state.count(Method::Blocking),
+        0,
+        "contract: legacy provider without blocking capability remains compatible"
+    );
+    assert_eq!(
+        state.count(Method::Async),
+        1,
+        "contract: legacy provider without blocking capability remains compatible"
+    );
     cache.shutdown().unwrap();
 }
 #[test]
@@ -427,14 +465,32 @@ fn mixed_callers_share_one_factory_and_owned_guards() {
         }));
     }
     for t in threads {
-        assert_eq!(t.join().unwrap().unwrap(), 42);
+        assert_eq!(
+            t.join().unwrap().unwrap(),
+            42,
+            "contract: mixed callers share one factory and owned guards"
+        );
     }
     for t in tasks {
-        assert_eq!(cache.runtime().run(t).unwrap().unwrap(), 42);
+        assert_eq!(
+            cache.runtime().run(t).unwrap().unwrap(),
+            42,
+            "contract: mixed callers share one factory and owned guards"
+        );
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(state.count(Method::Blocking) > 0);
-    assert!(state.count(Method::Async) > 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: mixed callers share one factory and owned guards"
+    );
+    assert!(
+        state.count(Method::Blocking) > 0,
+        "contract: mixed callers share one factory and owned guards"
+    );
+    assert!(
+        state.count(Method::Async) > 0,
+        "contract: mixed callers share one factory and owned guards"
+    );
     cache.flush_pending().unwrap();
     state.drained();
     cache.shutdown().unwrap();
@@ -511,14 +567,20 @@ fn blocking_waiter_cannot_starve_the_factory_with_one_callback_slot() {
     assert_eq!(
         a.expect("factory must progress while another lock acquisition waits")
             .unwrap(),
-        17
+        17,
+        "contract: blocking waiter cannot starve the factory with one callback slot"
     );
     assert_eq!(
         b.expect("waiter must consume the completed first factory")
             .unwrap(),
-        17
+        17,
+        "contract: blocking waiter cannot starve the factory with one callback slot"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: blocking waiter cannot starve the factory with one callback slot"
+    );
     state.drained();
 }
 #[test]
@@ -548,7 +610,11 @@ fn distinct_keys_enter_inline_factories_before_either_is_released() {
     let second = receive.recv_timeout(WAIT);
     gate.release();
     for t in callers {
-        assert_eq!(t.join().unwrap().unwrap(), 7);
+        assert_eq!(
+            t.join().unwrap().unwrap(),
+            7,
+            "contract: distinct keys enter inline factories before either is released"
+        );
     }
     cache.shutdown().unwrap();
     assert!(
@@ -593,18 +659,29 @@ fn ignored_acquisition_deadline_serves_stale_and_flush_waits_for_late_release() 
         .unwrap()
     });
     let request = entered.recv_timeout(WAIT).unwrap();
-    assert_eq!(receive.recv_timeout(WAIT).unwrap().unwrap(), 7);
+    assert_eq!(
+        receive.recv_timeout(WAIT).unwrap().unwrap(),
+        7,
+        "contract: ignored acquisition deadline serves stale and flush waits for late release"
+    );
     caller.join().unwrap();
     reason(&request, FactoryCancellationReason::HardTimeout);
     let c = cache.clone();
     let (send, receive) = mpsc::channel();
     let flush = thread::spawn(move || send.send(c.flush_pending()).unwrap());
-    assert!(receive.recv_timeout(Duration::from_millis(30)).is_err());
+    assert!(
+        receive.recv_timeout(Duration::from_millis(30)).is_err(),
+        "contract: ignored acquisition deadline serves stale and flush waits for late release"
+    );
     gate.release();
     receive.recv_timeout(WAIT).unwrap().unwrap();
     flush.join().unwrap();
     state.drained();
-    assert_eq!(state.acquired.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.acquired.load(Ordering::SeqCst),
+        1,
+        "contract: ignored acquisition deadline serves stale and flush waits for late release"
+    );
     cache.shutdown().unwrap();
 }
 #[test]
@@ -638,22 +715,33 @@ fn caller_cancellation_is_prompt_while_an_opaque_callback_is_still_owned() {
     });
     let request = entered.recv_timeout(WAIT).unwrap();
     source.cancel();
-    assert!(matches!(
-        receive.recv_timeout(WAIT).unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            receive.recv_timeout(WAIT).unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: caller cancellation is prompt while an opaque callback is still owned"
+    );
     caller.join().unwrap();
     reason(&request, FactoryCancellationReason::CallerCancelled);
-    assert_eq!(cache.try_get("hot").execute().unwrap(), Some(8));
+    assert_eq!(
+        cache.try_get("hot").execute().unwrap(),
+        Some(8),
+        "contract: caller cancellation is prompt while an opaque callback is still owned"
+    );
     cache
         .runtime()
         .run(async { tokio::time::sleep(Duration::from_millis(2)).await });
     gate.release();
     cache.flush_pending().unwrap();
     state.drained();
-    assert_eq!(state.acquired.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.acquired.load(Ordering::SeqCst),
+        1,
+        "contract: caller cancellation is prompt while an opaque callback is still owned"
+    );
     cache.shutdown().unwrap();
 }
 #[test]
@@ -689,18 +777,33 @@ fn queued_cancelled_acquisition_never_invokes_the_provider() {
     });
     thread::sleep(Duration::from_millis(10));
     source.cancel();
-    assert!(matches!(
-        receive.recv_timeout(WAIT).unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            receive.recv_timeout(WAIT).unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: queued cancelled acquisition never invokes the provider"
+    );
     second.join().unwrap();
-    assert_eq!(state.count(Method::Blocking), 1);
+    assert_eq!(
+        state.count(Method::Blocking),
+        1,
+        "contract: queued cancelled acquisition never invokes the provider"
+    );
     gate.release();
-    assert_eq!(first.join().unwrap().unwrap(), 1);
+    assert_eq!(
+        first.join().unwrap().unwrap(),
+        1,
+        "contract: queued cancelled acquisition never invokes the provider"
+    );
     cache.flush_pending().unwrap();
-    assert_eq!(state.count(Method::Blocking), 1);
+    assert_eq!(
+        state.count(Method::Blocking),
+        1,
+        "contract: queued cancelled acquisition never invokes the provider"
+    );
     state.drained();
     cache.shutdown().unwrap();
 }
@@ -727,23 +830,41 @@ fn shutdown_cancels_wait_but_drains_the_real_callback_and_late_guard() {
     let c = cache.clone();
     let (close_tx, close_rx) = mpsc::channel();
     let close = thread::spawn(move || close_tx.send(c.shutdown()).unwrap());
-    assert!(matches!(
-        receive.recv_timeout(WAIT).unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        }) | Err(Error::CacheClosed)
-    ));
+    assert!(
+        matches!(
+            receive.recv_timeout(WAIT).unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            }) | Err(Error::CacheClosed)
+        ),
+        "contract: shutdown cancels wait but drains the real callback and late guard"
+    );
     caller.join().unwrap();
     reason(&request, FactoryCancellationReason::CacheShutdown);
-    assert!(close_rx.recv_timeout(Duration::from_millis(30)).is_err());
-    assert_eq!(state.shutdowns.load(Ordering::SeqCst), 0);
+    assert!(
+        close_rx.recv_timeout(Duration::from_millis(30)).is_err(),
+        "contract: shutdown cancels wait but drains the real callback and late guard"
+    );
+    assert_eq!(
+        state.shutdowns.load(Ordering::SeqCst),
+        0,
+        "contract: shutdown cancels wait but drains the real callback and late guard"
+    );
     gate.release();
     close_rx.recv_timeout(WAIT).unwrap().unwrap();
     close.join().unwrap();
     state.drained();
-    assert_eq!(state.shutdowns.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.shutdowns.load(Ordering::SeqCst),
+        1,
+        "contract: shutdown cancels wait but drains the real callback and late guard"
+    );
     cache.shutdown().unwrap();
-    assert_eq!(state.shutdowns.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.shutdowns.load(Ordering::SeqCst),
+        1,
+        "contract: shutdown cancels wait but drains the real callback and late guard"
+    );
 }
 #[test]
 fn original_blocking_provider_error_is_not_a_miss_or_factory_failure() {
@@ -760,7 +881,10 @@ fn original_blocking_provider_error_is_not_a_miss_or_factory_failure() {
     let Error::MemoryLocker(MemoryLockerError::Provider { source }) = error else {
         panic!("lost provider error: {error:?}")
     };
-    assert!(source.downcast_ref::<Cause>().is_some());
+    assert!(
+        source.downcast_ref::<Cause>().is_some(),
+        "contract: original blocking provider error is not a miss or factory failure"
+    );
     cache.shutdown().unwrap();
     state.drained();
 }
@@ -783,18 +907,22 @@ fn blocking_provider_panic_keeps_its_join_cause_and_shutdown_stage() {
         source
             .downcast_ref::<tokio::task::JoinError>()
             .unwrap()
-            .is_panic()
+            .is_panic(),
+        "contract: blocking provider panic keeps its join cause and shutdown stage"
     );
     let Err(Error::Shutdown(report)) = cache.shutdown() else {
         panic!("owned callback panic must survive shutdown")
     };
-    assert!(report.failures().iter().any(|e| matches!(
-        e,
-        ShutdownFailure::BackgroundTask {
-            task: ShutdownTask::MemoryLockerAcquisition,
-            ..
-        }
-    )));
+    assert!(
+        report.failures().iter().any(|e| matches!(
+            e,
+            ShutdownFailure::BackgroundTask {
+                task: ShutdownTask::MemoryLockerAcquisition,
+                ..
+            }
+        )),
+        "contract: blocking provider panic keeps its join cause and shutdown stage"
+    );
     state.drained();
 }
 #[test]
@@ -810,9 +938,14 @@ fn unavailable_blocking_provider_permits_the_ordinary_unlocked_factory() {
             )
             .execute()
             .unwrap(),
-        4
+        4,
+        "contract: unavailable blocking provider permits the ordinary unlocked factory"
     );
-    assert_eq!(state.acquired.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        state.acquired.load(Ordering::SeqCst),
+        0,
+        "contract: unavailable blocking provider permits the ordinary unlocked factory"
+    );
     cache.shutdown().unwrap();
 }
 #[test]
@@ -839,10 +972,19 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
             )
             .execute()
             .unwrap(),
-        9
+        9,
+        "contract: async view stays async inside a native factory and after native drop"
     );
-    assert_eq!(state.count(Method::Blocking), 1);
-    assert_eq!(state.count(Method::Async), 1);
+    assert_eq!(
+        state.count(Method::Blocking),
+        1,
+        "contract: async view stays async inside a native factory and after native drop"
+    );
+    assert_eq!(
+        state.count(Method::Async),
+        1,
+        "contract: async view stays async inside a native factory and after native drop"
+    );
     std::mem::drop(cache);
     assert_eq!(
         driver
@@ -851,13 +993,26 @@ fn async_view_stays_async_inside_a_native_factory_and_after_native_drop() {
                 amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(11)) })
             ))
             .unwrap(),
-        11
+        11,
+        "contract: async view stays async inside a native factory and after native drop"
     );
-    assert_eq!(state.count(Method::Blocking), 1);
-    assert_eq!(state.count(Method::Async), 2);
+    assert_eq!(
+        state.count(Method::Blocking),
+        1,
+        "contract: async view stays async inside a native factory and after native drop"
+    );
+    assert_eq!(
+        state.count(Method::Async),
+        2,
+        "contract: async view stays async inside a native factory and after native drop"
+    );
     driver.run(asynchronous.shutdown()).unwrap();
     state.drained();
-    assert_eq!(state.shutdowns.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.shutdowns.load(Ordering::SeqCst),
+        1,
+        "contract: async view stays async inside a native factory and after native drop"
+    );
 }
 #[test]
 fn callbacks_and_late_release_reject_draining_their_own_cache() {
@@ -868,21 +1023,27 @@ fn callbacks_and_late_release_reject_draining_their_own_cache() {
     let cache = native(&state);
     let c = cache.clone();
     *state.acquire_hook.lock().unwrap() = Some(Arc::new(move || {
-        assert!(matches!(
-            c.flush_pending(),
-            Err(Error::ReentrantDrain {
-                operation: DrainOperation::FlushPending
-            })
-        ))
+        assert!(
+            matches!(
+                c.flush_pending(),
+                Err(Error::ReentrantDrain {
+                    operation: DrainOperation::FlushPending
+                })
+            ),
+            "contract: callbacks and late release reject draining their own cache"
+        )
     }));
     let c = cache.clone();
     *state.release_hook.lock().unwrap() = Some(Arc::new(move || {
-        assert!(matches!(
-            c.shutdown(),
-            Err(Error::ReentrantDrain {
-                operation: DrainOperation::Shutdown
-            })
-        ))
+        assert!(
+            matches!(
+                c.shutdown(),
+                Err(Error::ReentrantDrain {
+                    operation: DrainOperation::Shutdown
+                })
+            ),
+            "contract: callbacks and late release reject draining their own cache"
+        )
     }));
     let source = CancellationSource::new();
     let c = cache.clone();
@@ -901,7 +1062,10 @@ fn callbacks_and_late_release_reject_draining_their_own_cache() {
     });
     entered.recv_timeout(WAIT).unwrap();
     source.cancel();
-    assert!(receive.recv_timeout(WAIT).unwrap().is_err());
+    assert!(
+        receive.recv_timeout(WAIT).unwrap().is_err(),
+        "contract: callbacks and late release reject draining their own cache"
+    );
     caller.join().unwrap();
     gate.release();
     cache.flush_pending().unwrap();
@@ -949,14 +1113,27 @@ fn soft_timeout_background_keeps_the_blocking_acquired_guard_until_commit() {
             )
             .execute()
             .unwrap(),
-        1
+        1,
+        "contract: soft timeout background keeps the blocking acquired guard until commit"
     );
     receive.recv_timeout(WAIT).unwrap();
-    assert_eq!(state.acquired.load(Ordering::SeqCst), 1);
-    assert_eq!(state.returned.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        state.acquired.load(Ordering::SeqCst),
+        1,
+        "contract: soft timeout background keeps the blocking acquired guard until commit"
+    );
+    assert_eq!(
+        state.returned.load(Ordering::SeqCst),
+        0,
+        "contract: soft timeout background keeps the blocking acquired guard until commit"
+    );
     gate.release();
     cache.flush_pending().unwrap();
-    assert_eq!(cache.try_get("soft").execute().unwrap(), Some(2));
+    assert_eq!(
+        cache.try_get("soft").execute().unwrap(),
+        Some(2),
+        "contract: soft timeout background keeps the blocking acquired guard until commit"
+    );
     state.drained();
     cache.shutdown().unwrap();
 }
@@ -979,7 +1156,8 @@ fn eager_refresh_uses_nonblocking_try_and_never_blocking_acquisition() {
             )
             .execute()
             .unwrap(),
-        1
+        1,
+        "contract: eager refresh uses nonblocking try and never blocking acquisition"
     );
     clock.advance(Duration::from_secs(6));
     assert_eq!(
@@ -990,12 +1168,25 @@ fn eager_refresh_uses_nonblocking_try_and_never_blocking_acquisition() {
             )
             .execute()
             .unwrap(),
-        1
+        1,
+        "contract: eager refresh uses nonblocking try and never blocking acquisition"
     );
     cache.flush_pending().unwrap();
-    assert_eq!(cache.try_get("eager").execute().unwrap(), Some(2));
-    assert_eq!(state.count(Method::Blocking), 1);
-    assert_eq!(state.count(Method::Try), 1);
+    assert_eq!(
+        cache.try_get("eager").execute().unwrap(),
+        Some(2),
+        "contract: eager refresh uses nonblocking try and never blocking acquisition"
+    );
+    assert_eq!(
+        state.count(Method::Blocking),
+        1,
+        "contract: eager refresh uses nonblocking try and never blocking acquisition"
+    );
+    assert_eq!(
+        state.count(Method::Try),
+        1,
+        "contract: eager refresh uses nonblocking try and never blocking acquisition"
+    );
     state.drained();
     cache.shutdown().unwrap();
 }
@@ -1020,22 +1211,32 @@ fn native_marker_factories_use_the_blocking_provider_and_disjoint_keys() {
             .tags(vec![tag.clone()].into_boxed_slice())
             .execute()
             .unwrap(),
-        7
+        7,
+        "contract: native marker factories use the blocking provider and disjoint keys"
     );
-    assert_eq!(cache.try_get("tagged").execute().unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("tagged").execute().unwrap(),
+        Some(7),
+        "contract: native marker factories use the blocking provider and disjoint keys"
+    );
     let requests = state.requests.lock().unwrap();
     assert!(
         requests
             .iter()
             .any(|(method, r)| *method == Method::Blocking
-                && r.kind() == &MemoryLockKind::Marker(MarkerKind::Tag(tag.clone())))
+                && r.kind() == &MemoryLockKind::Marker(MarkerKind::Tag(tag.clone()))),
+        "contract: native marker factories use the blocking provider and disjoint keys"
     );
     assert!(
         requests
             .iter()
-            .any(|(method, r)| *method == Method::Blocking && r.kind() == &MemoryLockKind::Entry)
+            .any(|(method, r)| *method == Method::Blocking && r.kind() == &MemoryLockKind::Entry),
+        "contract: native marker factories use the blocking provider and disjoint keys"
     );
-    assert!(!requests.iter().any(|(method, _)| *method == Method::Async));
+    assert!(
+        !requests.iter().any(|(method, _)| *method == Method::Async),
+        "contract: native marker factories use the blocking provider and disjoint keys"
+    );
     std::mem::drop(requests);
     state.drained();
     cache.shutdown().unwrap();
@@ -1088,8 +1289,16 @@ fn opposite_nested_native_calls_progress_with_one_slot_per_class() {
     }
     left.shutdown().unwrap();
     right.shutdown().unwrap();
-    assert_eq!(a.expect("nested left must progress").unwrap(), 8);
-    assert_eq!(b.expect("nested right must progress").unwrap(), 8);
+    assert_eq!(
+        a.expect("nested left must progress").unwrap(),
+        8,
+        "contract: opposite nested native calls progress with one slot per class"
+    );
+    assert_eq!(
+        b.expect("nested right must progress").unwrap(),
+        8,
+        "contract: opposite nested native calls progress with one slot per class"
+    );
     left_state.drained();
     right_state.drained();
 }

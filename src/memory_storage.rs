@@ -387,20 +387,38 @@ mod tests {
     fn exhausted_epoch_never_reactivates_an_old_generation() {
         let epoch = MemoryStorageEpoch(Arc::new(AtomicU64::new(u64::MAX)));
         let old = epoch.current().unwrap();
-        assert!(old.is_current());
-        assert!(matches!(
-            epoch.advance(),
-            Err(MemoryStorageError::GenerationExhausted)
-        ));
-        assert!(!old.is_current());
-        assert!(matches!(
-            epoch.current(),
-            Err(MemoryStorageError::GenerationExhausted)
-        ));
-        assert!(matches!(
-            epoch.advance(),
-            Err(MemoryStorageError::GenerationExhausted)
-        ));
-        assert!(!old.is_current());
+        assert!(
+            old.is_current(),
+            "contract: exhausted epoch never reactivates an old generation"
+        );
+        assert!(
+            matches!(
+                epoch.advance(),
+                Err(MemoryStorageError::GenerationExhausted)
+            ),
+            "contract: exhausted epoch never reactivates an old generation"
+        );
+        assert!(
+            !old.is_current(),
+            "contract: exhausted epoch never reactivates an old generation"
+        );
+        assert!(
+            matches!(
+                epoch.current(),
+                Err(MemoryStorageError::GenerationExhausted)
+            ),
+            "contract: exhausted epoch never reactivates an old generation"
+        );
+        assert!(
+            matches!(
+                epoch.advance(),
+                Err(MemoryStorageError::GenerationExhausted)
+            ),
+            "contract: exhausted epoch never reactivates an old generation"
+        );
+        assert!(
+            !old.is_current(),
+            "contract: exhausted epoch never reactivates an old generation"
+        );
     }
 }

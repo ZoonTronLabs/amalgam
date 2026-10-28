@@ -212,7 +212,8 @@ async fn origin(cache: &Cache<u64>, calls: Arc<AtomicUsize>) -> Result<u64> {
 fn assert_lease_failure(result: Result<u64>) {
     assert!(
         matches!(result, Err(Error::Lease(LeaseError::Backend { source }))
-        if source.to_string() == "locker unavailable")
+        if source.to_string() == "locker unavailable"),
+        "contract: assert lease failure"
     );
 }
 fn options() -> EntryOptions {
@@ -224,8 +225,16 @@ async fn explicit_fenced_miss_rejects_failed_lease_even_when_rethrow_is_false() 
     let fixture = fixture(Coordination::Fenced, options(), None).await;
     let calls = Arc::new(AtomicUsize::new(0));
     assert_lease_failure(origin(&fixture.cache, calls.clone()).await);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: explicit fenced miss rejects failed lease even when rethrow is false"
+    );
+    assert_eq!(
+        fixture.locker.calls.load(Ordering::SeqCst),
+        1,
+        "contract: explicit fenced miss rejects failed lease even when rethrow is false"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -233,9 +242,21 @@ async fn explicit_fenced_miss_rejects_failed_lease_even_when_rethrow_is_false() 
 async fn cooperative_miss_can_run_origin_after_failed_lease() {
     let fixture = fixture(Coordination::Cooperative, options(), None).await;
     let calls = Arc::new(AtomicUsize::new(0));
-    assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 7);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        origin(&fixture.cache, calls.clone()).await.unwrap(),
+        7,
+        "contract: cooperative miss can run origin after failed lease"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: cooperative miss can run origin after failed lease"
+    );
+    assert_eq!(
+        fixture.locker.calls.load(Ordering::SeqCst),
+        1,
+        "contract: cooperative miss can run origin after failed lease"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -245,7 +266,11 @@ async fn cooperative_rethrow_rejects_origin_after_failed_lease() {
     let fixture = fixture(Coordination::Cooperative, options, None).await;
     let calls = Arc::new(AtomicUsize::new(0));
     assert_lease_failure(origin(&fixture.cache, calls.clone()).await);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: cooperative rethrow rejects origin after failed lease"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -263,9 +288,21 @@ async fn fresh_l1_without_backplane_does_not_contact_failed_locker_or_store() {
         .unwrap();
     fixture.store.down.store(true, Ordering::SeqCst);
     let calls = Arc::new(AtomicUsize::new(0));
-    assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 42);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        origin(&fixture.cache, calls.clone()).await.unwrap(),
+        42,
+        "contract: fresh l1 without backplane does not contact failed locker or store"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: fresh l1 without backplane does not contact failed locker or store"
+    );
+    assert_eq!(
+        fixture.locker.calls.load(Ordering::SeqCst),
+        0,
+        "contract: fresh l1 without backplane does not contact failed locker or store"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -300,11 +337,23 @@ async fn a_notification_gap_turns_old_l1_into_a_miss_under_each_lease_policy() {
         match coordination {
             Coordination::Fenced => {
                 assert_lease_failure(result);
-                assert_eq!(calls.load(Ordering::SeqCst), 0);
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    0,
+                    "contract: a notification gap turns old l1 into a miss under each lease policy"
+                );
             }
             Coordination::Default | Coordination::Local | Coordination::Cooperative => {
-                assert_eq!(result.unwrap(), 7);
-                assert_eq!(calls.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    result.unwrap(),
+                    7,
+                    "contract: a notification gap turns old l1 into a miss under each lease policy"
+                );
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    1,
+                    "contract: a notification gap turns old l1 into a miss under each lease policy"
+                );
             }
         }
         fixture.cache.shutdown().await.unwrap();
@@ -356,14 +405,34 @@ async fn best_effort_keeps_local_l1_across_gap_and_reconnect_under_each_lease_po
         fixture.store.down.store(true, Ordering::SeqCst);
         notifications.disconnect();
         let calls = Arc::new(AtomicUsize::new(0));
-        assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 42);
+        assert_eq!(
+            origin(&fixture.cache, calls.clone()).await.unwrap(),
+            42,
+            "contract: best effort keeps local l1 across gap and reconnect under each lease policy"
+        );
         // A removal missed while disconnected is deliberately not inferred.
         fixture.store.inner.remove("v2:key").await.unwrap();
         notifications.reconnect();
-        assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 42);
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(fixture.store.reads.load(Ordering::SeqCst), reads);
-        assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            origin(&fixture.cache, calls.clone()).await.unwrap(),
+            42,
+            "contract: best effort keeps local l1 across gap and reconnect under each lease policy"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "contract: best effort keeps local l1 across gap and reconnect under each lease policy"
+        );
+        assert_eq!(
+            fixture.store.reads.load(Ordering::SeqCst),
+            reads,
+            "contract: best effort keeps local l1 across gap and reconnect under each lease policy"
+        );
+        assert_eq!(
+            fixture.locker.calls.load(Ordering::SeqCst),
+            0,
+            "contract: best effort keeps local l1 across gap and reconnect under each lease policy"
+        );
         fixture.cache.shutdown().await.unwrap();
     }
 }
@@ -400,15 +469,35 @@ async fn best_effort_keeps_hydrated_l1_across_gap_in_bounded_and_unbounded_memor
         };
         let reader = reader.try_build_ready().await.unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
-        assert_eq!(origin(&reader, calls.clone()).await.unwrap(), 42);
+        assert_eq!(
+            origin(&reader, calls.clone()).await.unwrap(),
+            42,
+            "contract: best effort keeps hydrated l1 across gap in bounded and unbounded memory"
+        );
         let reads = writer.store.reads.load(Ordering::SeqCst);
         writer.store.down.store(true, Ordering::SeqCst);
         notifications.disconnect();
-        assert_eq!(origin(&reader, calls.clone()).await.unwrap(), 42);
+        assert_eq!(
+            origin(&reader, calls.clone()).await.unwrap(),
+            42,
+            "contract: best effort keeps hydrated l1 across gap in bounded and unbounded memory"
+        );
         notifications.reconnect();
-        assert_eq!(origin(&reader, calls.clone()).await.unwrap(), 42);
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert_eq!(writer.store.reads.load(Ordering::SeqCst), reads);
+        assert_eq!(
+            origin(&reader, calls.clone()).await.unwrap(),
+            42,
+            "contract: best effort keeps hydrated l1 across gap in bounded and unbounded memory"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "contract: best effort keeps hydrated l1 across gap in bounded and unbounded memory"
+        );
+        assert_eq!(
+            writer.store.reads.load(Ordering::SeqCst),
+            reads,
+            "contract: best effort keeps hydrated l1 across gap in bounded and unbounded memory"
+        );
         reader.shutdown().await.unwrap();
         writer.cache.shutdown().await.unwrap();
     }
@@ -428,10 +517,22 @@ async fn best_effort_cooperative_cold_miss_obeys_the_rethrow_option() {
         let result = origin(&fixture.cache, calls.clone()).await;
         if rethrow {
             assert_lease_failure(result);
-            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "contract: best effort cooperative cold miss obeys the rethrow option"
+            );
         } else {
-            assert_eq!(result.unwrap(), 7);
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                result.unwrap(),
+                7,
+                "contract: best effort cooperative cold miss obeys the rethrow option"
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "contract: best effort cooperative cold miss obeys the rethrow option"
+            );
         }
         fixture.cache.shutdown().await.unwrap();
     }
@@ -444,7 +545,11 @@ async fn best_effort_does_not_weaken_fenced_cold_admission() {
     notifications.disconnect();
     let calls = Arc::new(AtomicUsize::new(0));
     assert_lease_failure(origin(&fixture.cache, calls.clone()).await);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: best effort does not weaken fenced cold admission"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -483,12 +588,31 @@ async fn best_effort_fail_safe_keeps_stale_but_never_physically_dead_values() {
         )
         .await
         .unwrap();
-    assert_eq!(stale, 42);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stale, 42,
+        "contract: best effort fail safe keeps stale but never physically dead values"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: best effort fail safe keeps stale but never physically dead values"
+    );
     fixture.clock.advance(Duration::from_secs(2));
-    assert_eq!(local_value(&fixture.cache, "key").await, None);
-    assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 7);
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        local_value(&fixture.cache, "key").await,
+        None,
+        "contract: best effort fail safe keeps stale but never physically dead values"
+    );
+    assert_eq!(
+        origin(&fixture.cache, calls.clone()).await.unwrap(),
+        7,
+        "contract: best effort fail safe keeps stale but never physically dead values"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "contract: best effort fail safe keeps stale but never physically dead values"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -516,13 +640,20 @@ async fn best_effort_does_not_serve_a_hot_value_to_an_explicitly_cancelled_calle
         )
         .cancellation(source.token())
         .await;
-    assert!(matches!(
-        result,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled,
-        })
-    ));
-    assert_eq!(local_value(&fixture.cache, "key").await, Some(42));
+    assert!(
+        matches!(
+            result,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled,
+            })
+        ),
+        "contract: best effort does not serve a hot value to an explicitly cancelled caller"
+    );
+    assert_eq!(
+        local_value(&fixture.cache, "key").await,
+        Some(42),
+        "contract: best effort does not serve a hot value to an explicitly cancelled caller"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -579,9 +710,21 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(local_value(&fixture.cache, "removed").await, None);
-    assert_eq!(local_value(&fixture.cache, "tagged").await, None);
-    assert_eq!(local_value(&fixture.cache, "cleared").await, Some(3));
+    assert_eq!(
+        local_value(&fixture.cache, "removed").await,
+        None,
+        "contract: best effort still applies local remove tag and clear during a gap"
+    );
+    assert_eq!(
+        local_value(&fixture.cache, "tagged").await,
+        None,
+        "contract: best effort still applies local remove tag and clear during a gap"
+    );
+    assert_eq!(
+        local_value(&fixture.cache, "cleared").await,
+        Some(3),
+        "contract: best effort still applies local remove tag and clear during a gap"
+    );
     let _ = fixture
         .cache
         .clear(ClearMode::Remove)
@@ -591,7 +734,11 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(local_value(&fixture.cache, "cleared").await, None);
+    assert_eq!(
+        local_value(&fixture.cache, "cleared").await,
+        None,
+        "contract: best effort still applies local remove tag and clear during a gap"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 
@@ -652,7 +799,11 @@ async fn best_effort_retains_l1_after_malformed_frames_but_applies_received_remo
     })
     .await
     .unwrap();
-    assert_eq!(local_value(&cache, "key").await, Some(42));
+    assert_eq!(
+        local_value(&cache, "key").await,
+        Some(42),
+        "contract: best effort retains l1 after malformed frames but applies received removes"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -688,8 +839,16 @@ async fn best_effort_healthless_backplanes_do_not_add_periodic_l1_discard() {
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(2)).await;
     tokio::task::yield_now().await;
-    assert_eq!(local_value(&caches[0], "key").await, None);
-    assert_eq!(local_value(&caches[1], "key").await, Some(42));
+    assert_eq!(
+        local_value(&caches[0], "key").await,
+        None,
+        "contract: best effort healthless backplanes do not add periodic l1 discard"
+    );
+    assert_eq!(
+        local_value(&caches[1], "key").await,
+        Some(42),
+        "contract: best effort healthless backplanes do not add periodic l1 discard"
+    );
     for cache in caches {
         cache.shutdown().await.unwrap();
     }
@@ -700,12 +859,15 @@ fn best_effort_reconciliation_requires_a_backplane() {
     let result = Cache::<u64>::builder()
         .reconciliation_policy(ReconciliationPolicy::BackplaneBestEffort)
         .try_build();
-    assert!(matches!(
-        result,
-        Err(Error::Config(
-            ConfigError::BestEffortReconciliationWithoutBackplane
-        ))
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(Error::Config(
+                ConfigError::BestEffortReconciliationWithoutBackplane
+            ))
+        ),
+        "contract: best effort reconciliation requires a backplane"
+    );
 }
 
 #[tokio::test]
@@ -721,9 +883,21 @@ async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outag
     fixture.store.down.store(true, Ordering::SeqCst);
     notifications.disconnect();
     let calls = Arc::new(AtomicUsize::new(0));
-    assert_eq!(origin(&fixture.cache, calls.clone()).await.unwrap(), 42);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        origin(&fixture.cache, calls.clone()).await.unwrap(),
+        42,
+        "contract: default profile keeps hot l1 and computes cold misses during full outage"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: default profile keeps hot l1 and computes cold misses during full outage"
+    );
+    assert_eq!(
+        fixture.locker.calls.load(Ordering::SeqCst),
+        0,
+        "contract: default profile keeps hot l1 and computes cold misses during full outage"
+    );
     assert_eq!(
         fixture
             .cache
@@ -733,9 +907,14 @@ async fn default_profile_keeps_hot_l1_and_computes_cold_misses_during_full_outag
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: default profile keeps hot l1 and computes cold misses during full outage"
     );
-    assert_eq!(fixture.locker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.locker.calls.load(Ordering::SeqCst),
+        1,
+        "contract: default profile keeps hot l1 and computes cold misses during full outage"
+    );
     fixture.cache.shutdown().await.unwrap();
 }
 

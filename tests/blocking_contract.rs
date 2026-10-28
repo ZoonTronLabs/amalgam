@@ -63,17 +63,28 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .get_or_set(
             "key",
             typed_blocking_factory(move |ctx| {
-                assert_eq!(thread::current().id(), caller);
-                assert_eq!(ctx.invocation(), FactoryInvocation::Foreground);
+                assert_eq!(thread::current().id(), caller, "contract: native calls outside tokio keep inline affinity tags and present null");
+                assert_eq!(ctx.invocation(), FactoryInvocation::Foreground, "contract: native calls outside tokio keep inline affinity tags and present null");
                 Ok::<_, FactoryError>(ctx.value(None))
             }),
         )
         .tags([tag.clone()])
         .execute()
         .unwrap();
-    assert_eq!(value, None);
-    assert_eq!(cache.try_get("key").execute().unwrap(), Some(None));
-    assert_eq!(cache.try_get("miss").execute().unwrap(), None);
+    assert_eq!(
+        value, None,
+        "contract: native calls outside tokio keep inline affinity tags and present null"
+    );
+    assert_eq!(
+        cache.try_get("key").execute().unwrap(),
+        Some(None),
+        "contract: native calls outside tokio keep inline affinity tags and present null"
+    );
+    assert_eq!(
+        cache.try_get("miss").execute().unwrap(),
+        None,
+        "contract: native calls outside tokio keep inline affinity tags and present null"
+    );
     assert_eq!(
         cache
             .get_or_set(
@@ -82,7 +93,8 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
             )
             .execute()
             .unwrap(),
-        None
+        None,
+        "contract: native calls outside tokio keep inline affinity tags and present null"
     );
     let _ = cache
         .remove_by_tag(tag)
@@ -91,7 +103,11 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(cache.try_get("key").execute().unwrap(), None);
+    assert_eq!(
+        cache.try_get("key").execute().unwrap(),
+        None,
+        "contract: native calls outside tokio keep inline affinity tags and present null"
+    );
     let _ = cache
         .set("clear", Some(7))
         .with_receipt()
@@ -106,7 +122,11 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(cache.try_get("clear").execute().unwrap(), None);
+    assert_eq!(
+        cache.try_get("clear").execute().unwrap(),
+        None,
+        "contract: native calls outside tokio keep inline affinity tags and present null"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -137,9 +157,17 @@ fn same_key_native_callers_share_one_origin() {
         })
         .collect();
     for worker in workers {
-        assert_eq!(worker.join().unwrap(), 42);
+        assert_eq!(
+            worker.join().unwrap(),
+            42,
+            "contract: same key native callers share one origin"
+        );
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: same key native callers share one origin"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -166,16 +194,22 @@ fn hard_deadline_returns_before_callback_finishes_but_shutdown_owns_it() {
         result_tx.send(result).unwrap();
     });
     let token = started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(matches!(
-        result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-        Err(Error::FactoryTimeout { .. })
-    ));
-    assert!(matches!(
-        token.check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::HardTimeout
-        })
-    ));
+    assert!(
+        matches!(
+            result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err(Error::FactoryTimeout { .. })
+        ),
+        "contract: hard deadline returns before callback finishes but shutdown owns it"
+    );
+    assert!(
+        matches!(
+            token.check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::HardTimeout
+            })
+        ),
+        "contract: hard deadline returns before callback finishes but shutdown owns it"
+    );
     let (drained_tx, drained_rx) = mpsc::channel();
     let closing = cache.clone();
     let closer = thread::spawn(move || {
@@ -224,24 +258,33 @@ fn explicit_cancel_never_returns_failsafe_default_or_stores_late_product() {
     });
     let origin = started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     source.cancel();
-    assert!(matches!(
-        result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        }) | Err(Error::FactoryCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
-    assert!(matches!(
-        origin.check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            }) | Err(Error::FactoryCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit cancel never returns failsafe default or stores late product"
+    );
+    assert!(
+        matches!(
+            origin.check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit cancel never returns failsafe default or stores late product"
+    );
     release.0.open();
     caller.join().unwrap();
     cache.flush_pending().unwrap();
-    assert!(cache.try_get("cancel").execute().unwrap().is_none());
+    assert!(
+        cache.try_get("cancel").execute().unwrap().is_none(),
+        "contract: explicit cancel never returns failsafe default or stores late product"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -271,7 +314,11 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
             .get_or_set(
                 "eager",
                 amalgam::source::factory(move |ctx| {
-                    assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
+                    assert_eq!(
+                        ctx.invocation(),
+                        FactoryInvocation::EagerRefresh,
+                        "contract: eager callback does not occupy the single runtime worker"
+                    );
                     started_tx.send(()).unwrap();
                     blocked.wait();
                     Ok::<_, FactoryError>(ctx.value(2))
@@ -279,7 +326,8 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
             )
             .execute()
             .unwrap(),
-        1
+        1,
+        "contract: eager callback does not occupy the single runtime worker"
     );
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     driver
@@ -293,7 +341,11 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
         .unwrap();
     release.0.open();
     cache.flush_pending().unwrap();
-    assert_eq!(cache.try_get("eager").execute().unwrap(), Some(2));
+    assert_eq!(
+        cache.try_get("eager").execute().unwrap(),
+        Some(2),
+        "contract: eager callback does not occupy the single runtime worker"
+    );
     cache.shutdown().unwrap();
 }
 
@@ -317,7 +369,10 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
         .with_receipt()
         .execute()
         .unwrap();
-    assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
+    assert!(
+        matches!(receipt, BlockingMutationReceipt::Scheduled(_)),
+        "contract: scheduled native receipt waits for actual l2 visibility"
+    );
     let _ = receipt.wait().unwrap();
     let peer = BlockingCache::<u64>::on_runtime(
         Cache::builder()
@@ -326,7 +381,11 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
         driver,
     )
     .unwrap();
-    assert_eq!(peer.try_get("shared").execute().unwrap(), Some(123));
+    assert_eq!(
+        peer.try_get("shared").execute().unwrap(),
+        Some(123),
+        "contract: scheduled native receipt waits for actual l2 visibility"
+    );
     let _ = peer
         .expire("shared")
         .distributed_policy(DistributedExpirePolicy::Remove)
@@ -376,11 +435,14 @@ fn timed_callback_panic_retains_original_join_in_shutdown_report() {
         .unwrap()
         .downcast_ref::<Arc<tokio::task::JoinError>>()
         .expect("foreground failure retains the original join cause");
-    assert!(original.is_panic());
+    assert!(
+        original.is_panic(),
+        "contract: timed callback panic retains original join in shutdown report"
+    );
     let Error::Shutdown(error) = cache.shutdown().unwrap_err() else {
         panic!("shutdown must preserve the original blocking task failure");
     };
-    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::BackgroundTask { task: ShutdownTask::Factory, source } if Arc::ptr_eq(original, source))));
+    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::BackgroundTask { task: ShutdownTask::Factory, source } if Arc::ptr_eq(original, source))), "contract: timed callback panic retains original join in shutdown report");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -393,7 +455,11 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(cache.try_get("native").execute().unwrap(), Some(4));
+    assert_eq!(
+        cache.try_get("native").execute().unwrap(),
+        Some(4),
+        "contract: native calls and last drop work on foreign current thread tokio"
+    );
     assert_eq!(
         cache
             .get_or_set(
@@ -406,7 +472,8 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
             .options(|_| timed())
             .execute()
             .unwrap(),
-        5
+        5,
+        "contract: native calls and last drop work on foreign current thread tokio"
     );
     cache.shutdown().unwrap();
     std::mem::drop(cache);

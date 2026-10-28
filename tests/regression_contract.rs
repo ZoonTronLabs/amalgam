@@ -38,8 +38,16 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
     let a = make();
     let b = make();
     a.set("shared", 42).await.unwrap();
-    assert_eq!(b.try_get("shared").await.unwrap().as_ref(), Some(&42));
-    assert_eq!(b.get_or_default("shared", -1).await.unwrap(), 42);
+    assert_eq!(
+        b.try_get("shared").await.unwrap().as_ref(),
+        Some(&42),
+        "contract: read only reads l2 even when memory reads are skipped"
+    );
+    assert_eq!(
+        b.get_or_default("shared", -1).await.unwrap(),
+        42,
+        "contract: read only reads l2 even when memory reads are skipped"
+    );
     assert_eq!(
         b.get_or_set("shared", amalgam::source::value(999))
             .await
@@ -54,7 +62,8 @@ async fn read_only_reads_l2_even_when_memory_reads_are_skipped() {
             .await
             .unwrap()
             .as_ref(),
-        Some(&42)
+        Some(&42),
+        "contract: read only reads l2 even when memory reads are skipped"
     );
 }
 
@@ -79,12 +88,21 @@ async fn registry_concurrent_get_or_create_returns_one_shared_cache() {
     let second = spawn();
     let first = first.join().unwrap();
     let second = second.join().unwrap();
-    assert_eq!(builds.load(Ordering::SeqCst), 1);
-    assert_eq!(registry.len(), 1);
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        1,
+        "contract: registry concurrent get or create returns one shared cache"
+    );
+    assert_eq!(
+        registry.len(),
+        1,
+        "contract: registry concurrent get or create returns one shared cache"
+    );
     first.set("private-to-first", 1).await.unwrap();
     assert_eq!(
         second.try_get("private-to-first").await.unwrap().as_ref(),
-        Some(&1)
+        Some(&1),
+        "contract: registry concurrent get or create returns one shared cache"
     );
 }
 
@@ -100,7 +118,10 @@ async fn oversized_weighted_entry_is_rejected() {
         .await
         .unwrap();
     cache.run_pending_tasks().await.unwrap();
-    assert!(cache.try_get("oversized").await.unwrap().is_none());
+    assert!(
+        cache.try_get("oversized").await.unwrap().is_none(),
+        "contract: oversized weighted entry is rejected"
+    );
 }
 
 #[tokio::test]
@@ -130,7 +151,11 @@ async fn first_admitted_never_remove_entry_survives_capacity_pressure() {
         retained, 1,
         "pinned entries still consume the configured capacity"
     );
-    assert_eq!(cache.try_get("pinned-0").await.unwrap().as_ref(), Some(&0));
+    assert_eq!(
+        cache.try_get("pinned-0").await.unwrap().as_ref(),
+        Some(&0),
+        "contract: first admitted never remove entry survives capacity pressure"
+    );
 }
 
 #[tokio::test]
@@ -203,7 +228,11 @@ async fn cold_get_or_set_emits_one_logical_miss() {
         .get_or_set("cold", amalgam::source::value(1))
         .await
         .unwrap();
-    assert_eq!(observer.misses.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        observer.misses.load(Ordering::SeqCst),
+        1,
+        "contract: cold get or set emits one logical miss"
+    );
     cache.try_get("absent").await.unwrap();
     assert_eq!(
         observer.misses.load(Ordering::SeqCst),
@@ -258,7 +287,11 @@ async fn factory_error_source_survives_cache_boundary() {
         .unwrap_err();
     let wrapped = std::error::Error::source(&error).expect("factory wrapper");
     let original = wrapped.source().expect("original origin failure");
-    assert_eq!(original.to_string(), "upstream I/O failure");
+    assert_eq!(
+        original.to_string(),
+        "upstream I/O failure",
+        "contract: factory error source survives cache boundary"
+    );
 }
 
 #[tokio::test]
@@ -291,7 +324,8 @@ async fn corrupt_l2_entry_does_not_trip_transport_circuit() {
             .get_or_set("corrupt-key", amalgam::source::value(1))
             .await
             .unwrap(),
-        1
+        1,
+        "contract: corrupt l2 entry does not trip transport circuit"
     );
     assert_eq!(
         reader
@@ -322,12 +356,15 @@ async fn missing_serializer_is_a_typed_build_rejection() {
         .distributed(l2)
         .auto_recovery(no_recovery())
         .try_build();
-    assert!(matches!(
-        result,
-        Err(amalgam::Error::Config(
-            amalgam::ConfigError::DistributedWithoutSerializer
-        ))
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(amalgam::Error::Config(
+                amalgam::ConfigError::DistributedWithoutSerializer
+            ))
+        ),
+        "contract: missing serializer is a typed build rejection"
+    );
 }
 
 #[tokio::test]
@@ -351,7 +388,10 @@ async fn resilient_observer_survives_transient_lag() {
         .await
         .unwrap()
         .unwrap();
-    assert!(events.lost_events() > 0);
+    assert!(
+        events.lost_events() > 0,
+        "contract: resilient observer survives transient lag"
+    );
     let _ = cache
         .set("after-lag", 11)
         .with_receipt()
@@ -405,7 +445,10 @@ async fn metrics_include_factory_misses_and_distinct_cache_labels() {
         exposition.contains("amalgam_misses_total"),
         "real factory misses must be counted"
     );
-    assert!(exposition.contains("amalgam_hits_total"));
+    assert!(
+        exposition.contains("amalgam_hits_total"),
+        "contract: metrics include factory misses and distinct cache labels"
+    );
     assert!(
         exposition.contains("alpha") && exposition.contains("beta"),
         "distinct caches must retain finite cache labels"
@@ -425,7 +468,8 @@ async fn otlp_failed_init_preserves_global_provider() {
         !opentelemetry::global::tracer("before")
             .start("probe-before")
             .span_context()
-            .is_valid()
+            .is_valid(),
+        "contract: otlp failed init preserves global provider"
     );
     tracing_subscriber::registry().try_init().unwrap(); // Application already owns tracing setup.
     let result = amalgam::advanced::init_otlp("audit-service", "http://127.0.0.1:1");

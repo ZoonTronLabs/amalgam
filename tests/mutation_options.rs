@@ -118,20 +118,32 @@ async fn dynamic_remove_and_expire_use_raw_key_policy_and_preserve_skipped_layer
         }
         .unwrap();
         let report = receipt.wait().await.unwrap();
-        assert!(matches!(report.local, LocalEffect::Skipped));
-        assert!(matches!(
-            report.distributed,
-            EffectOutcome::Skipped(SkipReason::Policy)
-        ));
-        assert_eq!(memory_value(&cache).await, Some(42));
+        assert!(
+            matches!(report.local, LocalEffect::Skipped),
+            "contract: dynamic remove and expire use raw key policy and preserve skipped layers"
+        );
+        assert!(
+            matches!(
+                report.distributed,
+                EffectOutcome::Skipped(SkipReason::Policy)
+            ),
+            "contract: dynamic remove and expire use raw key policy and preserve skipped layers"
+        );
+        assert_eq!(
+            memory_value(&cache).await,
+            Some(42),
+            "contract: dynamic remove and expire use raw key policy and preserve skipped layers"
+        );
         assert_eq!(
             store.get("physical:tenant:item").await.unwrap(),
-            Some(original)
+            Some(original),
+            "contract: dynamic remove and expire use raw key policy and preserve skipped layers"
         );
     }
     assert_eq!(
         *provider.requested.lock().unwrap(),
-        ["tenant:item", "tenant:item"]
+        ["tenant:item", "tenant:item"],
+        "contract: dynamic remove and expire use raw key policy and preserve skipped layers"
     );
     cache.shutdown().await.unwrap();
 }
@@ -173,27 +185,54 @@ async fn explicit_mutation_options_bypass_provider_and_apply_each_layer() {
         }
         .unwrap();
         let report = receipt.wait().await.unwrap();
-        assert!(matches!(report.distributed, EffectOutcome::Applied));
-        assert_eq!(memory_value(&cache).await, None);
+        assert!(
+            matches!(report.distributed, EffectOutcome::Applied),
+            "contract: explicit mutation options bypass provider and apply each layer"
+        );
+        assert_eq!(
+            memory_value(&cache).await,
+            None,
+            "contract: explicit mutation options bypass provider and apply each layer"
+        );
         match mutation {
             Mutation::Remove => {
-                assert!(matches!(report.local, LocalEffect::Removed));
-                assert!(store.get("physical:tenant:item").await.unwrap().is_none());
+                assert!(
+                    matches!(report.local, LocalEffect::Removed),
+                    "contract: explicit mutation options bypass provider and apply each layer"
+                );
+                assert!(
+                    store.get("physical:tenant:item").await.unwrap().is_none(),
+                    "contract: explicit mutation options bypass provider and apply each layer"
+                );
             }
             Mutation::Expire => {
-                assert!(matches!(report.local, LocalEffect::Expired));
+                assert!(
+                    matches!(report.local, LocalEffect::Expired),
+                    "contract: explicit mutation options bypass provider and apply each layer"
+                );
                 let bytes = store.get("physical:tenant:item").await.unwrap().unwrap();
                 let expired = codec.deserialize_snapshot(&bytes).unwrap();
-                assert_eq!(expired.entry().value, 42);
-                assert!(expired.entry().logical_expiration_ticks <= clock.now().ticks());
+                assert_eq!(
+                    expired.entry().value,
+                    42,
+                    "contract: explicit mutation options bypass provider and apply each layer"
+                );
+                assert!(
+                    expired.entry().logical_expiration_ticks <= clock.now().ticks(),
+                    "contract: explicit mutation options bypass provider and apply each layer"
+                );
                 assert_eq!(
                     expired.entry().physical_expiration_ticks,
-                    before.entry().physical_expiration_ticks
+                    before.entry().physical_expiration_ticks,
+                    "contract: explicit mutation options bypass provider and apply each layer"
                 );
             }
         }
     }
-    assert!(provider.requested.lock().unwrap().is_empty());
+    assert!(
+        provider.requested.lock().unwrap().is_empty(),
+        "contract: explicit mutation options bypass provider and apply each layer"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -213,19 +252,28 @@ async fn invalid_dynamic_mutation_options_reject_before_changing_either_layer() 
             Mutation::Remove => cache.remove("tenant:item").with_receipt().await,
             Mutation::Expire => cache.expire("tenant:item").with_receipt().await,
         };
-        assert!(matches!(
-            result,
-            Err(Error::Config(ConfigError::NegativeEntryWeight { size: -1 }))
-        ));
-        assert_eq!(memory_value(&cache).await, Some(42));
+        assert!(
+            matches!(
+                result,
+                Err(Error::Config(ConfigError::NegativeEntryWeight { size: -1 }))
+            ),
+            "contract: invalid dynamic mutation options reject before changing either layer"
+        );
+        assert_eq!(
+            memory_value(&cache).await,
+            Some(42),
+            "contract: invalid dynamic mutation options reject before changing either layer"
+        );
         assert_eq!(
             store.get("physical:tenant:item").await.unwrap(),
-            Some(original)
+            Some(original),
+            "contract: invalid dynamic mutation options reject before changing either layer"
         );
     }
     assert_eq!(
         *provider.requested.lock().unwrap(),
-        ["tenant:item", "tenant:item"]
+        ["tenant:item", "tenant:item"],
+        "contract: invalid dynamic mutation options reject before changing either layer"
     );
     cache.shutdown().await.unwrap();
 }

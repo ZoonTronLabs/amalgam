@@ -67,8 +67,16 @@ impl CachePlugin<i32> for Probe {
         &self,
         context: &CachePluginContext<i32>,
     ) -> StdResult<Box<dyn PluginSession>, PluginError> {
-        assert_eq!(context.cache_name(), context.cache()?.name());
-        assert_eq!(context.instance_id(), context.cache()?.instance_id());
+        assert_eq!(
+            context.cache_name(),
+            context.cache()?.name(),
+            "contract: operational plugins receive the matching cache and can use it during attachment"
+        );
+        assert_eq!(
+            context.instance_id(),
+            context.cache()?.instance_id(),
+            "contract: operational plugins receive the matching cache and can use it during attachment"
+        );
         let cache = context.cache()?.blocking(self.runtime.clone());
         assert_eq!(
             boundary(
@@ -80,7 +88,8 @@ impl CachePlugin<i32> for Probe {
                     )
                     .execute()
             )?,
-            17
+            17,
+            "contract: operational plugins receive the matching cache and can use it during attachment"
         );
         let _ = boundary(
             PluginStage::Start,
@@ -94,7 +103,8 @@ impl CachePlugin<i32> for Probe {
         .map_err(|e| PluginError::from_source(self.name(), PluginStage::Start, e))?;
         assert_eq!(
             boundary(PluginStage::Start, cache.try_get("plugin-start").execute())?.as_ref(),
-            Some(&17)
+            Some(&17),
+            "contract: operational plugins receive the matching cache and can use it during attachment"
         );
         self.record.contexts.lock().unwrap().push(context.clone());
         self.record.starts.fetch_add(1, Ordering::SeqCst);
@@ -127,7 +137,8 @@ impl PluginSession for Session {
             let cache = self.context.cache()?.blocking(self.runtime.clone());
             assert_eq!(
                 boundary(PluginStage::Event, cache.try_get("caller").execute())?.as_ref(),
-                Some(&23)
+                Some(&23),
+                "contract: on event"
             );
             let _ = boundary(
                 PluginStage::Event,
@@ -150,7 +161,10 @@ impl PluginSession for Session {
                 )
                 .execute(),
         )?;
-        assert_eq!(value, 29);
+        assert_eq!(
+            value, 29,
+            "contract: plugin stop permits cache operations while rejecting reentrant draining"
+        );
         let _ = boundary(
             PluginStage::Stop,
             cache.set("plugin-stop", 30).with_receipt().execute(),
@@ -166,19 +180,28 @@ impl PluginSession for Session {
         )?
         .wait()
         .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;
-        assert!(boundary(PluginStage::Stop, cache.try_get("plugin-tagged").execute())?.is_none());
-        assert!(matches!(
-            cache.shutdown(),
-            Err(Error::ReentrantDrain {
-                operation: DrainOperation::Shutdown
-            })
-        ));
-        assert!(matches!(
-            cache.flush_pending(),
-            Err(Error::ReentrantDrain {
-                operation: DrainOperation::FlushPending
-            })
-        ));
+        assert!(
+            boundary(PluginStage::Stop, cache.try_get("plugin-tagged").execute())?.is_none(),
+            "contract: plugin stop permits cache operations while rejecting reentrant draining"
+        );
+        assert!(
+            matches!(
+                cache.shutdown(),
+                Err(Error::ReentrantDrain {
+                    operation: DrainOperation::Shutdown
+                })
+            ),
+            "contract: plugin stop permits cache operations while rejecting reentrant draining"
+        );
+        assert!(
+            matches!(
+                cache.flush_pending(),
+                Err(Error::ReentrantDrain {
+                    operation: DrainOperation::FlushPending
+                })
+            ),
+            "contract: plugin stop permits cache operations while rejecting reentrant draining"
+        );
         self.record.stops.fetch_add(1, Ordering::SeqCst);
         match self.stop {
             Stop::Succeed => Ok(()),
@@ -199,7 +222,8 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
     let registration = cache.register_cache_plugin(plugin(record.clone())).unwrap();
     assert_eq!(
         cache.try_get("plugin-start").execute().unwrap().as_ref(),
-        Some(&17)
+        Some(&17),
+        "contract: start event stop and retained detached view use one cache"
     );
     let _ = cache
         .set("caller", 23)
@@ -208,16 +232,22 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(record.events.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.events.load(Ordering::SeqCst),
+        1,
+        "contract: start event stop and retained detached view use one cache"
+    );
     assert_eq!(
         cache.try_get("plugin-event").execute().unwrap().as_ref(),
-        Some(&24)
+        Some(&24),
+        "contract: start event stop and retained detached view use one cache"
     );
     let retained = record.contexts.lock().unwrap()[0].cache().unwrap();
     registration.stop().unwrap();
     assert_eq!(
         cache.try_get("plugin-stop").execute().unwrap().as_ref(),
-        Some(&30)
+        Some(&30),
+        "contract: start event stop and retained detached view use one cache"
     );
     assert_eq!(
         retained
@@ -226,21 +256,32 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
             .execute()
             .unwrap()
             .as_ref(),
-        Some(&29)
+        Some(&29),
+        "contract: start event stop and retained detached view use one cache"
     );
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: start event stop and retained detached view use one cache"
+    );
     cache.shutdown().unwrap();
-    assert!(matches!(
-        retained
-            .blocking(cache.runtime().clone())
-            .try_get("plugin-start")
-            .execute(),
-        Err(Error::CacheClosed)
-    ));
-    assert!(matches!(
-        record.contexts.lock().unwrap()[0].cache(),
-        Err(PluginError::HostStopped)
-    ));
+    assert!(
+        matches!(
+            retained
+                .blocking(cache.runtime().clone())
+                .try_get("plugin-start")
+                .execute(),
+            Err(Error::CacheClosed)
+        ),
+        "contract: start event stop and retained detached view use one cache"
+    );
+    assert!(
+        matches!(
+            record.contexts.lock().unwrap()[0].cache(),
+            Err(PluginError::HostStopped)
+        ),
+        "contract: start event stop and retained detached view use one cache"
+    );
 }
 
 fn hybrid(backend: Arc<InMemoryDistributedCache>) -> CacheBuilder<i32> {
@@ -256,24 +297,36 @@ fn shutdown_stop_can_mutate_real_l2_after_normal_operations_close() {
         BlockingCache::from_builder(hybrid(backend.clone()).cache_plugin(plugin(record.clone())))
             .unwrap();
     cache.shutdown().unwrap();
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
-    assert!(matches!(
-        cache.try_get("plugin-stop").execute(),
-        Err(Error::CacheClosed)
-    ));
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: shutdown stop can mutate real l2 after normal operations close"
+    );
+    assert!(
+        matches!(
+            cache.try_get("plugin-stop").execute(),
+            Err(Error::CacheClosed)
+        ),
+        "contract: shutdown stop can mutate real l2 after normal operations close"
+    );
     let peer = BlockingCache::from_builder(hybrid(backend)).unwrap();
     assert_eq!(
         peer.try_get("plugin-stop-factory")
             .execute()
             .unwrap()
             .as_ref(),
-        Some(&29)
+        Some(&29),
+        "contract: shutdown stop can mutate real l2 after normal operations close"
     );
     assert_eq!(
         peer.try_get("plugin-stop").execute().unwrap().as_ref(),
-        Some(&30)
+        Some(&30),
+        "contract: shutdown stop can mutate real l2 after normal operations close"
     );
-    assert!(peer.try_get("plugin-tagged").execute().unwrap().is_none());
+    assert!(
+        peer.try_get("plugin-tagged").execute().unwrap().is_none(),
+        "contract: shutdown stop can mutate real l2 after normal operations close"
+    );
     peer.shutdown().unwrap();
 }
 
@@ -286,14 +339,25 @@ fn weak_context_does_not_keep_cache_or_public_lifetime_alive() {
             hybrid(backend.clone()).cache_plugin(plugin(record.clone())),
         )
         .unwrap();
-        assert_eq!(record.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            record.starts.load(Ordering::SeqCst),
+            1,
+            "contract: weak context does not keep cache or public lifetime alive"
+        );
         cache.shutdown().unwrap();
     }
-    assert!(matches!(
-        record.contexts.lock().unwrap()[0].cache(),
-        Err(PluginError::HostStopped)
-    ));
-    assert_eq!(Arc::strong_count(&backend), 1);
+    assert!(
+        matches!(
+            record.contexts.lock().unwrap()[0].cache(),
+            Err(PluginError::HostStopped)
+        ),
+        "contract: weak context does not keep cache or public lifetime alive"
+    );
+    assert_eq!(
+        Arc::strong_count(&backend),
+        1,
+        "contract: weak context does not keep cache or public lifetime alive"
+    );
 }
 
 #[test]
@@ -304,14 +368,21 @@ fn retained_operational_view_cannot_prevent_last_application_owner_from_closing(
     let runtime = cache.runtime().clone();
     *record.held.lock().unwrap() = Some(record.contexts.lock().unwrap()[0].cache().unwrap());
     std::mem::drop(cache);
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: retained operational view cannot prevent last application owner from closing"
+    );
     let held = record.held.lock().unwrap().take().unwrap();
-    assert!(matches!(
-        held.blocking(runtime.clone())
-            .try_get("plugin-start")
-            .execute(),
-        Err(Error::CacheClosed)
-    ));
+    assert!(
+        matches!(
+            held.blocking(runtime.clone())
+                .try_get("plugin-start")
+                .execute(),
+            Err(Error::CacheClosed)
+        ),
+        "contract: retained operational view cannot prevent last application owner from closing"
+    );
     runtime.run(held.shutdown()).unwrap();
 }
 
@@ -327,11 +398,16 @@ fn external_async_owner_remains_available_inside_its_final_stop_hook() {
             .unwrap()
     });
     std::mem::drop(cache);
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: external async owner remains available inside its final stop hook"
+    );
     let peer = BlockingCache::from_builder(hybrid(backend)).unwrap();
     assert_eq!(
         peer.try_get("plugin-stop").execute().unwrap().as_ref(),
-        Some(&30)
+        Some(&30),
+        "contract: external async owner remains available inside its final stop hook"
     );
     peer.shutdown().unwrap();
 }
@@ -348,12 +424,18 @@ fn dynamic_start_failure_preserves_source_and_writes_without_invented_stop() {
     });
     let error = cache.register_cache_plugin(failed).err().unwrap();
     assert!(
-        matches!(&error, Error::Plugin(PluginError::Failure { stage: PluginStage::Start, source, .. }) if source.downcast_ref::<IoError>().unwrap().to_string() == "original start failure")
+        matches!(&error, Error::Plugin(PluginError::Failure { stage: PluginStage::Start, source, .. }) if source.downcast_ref::<IoError>().unwrap().to_string() == "original start failure"),
+        "contract: dynamic start failure preserves source and writes without invented stop"
     );
-    assert_eq!(record.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        0,
+        "contract: dynamic start failure preserves source and writes without invented stop"
+    );
     assert_eq!(
         cache.try_get("plugin-start").execute().unwrap().as_ref(),
-        Some(&17)
+        Some(&17),
+        "contract: dynamic start failure preserves source and writes without invented stop"
     );
     cache.shutdown().unwrap();
 }
@@ -372,10 +454,21 @@ fn stop_failure_is_preserved_and_cannot_skip_owned_shutdown() {
     let Error::Shutdown(error) = error else {
         panic!("expected owned shutdown failure")
     };
-    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::Plugin(PluginError::Failure { stage: PluginStage::Stop, source, .. }) if source.downcast_ref::<IoError>().unwrap().to_string() == "original stop failure")));
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
-    assert!(cache.shutdown().is_err());
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert!(error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::Plugin(PluginError::Failure { stage: PluginStage::Stop, source, .. }) if source.downcast_ref::<IoError>().unwrap().to_string() == "original stop failure")), "contract: stop failure is preserved and cannot skip owned shutdown");
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: stop failure is preserved and cannot skip owned shutdown"
+    );
+    assert!(
+        cache.shutdown().is_err(),
+        "contract: stop failure is preserved and cannot skip owned shutdown"
+    );
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: stop failure is preserved and cannot skip owned shutdown"
+    );
 }
 
 #[tokio::test]
@@ -406,13 +499,20 @@ async fn ordinary_plugin_factory_is_cancelled_by_owner_shutdown() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(
-        work.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            work.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: ordinary plugin factory is cancelled by owner shutdown"
+    );
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: ordinary plugin factory is cancelled by owner shutdown"
+    );
 }
 
 struct ParkedStart {
@@ -464,16 +564,24 @@ async fn startup_that_finishes_after_close_still_receives_operational_stop_and_d
     cache.close();
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
-    assert!(attachment.await.unwrap().is_err());
+    assert!(
+        attachment.await.unwrap().is_err(),
+        "contract: startup that finishes after close still receives operational stop and drains"
+    );
     tokio::time::timeout(Duration::from_secs(3), cache.shutdown())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: startup that finishes after close still receives operational stop and drains"
+    );
     let peer = hybrid(backend).try_build().unwrap();
     assert_eq!(
         peer.try_get("plugin-stop").await.unwrap().as_ref(),
-        Some(&30)
+        Some(&30),
+        "contract: startup that finishes after close still receives operational stop and drains"
     );
     peer.shutdown().await.unwrap();
 }
@@ -503,10 +611,14 @@ impl CachePlugin<i32> for TypedOrder {
     ) -> StdResult<Box<dyn PluginSession>, PluginError> {
         let cache = context.cache()?.blocking(self.runtime.clone());
         match self.position {
-            1 => assert!(cache.try_get("ordered").execute().unwrap().is_none()),
+            1 => assert!(
+                cache.try_get("ordered").execute().unwrap().is_none(),
+                "contract: typed and legacy plugins attach in registration order"
+            ),
             3 => assert_eq!(
                 cache.try_get("ordered").execute().unwrap().as_ref(),
-                Some(&1)
+                Some(&1),
+                "contract: typed and legacy plugins attach in registration order"
             ),
             _ => panic!("fixture uses first/third positions"),
         }
@@ -550,10 +662,15 @@ fn builder_preserves_interleaved_legacy_and_operational_plugin_order() {
             })),
     )
     .unwrap();
-    assert_eq!(*order.sequence.lock().unwrap(), [1, 2, 3]);
+    assert_eq!(
+        *order.sequence.lock().unwrap(),
+        [1, 2, 3],
+        "contract: builder preserves interleaved legacy and operational plugin order"
+    );
     assert_eq!(
         cache.try_get("ordered").execute().unwrap().as_ref(),
-        Some(&3)
+        Some(&3),
+        "contract: builder preserves interleaved legacy and operational plugin order"
     );
     cache.shutdown().unwrap();
 }
@@ -585,14 +702,30 @@ fn one_plugin_definition_gets_independent_operational_sessions_per_cache() {
         .unwrap();
     assert_eq!(
         a.try_get("plugin-event").execute().unwrap().as_ref(),
-        Some(&24)
+        Some(&24),
+        "contract: one plugin definition gets independent operational sessions per cache"
     );
-    assert!(b.try_get("plugin-event").execute().unwrap().is_none());
-    assert_eq!(record.contexts.lock().unwrap()[0].instance_id(), "a-owner");
-    assert_eq!(record.contexts.lock().unwrap()[1].instance_id(), "b-owner");
+    assert!(
+        b.try_get("plugin-event").execute().unwrap().is_none(),
+        "contract: one plugin definition gets independent operational sessions per cache"
+    );
+    assert_eq!(
+        record.contexts.lock().unwrap()[0].instance_id(),
+        "a-owner",
+        "contract: one plugin definition gets independent operational sessions per cache"
+    );
+    assert_eq!(
+        record.contexts.lock().unwrap()[1].instance_id(),
+        "b-owner",
+        "contract: one plugin definition gets independent operational sessions per cache"
+    );
     a.shutdown().unwrap();
     b.shutdown().unwrap();
-    assert_eq!(record.stops.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        2,
+        "contract: one plugin definition gets independent operational sessions per cache"
+    );
 }
 
 struct GatedStore {
@@ -663,7 +796,10 @@ impl PluginSession for BackgroundSession {
             .with_receipt()
             .execute()
             .unwrap();
-        assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
+        assert!(
+            matches!(receipt, BlockingMutationReceipt::Scheduled(_)),
+            "contract: plugin stop retains scheduled distributed work until completion"
+        );
         self.runtime.run(async {
             tokio::time::timeout(Duration::from_secs(3), self.backend.entered.notified())
                 .await
@@ -696,7 +832,10 @@ fn unfinished_cleanup_work_is_cancelled_and_owned_shutdown_waits_its_destruction
             .unwrap()
             .unwrap();
     });
-    assert!(backend.dropped.load(Ordering::SeqCst));
+    assert!(
+        backend.dropped.load(Ordering::SeqCst),
+        "contract: unfinished cleanup work is cancelled and owned shutdown waits its destruction"
+    );
 }
 
 #[cfg(feature = "redis")]
@@ -728,18 +867,24 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         .await
         .unwrap();
     let view = record.contexts.lock().unwrap()[0].cache().unwrap();
-    assert!(Arc::ptr_eq(
-        cache.distributed_cache().unwrap(),
-        view.distributed_cache().unwrap()
-    ));
-    assert!(Arc::ptr_eq(
-        cache.backplane().unwrap(),
-        view.backplane().unwrap()
-    ));
-    assert!(Arc::ptr_eq(
-        cache.distributed_locker().unwrap(),
-        view.distributed_locker().unwrap()
-    ));
+    assert!(
+        Arc::ptr_eq(
+            cache.distributed_cache().unwrap(),
+            view.distributed_cache().unwrap()
+        ),
+        "contract: operational start event and shutdown stop use native redis components"
+    );
+    assert!(
+        Arc::ptr_eq(cache.backplane().unwrap(), view.backplane().unwrap()),
+        "contract: operational start event and shutdown stop use native redis components"
+    );
+    assert!(
+        Arc::ptr_eq(
+            cache.distributed_locker().unwrap(),
+            view.distributed_locker().unwrap()
+        ),
+        "contract: operational start event and shutdown stop use native redis components"
+    );
     let _ = cache
         .set("caller", 23)
         .with_receipt()
@@ -748,16 +893,25 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         .wait()
         .await
         .unwrap();
-    assert_eq!(record.events.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.events.load(Ordering::SeqCst),
+        1,
+        "contract: operational start event and shutdown stop use native redis components"
+    );
     assert_eq!(
         cache.try_get("plugin-event").await.unwrap().as_ref(),
-        Some(&24)
+        Some(&24),
+        "contract: operational start event and shutdown stop use native redis components"
     );
     tokio::time::timeout(Duration::from_secs(6), cache.shutdown())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(record.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        record.stops.load(Ordering::SeqCst),
+        1,
+        "contract: operational start event and shutdown stop use native redis components"
+    );
     let peer = Cache::<i32>::builder()
         .name(&label)
         .key_prefix(&prefix)
@@ -768,21 +922,28 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         .unwrap();
     assert_eq!(
         peer.try_get("plugin-start").await.unwrap().as_ref(),
-        Some(&17)
+        Some(&17),
+        "contract: operational start event and shutdown stop use native redis components"
     );
     assert_eq!(
         peer.try_get("plugin-event").await.unwrap().as_ref(),
-        Some(&24)
+        Some(&24),
+        "contract: operational start event and shutdown stop use native redis components"
     );
     assert_eq!(
         peer.try_get("plugin-stop-factory").await.unwrap().as_ref(),
-        Some(&29)
+        Some(&29),
+        "contract: operational start event and shutdown stop use native redis components"
     );
     assert_eq!(
         peer.try_get("plugin-stop").await.unwrap().as_ref(),
-        Some(&30)
+        Some(&30),
+        "contract: operational start event and shutdown stop use native redis components"
     );
-    assert!(peer.try_get("plugin-tagged").await.unwrap().is_none());
+    assert!(
+        peer.try_get("plugin-tagged").await.unwrap().is_none(),
+        "contract: operational start event and shutdown stop use native redis components"
+    );
     peer.shutdown().await.unwrap();
     backplane.shutdown().await.unwrap();
 }

@@ -60,12 +60,31 @@ fn a_ready_first_poll_uses_admission_without_any_task_subscription_or_runtime() 
         },
         source,
     );
-    assert!(scopes.tasks.is_empty());
-    assert!(!scopes.idle());
-    assert!(matches!(poll_once(&mut execution), Poll::Ready(Ok(7))));
-    assert!(scopes.tasks.is_empty());
-    assert!(scopes.idle());
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::ScopeFinished]);
+    assert!(
+        scopes.tasks.is_empty(),
+        "contract: a ready first poll uses admission without any task subscription or runtime"
+    );
+    assert!(
+        !scopes.idle(),
+        "contract: a ready first poll uses admission without any task subscription or runtime"
+    );
+    assert!(
+        matches!(poll_once(&mut execution), Poll::Ready(Ok(7))),
+        "contract: a ready first poll uses admission without any task subscription or runtime"
+    );
+    assert!(
+        scopes.tasks.is_empty(),
+        "contract: a ready first poll uses admission without any task subscription or runtime"
+    );
+    assert!(
+        scopes.idle(),
+        "contract: a ready first poll uses admission without any task subscription or runtime"
+    );
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::ScopeFinished],
+        "contract: a ready first poll uses admission without any task subscription or runtime"
+    );
 }
 
 #[tokio::test]
@@ -79,20 +98,37 @@ async fn suspension_subscribes_before_admission_ends_and_shutdown_needs_no_repol
         },
         source,
     );
-    assert!(scopes.tasks.is_empty());
-    assert!(poll_once(&mut execution).is_pending());
-    assert_eq!(scopes.tasks.len(), 1);
+    assert!(
+        scopes.tasks.is_empty(),
+        "contract: suspension subscribes before admission ends and shutdown needs no repoll"
+    );
+    assert!(
+        poll_once(&mut execution).is_pending(),
+        "contract: suspension subscribes before admission ends and shutdown needs no repoll"
+    );
+    assert_eq!(
+        scopes.tasks.len(),
+        1,
+        "contract: suspension subscribes before admission ends and shutdown needs no repoll"
+    );
     scopes.close();
     tokio::time::timeout(Duration::from_secs(1), scopes.drained())
         .await
         .unwrap();
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
-    assert!(matches!(
-        execution.await,
-        Err(Error::OperationCancelled {
-            reason: Reason::CacheShutdown
-        })
-    ));
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::CacheShutdown],
+        "contract: suspension subscribes before admission ends and shutdown needs no repoll"
+    );
+    assert!(
+        matches!(
+            execution.await,
+            Err(Error::OperationCancelled {
+                reason: Reason::CacheShutdown
+            })
+        ),
+        "contract: suspension subscribes before admission ends and shutdown needs no repoll"
+    );
 }
 
 struct BlockingReady {
@@ -106,7 +142,11 @@ impl Future for BlockingReady {
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
         self.entered.send(()).unwrap();
         self.resume.recv().unwrap();
-        assert_eq!(self.token.reason(), Some(Reason::CacheShutdown));
+        assert_eq!(
+            self.token.reason(),
+            Some(Reason::CacheShutdown),
+            "contract: shutdown reaches a factory blocked inside its first poll"
+        );
         Poll::Ready(Ok(7))
     }
 }
@@ -130,24 +170,35 @@ async fn shutdown_is_visible_inside_a_blocked_first_poll_and_drains_its_retireme
         poll_once(&mut execution)
     });
     started.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(scopes.tasks.is_empty());
+    assert!(
+        scopes.tasks.is_empty(),
+        "contract: shutdown is visible inside a blocked first poll and drains its retirement"
+    );
     scopes.close();
     assert!(
         tokio::time::timeout(Duration::from_millis(10), scopes.drained())
             .await
-            .is_err()
+            .is_err(),
+        "contract: shutdown is visible inside a blocked first poll and drains its retirement"
     );
     resume.send(()).unwrap();
-    assert!(matches!(
-        worker.join().unwrap(),
-        Poll::Ready(Err(Error::OperationCancelled {
-            reason: Reason::CacheShutdown
-        }))
-    ));
+    assert!(
+        matches!(
+            worker.join().unwrap(),
+            Poll::Ready(Err(Error::OperationCancelled {
+                reason: Reason::CacheShutdown
+            }))
+        ),
+        "contract: shutdown is visible inside a blocked first poll and drains its retirement"
+    );
     tokio::time::timeout(Duration::from_secs(1), scopes.drained())
         .await
         .unwrap();
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::CacheShutdown],
+        "contract: shutdown is visible inside a blocked first poll and drains its retirement"
+    );
 }
 
 struct Immovable {
@@ -165,7 +216,11 @@ impl Future for Immovable {
             work.address.store(address, Ordering::SeqCst);
             Poll::Pending
         } else {
-            assert_eq!(work.address.load(Ordering::SeqCst), address);
+            assert_eq!(
+                work.address.load(Ordering::SeqCst),
+                address,
+                "contract: ready execution promotion preserves the pinned future address"
+            );
             Poll::Ready(Ok(7))
         }
     }
@@ -182,9 +237,19 @@ async fn promotion_keeps_a_non_unpin_future_at_its_first_poll_address() {
         _pin: PhantomPinned,
     };
     let mut execution = scopes.ready_execution(work, source);
-    assert!(poll_once(&mut execution).is_pending());
-    assert!(matches!(poll_once(&mut execution), Poll::Ready(Ok(7))));
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::ScopeFinished]);
+    assert!(
+        poll_once(&mut execution).is_pending(),
+        "contract: promotion keeps a non unpin future at its first poll address"
+    );
+    assert!(
+        matches!(poll_once(&mut execution), Poll::Ready(Ok(7))),
+        "contract: promotion keeps a non unpin future at its first poll address"
+    );
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::ScopeFinished],
+        "contract: promotion keeps a non unpin future at its first poll address"
+    );
     scopes.close();
     scopes.drained().await;
 }
@@ -207,13 +272,20 @@ async fn an_exported_first_poll_token_cancels_foreign_work_without_foreign_repol
     tokio::time::timeout(Duration::from_secs(1), a.drained())
         .await
         .unwrap();
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
-    assert!(matches!(
-        execution.await,
-        Err(Error::OperationCancelled {
-            reason: Reason::CacheShutdown
-        })
-    ));
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::CacheShutdown],
+        "contract: an exported first poll token cancels foreign work without foreign repoll"
+    );
+    assert!(
+        matches!(
+            execution.await,
+            Err(Error::OperationCancelled {
+                reason: Reason::CacheShutdown
+            })
+        ),
+        "contract: an exported first poll token cancels foreign work without foreign repoll"
+    );
     b.close();
     b.drained().await;
 }
@@ -237,13 +309,20 @@ async fn an_exported_child_token_also_preserves_cross_cache_shutdown_delivery() 
     tokio::time::timeout(Duration::from_secs(1), a.drained())
         .await
         .unwrap();
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
-    assert!(matches!(
-        execution.await,
-        Err(Error::OperationCancelled {
-            reason: Reason::CacheShutdown
-        })
-    ));
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::CacheShutdown],
+        "contract: an exported child token also preserves cross cache shutdown delivery"
+    );
+    assert!(
+        matches!(
+            execution.await,
+            Err(Error::OperationCancelled {
+                reason: Reason::CacheShutdown
+            })
+        ),
+        "contract: an exported child token also preserves cross cache shutdown delivery"
+    );
     b.close();
     b.drained().await;
 }
@@ -270,11 +349,22 @@ fn a_first_poll_panic_publishes_cause_before_cache_controlled_work_destruction()
     );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| poll_once(&mut execution)))
-            .is_err()
+            .is_err(),
+        "contract: a first poll panic publishes cause before cache controlled work destruction"
     );
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CallerDropped]);
-    assert!(scopes.idle());
-    assert!(scopes.tasks.is_empty());
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::CallerDropped],
+        "contract: a first poll panic publishes cause before cache controlled work destruction"
+    );
+    assert!(
+        scopes.idle(),
+        "contract: a first poll panic publishes cause before cache controlled work destruction"
+    );
+    assert!(
+        scopes.tasks.is_empty(),
+        "contract: a first poll panic publishes cause before cache controlled work destruction"
+    );
 }
 
 #[test]
@@ -285,7 +375,11 @@ fn a_promoted_scope_owns_completion_before_source_notification() {
     let execution = scopes.execution(std::future::pending::<Result<u64>>(), source);
     *super::lock(&execution.owned_scope().state) = super::State::Completed;
     scopes.close();
-    assert_eq!(token.reason(), Some(Reason::ScopeFinished));
+    assert_eq!(
+        token.reason(),
+        Some(Reason::ScopeFinished),
+        "contract: a promoted scope owns completion before source notification"
+    );
 }
 
 #[tokio::test]
@@ -303,17 +397,27 @@ async fn linking_a_first_poll_view_after_close_cancels_and_retires_without_repol
         source,
     );
     execution.link(&owner.token(), LinkMode::Explicit);
-    assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
+    assert_eq!(
+        *reasons.lock().unwrap(),
+        vec![Reason::CacheShutdown],
+        "contract: linking a first poll view after close cancels and retires without repoll"
+    );
     tokio::time::timeout(Duration::from_secs(1), a.drained())
         .await
         .unwrap();
-    assert!(a.tasks.is_empty());
-    assert!(matches!(
-        execution.await,
-        Err(Error::OperationCancelled {
-            reason: Reason::CacheShutdown
-        })
-    ));
+    assert!(
+        a.tasks.is_empty(),
+        "contract: linking a first poll view after close cancels and retires without repoll"
+    );
+    assert!(
+        matches!(
+            execution.await,
+            Err(Error::OperationCancelled {
+                reason: Reason::CacheShutdown
+            })
+        ),
+        "contract: linking a first poll view after close cancels and retires without repoll"
+    );
     b.close();
     b.drained().await;
 }
@@ -326,22 +430,41 @@ async fn an_owned_parents_child_sees_closing_before_queued_parent_notification()
     let parent = scopes.execution(std::future::pending::<Result<u64>>(), owner);
     let phase = super::BorrowedPhase::new(&scopes, &parent_token);
     let child = phase.token();
-    assert_eq!(scopes.tasks.len(), 1);
+    assert_eq!(
+        scopes.tasks.len(),
+        1,
+        "contract: an owned parents child sees closing before queued parent notification"
+    );
     // Exercise the interval after close publishes its gate but before queued
     // owned-work notifications are delivered. Callback checks are pure reads.
     scopes.closing.store(true, Ordering::SeqCst);
-    assert_eq!(parent_token.reason(), None);
-    assert_eq!(child.reason(), Some(Reason::CacheShutdown));
-    assert_eq!(scopes.tasks.len(), 1);
+    assert_eq!(
+        parent_token.reason(),
+        None,
+        "contract: an owned parents child sees closing before queued parent notification"
+    );
+    assert_eq!(
+        child.reason(),
+        Some(Reason::CacheShutdown),
+        "contract: an owned parents child sees closing before queued parent notification"
+    );
+    assert_eq!(
+        scopes.tasks.len(),
+        1,
+        "contract: an owned parents child sees closing before queued parent notification"
+    );
     scopes.close();
     tokio::time::timeout(Duration::from_secs(1), scopes.drained())
         .await
         .unwrap();
-    assert!(matches!(
-        parent.await,
-        Err(Error::OperationCancelled {
-            reason: Reason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            parent.await,
+            Err(Error::OperationCancelled {
+                reason: Reason::CacheShutdown
+            })
+        ),
+        "contract: an owned parents child sees closing before queued parent notification"
+    );
     std::mem::drop(phase);
 }

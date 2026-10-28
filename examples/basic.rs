@@ -62,6 +62,9 @@ async fn main() {
     let runs = factory_runs.load(Ordering::SeqCst);
     println!("\nfactory ran {runs} time(s) — expected exactly 1");
     assert_eq!(runs, 1, "the second call must be a cache hit");
-    assert_eq!(first, second);
+    assert_eq!(
+        first, second,
+        "contract: repeated cache hits reuse the first factory value"
+    );
     println!("OK: second call was a cache hit.");
 }

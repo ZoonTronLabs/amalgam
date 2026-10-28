@@ -38,17 +38,25 @@ async fn provider_runs_once_on_miss_and_hit_uses_raw_key_and_explicit_options_by
                     "key",
                     amalgam::source::factory(move |ctx| async move {
                         factories.fetch_add(1, Ordering::SeqCst);
-                        assert_eq!(ctx.original_key(), "key");
+                        assert_eq!(ctx.original_key(), "key", "contract: provider runs once on miss and hit uses raw key and explicit options bypass it");
                         Ok::<_, FactoryError>(ctx.value(7))
                     })
                 )
                 .await
                 .unwrap(),
-            7
+            7, "contract: provider runs once on miss and hit uses raw key and explicit options bypass it"
         );
     }
-    assert_eq!(&*provider.0.lock().unwrap(), &["key", "key"]);
-    assert_eq!(factories.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        &*provider.0.lock().unwrap(),
+        &["key", "key"],
+        "contract: provider runs once on miss and hit uses raw key and explicit options bypass it"
+    );
+    assert_eq!(
+        factories.load(Ordering::SeqCst),
+        1,
+        "contract: provider runs once on miss and hit uses raw key and explicit options bypass it"
+    );
     assert_eq!(
         cache
             .try_get("key")
@@ -56,9 +64,14 @@ async fn provider_runs_once_on_miss_and_hit_uses_raw_key_and_explicit_options_by
             .into_future()
             .await
             .unwrap(),
-        Some(7)
+        Some(7),
+        "contract: provider runs once on miss and hit uses raw key and explicit options bypass it"
     );
-    assert_eq!(provider.0.lock().unwrap().len(), 2);
+    assert_eq!(
+        provider.0.lock().unwrap().len(),
+        2,
+        "contract: provider runs once on miss and hit uses raw key and explicit options bypass it"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -99,7 +112,11 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
     );
     future::poll_fn(|cx| match hit.as_mut().poll(cx) {
         Poll::Ready(value) => {
-            assert_eq!(value.unwrap(), 7);
+            assert_eq!(
+                value.unwrap(),
+                7,
+                "contract: eager hit finishes in one poll while its factory is pending"
+            );
             Poll::Ready(())
         }
         Poll::Pending => panic!("a fresh eager hit parked the caller"),
@@ -113,7 +130,8 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
             .get_or_set("key", amalgam::source::value(99))
             .await
             .unwrap(),
-        7
+        7,
+        "contract: eager hit finishes in one poll while its factory is pending"
     );
     release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -133,7 +151,10 @@ struct RuntimeCheckedValue {
 impl Clone for RuntimeCheckedValue {
     fn clone(&self) -> Self {
         if self.armed.load(Ordering::Acquire) {
-            assert!(tokio::runtime::Handle::try_current().is_err());
+            assert!(
+                tokio::runtime::Handle::try_current().is_err(),
+                "contract: native warmed reads clone values without entering a Tokio runtime"
+            );
         }
         Self {
             value: self.value,
@@ -160,14 +181,25 @@ fn native_and_async_ready_reads_copy_on_the_caller_without_entering_a_runtime() 
         .wait()
         .unwrap();
     armed.store(true, Ordering::Release);
-    assert_eq!(cache.try_get("key").execute().unwrap().unwrap().value, 42);
+    assert_eq!(
+        cache.try_get("key").execute().unwrap().unwrap().value,
+        42,
+        "contract: native and async ready reads copy on the caller without entering a runtime"
+    );
     let mut lookup = std::pin::pin!(cache.as_async().try_get("key").into_future());
     let mut context = Context::from_waker(Waker::noop());
     let Poll::Ready(result) = Future::poll(lookup.as_mut(), &mut context) else {
         panic!("a fresh hit must complete without a runtime");
     };
-    assert_eq!(result.unwrap().unwrap().value, 42);
+    assert_eq!(
+        result.unwrap().unwrap().value,
+        42,
+        "contract: native and async ready reads copy on the caller without entering a runtime"
+    );
     // The same native operation transfers a real miss once to its executor.
-    assert!(cache.try_get("absent").execute().unwrap().is_none());
+    assert!(
+        cache.try_get("absent").execute().unwrap().is_none(),
+        "contract: native and async ready reads copy on the caller without entering a runtime"
+    );
     cache.shutdown().unwrap();
 }

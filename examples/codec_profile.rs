@@ -97,11 +97,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let bytes = wire.encode(codec.as_ref(), &snapshot)?;
                 match wire {
                     Wire::Legacy => {
-                        assert_eq!(codec.deserialize(&bytes)?.value, snapshot.entry().value)
+                        assert_eq!(
+                            codec.deserialize(&bytes)?.value,
+                            snapshot.entry().value,
+                            "contract: codec profiling validates legacy and versioned round trips before timing"
+                        )
                     }
                     Wire::V2 => assert_eq!(
                         codec.deserialize_snapshot(&bytes)?.entry().value,
-                        snapshot.entry().value
+                        snapshot.entry().value,
+                        "contract: codec profiling validates legacy and versioned round trips before timing"
                     ),
                 }
                 for _ in 0..30 {

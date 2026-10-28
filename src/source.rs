@@ -40,8 +40,12 @@ pub fn value<V>(value: V) -> Value<V> {
 ///     ctx.try_set_tags(["profiles"]).map_err(amalgam::FactoryError::from_source)?;
 ///     Ok::<_, amalgam::FactoryError>(7)
 /// })).await?;
-/// assert_eq!(value, 7);
-/// assert_eq!(cache.get_or_set("supplied", source::value(9)).await?, 9);
+/// assert_eq!(value, 7, "the factory source returns its produced value");
+/// assert_eq!(
+///     cache.get_or_set("supplied", source::value(9)).await?,
+///     9,
+///     "the value source supplies an entry without invoking a factory",
+/// );
 /// cache.shutdown().await?;
 /// # Ok(()) }
 /// ```

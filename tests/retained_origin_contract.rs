@@ -66,7 +66,8 @@ impl Drop for PinnedOrigin {
     fn drop(&mut self) {
         assert_eq!(
             self.address.load(Ordering::SeqCst),
-            self as *const Self as usize
+            self as *const Self as usize,
+            "contract: retained origin work stays pinned until destruction"
         );
         self.dropped.store(true, Ordering::SeqCst);
     }
@@ -103,8 +104,15 @@ fn a_new_caller_drives_the_same_pinned_origin_across_option_paths_without_a_runt
                 .options(move |_| options(first_general))
                 .into_future(),
         );
-        assert!(once(first.as_mut()).is_pending());
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert!(
+            once(first.as_mut()).is_pending(),
+            "contract: a new caller drives the same pinned origin across option paths without a runtime"
+        );
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "contract: a new caller drives the same pinned origin across option paths without a runtime"
+        );
         std::mem::drop(first);
         assert!(
             !dropped.load(Ordering::SeqCst),
@@ -122,9 +130,19 @@ fn a_new_caller_drives_the_same_pinned_origin_across_option_paths_without_a_runt
                 .options(move |_| options(next_general))
                 .into_future(),
         );
-        assert!(matches!(once(next.as_mut()), Poll::Ready(Ok(9))));
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-        assert!(dropped.load(Ordering::SeqCst));
+        assert!(
+            matches!(once(next.as_mut()), Poll::Ready(Ok(9))),
+            "contract: a new caller drives the same pinned origin across option paths without a runtime"
+        );
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "contract: a new caller drives the same pinned origin across option paths without a runtime"
+        );
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "contract: a new caller drives the same pinned origin across option paths without a runtime"
+        );
         cache.close();
     }
 }
@@ -154,7 +172,10 @@ fn panic_is_preserved_for_the_leader_and_typed_for_waiters_across_option_paths()
                 .options(move |_| options(first_general))
                 .into_future(),
         );
-        assert!(once(leader.as_mut()).is_pending());
+        assert!(
+            once(leader.as_mut()).is_pending(),
+            "contract: panic is preserved for the leader and typed for waiters across option paths"
+        );
         let mut waiter = Box::pin(
             cache
                 .get_or_set::<_, _>(
@@ -164,17 +185,30 @@ fn panic_is_preserved_for_the_leader_and_typed_for_waiters_across_option_paths()
                 .options(move |_| options(next_general))
                 .into_future(),
         );
-        assert!(once(waiter.as_mut()).is_pending());
+        assert!(
+            once(waiter.as_mut()).is_pending(),
+            "contract: panic is preserved for the leader and typed for waiters across option paths"
+        );
         ready.store(true, Ordering::SeqCst);
         let panic =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| once(leader.as_mut())))
                 .unwrap_err();
-        assert_eq!(*panic.downcast::<u64>().unwrap(), 91);
-        assert!(matches!(
-            once(waiter.as_mut()),
-            Poll::Ready(Err(Error::FactoryPanicked))
-        ));
-        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            *panic.downcast::<u64>().unwrap(),
+            91,
+            "contract: panic is preserved for the leader and typed for waiters across option paths"
+        );
+        assert!(
+            matches!(
+                once(waiter.as_mut()),
+                Poll::Ready(Err(Error::FactoryPanicked))
+            ),
+            "contract: panic is preserved for the leader and typed for waiters across option paths"
+        );
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "contract: panic is preserved for the leader and typed for waiters across option paths"
+        );
         let mut retry = Box::pin(
             cache
                 .get_or_set::<_, _>(
@@ -183,7 +217,10 @@ fn panic_is_preserved_for_the_leader_and_typed_for_waiters_across_option_paths()
                 )
                 .into_future(),
         );
-        assert!(matches!(once(retry.as_mut()), Poll::Ready(Ok(7))));
+        assert!(
+            matches!(once(retry.as_mut()), Poll::Ready(Ok(7))),
+            "contract: panic is preserved for the leader and typed for waiters across option paths"
+        );
         cache.close();
     }
 }
@@ -199,7 +236,10 @@ async fn started<F: Future>(future: Pin<&mut F>, runs: &AtomicUsize) {
     tokio::time::timeout(
         Duration::from_secs(2),
         std::future::poll_fn(|cx| {
-            assert!(future.as_mut().poll(cx).is_pending());
+            assert!(
+                future.as_mut().poll(cx).is_pending(),
+                "contract: retained origin work remains pending while its first factory call starts"
+            );
             if runs.load(Ordering::SeqCst) == 1 {
                 Poll::Ready(())
             } else {
@@ -249,7 +289,10 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
     );
     started(first.as_mut(), &runs).await;
     std::mem::drop(first);
-    assert!(!token.lock().unwrap().as_ref().unwrap().is_cancelled());
+    assert!(
+        !token.lock().unwrap().as_ref().unwrap().is_cancelled(),
+        "contract: a dropped hybrid caller retains one factory and commits for its waiters"
+    );
     let mut waiters = Vec::with_capacity(30);
     for _ in 0..30 {
         let mut waiter = Box::pin(
@@ -260,7 +303,10 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
                 )
                 .into_future(),
         );
-        assert!(once(waiter.as_mut()).is_pending());
+        assert!(
+            once(waiter.as_mut()).is_pending(),
+            "contract: a dropped hybrid caller retains one factory and commits for its waiters"
+        );
         waiters.push(waiter);
     }
     gate.add_permits(1);
@@ -270,10 +316,15 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
                 .await
                 .unwrap()
                 .unwrap(),
-            9
+            9,
+            "contract: a dropped hybrid caller retains one factory and commits for its waiters"
         );
     }
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: a dropped hybrid caller retains one factory and commits for its waiters"
+    );
     let other = Cache::<u64>::builder()
         .clock(clock)
         .distributed(backend)
@@ -289,7 +340,8 @@ async fn a_dropped_hybrid_caller_retains_one_factory_and_commits_for_its_waiters
             )
             .await
             .unwrap(),
-        9
+        9,
+        "contract: a dropped hybrid caller retains one factory and commits for its waiters"
     );
     cache.shutdown().await.unwrap();
     other.shutdown().await.unwrap();
@@ -329,13 +381,20 @@ async fn explicit_cancellation_still_releases_a_general_factory_without_failsafe
     );
     started(first.as_mut(), &runs).await;
     source.cancel();
-    assert!(matches!(
-        first.await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
-    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            first.await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit cancellation still releases a general factory without failsafe"
+    );
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "contract: explicit cancellation still releases a general factory without failsafe"
+    );
     assert_eq!(
         cache
             .get_or_set::<_, _>(
@@ -344,7 +403,8 @@ async fn explicit_cancellation_still_releases_a_general_factory_without_failsafe
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: explicit cancellation still releases a general factory without failsafe"
     );
     cache.shutdown().await.unwrap();
 }
@@ -422,7 +482,10 @@ fn a_waiter_admitted_before_factory_installation_is_not_stranded() {
             )
             .into_future(),
     );
-    assert!(once(first.as_mut()).is_pending());
+    assert!(
+        once(first.as_mut()).is_pending(),
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
     assert_eq!(
         runs.load(Ordering::SeqCst),
         0,
@@ -442,21 +505,42 @@ fn a_waiter_admitted_before_factory_installation_is_not_stranded() {
         second
             .as_mut()
             .poll(&mut Context::from_waker(&waker))
-            .is_pending()
+            .is_pending(),
+        "contract: a waiter admitted before factory installation is not stranded"
     );
     reads_ready.store(true, Ordering::SeqCst);
-    assert!(once(first.as_mut()).is_pending());
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert!(
+        once(first.as_mut()).is_pending(),
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
     assert!(
         wakes.0.load(Ordering::SeqCst) > 0,
         "factory installation must wake the existing lock waiter"
     );
     std::mem::drop(first);
-    assert!(!dropped.load(Ordering::SeqCst));
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
     ready.store(true, Ordering::SeqCst);
-    assert!(matches!(once(second.as_mut()), Poll::Ready(Ok(9))));
-    assert!(dropped.load(Ordering::SeqCst));
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(once(second.as_mut()), Poll::Ready(Ok(9))),
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: a waiter admitted before factory installation is not stranded"
+    );
     cache.close();
 }
 
@@ -490,14 +574,23 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
     );
     started(first.as_mut(), &runs).await;
     std::mem::drop(first);
-    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        0,
+        "contract: explicit cancellation can stop retained work after its caller was dropped"
+    );
     source.cancel();
     cache.flush_pending().await.unwrap();
-    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "contract: explicit cancellation can stop retained work after its caller was dropped"
+    );
     let token = token.lock().unwrap().take().unwrap();
     assert_eq!(
         token.cancelled().await,
-        FactoryCancellationReason::CallerCancelled
+        FactoryCancellationReason::CallerCancelled,
+        "contract: explicit cancellation can stop retained work after its caller was dropped"
     );
     assert_eq!(
         cache
@@ -507,7 +600,8 @@ async fn explicit_cancellation_can_stop_retained_work_after_its_caller_was_dropp
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: explicit cancellation can stop retained work after its caller was dropped"
     );
     cache.shutdown().await.unwrap();
 }
@@ -542,7 +636,7 @@ async fn a_retained_background_panic_preserves_the_supervised_shutdown_cause() {
     };
     assert!(report.failures().iter().any(|failure| matches!(failure,
         ShutdownFailure::BackgroundTask { task: ShutdownTask::Factory, source } if source.is_panic()
-    )));
+    )), "contract: a retained background panic preserves the supervised shutdown cause");
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F

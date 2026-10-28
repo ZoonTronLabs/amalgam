@@ -555,7 +555,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
             std::mem::drop(writer);
             let sampled = sampled.join().unwrap();
-            assert_eq!(sampled, crate::entry::Freshness::Stale);
+            assert_eq!(
+                sampled,
+                crate::entry::Freshness::Stale,
+                "contract: local freshness is checked after waiting for the value slot"
+            );
         }
     }
     #[test]
@@ -570,35 +574,68 @@ mod tests {
         for shard in 0..store.shard_count() {
             retired.extend(store.drain_before(shard, first));
         }
-        assert_eq!(retired.len(), 1);
-        assert_eq!(*retired[0].entry.value(), 1);
-        assert_eq!(store.usage().entries, 2);
+        assert_eq!(
+            retired.len(),
+            1,
+            "contract: overlapping clear drains preserve all newer generations"
+        );
+        assert_eq!(
+            *retired[0].entry.value(),
+            1,
+            "contract: overlapping clear drains preserve all newer generations"
+        );
+        assert_eq!(
+            store.usage().entries,
+            2,
+            "contract: overlapping clear drains preserve all newer generations"
+        );
         retired.clear();
         for shard in 0..store.shard_count() {
             retired.extend(store.drain_before(shard, second));
         }
-        assert_eq!(retired.len(), 1);
-        assert_eq!(*retired[0].entry.value(), 2);
+        assert_eq!(
+            retired.len(),
+            1,
+            "contract: overlapping clear drains preserve all newer generations"
+        );
+        assert_eq!(
+            *retired[0].entry.value(),
+            2,
+            "contract: overlapping clear drains preserve all newer generations"
+        );
         let MemoryRead::Present(newest) = store.get("newest", Some(Timestamp::from_ticks(0)))
         else {
             panic!("new generation was lost")
         };
-        assert_eq!(*newest.value(), 3);
+        assert_eq!(
+            *newest.value(),
+            3,
+            "contract: overlapping clear drains preserve all newer generations"
+        );
     }
     #[test]
     fn generation_exhaustion_rejects_admission_without_reusing_a_clear_identity() {
         let store = Sharded::new(MemoryExpiry::ClockDriven);
         put(&store, "old", 1);
         store.generation.store(u64::MAX, Ordering::Release);
-        assert_eq!(store.begin_clear(), u64::MAX);
+        assert_eq!(
+            store.begin_clear(),
+            u64::MAX,
+            "contract: generation exhaustion rejects admission without reusing a clear identity"
+        );
         assert_eq!(
             put(&store, "next", 2).admission,
-            MemoryAdmission::Rejected(CapacityRejection::GenerationExhausted)
+            MemoryAdmission::Rejected(CapacityRejection::GenerationExhausted),
+            "contract: generation exhaustion rejects admission without reusing a clear identity"
         );
         for shard in 0..store.shard_count() {
             store.drain_before(shard, u64::MAX);
         }
-        assert_eq!(store.usage().entries, 0);
+        assert_eq!(
+            store.usage().entries,
+            0,
+            "contract: generation exhaustion rejects admission without reusing a clear identity"
+        );
     }
     #[test]
     fn keys_sharing_a_section_are_not_aliased_by_the_precomputed_hash() {
@@ -618,7 +655,11 @@ mod tests {
             let MemoryRead::Present(entry) = store.get(&key, Some(Timestamp::from_ticks(0))) else {
                 panic!("key disappeared")
             };
-            assert_eq!(*entry.value(), value);
+            assert_eq!(
+                *entry.value(),
+                value,
+                "contract: keys sharing a section are not aliased by the precomputed hash"
+            );
         }
     }
     #[test]
@@ -644,7 +685,8 @@ mod tests {
         );
         assert_eq!(
             rejected.admission,
-            MemoryAdmission::Rejected(CapacityRejection::VersionChanged)
+            MemoryAdmission::Rejected(CapacityRejection::VersionChanged),
+            "contract: an invalidated slot is absent for admission and retires with removed reason"
         );
         let committed = store.insert(
             Arc::from("k"),
@@ -654,12 +696,25 @@ mod tests {
             CaptureAdmission::Armed,
             MemoryWriteEvent::Set,
         );
-        assert_eq!(committed.admission, MemoryAdmission::Admitted);
-        assert_eq!(committed.retired.len(), 1);
+        assert_eq!(
+            committed.admission,
+            MemoryAdmission::Admitted,
+            "contract: an invalidated slot is absent for admission and retires with removed reason"
+        );
+        assert_eq!(
+            committed.retired.len(),
+            1,
+            "contract: an invalidated slot is absent for admission and retires with removed reason"
+        );
         assert_eq!(
             committed.retired[0].reason.fact(),
-            Some(crate::advanced::MemoryEvictionReason::Removed)
+            Some(crate::advanced::MemoryEvictionReason::Removed),
+            "contract: an invalidated slot is absent for admission and retires with removed reason"
         );
-        assert_eq!(*committed.retired[0].entry.value(), 1);
+        assert_eq!(
+            *committed.retired[0].entry.value(),
+            1,
+            "contract: an invalidated slot is absent for admission and retires with removed reason"
+        );
     }
 }

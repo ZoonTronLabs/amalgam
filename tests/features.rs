@@ -164,7 +164,10 @@ async fn distributed_locker_enforces_cross_instance_single_flight() {
     let v1 = h1.await.unwrap().unwrap();
     let v2 = h2.await.unwrap().unwrap();
 
-    assert_eq!(v1, "from-factory");
+    assert_eq!(
+        v1, "from-factory",
+        "contract: distributed locker enforces cross instance single flight"
+    );
     assert_eq!(v2, "from-factory", "loser served the winner's L2 value");
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -335,7 +338,11 @@ async fn remove_by_tag_propagates_across_nodes() {
             .await
             .unwrap();
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: remove by tag propagates across nodes"
+    );
 
     // Advance so the tag marker B is about to publish is strictly newer than A's
     // entry (the tag check is inclusive: entry_created <= marker ⇒ invalid).
@@ -396,17 +403,32 @@ async fn registry_resolves_named_caches_independently() {
     };
     registry.register("alpha", make());
     registry.register("beta", make());
-    assert_eq!(registry.len(), 2);
+    assert_eq!(
+        registry.len(),
+        2,
+        "contract: registry resolves named caches independently"
+    );
 
     let alpha = registry.get("alpha").expect("alpha is registered");
     let beta = registry.get("beta").expect("beta is registered");
-    assert!(registry.get("missing").is_none());
+    assert!(
+        registry.get("missing").is_none(),
+        "contract: registry resolves named caches independently"
+    );
 
     // The two named caches are independent stores.
     alpha.set("k", 1).await.unwrap();
     beta.set("k", 2).await.unwrap();
-    assert_eq!(alpha.try_get("k").await.unwrap().as_ref(), Some(&1));
-    assert_eq!(beta.try_get("k").await.unwrap().as_ref(), Some(&2));
+    assert_eq!(
+        alpha.try_get("k").await.unwrap().as_ref(),
+        Some(&1),
+        "contract: registry resolves named caches independently"
+    );
+    assert_eq!(
+        beta.try_get("k").await.unwrap().as_ref(),
+        Some(&2),
+        "contract: registry resolves named caches independently"
+    );
 
     // `get_or_create` builds exactly once: a second call returns the existing
     // cache without invoking the builder again.
@@ -483,16 +505,36 @@ async fn default_options_provider_applies_per_key_duration() {
 
     // Prime both keys. Neither passes explicit options, so the provider is
     // consulted: "short:x" gets the 2s window, "normal" falls back to 100s.
-    assert_eq!(prime(&cache, "short:x", short_calls.clone(), 1).await, 1);
-    assert_eq!(prime(&cache, "normal", normal_calls.clone(), 1).await, 1);
-    assert_eq!(short_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(normal_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        prime(&cache, "short:x", short_calls.clone(), 1).await,
+        1,
+        "contract: default options provider applies per key duration"
+    );
+    assert_eq!(
+        prime(&cache, "normal", normal_calls.clone(), 1).await,
+        1,
+        "contract: default options provider applies per key duration"
+    );
+    assert_eq!(
+        short_calls.load(Ordering::SeqCst),
+        1,
+        "contract: default options provider applies per key duration"
+    );
+    assert_eq!(
+        normal_calls.load(Ordering::SeqCst),
+        1,
+        "contract: default options provider applies per key duration"
+    );
 
     // Advance past the short window but well within the static default.
     clock.advance(Duration::from_secs(3));
 
     // "short:x" has expired (provider's 2s window) ⇒ the factory re-runs.
-    assert_eq!(prime(&cache, "short:x", short_calls.clone(), 2).await, 2);
+    assert_eq!(
+        prime(&cache, "short:x", short_calls.clone(), 2).await,
+        2,
+        "contract: default options provider applies per key duration"
+    );
     assert_eq!(
         short_calls.load(Ordering::SeqCst),
         2,
@@ -500,7 +542,11 @@ async fn default_options_provider_applies_per_key_duration() {
     );
 
     // "normal" is still fresh (100s default) ⇒ the factory does NOT re-run.
-    assert_eq!(prime(&cache, "normal", normal_calls.clone(), 99).await, 1);
+    assert_eq!(
+        prime(&cache, "normal", normal_calls.clone(), 99).await,
+        1,
+        "contract: default options provider applies per key duration"
+    );
     assert_eq!(
         normal_calls.load(Ordering::SeqCst),
         1,

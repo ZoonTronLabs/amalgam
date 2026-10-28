@@ -148,12 +148,16 @@ async fn seed(backend: Arc<InMemoryDistributedCache>, clock: Arc<dyn Clock>, opt
 }
 fn assert_cancelled(token: &FactoryCancellation, expected: FactoryCancellationReason) {
     assert!(
-        matches!(token.check(), Err(Error::OperationCancelled { reason }) if reason == expected)
+        matches!(token.check(), Err(Error::OperationCancelled { reason }) if reason == expected),
+        "contract: assert cancelled"
     );
 }
 async fn poll_pending<T>(future: &mut Pin<Box<impl Future<Output = T>>>) {
     std::future::poll_fn(|cx| {
-        assert!(future.as_mut().poll(cx).is_pending());
+        assert!(
+            future.as_mut().poll(cx).is_pending(),
+            "contract: poll pending"
+        );
         Poll::Ready(())
     })
     .await;
@@ -192,23 +196,34 @@ async fn caller_cancellation_reaches_both_codec_directions_before_repoll() {
         poll_pending(&mut operation).await;
         gate.entered().await;
         let token = recorder.token(direction);
-        assert!(token.check().is_ok());
+        assert!(
+            token.check().is_ok(),
+            "contract: caller cancellation reaches both codec directions before repoll"
+        );
         source.cancel();
         assert_cancelled(&token, FactoryCancellationReason::CallerCancelled);
-        assert!(matches!(
-            operation.await,
-            Err(Error::OperationCancelled {
-                reason: FactoryCancellationReason::CallerCancelled
-            })
-        ));
-        assert_eq!(backend.get("v2:key").await.unwrap(), before);
+        assert!(
+            matches!(
+                operation.await,
+                Err(Error::OperationCancelled {
+                    reason: FactoryCancellationReason::CallerCancelled
+                })
+            ),
+            "contract: caller cancellation reaches both codec directions before repoll"
+        );
+        assert_eq!(
+            backend.get("v2:key").await.unwrap(),
+            before,
+            "contract: caller cancellation reaches both codec directions before repoll"
+        );
         assert!(
             cache
                 .try_get("key")
                 .options(|_| EntryOptions::default().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .is_none()
+                .is_none(),
+            "contract: caller cancellation reaches both codec directions before repoll"
         );
         cache.shutdown().await.unwrap();
     }
@@ -268,20 +283,28 @@ async fn codec_cancellation_is_never_suppressed_as_a_miss_or_local_only_write() 
                 .await
                 .map(|_| ()),
         };
-        assert!(matches!(
-            result,
-            Err(Error::OperationCancelled {
-                reason: FactoryCancellationReason::CallerCancelled
-            })
-        ));
-        assert_eq!(cache.pending_recovery(), 0);
+        assert!(
+            matches!(
+                result,
+                Err(Error::OperationCancelled {
+                    reason: FactoryCancellationReason::CallerCancelled
+                })
+            ),
+            "contract: codec cancellation is never suppressed as a miss or local only write"
+        );
+        assert_eq!(
+            cache.pending_recovery(),
+            0,
+            "contract: codec cancellation is never suppressed as a miss or local only write"
+        );
         assert!(
             cache
                 .try_get("key")
                 .options(|_| EntryOptions::default().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .is_none()
+                .is_none(),
+            "contract: codec cancellation is never suppressed as a miss or local only write"
         );
         cache.shutdown().await.unwrap();
     }
@@ -306,15 +329,20 @@ async fn hard_factory_timeout_ends_the_owned_encoder_with_the_exact_reason() {
         ))
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache
-            .get_or_set(
-                "key",
-                amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) })
-            )
-            .await,
-        Err(Error::FactoryTimeout { .. })
-    ));
+    assert!(
+        matches!(
+            cache
+                .get_or_set(
+                    "key",
+                    amalgam::source::factory(
+                        |ctx| async move { Ok::<_, FactoryError>(ctx.value(2)) }
+                    )
+                )
+                .await,
+            Err(Error::FactoryTimeout { .. })
+        ),
+        "contract: hard factory timeout ends the owned encoder with the exact reason"
+    );
     assert_cancelled(
         &recorder.token(Direction::Encode),
         FactoryCancellationReason::HardTimeout,
@@ -359,7 +387,8 @@ async fn permitted_background_encoder_survives_caller_completion_and_owns_shutdo
                 )
                 .await
                 .unwrap(),
-            1
+            1,
+            "contract: permitted background encoder survives caller completion and owns shutdown"
         );
         gate.entered().await;
         let token = recorder.token(Direction::Encode);
@@ -374,7 +403,11 @@ async fn permitted_background_encoder_survives_caller_completion_and_owns_shutdo
                 .unwrap()
                 .unwrap();
             assert_cancelled(&token, FactoryCancellationReason::ScopeFinished);
-            assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
+            assert_eq!(
+                cache.try_get("key").await.unwrap().as_ref(),
+                Some(&2),
+                "contract: permitted background encoder survives caller completion and owns shutdown"
+            );
             cache.shutdown().await.unwrap();
         } else {
             tokio::time::timeout(Duration::from_secs(3), cache.shutdown())
@@ -420,7 +453,8 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
                     .fail_safe_default(Some(1))
                     .await
                     .unwrap(),
-                2
+                2,
+                "contract: distributed decode deadline ends only its phase with soft or hard reason"
             );
             assert_cancelled(
                 &recorder.token(Direction::Decode),
@@ -430,15 +464,22 @@ async fn distributed_decode_deadline_ends_only_its_phase_with_soft_or_hard_reaso
                 &recorder.token(Direction::Encode),
                 FactoryCancellationReason::ScopeFinished,
             );
-            assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
+            assert_eq!(
+                cache.try_get("key").await.unwrap().as_ref(),
+                Some(&2),
+                "contract: distributed decode deadline ends only its phase with soft or hard reason"
+            );
         } else {
-            assert!(matches!(
-                cache
-                    .try_get("key")
-                    .options(|o| o.with_rethrow_distributed_exceptions(true))
-                    .await,
-                Err(Error::DistributedTimeout { .. })
-            ));
+            assert!(
+                matches!(
+                    cache
+                        .try_get("key")
+                        .options(|o| o.with_rethrow_distributed_exceptions(true))
+                        .await,
+                    Err(Error::DistributedTimeout { .. })
+                ),
+                "contract: distributed decode deadline ends only its phase with soft or hard reason"
+            );
             assert_cancelled(
                 &recorder.token(Direction::Decode),
                 FactoryCancellationReason::HardTimeout,
@@ -478,13 +519,20 @@ async fn expiry_decode_and_encode_receive_the_mutation_scope() {
             &recorder.token(direction),
             FactoryCancellationReason::CallerCancelled,
         );
-        assert!(matches!(
-            operation.await,
-            Err(Error::OperationCancelled {
-                reason: FactoryCancellationReason::CallerCancelled
-            })
-        ));
-        assert_eq!(backend.get("v2:key").await.unwrap(), before);
+        assert!(
+            matches!(
+                operation.await,
+                Err(Error::OperationCancelled {
+                    reason: FactoryCancellationReason::CallerCancelled
+                })
+            ),
+            "contract: expiry decode and encode receive the mutation scope"
+        );
+        assert_eq!(
+            backend.get("v2:key").await.unwrap(),
+            before,
+            "contract: expiry decode and encode receive the mutation scope"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -517,12 +565,15 @@ async fn direct_default_hook_preserves_cancellation_after_a_legacy_await() {
     gate.entered().await;
     source.cancel();
     gate.release.add_permits(1);
-    assert!(matches!(
-        operation.await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            operation.await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: direct default hook preserves cancellation after a legacy await"
+    );
 }
 
 struct FailFirstWrite {
@@ -576,17 +627,20 @@ async fn replay_codec_has_an_independent_scope_and_is_cancelled_by_shutdown() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.distributed,
-        EffectOutcome::RecoveryQueued { .. }
-    ));
+    assert!(
+        matches!(report.distributed, EffectOutcome::RecoveryQueued { .. }),
+        "contract: replay codec has an independent scope and is cancelled by shutdown"
+    );
     assert_cancelled(
         &recorder.token(Direction::Encode),
         FactoryCancellationReason::ScopeFinished,
     );
     gate.entered().await;
     let token = recorder.token(Direction::Decode);
-    assert!(token.check().is_ok());
+    assert!(
+        token.check().is_ok(),
+        "contract: replay codec has an independent scope and is cancelled by shutdown"
+    );
     tokio::time::timeout(Duration::from_secs(3), cache.shutdown())
         .await
         .unwrap()
@@ -639,7 +693,10 @@ async fn passive_refresh_codec_is_owned_and_cancelled_by_shutdown() {
         .unwrap();
     gate.entered().await;
     let token = recorder.token(Direction::Decode);
-    assert!(token.check().is_ok());
+    assert!(
+        token.check().is_ok(),
+        "contract: passive refresh codec is owned and cancelled by shutdown"
+    );
     tokio::time::timeout(Duration::from_secs(3), target.shutdown())
         .await
         .unwrap()
@@ -668,7 +725,11 @@ async fn eager_encoder_outlives_the_hit_and_is_cancelled_by_shutdown() {
         .default_options(opts)
         .try_build()
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&1));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&1),
+        "contract: eager encoder outlives the hit and is cancelled by shutdown"
+    );
     clock.advance(Duration::from_secs(6));
     assert_eq!(
         cache
@@ -678,11 +739,15 @@ async fn eager_encoder_outlives_the_hit_and_is_cancelled_by_shutdown() {
             )
             .await
             .unwrap(),
-        1
+        1,
+        "contract: eager encoder outlives the hit and is cancelled by shutdown"
     );
     gate.entered().await;
     let token = recorder.token(Direction::Encode);
-    assert!(token.check().is_ok());
+    assert!(
+        token.check().is_ok(),
+        "contract: eager encoder outlives the hit and is cancelled by shutdown"
+    );
     tokio::time::timeout(Duration::from_secs(3), cache.shutdown())
         .await
         .unwrap()
@@ -732,20 +797,28 @@ async fn cancellation_inside_synchronous_codec_callbacks_cannot_commit_or_return
                 .await
                 .map(|_| ()),
         };
-        assert!(matches!(
-            result,
-            Err(Error::OperationCancelled {
-                reason: FactoryCancellationReason::CallerCancelled
-            })
-        ));
-        assert_eq!(backend.get("v2:key").await.unwrap(), before);
+        assert!(
+            matches!(
+                result,
+                Err(Error::OperationCancelled {
+                    reason: FactoryCancellationReason::CallerCancelled
+                })
+            ),
+            "contract: cancellation inside synchronous codec callbacks cannot commit or return data"
+        );
+        assert_eq!(
+            backend.get("v2:key").await.unwrap(),
+            before,
+            "contract: cancellation inside synchronous codec callbacks cannot commit or return data"
+        );
         assert!(
             cache
                 .try_get("key")
                 .options(|_| EntryOptions::default().with_skip_distributed(true, false))
                 .await
                 .unwrap()
-                .is_none()
+                .is_none(),
+            "contract: cancellation inside synchronous codec callbacks cannot commit or return data"
         );
         cache.shutdown().await.unwrap();
     }

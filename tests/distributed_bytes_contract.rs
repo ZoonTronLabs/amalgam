@@ -18,7 +18,11 @@ async fn immutable_reads_survive_replacement_removal_and_mutable_conversion() ->
         .await?;
     let first = backend.get("snapshot").await?.unwrap();
     let second = backend.get("snapshot").await?.unwrap();
-    assert_eq!(first.as_ref(), [1, 2, 3]);
+    assert_eq!(
+        first.as_ref(),
+        [1, 2, 3],
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
     assert_eq!(
         first.as_ptr(),
         second.as_ptr(),
@@ -26,14 +30,37 @@ async fn immutable_reads_survive_replacement_removal_and_mutable_conversion() ->
     );
     let mut editable = Vec::from(first.clone());
     editable[0] = 9;
-    assert_eq!(backend.get("snapshot").await?.unwrap().as_ref(), [1, 2, 3]);
+    assert_eq!(
+        backend.get("snapshot").await?.unwrap().as_ref(),
+        [1, 2, 3],
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
     backend.set("snapshot", vec![4, 5], None).await?;
-    assert_eq!(first.as_ref(), [1, 2, 3]);
-    assert_eq!(second.as_ref(), [1, 2, 3]);
-    assert_eq!(backend.get("snapshot").await?.unwrap().as_ref(), [4, 5]);
+    assert_eq!(
+        first.as_ref(),
+        [1, 2, 3],
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
+    assert_eq!(
+        second.as_ref(),
+        [1, 2, 3],
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
+    assert_eq!(
+        backend.get("snapshot").await?.unwrap().as_ref(),
+        [4, 5],
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
     backend.remove("snapshot").await?;
-    assert!(backend.get("snapshot").await?.is_none());
-    assert_eq!(first.as_ref(), [1, 2, 3]);
+    assert!(
+        backend.get("snapshot").await?.is_none(),
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
+    assert_eq!(
+        first.as_ref(),
+        [1, 2, 3],
+        "contract: immutable reads survive replacement removal and mutable conversion"
+    );
     Ok(())
 }
 #[tokio::test]
@@ -46,11 +73,19 @@ async fn ttl_does_not_extend_key_lifetime_or_invalidate_a_returned_snapshot() ->
         .await?;
     let retained = backend.get("ttl").await?.unwrap();
     clock.advance(Duration::from_secs(1));
-    assert!(backend.get("ttl").await?.is_none());
-    assert_eq!(retained.as_ref(), [7]);
+    assert!(
+        backend.get("ttl").await?.is_none(),
+        "contract: ttl does not extend key lifetime or invalidate a returned snapshot"
+    );
+    assert_eq!(
+        retained.as_ref(),
+        [7],
+        "contract: ttl does not extend key lifetime or invalidate a returned snapshot"
+    );
     assert_eq!(
         Vec::from(DistributedBytes::from(Vec::new())),
-        Vec::<u8>::new()
+        Vec::<u8>::new(),
+        "contract: ttl does not extend key lifetime or invalidate a returned snapshot"
     );
     Ok(())
 }

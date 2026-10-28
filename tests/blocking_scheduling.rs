@@ -62,7 +62,8 @@ fn nested_cancellable_factories_progress_with_a_single_base_pool_thread() {
         result
             .expect("nested dispatch must progress without external cancellation")
             .unwrap(),
-        5
+        5,
+        "contract: nested cancellable factories progress with a single base pool thread"
     );
 }
 
@@ -120,13 +121,15 @@ fn opposite_cross_runtime_nested_calls_progress() {
         first
             .expect("left/right nesting must progress before cancellation")
             .unwrap(),
-        8
+        8,
+        "contract: opposite cross runtime nested calls progress"
     );
     assert_eq!(
         second
             .expect("both nesting directions must progress before cancellation")
             .unwrap(),
-        8
+        8,
+        "contract: opposite cross runtime nested calls progress"
     );
 }
 

@@ -59,19 +59,29 @@ async fn skipped_write_does_not_extend_distributed_circuit_cooldown() {
         .default_options(EntryOptions::default().with_rethrow_distributed_exceptions(true))
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache.set("first", 1).with_receipt().await,
-        Err(Error::Distributed(_))
-    ));
+    assert!(
+        matches!(
+            cache.set("first", 1).with_receipt().await,
+            Err(Error::Distributed(_))
+        ),
+        "contract: skipped write does not extend distributed circuit cooldown"
+    );
     clock.advance(Duration::from_secs(9));
     backend.failed.store(false, Ordering::SeqCst);
-    assert!(matches!(
-        cache.set("skipped", 2).with_receipt().await,
-        Err(Error::CircuitOpen {
-            component: CircuitComponent::Distributed
-        })
-    ));
-    assert_eq!(backend.attempts.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            cache.set("skipped", 2).with_receipt().await,
+            Err(Error::CircuitOpen {
+                component: CircuitComponent::Distributed
+            })
+        ),
+        "contract: skipped write does not extend distributed circuit cooldown"
+    );
+    assert_eq!(
+        backend.attempts.load(Ordering::SeqCst),
+        1,
+        "contract: skipped write does not extend distributed circuit cooldown"
+    );
     clock.advance(Duration::from_secs(2));
     let receipt = cache
         .set("after-cooldown", 3)
@@ -81,8 +91,15 @@ async fn skipped_write_does_not_extend_distributed_circuit_cooldown() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(receipt.distributed, EffectOutcome::Applied));
-    assert_eq!(backend.attempts.load(Ordering::SeqCst), 2);
+    assert!(
+        matches!(receipt.distributed, EffectOutcome::Applied),
+        "contract: skipped write does not extend distributed circuit cooldown"
+    );
+    assert_eq!(
+        backend.attempts.load(Ordering::SeqCst),
+        2,
+        "contract: skipped write does not extend distributed circuit cooldown"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -168,7 +185,11 @@ async fn skipped_marker_write(mutation: MarkerMutation) {
         },
         "{report:?}"
     );
-    assert_eq!(cache.pending_recovery(), 0);
+    assert_eq!(
+        cache.pending_recovery(),
+        0,
+        "contract: skipped marker write"
+    );
     let scope = CacheScope::new("", "v2", KeyModifierMode::Prefix).unwrap();
     let markers = backend.invalidation_store().unwrap();
     for kind in [
@@ -254,19 +275,29 @@ async fn skipped_publish_does_not_extend_backplane_circuit_cooldown() {
         )
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache.set("first", 1).with_receipt().await,
-        Err(Error::Backplane(_))
-    ));
+    assert!(
+        matches!(
+            cache.set("first", 1).with_receipt().await,
+            Err(Error::Backplane(_))
+        ),
+        "contract: skipped publish does not extend backplane circuit cooldown"
+    );
     clock.advance(Duration::from_secs(9));
     backplane.failed.store(false, Ordering::SeqCst);
-    assert!(matches!(
-        cache.set("skipped", 2).with_receipt().await,
-        Err(Error::CircuitOpen {
-            component: CircuitComponent::Backplane
-        })
-    ));
-    assert_eq!(backplane.attempts.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            cache.set("skipped", 2).with_receipt().await,
+            Err(Error::CircuitOpen {
+                component: CircuitComponent::Backplane
+            })
+        ),
+        "contract: skipped publish does not extend backplane circuit cooldown"
+    );
+    assert_eq!(
+        backplane.attempts.load(Ordering::SeqCst),
+        1,
+        "contract: skipped publish does not extend backplane circuit cooldown"
+    );
     clock.advance(Duration::from_secs(2));
     let receipt = cache
         .set("after-cooldown", 3)
@@ -276,7 +307,14 @@ async fn skipped_publish_does_not_extend_backplane_circuit_cooldown() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(receipt.backplane, EffectOutcome::Applied));
-    assert_eq!(backplane.attempts.load(Ordering::SeqCst), 2);
+    assert!(
+        matches!(receipt.backplane, EffectOutcome::Applied),
+        "contract: skipped publish does not extend backplane circuit cooldown"
+    );
+    assert_eq!(
+        backplane.attempts.load(Ordering::SeqCst),
+        2,
+        "contract: skipped publish does not extend backplane circuit cooldown"
+    );
     cache.shutdown().await.unwrap();
 }

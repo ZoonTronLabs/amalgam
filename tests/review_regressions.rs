@@ -255,7 +255,11 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             .wait()
             .await
             .unwrap();
-        assert_eq!(reader.try_get("k").await.unwrap().as_ref(), Some(&2));
+        assert_eq!(
+            reader.try_get("k").await.unwrap().as_ref(),
+            Some(&2),
+            "contract: overlapping hydration"
+        );
         backend.release.add_permits(1);
         older.await.unwrap();
         let after = reader
@@ -355,9 +359,16 @@ async fn shutdown_waits_for_already_admitted_plugin_attachment() {
         .is_ok();
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
-    assert!(registering.join().unwrap().is_err());
+    assert!(
+        registering.join().unwrap().is_err(),
+        "contract: shutdown waits for already admitted plugin attachment"
+    );
     cache.shutdown().await.unwrap();
-    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stopped.load(Ordering::SeqCst),
+        1,
+        "contract: shutdown waits for already admitted plugin attachment"
+    );
     assert!(
         !premature,
         "shutdown returned before an admitted attachment and its stop hook finished"
@@ -428,7 +439,11 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.pending_recovery(), 1);
+    assert_eq!(
+        cache.pending_recovery(),
+        1,
+        "contract: malformed control does not permanently suspend connected recovery"
+    );
     bp.publish(BackplaneMessage {
         source_id: Arc::from("\u{1f}amalgam-control-v2:zz"),
         timestamp: clock.now(),
@@ -468,7 +483,10 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
         drained,
         "connected recovery stayed suspended after rejecting a malformed frame"
     );
-    assert_eq!(commits, 1);
+    assert_eq!(
+        commits, 1,
+        "contract: malformed control does not permanently suspend connected recovery"
+    );
 }
 
 #[tokio::test]

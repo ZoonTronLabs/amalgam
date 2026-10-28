@@ -605,10 +605,13 @@ async fn audit_clear_respects_cache_key_prefix() {
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(
-        amalgam::provider::BackplaneCommand::from_message(control).unwrap(),
-        amalgam::provider::BackplaneCommand::Marker(_)
-    ));
+    assert!(
+        matches!(
+            amalgam::provider::BackplaneCommand::from_message(control).unwrap(),
+            amalgam::provider::BackplaneCommand::Marker(_)
+        ),
+        "contract: audit clear respects cache key prefix"
+    );
     assert_eq!(
         beta.try_get("k").await.unwrap().as_ref(),
         Some(&7),
@@ -742,7 +745,8 @@ async fn shared_fc_tag_invalidation_rechecks_origin_despite_failsafe_throttle() 
                 )
                 .await
                 .unwrap(),
-            1
+            1,
+            "contract: shared fc tag invalidation rechecks origin despite failsafe throttle"
         );
     }
     assert_eq!(
@@ -844,10 +848,10 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
         .with_receipt()
         .await
         .unwrap();
-    assert!(matches!(
-        commit,
-        amalgam::advanced::MutationReceipt::Scheduled(_)
-    ));
+    assert!(
+        matches!(commit, amalgam::advanced::MutationReceipt::Scheduled(_)),
+        "contract: audit background l2 write publishes only after the value is visible"
+    );
     tokio::time::timeout(Duration::from_secs(1), l2.started.notified())
         .await
         .unwrap();

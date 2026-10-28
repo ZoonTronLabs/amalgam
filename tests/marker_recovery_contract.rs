@@ -287,12 +287,32 @@ async fn explicit_tag_and_both_clear_modes_populate_original_policy() {
             .unwrap()
             .snapshot()
             .unwrap();
-        assert_eq!(stored.version(), version(10));
-        assert_eq!(stored.created(), time(10));
-        assert_eq!(stored.logical_expiration(), time(17));
-        assert_eq!(stored.physical_expiration(), time(17));
+        assert_eq!(
+            stored.version(),
+            version(10),
+            "contract: explicit tag and both clear modes populate original policy"
+        );
+        assert_eq!(
+            stored.created(),
+            time(10),
+            "contract: explicit tag and both clear modes populate original policy"
+        );
+        assert_eq!(
+            stored.logical_expiration(),
+            time(17),
+            "contract: explicit tag and both clear modes populate original policy"
+        );
+        assert_eq!(
+            stored.physical_expiration(),
+            time(17),
+            "contract: explicit tag and both clear modes populate original policy"
+        );
     }
-    assert_eq!(f.cache.pending_recovery(), 0);
+    assert_eq!(
+        f.cache.pending_recovery(),
+        0,
+        "contract: explicit tag and both clear modes populate original policy"
+    );
     f.cache.shutdown().await.unwrap();
 }
 
@@ -301,19 +321,39 @@ async fn snapshot_failure_preserves_fact_and_publication_and_original_expiry() {
     let f = fixture(recovery());
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
     let report = mutate(&f.cache, &group(), None).await.unwrap();
-    assert!(has_queued(&report.distributed));
+    assert!(
+        has_queued(&report.distributed),
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
     assert_eq!(
         f.store.read(&scope(), &group()).await.unwrap(),
-        Some(version(10))
+        Some(version(10)),
+        "contract: snapshot failure preserves fact and publication and original expiry"
     );
-    assert_eq!(f.bus.commands.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.bus.commands.lock().unwrap().len(),
+        1,
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
     let ticket = f.cache.marker_snapshot_recovery_ticket(&group()).unwrap();
     let RecoveryWork::MarkerSnapshot(work) = ticket.work() else {
         panic!("expected finite observation repair");
     };
-    assert_eq!(work.snapshot().created(), time(10));
-    assert_eq!(work.snapshot().physical_expiration(), time(15));
-    assert_eq!(work.participation(), MarkerSnapshotParticipation::Unleased);
+    assert_eq!(
+        work.snapshot().created(),
+        time(10),
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
+    assert_eq!(
+        work.snapshot().physical_expiration(),
+        time(15),
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
+    assert_eq!(
+        work.participation(),
+        MarkerSnapshotParticipation::Unleased,
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
     f.clock.set(time(12));
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     until(|| f.cache.pending_recovery() == 0).await;
@@ -326,8 +366,16 @@ async fn snapshot_failure_preserves_fact_and_publication_and_original_expiry() {
         .unwrap()
         .snapshot()
         .unwrap();
-    assert_eq!(stored.created(), time(10));
-    assert_eq!(stored.physical_expiration(), time(15));
+    assert_eq!(
+        stored.created(),
+        time(10),
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
+    assert_eq!(
+        stored.physical_expiration(),
+        time(15),
+        "contract: snapshot failure preserves fact and publication and original expiry"
+    );
     assert_eq!(
         f.store.advances.load(Ordering::SeqCst),
         1,
@@ -351,25 +399,31 @@ async fn strict_snapshot_failure_keeps_notification_obligation() {
         Some(options().with_rethrow_distributed_exceptions(true)),
     )
     .await;
-    assert!(matches!(
-        result,
-        Err(Error::Marker(MarkerError::Backend { .. }))
-    ));
+    assert!(
+        matches!(result, Err(Error::Marker(MarkerError::Backend { .. }))),
+        "contract: strict snapshot failure keeps notification obligation"
+    );
     assert_eq!(
         f.store
             .read(&scope(), &MarkerKind::ClearRemove)
             .await
             .unwrap(),
-        Some(version(10))
+        Some(version(10)),
+        "contract: strict snapshot failure keeps notification obligation"
     );
     assert!(
         f.cache
             .marker_snapshot_recovery_ticket(&MarkerKind::ClearRemove)
-            .is_some()
+            .is_some(),
+        "contract: strict snapshot failure keeps notification obligation"
     );
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     until(|| f.cache.pending_recovery() == 0).await;
-    assert_eq!(f.bus.commands.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.bus.commands.lock().unwrap().len(),
+        1,
+        "contract: strict snapshot failure keeps notification obligation"
+    );
     f.cache.shutdown().await.unwrap();
 }
 
@@ -391,19 +445,28 @@ async fn mutation_replay_retains_population_then_notification_stages() {
         panic!("expected captured mutation");
     };
     assert!(
-        matches!(work.stage(), MarkerMutationStage::Advance { snapshot, .. } if snapshot.physical_expiration() == time(19))
+        matches!(work.stage(), MarkerMutationStage::Advance { snapshot, .. } if snapshot.physical_expiration() == time(19)),
+        "contract: mutation replay retains population then notification stages"
     );
     f.clock.set(time(12));
     f.store.advance_fails.store(false, Ordering::SeqCst);
     until(|| matches!(f.cache.marker_recovery_ticket(&group()).as_ref().map(ReplayTicket::work), Some(RecoveryWork::MarkerMutation(work)) if matches!(work.stage(), MarkerMutationStage::Populate { .. }))).await;
     let advances = f.store.advances.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(70)).await;
-    assert_eq!(f.store.advances.load(Ordering::SeqCst), advances);
+    assert_eq!(
+        f.store.advances.load(Ordering::SeqCst),
+        advances,
+        "contract: mutation replay retains population then notification stages"
+    );
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     until(|| matches!(f.cache.marker_recovery_ticket(&group()).as_ref().map(ReplayTicket::work), Some(RecoveryWork::MarkerMutation(work)) if matches!(work.stage(), MarkerMutationStage::Notify { .. }))).await;
     let writes = f.store.snapshots.writes.lock().unwrap().len();
     tokio::time::sleep(Duration::from_millis(70)).await;
-    assert_eq!(f.store.snapshots.writes.lock().unwrap().len(), writes);
+    assert_eq!(
+        f.store.snapshots.writes.lock().unwrap().len(),
+        writes,
+        "contract: mutation replay retains population then notification stages"
+    );
     f.bus.fails.store(false, Ordering::SeqCst);
     until(|| f.cache.pending_recovery() == 0).await;
     let stored = f
@@ -415,9 +478,21 @@ async fn mutation_replay_retains_population_then_notification_stages() {
         .unwrap()
         .snapshot()
         .unwrap();
-    assert_eq!(stored.created(), time(10));
-    assert_eq!(stored.physical_expiration(), time(19));
-    assert_eq!(f.bus.commands.lock().unwrap().len(), 1);
+    assert_eq!(
+        stored.created(),
+        time(10),
+        "contract: mutation replay retains population then notification stages"
+    );
+    assert_eq!(
+        stored.physical_expiration(),
+        time(19),
+        "contract: mutation replay retains population then notification stages"
+    );
+    assert_eq!(
+        f.bus.commands.lock().unwrap().len(),
+        1,
+        "contract: mutation replay retains population then notification stages"
+    );
     f.cache.shutdown().await.unwrap();
 }
 
@@ -437,11 +512,13 @@ async fn finite_repairs_expire_but_pending_durable_facts_do_not() {
             .await
             .unwrap()
             .snapshot()
-            .is_none()
+            .is_none(),
+        "contract: finite repairs expire but pending durable facts do not"
     );
     assert_eq!(
         f.store.read(&scope(), &group()).await.unwrap(),
-        Some(version(10))
+        Some(version(10)),
+        "contract: finite repairs expire but pending durable facts do not"
     );
     f.store.advance_fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
@@ -460,7 +537,8 @@ async fn finite_repairs_expire_but_pending_durable_facts_do_not() {
             .read(&scope(), &MarkerKind::ClearExpire)
             .await
             .unwrap(),
-        Some(version(15))
+        Some(version(15)),
+        "contract: finite repairs expire but pending durable facts do not"
     );
     assert!(
         f.store
@@ -470,7 +548,8 @@ async fn finite_repairs_expire_but_pending_durable_facts_do_not() {
             .await
             .unwrap()
             .snapshot()
-            .is_none()
+            .is_none(),
+        "contract: finite repairs expire but pending durable facts do not"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -497,7 +576,8 @@ async fn failed_replay_consumes_budget_instead_of_becoming_success() {
             .await
             .unwrap()
             .snapshot()
-            .is_none()
+            .is_none(),
+        "contract: failed replay consumes budget instead of becoming success"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -510,8 +590,15 @@ async fn skipped_writes_and_disabled_recovery_are_explicit() {
     });
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
     let report = mutate(&f.cache, &group(), None).await.unwrap();
-    assert!(!has_queued(&report.distributed));
-    assert_eq!(f.cache.pending_recovery(), 0);
+    assert!(
+        !has_queued(&report.distributed),
+        "contract: skipped writes and disabled recovery are explicit"
+    );
+    assert_eq!(
+        f.cache.pending_recovery(),
+        0,
+        "contract: skipped writes and disabled recovery are explicit"
+    );
     let attempts = f.store.snapshots.writes.lock().unwrap().len();
     let _ = mutate(
         &f.cache,
@@ -520,13 +607,18 @@ async fn skipped_writes_and_disabled_recovery_are_explicit() {
     )
     .await
     .unwrap();
-    assert_eq!(f.store.snapshots.writes.lock().unwrap().len(), attempts);
+    assert_eq!(
+        f.store.snapshots.writes.lock().unwrap().len(),
+        attempts,
+        "contract: skipped writes and disabled recovery are explicit"
+    );
     assert_eq!(
         f.store
             .read(&scope(), &MarkerKind::ClearRemove)
             .await
             .unwrap(),
-        None
+        None,
+        "contract: skipped writes and disabled recovery are explicit"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -543,18 +635,24 @@ async fn shutdown_signals_actual_explicit_population_provider() {
         .unwrap();
     let cancellation = f.store.snapshots.signals.lock().unwrap()[0].clone();
     f.cache.shutdown().await.unwrap();
-    assert!(matches!(
-        task.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
-    assert!(matches!(
-        cancellation.check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            task.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown signals actual explicit population provider"
+    );
+    assert!(
+        matches!(
+            cancellation.check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown signals actual explicit population provider"
+    );
 }
 
 #[tokio::test]
@@ -580,7 +678,8 @@ async fn replacing_tag_recovery_cannot_forget_a_committed_compacted_clear() {
             .read(&scope(), &MarkerKind::ClearRemove)
             .await
             .unwrap(),
-        Some(version(10))
+        Some(version(10)),
+        "contract: replacing tag recovery cannot forget a committed compacted clear"
     );
     f.clock.set(time(11));
     f.store.advance_fails.store(true, Ordering::SeqCst);
@@ -638,10 +737,10 @@ async fn notification_replacement_retains_compaction_with_one_queue_slot() {
     f.bus.fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     let report = mutate(&f.cache, &group(), None).await.unwrap();
-    assert!(matches!(
-        report.backplane,
-        EffectOutcome::RecoveryQueued { .. }
-    ));
+    assert!(
+        matches!(report.backplane, EffectOutcome::RecoveryQueued { .. }),
+        "contract: notification replacement retains compaction with one queue slot"
+    );
     assert_eq!(
         f.cache.pending_recovery(),
         1,
@@ -651,15 +750,22 @@ async fn notification_replacement_retains_compaction_with_one_queue_slot() {
     let RecoveryWork::MarkerMutation(work) = ticket.work() else {
         panic!("notification replacement discarded the prior committed global clear");
     };
-    assert!(matches!(work.stage(), MarkerMutationStage::Notify { .. }));
+    assert!(
+        matches!(work.stage(), MarkerMutationStage::Notify { .. }),
+        "contract: notification replacement retains compaction with one queue slot"
+    );
     let child = work
         .pending_compaction()
         .expect("the committed clear must survive replacement");
-    assert_eq!(*child.command().marker().kind(), MarkerKind::ClearRemove);
-    assert!(matches!(
-        child.stage(),
-        MarkerMutationStage::Populate { .. }
-    ));
+    assert_eq!(
+        *child.command().marker().kind(),
+        MarkerKind::ClearRemove,
+        "contract: notification replacement retains compaction with one queue slot"
+    );
+    assert!(
+        matches!(child.stage(), MarkerMutationStage::Populate { .. }),
+        "contract: notification replacement retains compaction with one queue slot"
+    );
     assert!(
         child.pending_compaction().is_none(),
         "inherited debt stays flat and bounded"
@@ -680,7 +786,10 @@ async fn notification_replacement_retains_compaction_with_one_queue_slot() {
         .iter()
         .filter(|(kind, _)| *kind == MarkerKind::ClearRemove)
         .count();
-    assert_eq!(clear_writes, 1);
+    assert_eq!(
+        clear_writes, 1,
+        "contract: notification replacement retains compaction with one queue slot"
+    );
     f.bus.fails.store(false, Ordering::SeqCst);
     until(|| f.cache.pending_recovery() == 0).await;
     assert_eq!(
@@ -703,7 +812,8 @@ async fn notification_replacement_retains_compaction_with_one_queue_slot() {
             .iter()
             .any(|command| matches!(command,
         BackplaneCommand::Marker(marker) if *marker.marker().kind() == MarkerKind::ClearRemove
-            && marker.marker().version() == version(10)))
+            && marker.marker().version() == version(10))),
+        "contract: notification replacement retains compaction with one queue slot"
     );
     let clear = f
         .store
@@ -714,9 +824,21 @@ async fn notification_replacement_retains_compaction_with_one_queue_slot() {
         .unwrap()
         .snapshot()
         .unwrap();
-    assert_eq!(clear.created(), time(10));
-    assert_eq!(clear.logical_expiration(), time(15));
-    assert_eq!(clear.physical_expiration(), time(15));
+    assert_eq!(
+        clear.created(),
+        time(10),
+        "contract: notification replacement retains compaction with one queue slot"
+    );
+    assert_eq!(
+        clear.logical_expiration(),
+        time(15),
+        "contract: notification replacement retains compaction with one queue slot"
+    );
+    assert_eq!(
+        clear.physical_expiration(),
+        time(15),
+        "contract: notification replacement retains compaction with one queue slot"
+    );
     f.cache.shutdown().await.unwrap();
 }
 
@@ -756,20 +878,32 @@ async fn strict_population_replacement_retains_prior_compaction() {
         Some(options().with_rethrow_distributed_exceptions(true)),
     )
     .await;
-    assert!(matches!(
-        result,
-        Err(Error::Marker(MarkerError::Backend { .. }))
-    ));
-    assert_eq!(f.cache.pending_recovery(), 1);
+    assert!(
+        matches!(result, Err(Error::Marker(MarkerError::Backend { .. }))),
+        "contract: strict population replacement retains prior compaction"
+    );
+    assert_eq!(
+        f.cache.pending_recovery(),
+        1,
+        "contract: strict population replacement retains prior compaction"
+    );
     let ticket = f.cache.marker_recovery_ticket(&group()).unwrap();
     let RecoveryWork::MarkerMutation(work) = ticket.work() else {
         panic!("strict notification must retain prior clear");
     };
-    assert!(matches!(work.stage(), MarkerMutationStage::Notify { .. }));
-    let clear = work.pending_compaction().unwrap();
-    assert_eq!(*clear.command().marker().kind(), MarkerKind::ClearRemove);
     assert!(
-        matches!(clear.stage(), MarkerMutationStage::Populate { snapshot, .. } if snapshot.created() == time(10))
+        matches!(work.stage(), MarkerMutationStage::Notify { .. }),
+        "contract: strict population replacement retains prior compaction"
+    );
+    let clear = work.pending_compaction().unwrap();
+    assert_eq!(
+        *clear.command().marker().kind(),
+        MarkerKind::ClearRemove,
+        "contract: strict population replacement retains prior compaction"
+    );
+    assert!(
+        matches!(clear.stage(), MarkerMutationStage::Populate { snapshot, .. } if snapshot.created() == time(10)),
+        "contract: strict population replacement retains prior compaction"
     );
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     until(|| f.cache.pending_recovery() == 0).await;
@@ -780,7 +914,8 @@ async fn strict_population_replacement_retains_prior_compaction() {
             .unwrap()
             .iter()
             .any(|command| matches!(command,
-        BackplaneCommand::Marker(marker) if *marker.marker().kind() == MarkerKind::ClearRemove))
+        BackplaneCommand::Marker(marker) if *marker.marker().kind() == MarkerKind::ClearRemove)),
+        "contract: strict population replacement retains prior compaction"
     );
     f.cache.shutdown().await.unwrap();
 }

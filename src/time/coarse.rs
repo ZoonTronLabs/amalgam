@@ -150,13 +150,20 @@ mod tests {
     fn anchors_unless_cpus_run_tickless_or_the_tick_is_unusable() {
         // CI kernels tick at 1-4 ms, so there the coarse path is exercised.
         let usable = linux::tick().is_some_and(linux::usable_tick);
-        assert_eq!(linux::prepare().is_some(), usable && !linux::nohz_full());
+        assert_eq!(
+            linux::prepare().is_some(),
+            usable && !linux::nohz_full(),
+            "contract: anchors unless cpus run tickless or the tick is unusable"
+        );
     }
 
     #[test]
     fn slack_is_at_least_one_second() {
         if let Some(anchor) = linux::prepare() {
-            assert!(anchor.slack() >= Duration::from_secs(1));
+            assert!(
+                anchor.slack() >= Duration::from_secs(1),
+                "contract: slack is at least one second"
+            );
         }
     }
 

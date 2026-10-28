@@ -70,7 +70,11 @@ async fn selected_stale_source(source: NewerSource) {
     }
     clock.advance(Duration::from_secs(2));
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&2),
+        "contract: selected stale source"
+    );
     let level = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if let CacheEvent::OperationCompleted { level, .. } = events.recv().await.unwrap() {
@@ -85,7 +89,8 @@ async fn selected_stale_source(source: NewerSource) {
         Some(match source {
             NewerSource::Memory | NewerSource::EqualStampMemory => CacheLevel::Memory,
             NewerSource::Distributed => CacheLevel::Distributed,
-        })
+        }),
+        "contract: selected stale source"
     );
     assert_eq!(
         cache.try_get("key").await.unwrap().as_ref(),

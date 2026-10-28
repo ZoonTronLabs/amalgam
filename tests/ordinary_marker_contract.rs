@@ -139,10 +139,14 @@ async fn lazy_tag_write_invalidates_a_cold_node_without_touching_value_bytes() {
     let clock = Arc::new(ManualClock::default());
     let bytes = Bytes::new(clock.clone());
     let first = node(&clock, &bytes, "scope:");
-    assert!(bytes.invalidation_store().is_none());
+    assert!(
+        bytes.invalidation_store().is_none(),
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
     assert_eq!(
         first.marker_read_policy(),
-        MarkerReadPolicy::OptionsControlled
+        MarkerReadPolicy::OptionsControlled,
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
     );
     store(&first).await;
     clock.advance(Duration::from_millis(1));
@@ -152,11 +156,26 @@ async fn lazy_tag_write_invalidates_a_cold_node_without_touching_value_bytes() {
         "construction must stay lazy"
     );
     let _ = request.with_receipt().await.unwrap().wait().await.unwrap();
-    assert!(bytes.inner.get("v2:scope:key").await.unwrap().is_some());
-    assert_eq!(bytes.removes.load(Ordering::SeqCst), 0);
+    assert!(
+        bytes.inner.get("v2:scope:key").await.unwrap().is_some(),
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
+    assert_eq!(
+        bytes.removes.load(Ordering::SeqCst),
+        0,
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
     let writes = bytes.marker_writes();
-    assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0].ttl, Some(Duration::from_secs(10 * 24 * 60 * 60)));
+    assert_eq!(
+        writes.len(),
+        1,
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
+    assert_eq!(
+        writes[0].ttl,
+        Some(Duration::from_secs(10 * 24 * 60 * 60)),
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
     let cold = node(&clock, &bytes, "scope:");
     let calls = Arc::new(AtomicUsize::new(0));
     let factory_calls = calls.clone();
@@ -167,8 +186,15 @@ async fn lazy_tag_write_invalidates_a_cold_node_without_touching_value_bytes() {
         })
         .await
         .unwrap();
-    assert_eq!(value, 7);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        value, 7,
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: lazy tag write invalidates a cold node without touching value bytes"
+    );
     first.shutdown().await.unwrap();
     cold.shutdown().await.unwrap();
 }
@@ -187,7 +213,8 @@ async fn equal_timestamp_invalidation_is_visible_and_prefixes_are_isolated() {
         cold.get_or_set("key", |_| async { Ok::<_, FactoryError>(7) })
             .await
             .unwrap(),
-        7
+        7,
+        "contract: equal timestamp invalidation is visible and prefixes are isolated"
     );
     let untouched = node(&clock, &bytes, "b:");
     assert_eq!(
@@ -197,7 +224,8 @@ async fn equal_timestamp_invalidation_is_visible_and_prefixes_are_isolated() {
             })
             .await
             .unwrap(),
-        42
+        42,
+        "contract: equal timestamp invalidation is visible and prefixes are isolated"
     );
     for cache in [first, isolated, cold, untouched] {
         cache.shutdown().await.unwrap();
@@ -224,7 +252,8 @@ async fn expire_keeps_stale_for_fail_safe_for_tag_and_clear() {
             })
             .await
             .unwrap(),
-            42
+            42,
+            "contract: expire keeps stale for fail safe for tag and clear"
         );
         first.shutdown().await.unwrap();
         cold.shutdown().await.unwrap();
@@ -253,13 +282,16 @@ async fn remove_rejects_stale_for_fail_safe_for_tag_and_clear() {
             .auto_recovery(no_recovery())
             .try_build()
             .unwrap();
-        assert!(matches!(
-            cold.get_or_set("key", |_| async {
-                Err::<u64, _>(FactoryError::from_source(BackendDown))
-            })
-            .await,
-            Err(Error::FactoryWithSource { .. })
-        ));
+        assert!(
+            matches!(
+                cold.get_or_set("key", |_| async {
+                    Err::<u64, _>(FactoryError::from_source(BackendDown))
+                })
+                .await,
+                Err(Error::FactoryWithSource { .. })
+            ),
+            "contract: remove rejects stale for fail safe for tag and clear"
+        );
         first.shutdown().await.unwrap();
         cold.shutdown().await.unwrap();
     }
@@ -292,7 +324,8 @@ async fn observation_reloads_keep_the_original_remote_revision() {
             })
             .await
             .unwrap(),
-            42
+            42,
+            "contract: observation reloads keep the original remote revision"
         );
         clock.advance(Duration::from_secs(2));
     }
@@ -302,7 +335,10 @@ async fn observation_reloads_keep_the_original_remote_revision() {
         1,
         "re-observation must not rewrite remote marker lifetime"
     );
-    assert_eq!(writes[0].bytes, original);
+    assert_eq!(
+        writes[0].bytes, original,
+        "contract: observation reloads keep the original remote revision"
+    );
     MarkerVersion::from_ordered_hex(std::str::from_utf8(&original).unwrap()).unwrap();
     first.shutdown().await.unwrap();
     cold.shutdown().await.unwrap();
@@ -319,29 +355,45 @@ async fn stronger_policies_fail_at_construction_without_provider_io() {
             .serializer(Arc::new(JsonSerializer))
             .auto_recovery(no_recovery())
     };
-    assert!(matches!(
-        build()
-            .marker_read_policy(MarkerReadPolicy::DurableRequired)
-            .try_build(),
-        Err(Error::Config(ConfigError::AtomicInvalidationUnavailable))
-    ));
-    assert!(matches!(
-        build()
-            .strict()
-            .lease_policy(LeasePolicy::Cooperative)
-            .try_build(),
-        Err(Error::Config(ConfigError::AtomicInvalidationUnavailable))
-    ));
-    assert!(matches!(
-        build()
-            .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
-            .try_build(),
-        Err(Error::Config(
-            ConfigError::MarkerSnapshotCapabilityUnavailable
-        ))
-    ));
-    assert_eq!(bytes.reads.load(Ordering::SeqCst), 0);
-    assert!(bytes.writes.lock().is_empty());
+    assert!(
+        matches!(
+            build()
+                .marker_read_policy(MarkerReadPolicy::DurableRequired)
+                .try_build(),
+            Err(Error::Config(ConfigError::AtomicInvalidationUnavailable))
+        ),
+        "contract: stronger policies fail at construction without provider io"
+    );
+    assert!(
+        matches!(
+            build()
+                .strict()
+                .lease_policy(LeasePolicy::Cooperative)
+                .try_build(),
+            Err(Error::Config(ConfigError::AtomicInvalidationUnavailable))
+        ),
+        "contract: stronger policies fail at construction without provider io"
+    );
+    assert!(
+        matches!(
+            build()
+                .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
+                .try_build(),
+            Err(Error::Config(
+                ConfigError::MarkerSnapshotCapabilityUnavailable
+            ))
+        ),
+        "contract: stronger policies fail at construction without provider io"
+    );
+    assert_eq!(
+        bytes.reads.load(Ordering::SeqCst),
+        0,
+        "contract: stronger policies fail at construction without provider io"
+    );
+    assert!(
+        bytes.writes.lock().is_empty(),
+        "contract: stronger policies fail at construction without provider io"
+    );
 }
 
 #[tokio::test]
@@ -359,7 +411,10 @@ async fn marker_write_failure_preserves_cause_in_suppression_and_rethrow() {
         .await
         .unwrap();
     match report.distributed {
-        EffectOutcome::FailedSuppressed { cause } => assert!(has_backend_cause(&cause)),
+        EffectOutcome::FailedSuppressed { cause } => assert!(
+            has_backend_cause(&cause),
+            "contract: marker write failure preserves cause in suppression and rethrow"
+        ),
         other => panic!("unexpected distributed outcome: {other:?}"),
     }
     let error = cache
@@ -367,8 +422,14 @@ async fn marker_write_failure_preserves_cause_in_suppression_and_rethrow() {
         .options(|options| options.with_rethrow_distributed_exceptions(true))
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Marker(MarkerError::Backend { .. })));
-    assert!(has_backend_cause(&error));
+    assert!(
+        matches!(error, Error::Marker(MarkerError::Backend { .. })),
+        "contract: marker write failure preserves cause in suppression and rethrow"
+    );
+    assert!(
+        has_backend_cause(&error),
+        "contract: marker write failure preserves cause in suppression and rethrow"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -401,10 +462,10 @@ async fn recovery_keeps_the_captured_revision_and_write_policy() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.distributed,
-        EffectOutcome::RecoveryQueued { .. }
-    ));
+    assert!(
+        matches!(report.distributed, EffectOutcome::RecoveryQueued { .. }),
+        "contract: recovery keeps the captured revision and write policy"
+    );
     let original = bytes.marker_writes()[0].bytes.clone();
     clock.advance(Duration::from_secs(2));
     bytes.down.store(false, Ordering::SeqCst);
@@ -425,7 +486,11 @@ async fn recovery_keeps_the_captured_revision_and_write_policy() {
         original,
         "recovery cannot refresh the invalidation timestamp"
     );
-    assert_eq!(writes.last().unwrap().ttl, Some(Duration::from_secs(5)));
+    assert_eq!(
+        writes.last().unwrap().ttl,
+        Some(Duration::from_secs(5)),
+        "contract: recovery keeps the captured revision and write policy"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -456,17 +521,20 @@ async fn corrupt_marker_is_a_typed_protocol_error_with_the_original_utf8_cause()
         .get_or_set("key", |_| async { Ok::<_, FactoryError>(7) })
         .await
         .unwrap_err();
-    assert!(matches!(
-        error,
-        Error::Marker(MarkerError::ProtocolWithSource { .. })
-    ));
+    assert!(
+        matches!(error, Error::Marker(MarkerError::ProtocolWithSource { .. })),
+        "contract: corrupt marker is a typed protocol error with the original utf8 cause"
+    );
     let mut source: Option<&dyn std::error::Error> = Some(&error);
     let mut found = false;
     while let Some(cause) = source {
         found |= cause.is::<std::str::Utf8Error>();
         source = cause.source();
     }
-    assert!(found);
+    assert!(
+        found,
+        "contract: corrupt marker is a typed protocol error with the original utf8 cause"
+    );
     first.shutdown().await.unwrap();
     cold.shutdown().await.unwrap();
 }
@@ -483,7 +551,8 @@ async fn first_ordinary_hot_read_initializes_clear_markers_then_reuses_them() {
             .get_or_set("hot", |_| async { Err::<u64, _>(BackendDown) })
             .await
             .unwrap(),
-        42
+        42,
+        "contract: first ordinary hot read initializes clear markers then reuses them"
     );
     let initialized = bytes.reads.load(Ordering::SeqCst);
     assert_eq!(
@@ -498,10 +567,15 @@ async fn first_ordinary_hot_read_initializes_clear_markers_then_reuses_them() {
                 .get_or_set("hot", |_| async { Err::<u64, _>(BackendDown) })
                 .await
                 .unwrap(),
-            42
+            42,
+            "contract: first ordinary hot read initializes clear markers then reuses them"
         );
     }
-    assert_eq!(bytes.reads.load(Ordering::SeqCst), initialized);
+    assert_eq!(
+        bytes.reads.load(Ordering::SeqCst),
+        initialized,
+        "contract: first ordinary hot read initializes clear markers then reuses them"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -522,21 +596,32 @@ fn initialized_ordinary_hot_hit_does_not_require_a_runtime() {
                     .get_or_set("hot", |_| async { Err::<u64, _>(BackendDown) })
                     .await
                     .unwrap(),
-                42
+                42,
+                "contract: initialized ordinary hot hit does not require a runtime"
             );
             cache
         })
     };
-    assert!(tokio::runtime::Handle::try_current().is_err());
+    assert!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "contract: initialized ordinary hot hit does not require a runtime"
+    );
     let reads = bytes.reads.load(Ordering::SeqCst);
     let request = cache.get_or_set("hot", |_| async { Err::<u64, _>(BackendDown) });
     let mut work = std::pin::pin!(IntoFuture::into_future(request));
     let mut context = Context::from_waker(Waker::noop());
-    assert!(matches!(
-        Future::poll(work.as_mut(), &mut context),
-        Poll::Ready(Ok(42))
-    ));
-    assert_eq!(bytes.reads.load(Ordering::SeqCst), reads);
+    assert!(
+        matches!(
+            Future::poll(work.as_mut(), &mut context),
+            Poll::Ready(Ok(42))
+        ),
+        "contract: initialized ordinary hot hit does not require a runtime"
+    );
+    assert_eq!(
+        bytes.reads.load(Ordering::SeqCst),
+        reads,
+        "contract: initialized ordinary hot hit does not require a runtime"
+    );
     cache.close();
 }
 
@@ -590,7 +675,11 @@ async fn ordinary_marker_boundaries_match_the_released_reference_for_all_three_k
                 "marker={kind:?}, created-minus-marker={difference}"
             );
             if result.is_some() {
-                assert_eq!(result.as_ref(), Some(&42));
+                assert_eq!(
+                    result.as_ref(),
+                    Some(&42),
+                    "contract: ordinary marker boundaries match the released reference for all three kinds"
+                );
             }
             writer.shutdown().await.unwrap();
             cold.shutdown().await.unwrap();

@@ -38,9 +38,14 @@ async fn compiler_proven_owned_values_bypass_codec_copy_and_remain_isolated() {
     read[0].push_str(" output mutation");
     assert_eq!(
         cache.try_get("value").await.unwrap().as_ref().unwrap(),
-        &["before"]
+        &["before"],
+        "contract: compiler proven owned values bypass codec copy and remain isolated"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: compiler proven owned values bypass codec copy and remain isolated"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -58,13 +63,20 @@ async fn immutable_shared_allocation_retains_identity_and_null_is_a_present_valu
         .await
         .unwrap();
     let read = cache.try_get("shared").await.unwrap();
-    assert!(Arc::ptr_eq(
-        &original,
-        read.as_ref().unwrap().as_ref().unwrap()
-    ));
+    assert!(
+        Arc::ptr_eq(&original, read.as_ref().unwrap().as_ref().unwrap()),
+        "contract: immutable shared allocation retains identity and null is a present value"
+    );
     cache.set("null", None).with_receipt().await.unwrap();
-    assert_eq!(cache.try_get("null").await.unwrap().as_ref(), Some(&None));
-    assert!(cache.try_get("absent").await.unwrap().is_none());
+    assert_eq!(
+        cache.try_get("null").await.unwrap().as_ref(),
+        Some(&None),
+        "contract: immutable shared allocation retains identity and null is a present value"
+    );
+    assert!(
+        cache.try_get("absent").await.unwrap().is_none(),
+        "contract: immutable shared allocation retains identity and null is a present value"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -77,10 +89,17 @@ async fn explicit_later_copy_strategy_keeps_its_failure_instead_of_silently_bypa
         .default_options(EntryOptions::default().with_enable_auto_clone(true))
         .try_build()
         .unwrap();
-    assert!(matches!(
-        cache.set("value", vec![]).with_receipt().await,
-        Err(Error::Clone(_))
-    ));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            cache.set("value", vec![]).with_receipt().await,
+            Err(Error::Clone(_))
+        ),
+        "contract: explicit later copy strategy keeps its failure instead of silently bypassing"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: explicit later copy strategy keeps its failure instead of silently bypassing"
+    );
     cache.shutdown().await.unwrap();
 }

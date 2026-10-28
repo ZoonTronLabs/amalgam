@@ -55,21 +55,29 @@ async fn a_ready_origin_hit_reaches_an_observer_attached_by_the_unused_factory_d
             .await
             .unwrap(),
         7,
+        "contract: a ready origin hit reaches an observer attached by the unused factory drop",
     );
     let mut receiver = receiver.lock().unwrap().take().unwrap();
     assert!(
-        matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if key.as_ref() == "hit")
+        matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if key.as_ref() == "hit"),
+        "contract: a ready origin hit reaches an observer attached by the unused factory drop"
     );
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        CacheEvent::OperationCompleted {
-            operation: CacheOperation::GetOrSet,
-            outcome: OperationOutcome::Hit,
-            level: Some(CacheLevel::Memory),
-            ..
-        }
-    ));
-    assert!(receiver.try_recv().is_err());
+    assert!(
+        matches!(
+            receiver.try_recv().unwrap(),
+            CacheEvent::OperationCompleted {
+                operation: CacheOperation::GetOrSet,
+                outcome: OperationOutcome::Hit,
+                level: Some(CacheLevel::Memory),
+                ..
+            }
+        ),
+        "contract: a ready origin hit reaches an observer attached by the unused factory drop"
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "contract: a ready origin hit reaches an observer attached by the unused factory drop"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -83,31 +91,40 @@ async fn closing_from_the_unused_factory_drop_rejects_the_ready_value_once() {
         receiver: receiver.clone(),
         next: AfterSubscription::Close,
     };
-    assert!(matches!(
-        cache
-            .get_or_set(
-                "hit",
-                amalgam::source::factory(move |ctx| async move {
-                    std::mem::drop(capture);
-                    Ok::<_, FactoryError>(ctx.value(99))
-                })
-            )
-            .await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            cache
+                .get_or_set(
+                    "hit",
+                    amalgam::source::factory(move |ctx| async move {
+                        std::mem::drop(capture);
+                        Ok::<_, FactoryError>(ctx.value(99))
+                    })
+                )
+                .await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: closing from the unused factory drop rejects the ready value once"
+    );
     let mut receiver = receiver.lock().unwrap().take().unwrap();
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        CacheEvent::OperationCompleted {
-            operation: CacheOperation::GetOrSet,
-            outcome: OperationOutcome::Cancelled,
-            level: None,
-            ..
-        }
-    ));
-    assert!(receiver.try_recv().is_err());
+    assert!(
+        matches!(
+            receiver.try_recv().unwrap(),
+            CacheEvent::OperationCompleted {
+                operation: CacheOperation::GetOrSet,
+                outcome: OperationOutcome::Cancelled,
+                level: None,
+                ..
+            }
+        ),
+        "contract: closing from the unused factory drop rejects the ready value once"
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "contract: closing from the unused factory drop rejects the ready value once"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -140,26 +157,38 @@ fn native_ready_origins_preserve_unused_capture_events_and_close() {
             .execute();
         let mut receiver = receiver.lock().unwrap().take().unwrap();
         let (outcome, level) = if closes {
-            assert!(matches!(
-                result,
-                Err(Error::OperationCancelled {
-                    reason: FactoryCancellationReason::CacheShutdown
-                })
-            ));
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::OperationCancelled {
+                        reason: FactoryCancellationReason::CacheShutdown
+                    })
+                ),
+                "contract: native ready origins preserve unused capture events and close"
+            );
             (OperationOutcome::Cancelled, None)
         } else {
-            assert_eq!(result.unwrap(), 7);
+            assert_eq!(
+                result.unwrap(),
+                7,
+                "contract: native ready origins preserve unused capture events and close"
+            );
             assert!(
-                matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if key.as_ref() == "hit")
+                matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if key.as_ref() == "hit"),
+                "contract: native ready origins preserve unused capture events and close"
             );
             (OperationOutcome::Hit, Some(CacheLevel::Memory))
         };
         assert!(
             matches!(receiver.try_recv().unwrap(), CacheEvent::OperationCompleted {
             operation: CacheOperation::GetOrSet, outcome: actual, level: actual_level, ..
-        } if actual == outcome && actual_level == level)
+        } if actual == outcome && actual_level == level),
+            "contract: native ready origins preserve unused capture events and close"
         );
-        assert!(receiver.try_recv().is_err());
+        assert!(
+            receiver.try_recv().is_err(),
+            "contract: native ready origins preserve unused capture events and close"
+        );
         cache.shutdown().unwrap();
     }
 }
@@ -231,21 +260,31 @@ async fn shutdown_drains_ready_clone_and_the_unused_origin_capture() {
     assert!(
         tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
             .await
-            .is_err()
+            .is_err(),
+        "contract: shutdown drains ready clone and the unused origin capture"
     );
-    assert!(!dropped.load(Ordering::SeqCst));
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "contract: shutdown drains ready clone and the unused origin capture"
+    );
     release.send(()).unwrap();
-    assert!(matches!(
-        reader.join().unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            reader.join().unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown drains ready clone and the unused origin capture"
+    );
     tokio::time::timeout(Duration::from_secs(2), shutdown)
         .await
         .unwrap()
         .unwrap();
-    assert!(dropped.load(Ordering::SeqCst));
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "contract: shutdown drains ready clone and the unused origin capture"
+    );
 }
 
 #[tokio::test]
@@ -299,23 +338,33 @@ async fn an_individual_eager_entry_refreshes_only_for_a_factory_origin() {
             .get_or_set("eager", amalgam::source::value(99))
             .await
             .unwrap(),
-        1
+        1,
+        "contract: an individual eager entry refreshes only for a factory origin"
     );
     assert_eq!(
         cache
             .get_or_set(
                 "eager",
                 amalgam::source::factory(|ctx| async move {
-                    assert_eq!(ctx.invocation(), FactoryInvocation::EagerRefresh);
+                    assert_eq!(
+                        ctx.invocation(),
+                        FactoryInvocation::EagerRefresh,
+                        "contract: an individual eager entry refreshes only for a factory origin"
+                    );
                     Ok::<_, FactoryError>(ctx.value(2))
                 })
             )
             .await
             .unwrap(),
-        1
+        1,
+        "contract: an individual eager entry refreshes only for a factory origin"
     );
     cache.flush_pending().await.unwrap();
-    assert_eq!(cache.try_get("eager").await.unwrap(), Some(2));
+    assert_eq!(
+        cache.try_get("eager").await.unwrap(),
+        Some(2),
+        "contract: an individual eager entry refreshes only for a factory origin"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -338,7 +387,10 @@ impl Clone for NoDropClone {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_value_without_drop_can_still_have_a_user_clone() {
-    assert!(!std::mem::needs_drop::<NoDropClone>());
+    assert!(
+        !std::mem::needs_drop::<NoDropClone>(),
+        "contract: a value without drop can still have a user clone"
+    );
     for native in [false, true] {
         let cache = BlockingCache::new().unwrap();
         let _ = cache
@@ -374,15 +426,19 @@ async fn a_value_without_drop_can_still_have_a_user_clone() {
         assert!(
             tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
                 .await
-                .is_err()
+                .is_err(),
+            "contract: a value without drop can still have a user clone"
         );
         release.send(()).unwrap();
-        assert!(matches!(
-            reader.join().unwrap(),
-            Err(Error::OperationCancelled {
-                reason: FactoryCancellationReason::CacheShutdown,
-            })
-        ));
+        assert!(
+            matches!(
+                reader.join().unwrap(),
+                Err(Error::OperationCancelled {
+                    reason: FactoryCancellationReason::CacheShutdown,
+                })
+            ),
+            "contract: a value without drop can still have a user clone"
+        );
         tokio::time::timeout(Duration::from_secs(2), shutdown)
             .await
             .unwrap()

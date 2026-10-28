@@ -130,7 +130,7 @@ fn trace(lookup: Lookup) {
         .block_on(async {
             let cache = fixture().await;
             for _ in 0..20_000 {
-                assert_eq!(lookup.value(&cache).await, 7);
+                assert_eq!(lookup.value(&cache).await, 7, "contract: ownership tracing reads the seeded distributed value before and during measurement");
             }
             PROBE.with(|probe| probe.set(Probe::Tracing(0)));
             let value = lookup.value(&cache).await;
@@ -138,7 +138,7 @@ fn trace(lookup: Lookup) {
                 Probe::Tracing(count) => count,
                 Probe::Inactive => panic!("the allocation probe was not enabled"),
             });
-            assert_eq!(value, 7);
+            assert_eq!(value, 7, "contract: ownership tracing reads the seeded distributed value before and during measurement");
             let _ = writeln!(
                 std::io::stdout().lock(),
                 "one untimed L2 lookup: {count} allocation stacks"

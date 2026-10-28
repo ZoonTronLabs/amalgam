@@ -16,14 +16,20 @@ async fn get_or_set_value_sets_then_returns_existing() {
         .get_or_set("k", amalgam::source::value(7))
         .await
         .unwrap();
-    assert_eq!(first, 7);
+    assert_eq!(
+        first, 7,
+        "contract: get or set value sets then returns existing"
+    );
 
     // Present → returns the existing value, ignoring the new constant.
     let second = cache
         .get_or_set("k", amalgam::source::value(999))
         .await
         .unwrap();
-    assert_eq!(second, 7);
+    assert_eq!(
+        second, 7,
+        "contract: get or set value sets then returns existing"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -523,10 +523,19 @@ mod tests {
         let scopes = Scopes::new();
         let first = table.acquire(Arc::from("abandoned"), scopes.clone());
         let first_signal = first.subscription.flight.source().token();
-        assert!(first.leader);
+        assert!(
+            first.leader,
+            "contract: abandoned preparation does not leave a key waiting forever"
+        );
         std::mem::drop(first);
-        assert!(first_signal.is_cancelled());
+        assert!(
+            first_signal.is_cancelled(),
+            "contract: abandoned preparation does not leave a key waiting forever"
+        );
         let retry = table.acquire(Arc::from("abandoned"), scopes);
-        assert!(retry.leader);
+        assert!(
+            retry.leader,
+            "contract: abandoned preparation does not leave a key waiting forever"
+        );
     }
 }

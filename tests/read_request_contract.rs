@@ -28,15 +28,30 @@ fn creating_and_dropping_a_read_does_not_access_the_key_or_admit_work() {
         _pin: PhantomPinned,
     };
     std::mem::drop(cache.try_get(key()).into_future());
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: creating and dropping a read does not access the key or admit work"
+    );
     let query = cache.try_get(key()).into_future();
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: creating and dropping a read does not access the key or admit work"
+    );
     cache.close();
     let mut query = std::pin::pin!(query);
     let mut context = Context::from_waker(Waker::noop());
-    assert!(matches!(
-        query.as_mut().poll(&mut context),
-        Poll::Ready(Err(Error::CacheClosed))
-    ));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            query.as_mut().poll(&mut context),
+            Poll::Ready(Err(Error::CacheClosed))
+        ),
+        "contract: creating and dropping a read does not access the key or admit work"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: creating and dropping a read does not access the key or admit work"
+    );
 }

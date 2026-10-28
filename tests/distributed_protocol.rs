@@ -61,18 +61,29 @@ fn work(ticks: i64) -> RecoveryWork {
 
 #[test]
 fn tags_reject_blank_at_every_typed_boundary_and_include_minimum_revision() {
-    assert!(matches!(Tag::new("\t "), Err(TagError::Blank)));
-    assert!(serde_json::from_str::<Tag>("\" \"").is_err());
-    assert!(tags::try_collect_tags(["valid", ""]).is_err());
+    assert!(
+        matches!(Tag::new("\t "), Err(TagError::Blank)),
+        "contract: tags reject blank at every typed boundary and include minimum revision"
+    );
+    assert!(
+        serde_json::from_str::<Tag>("\" \"").is_err(),
+        "contract: tags reject blank at every typed boundary and include minimum revision"
+    );
+    assert!(
+        tags::try_collect_tags(["valid", ""]).is_err(),
+        "contract: tags reject blank at every typed boundary and include minimum revision"
+    );
     let registry = TagRegistry::new();
     assert_eq!(
         registry.evaluate(Timestamp::MIN, &[], RemoveByTagBehavior::Expire),
-        TagVerdict::Valid
+        TagVerdict::Valid,
+        "contract: tags reject blank at every typed boundary and include minimum revision"
     );
     registry.mark_clear_remove(Timestamp::MIN);
     assert_eq!(
         registry.evaluate(Timestamp::MIN, &[], RemoveByTagBehavior::Expire),
-        TagVerdict::Remove
+        TagVerdict::Remove,
+        "contract: tags reject blank at every typed boundary and include minimum revision"
     );
 }
 
@@ -84,8 +95,14 @@ async fn markers_share_effective_namespace_and_compact_without_forgetting_a_tomb
     let a = scope("v2:tenant:", "ignored", KeyModifierMode::None);
     let same = scope("tenant:", "v2", KeyModifierMode::Prefix);
     let other = scope("tenant:", "v2", KeyModifierMode::Suffix);
-    assert_eq!(a, same);
-    assert_ne!(a, other);
+    assert_eq!(
+        a, same,
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
+    );
+    assert_ne!(
+        a, other,
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
+    );
     let tag = MarkerKind::Tag(Tag::new("group").unwrap());
     let mut tasks = Vec::new();
     for ticks in [i64::MIN, 9_007_199_254_740_993, i64::MAX, 0, -1] {
@@ -104,9 +121,14 @@ async fn markers_share_effective_namespace_and_compact_without_forgetting_a_tomb
     }
     assert_eq!(
         store.read(&same, &tag).await.unwrap(),
-        Some(MarkerVersion::new(Timestamp::MAX))
+        Some(MarkerVersion::new(Timestamp::MAX)),
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
     );
-    assert_eq!(store.read(&other, &tag).await.unwrap(), None);
+    assert_eq!(
+        store.read(&other, &tag).await.unwrap(),
+        None,
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
+    );
     store
         .advance(
             &a,
@@ -124,26 +146,31 @@ async fn markers_share_effective_namespace_and_compact_without_forgetting_a_tomb
         .await
         .unwrap();
     assert!(
-        matches!(outcome, MarkerAdvanceOutcome::Compacted { clear_remove, .. } if clear_remove.timestamp() == Timestamp::MAX)
+        matches!(outcome, MarkerAdvanceOutcome::Compacted { clear_remove, .. } if clear_remove.timestamp() == Timestamp::MAX),
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
     );
     assert_eq!(
         store.read(&same, &MarkerKind::ClearRemove).await.unwrap(),
-        Some(MarkerVersion::new(Timestamp::MAX))
+        Some(MarkerVersion::new(Timestamp::MAX)),
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
     );
     store
         .advance(&other, MarkerKind::ClearExpire, MarkerVersion::new(at(1)))
         .await
         .unwrap();
-    assert!(matches!(
-        store
-            .advance(
-                &scope("third", "v2", KeyModifierMode::None),
-                MarkerKind::ClearExpire,
-                MarkerVersion::new(at(1))
-            )
-            .await,
-        Err(MarkerError::ScopeCapacity { limit: 2 })
-    ));
+    assert!(
+        matches!(
+            store
+                .advance(
+                    &scope("third", "v2", KeyModifierMode::None),
+                    MarkerKind::ClearExpire,
+                    MarkerVersion::new(at(1))
+                )
+                .await,
+            Err(MarkerError::ScopeCapacity { limit: 2 })
+        ),
+        "contract: markers share effective namespace and compact without forgetting a tombstone"
+    );
 }
 
 #[tokio::test]
@@ -151,7 +178,10 @@ async fn typed_controls_round_trip_without_reinterpreting_reserved_ordinary_data
     let backplane = InProcessBackplane::default();
     let mut receiver = backplane.subscribe();
     let mut health = backplane.connection_state().unwrap();
-    assert!(matches!(*health.borrow(), BackplaneState::Connected { .. }));
+    assert!(
+        matches!(*health.borrow(), BackplaneState::Connected { .. }),
+        "contract: typed controls round trip without reinterpreting reserved ordinary data"
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(10), health.changed())
             .await
@@ -174,8 +204,14 @@ async fn typed_controls_round_trip_without_reinterpreting_reserved_ordinary_data
     else {
         panic!("ordinary data became a marker")
     };
-    assert_eq!(decoded.source_id, data.source_id);
-    assert_eq!(decoded.key, data.key);
+    assert_eq!(
+        decoded.source_id, data.source_id,
+        "contract: typed controls round trip without reinterpreting reserved ordinary data"
+    );
+    assert_eq!(
+        decoded.key, data.key,
+        "contract: typed controls round trip without reinterpreting reserved ordinary data"
+    );
     let command = MarkerCommand::new(
         source,
         scope("tenant|:", "v2", KeyModifierMode::Prefix),
@@ -194,11 +230,22 @@ async fn typed_controls_round_trip_without_reinterpreting_reserved_ordinary_data
     else {
         panic!("marker became data")
     };
-    assert_eq!(decoded.scope(), command.scope());
-    assert_eq!(decoded.marker(), command.marker());
+    assert_eq!(
+        decoded.scope(),
+        command.scope(),
+        "contract: typed controls round trip without reinterpreting reserved ordinary data"
+    );
+    assert_eq!(
+        decoded.marker(),
+        command.marker(),
+        "contract: typed controls round trip without reinterpreting reserved ordinary data"
+    );
     let mut corrupted = BackplaneCommand::Marker(command).into_message().unwrap();
     corrupted.key = "another namespace".into();
-    assert!(BackplaneCommand::from_message(corrupted).is_err());
+    assert!(
+        BackplaneCommand::from_message(corrupted).is_err(),
+        "contract: typed controls round trip without reinterpreting reserved ordinary data"
+    );
 }
 
 fn snapshot(codec: &dyn DistributedSerializer<i32>) {
@@ -211,17 +258,29 @@ fn snapshot(codec: &dyn DistributedSerializer<i32>) {
     let source = DistributedSnapshot::from_entry_with_options(&entry, &options, inserted).unwrap();
     let raw = codec.serialize(source.entry()).unwrap();
     let legacy = codec.deserialize_snapshot(&raw).unwrap();
-    assert_eq!(legacy.retention(), SnapshotRetention::Unspecified);
+    assert_eq!(
+        legacy.retention(),
+        SnapshotRetention::Unspecified,
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
     let bytes = codec.serialize_snapshot(&source).unwrap();
-    assert!(bytes.starts_with(b"AMALGAM\0"));
+    assert!(
+        bytes.starts_with(b"AMALGAM\0"),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
     let roundtrip = codec.deserialize_snapshot(&bytes).unwrap();
-    assert_eq!(roundtrip.inserted_at(), inserted);
+    assert_eq!(
+        roundtrip.inserted_at(),
+        inserted,
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
     assert_eq!(
         roundtrip.retention(),
         SnapshotRetention::Specified {
             size: Some(EntryWeight::new(7)),
             priority: Priority::High
-        }
+        },
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
     );
     let hydrated_at = inserted.saturating_add(Duration::from_secs(2));
     let hydrated = roundtrip
@@ -231,25 +290,55 @@ fn snapshot(codec: &dyn DistributedSerializer<i32>) {
         )
         .unwrap()
         .unwrap();
-    assert_eq!(hydrated.value(), &42);
-    assert_eq!(hydrated.meta().created(), at(20));
+    assert_eq!(
+        hydrated.value(),
+        &42,
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
+    assert_eq!(
+        hydrated.meta().created(),
+        at(20),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
     assert_eq!(
         hydrated.meta().logical_expiration(),
-        hydrated_at.saturating_add(Duration::from_secs(1))
+        hydrated_at.saturating_add(Duration::from_secs(1)),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
     );
-    assert_eq!(hydrated.meta().priority(), Priority::High);
-    assert_eq!(hydrated.meta().size(), Some(EntryWeight::new(7)));
-    assert_eq!(source.backend_ttl_at(hydrated_at), Duration::from_secs(8));
+    assert_eq!(
+        hydrated.meta().priority(),
+        Priority::High,
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
+    assert_eq!(
+        hydrated.meta().size(),
+        Some(EntryWeight::new(7)),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
+    assert_eq!(
+        source.backend_ttl_at(hydrated_at),
+        Duration::from_secs(8),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
     let mut unknown = bytes.clone();
     unknown[8] = 99;
-    assert!(matches!(
-        codec.deserialize_snapshot(&unknown),
-        Err(Error::Deserialization(_))
-    ));
-    assert!(codec.deserialize_snapshot(&bytes[..12]).is_err());
+    assert!(
+        matches!(
+            codec.deserialize_snapshot(&unknown),
+            Err(Error::Deserialization(_))
+        ),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
+    assert!(
+        codec.deserialize_snapshot(&bytes[..12]).is_err(),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
     let mut corrupt = bytes;
     corrupt[13] = 0xff;
-    assert!(codec.deserialize_snapshot(&corrupt).is_err());
+    assert!(
+        codec.deserialize_snapshot(&corrupt).is_err(),
+        "contract: snapshot round trips preserve independent retention metadata and reject corrupt frames"
+    );
 }
 
 #[test]
@@ -360,19 +449,35 @@ async fn replacement_survives_old_completion(fail_old: bool) {
     gate.release.add_permits(1);
     drain.await.unwrap();
     let newest = queue.snapshot("key").unwrap();
-    assert_eq!(newest.generation(), OperationGeneration::new(2));
-    assert!(!queue.is_current(&old));
-    assert_eq!(queue.complete(&old), SupersedeOutcome::Unchanged);
+    assert_eq!(
+        newest.generation(),
+        OperationGeneration::new(2),
+        "contract: replacement survives old completion"
+    );
+    assert!(
+        !queue.is_current(&old),
+        "contract: replacement survives old completion"
+    );
+    assert_eq!(
+        queue.complete(&old),
+        SupersedeOutcome::Unchanged,
+        "contract: replacement survives old completion"
+    );
     assert_eq!(
         queue.supersede_through("key", OperationGeneration::new(1)),
-        SupersedeOutcome::Unchanged
+        SupersedeOutcome::Unchanged,
+        "contract: replacement survives old completion"
     );
     assert_eq!(
         queue.supersede_through("key", OperationGeneration::new(2)),
-        SupersedeOutcome::Removed
+        SupersedeOutcome::Removed,
+        "contract: replacement survives old completion"
     );
     std::mem::drop(old);
-    assert!(weak.upgrade().is_none());
+    assert!(
+        weak.upgrade().is_none(),
+        "contract: replacement survives old completion"
+    );
 }
 
 #[tokio::test]
@@ -397,13 +502,27 @@ async fn cancelled_recovery_claim_returns_pending_and_concurrent_drains_do_not_d
     };
     gate.entered.notified().await;
     queue.drain_once(gate.as_ref()).await;
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        1,
+        "contract: cancelled recovery claim returns pending and concurrent drains do not duplicate"
+    );
     drain.abort();
-    assert!(drain.await.unwrap_err().is_cancelled());
+    assert!(
+        drain.await.unwrap_err().is_cancelled(),
+        "contract: cancelled recovery claim returns pending and concurrent drains do not duplicate"
+    );
     gate.release.add_permits(1);
     queue.drain_once(gate.as_ref()).await;
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
-    assert!(queue.is_empty());
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        2,
+        "contract: cancelled recovery claim returns pending and concurrent drains do not duplicate"
+    );
+    assert!(
+        queue.is_empty(),
+        "contract: cancelled recovery claim returns pending and concurrent drains do not duplicate"
+    );
 }
 
 #[tokio::test]
@@ -423,7 +542,11 @@ async fn recovery_reconnect_barrier_uses_real_time_and_shutdown_releases_pins() 
     queue.enqueue(item(1));
     queue.suspend();
     queue.drain_once(gate.as_ref()).await;
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        0,
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
     clock.advance(Duration::from_secs(100));
     queue.drain_once(gate.as_ref()).await;
     assert_eq!(
@@ -433,22 +556,44 @@ async fn recovery_reconnect_barrier_uses_real_time_and_shutdown_releases_pins() 
     );
     queue.pause_after_reconnect().unwrap();
     queue.drain_once(gate.as_ref()).await;
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        0,
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
     tokio::time::sleep(Duration::from_millis(30)).await;
     queue.drain_once(gate.as_ref()).await;
-    assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(queue.try_spawn().unwrap(), RecoveryStart::Started);
-    assert_eq!(queue.try_spawn().unwrap(), RecoveryStart::AlreadyRunning);
+    assert_eq!(
+        gate.calls.load(Ordering::SeqCst),
+        1,
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
+    assert_eq!(
+        queue.try_spawn().unwrap(),
+        RecoveryStart::Started,
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
+    assert_eq!(
+        queue.try_spawn().unwrap(),
+        RecoveryStart::AlreadyRunning,
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
     queue.shutdown().await.unwrap();
     queue.shutdown().await.unwrap();
-    assert!(matches!(
-        queue.try_spawn(),
-        Err(amalgam::advanced::RecoveryError::Stopped)
-    ));
-    assert!(matches!(
-        OperationGeneration::new(u64::MAX).next(),
-        Err(amalgam::advanced::RecoveryError::GenerationExhausted)
-    ));
+    assert!(
+        matches!(
+            queue.try_spawn(),
+            Err(amalgam::advanced::RecoveryError::Stopped)
+        ),
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
+    assert!(
+        matches!(
+            OperationGeneration::new(u64::MAX).next(),
+            Err(amalgam::advanced::RecoveryError::GenerationExhausted)
+        ),
+        "contract: recovery reconnect barrier uses real time and shutdown releases pins"
+    );
 }
 
 #[tokio::test]
@@ -473,9 +618,13 @@ async fn reference_lease_deadline_never_grants_a_late_expired_lease() {
             )
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: reference lease deadline never grants a late expired lease"
     );
-    assert!(started.elapsed() < Duration::from_millis(50));
+    assert!(
+        started.elapsed() < Duration::from_millis(50),
+        "contract: reference lease deadline never grants a late expired lease"
+    );
     locker.release("key", &first).await.unwrap();
 }
 
@@ -507,7 +656,8 @@ async fn atomic_reference_fence_rejects_expired_and_replaced_owners() {
             )
             .await
             .unwrap(),
-        LeasedWriteOutcome::Committed
+        LeasedWriteOutcome::Committed,
+        "contract: atomic reference fence rejects expired and replaced owners"
     );
     clock.advance(Duration::from_secs(2));
     let replacement = locker
@@ -524,10 +674,18 @@ async fn atomic_reference_fence_rejects_expired_and_replaced_owners() {
             .write_with_lease("key", LeasedMutation::Remove, &proof)
             .await
             .unwrap(),
-        LeasedWriteOutcome::LeaseLost
+        LeasedWriteOutcome::LeaseLost,
+        "contract: atomic reference fence rejects expired and replaced owners"
     );
-    assert_eq!(backend.get("key").await.unwrap(), Some(vec![1].into()));
-    assert!(matches!(lease.proof(), Err(LeaseError::Lost)));
+    assert_eq!(
+        backend.get("key").await.unwrap(),
+        Some(vec![1].into()),
+        "contract: atomic reference fence rejects expired and replaced owners"
+    );
+    assert!(
+        matches!(lease.proof(), Err(LeaseError::Lost)),
+        "contract: atomic reference fence rejects expired and replaced owners"
+    );
     lease.release().await.unwrap();
     assert_eq!(
         locker.held_count(),
@@ -550,18 +708,25 @@ impl DistributedLocker for LegacyLocker {
 #[tokio::test]
 async fn legacy_locker_is_source_compatible_without_inventing_a_lifetime() {
     let locker: Arc<dyn DistributedLocker> = Arc::new(LegacyLocker);
-    assert_eq!(locker.lease_support(), LeaseSupport::OpaqueLegacy);
-    assert!(matches!(
-        provider::acquire_owned(
-            locker.clone(),
-            "key".into(),
-            LeaseTtl::new(Duration::from_secs(1)).unwrap(),
-            Timeout::Infinite,
-            AcquisitionPolicy::TokenOwned
-        )
-        .await,
-        Err(LeaseError::UnsupportedTokenAcquisition)
-    ));
+    assert_eq!(
+        locker.lease_support(),
+        LeaseSupport::OpaqueLegacy,
+        "contract: legacy locker is source compatible without inventing a lifetime"
+    );
+    assert!(
+        matches!(
+            provider::acquire_owned(
+                locker.clone(),
+                "key".into(),
+                LeaseTtl::new(Duration::from_secs(1)).unwrap(),
+                Timeout::Infinite,
+                AcquisitionPolicy::TokenOwned
+            )
+            .await,
+            Err(LeaseError::UnsupportedTokenAcquisition)
+        ),
+        "contract: legacy locker is source compatible without inventing a lifetime"
+    );
     let lease = provider::acquire_owned(
         locker,
         "key".into(),
@@ -572,7 +737,10 @@ async fn legacy_locker_is_source_compatible_without_inventing_a_lifetime() {
     .await
     .unwrap()
     .unwrap();
-    assert!(matches!(lease.proof(), Err(LeaseError::OpaqueLifetime)));
+    assert!(
+        matches!(lease.proof(), Err(LeaseError::OpaqueLifetime)),
+        "contract: legacy locker is source compatible without inventing a lifetime"
+    );
     lease.release().await.unwrap();
 }
 
@@ -634,11 +802,17 @@ async fn cancelled_owned_acquire_releases_the_preselected_token_without_a_reply(
     };
     locker.entered.notified().await;
     task.abort();
-    assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+    assert!(
+        matches!(task.await, Err(error) if error.is_cancelled()),
+        "contract: cancelled owned acquire releases the preselected token without a reply"
+    );
     tokio::time::timeout(Duration::from_secs(1), locker.released.notified())
         .await
         .unwrap();
-    assert!(locker.token.lock().unwrap().is_none());
+    assert!(
+        locker.token.lock().unwrap().is_none(),
+        "contract: cancelled owned acquire releases the preselected token without a reply"
+    );
 }
 
 #[test]
@@ -653,13 +827,16 @@ fn invalid_distributed_payloads_are_rejected_before_hydration() {
         last_modified_ticks: None,
         tags: Vec::new(),
     };
-    assert!(dto.clone().try_into_entry(at(0)).is_err());
+    assert!(
+        dto.clone().try_into_entry(at(0)).is_err(),
+        "contract: invalid distributed payloads are rejected before hydration"
+    );
     dto.logical_expiration_ticks = 1;
     dto.tags.push(" ".into());
-    assert!(matches!(
-        dto.try_into_entry(at(0)),
-        Err(Error::Tag(TagError::Blank))
-    ));
+    assert!(
+        matches!(dto.try_into_entry(at(0)), Err(Error::Tag(TagError::Blank))),
+        "contract: invalid distributed payloads are rejected before hydration"
+    );
 }
 
 #[test]
@@ -675,7 +852,8 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
     .into();
     assert_eq!(
         OperationOutcome::from_error(&marker),
-        OperationOutcome::DistributedError
+        OperationOutcome::DistributedError,
+        "contract: typed module wrappers preserve backend sources and expected rejections"
     );
     assert_eq!(
         marker
@@ -684,7 +862,8 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
             .downcast_ref::<IoError>()
             .unwrap()
             .kind(),
-        ErrorKind::ConnectionReset
+        ErrorKind::ConnectionReset,
+        "contract: typed module wrappers preserve backend sources and expected rejections"
     );
     let lease: Error = LeaseError::backend(IoError::new(
         ErrorKind::ConnectionRefused,
@@ -693,7 +872,8 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
     .into();
     assert_eq!(
         OperationOutcome::from_error(&lease),
-        OperationOutcome::LockError
+        OperationOutcome::LockError,
+        "contract: typed module wrappers preserve backend sources and expected rejections"
     );
     assert_eq!(
         lease
@@ -702,7 +882,8 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
             .downcast_ref::<IoError>()
             .unwrap()
             .kind(),
-        ErrorKind::ConnectionRefused
+        ErrorKind::ConnectionRefused,
+        "contract: typed module wrappers preserve backend sources and expected rejections"
     );
     for rejected in [
         Error::Marker(MarkerError::ScopeCapacity { limit: 1 }),
@@ -711,10 +892,15 @@ fn typed_module_wrappers_preserve_backend_sources_and_expected_rejections() {
     ] {
         assert_eq!(
             OperationOutcome::from_error(&rejected),
-            OperationOutcome::Rejected
+            OperationOutcome::Rejected,
+            "contract: typed module wrappers preserve backend sources and expected rejections"
         );
     }
-    assert_eq!(OperationOutcome::Rejected.as_str(), "rejected");
+    assert_eq!(
+        OperationOutcome::Rejected.as_str(),
+        "rejected",
+        "contract: typed module wrappers preserve backend sources and expected rejections"
+    );
 }
 
 #[tokio::test]
@@ -729,7 +915,8 @@ async fn owned_worker_task_failures_distinguish_cancellation_and_contract_panic(
     .into();
     assert_eq!(
         OperationOutcome::from_error(&error),
-        OperationOutcome::Cancelled
+        OperationOutcome::Cancelled,
+        "contract: owned worker task failures distinguish cancellation and contract panic"
     );
     let panicked = tokio::spawn(async { panic!("worker contract violation fixture") });
     let error: Error = LeaseError::Task {
@@ -738,6 +925,7 @@ async fn owned_worker_task_failures_distinguish_cancellation_and_contract_panic(
     .into();
     assert_eq!(
         OperationOutcome::from_error(&error),
-        OperationOutcome::Panicked
+        OperationOutcome::Panicked,
+        "contract: owned worker task failures distinguish cancellation and contract panic"
     );
 }

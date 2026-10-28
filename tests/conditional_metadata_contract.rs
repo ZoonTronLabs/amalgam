@@ -60,8 +60,8 @@ async fn conditional_builder_preserves_the_value_and_saved_tags_but_replaces_or_
             .get_or_set(
                 "key",
                 typed_factory(move |mut ctx| async move {
-                    assert_eq!(ctx.tags().unwrap(), &*tags("request"));
-                    assert_eq!(ctx.stale_tags().unwrap(), &*tags("saved"));
+                    assert_eq!(ctx.tags().unwrap(), &*tags("request"), "contract: conditional builder preserves the value and saved tags but replaces or clears validators");
+                    assert_eq!(ctx.stale_tags().unwrap(), &*tags("saved"), "contract: conditional builder preserves the value and saved tags but replaces or clears validators");
                     ctx.try_set_tags(["attempted"]).unwrap();
                     let changed = ctx.not_modified_builder()?;
                     Ok(if clear {
@@ -86,16 +86,16 @@ async fn conditional_builder_preserves_the_value_and_saved_tags_but_replaces_or_
             .get_or_set(
                 "key",
                 amalgam::source::factory(move |ctx| async move {
-                    assert_eq!(ctx.stale_value(), Some(&7));
-                    assert_eq!(ctx.stale_tags().unwrap(), &*tags("saved"));
-                    assert_eq!(ctx.stale_etag(), if clear { None } else { Some("new") });
+                    assert_eq!(ctx.stale_value(), Some(&7), "contract: conditional builder preserves the value and saved tags but replaces or clears validators");
+                    assert_eq!(ctx.stale_tags().unwrap(), &*tags("saved"), "contract: conditional builder preserves the value and saved tags but replaces or clears validators");
+                    assert_eq!(ctx.stale_etag(), if clear { None } else { Some("new") }, "contract: conditional builder preserves the value and saved tags but replaces or clears validators");
                     assert_eq!(
                         ctx.stale_last_modified(),
                         if clear {
                             None
                         } else {
                             Some(Timestamp::from_ticks(2))
-                        }
+                        }, "contract: conditional builder preserves the value and saved tags but replaces or clears validators"
                     );
                     Ok::<_, FactoryError>(ctx.not_modified_builder()?.done())
                 }),
@@ -147,7 +147,11 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: explicit conditional tags replace the saved tags after a new revision"
+    );
     let _ = cache
         .remove_by_tag(Tag::new("new").unwrap())
         .with_receipt()
@@ -156,7 +160,10 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .wait()
         .await
         .unwrap();
-    assert!(cache.try_get("key").await.unwrap().is_none());
+    assert!(
+        cache.try_get("key").await.unwrap().is_none(),
+        "contract: explicit conditional tags replace the saved tags after a new revision"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -173,7 +180,7 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
             "absent",
             amalgam::source::factory(|ctx| async move {
                 let error = ctx.not_modified_builder().unwrap_err();
-                assert_eq!(error, ConditionalRefreshError::NoStaleSnapshot);
+                assert_eq!(error, ConditionalRefreshError::NoStaleSnapshot, "contract: absent snapshot is typed and bad legacy tags cannot escape through the builder");
                 Err::<_, FactoryError>(error.into())
             }),
         )
@@ -200,7 +207,10 @@ async fn absent_snapshot_is_typed_and_bad_legacy_tags_cannot_escape_through_the_
             }),
         )
         .await;
-    assert!(matches!(bad_tags, Err(Error::Tag(TagError::Blank))));
+    assert!(
+        matches!(bad_tags, Err(Error::Tag(TagError::Blank))),
+        "contract: absent snapshot is typed and bad legacy tags cannot escape through the builder"
+    );
     cache.shutdown().await.unwrap();
 }
 

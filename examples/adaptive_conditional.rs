@@ -90,7 +90,7 @@ async fn adaptive_caching() {
         .await
         .unwrap_or_else(|error| panic!("factory re-runs after the adapted window: {error:?}"));
     println!("after 150ms        => factory re-ran: {refreshed:?}");
-    assert_eq!(refreshed, "RESULTS NOW");
+    assert_eq!(refreshed, "RESULTS NOW", "contract: adaptive caching");
 }
 
 /// HTTP-style conditional refresh using ETags.
@@ -143,7 +143,7 @@ async fn conditional_refresh() {
         .await
         .unwrap_or_else(|error| panic!("not_modified reuses the stale value: {error:?}"));
     println!("after 304 NotModified => {reused:?}  (stale value reused, expiration bumped)");
-    assert_eq!(reused, "document v1");
+    assert_eq!(reused, "document v1", "contract: conditional refresh");
 
     // 3b. Let it go stale again, then the server returns a genuinely new version.
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -166,7 +166,7 @@ async fn conditional_refresh() {
         .await
         .unwrap_or_else(|error| panic!("modified replaces the value: {error:?}"));
     println!("after 200 Modified    => {updated:?}  (new value + new etag cached)");
-    assert_eq!(updated, "document v2");
+    assert_eq!(updated, "document v2", "contract: conditional refresh");
     println!("OK: adaptive duration + conditional (304/200) refresh both demonstrated.");
 }
 

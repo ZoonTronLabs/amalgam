@@ -43,7 +43,7 @@ impl ValueCloner<u64> for AttachingCloner {
 fn assert_hit(events: &[CacheEvent], key: &str) {
     assert_eq!(
         events.iter().filter(|event| matches!(event, CacheEvent::Hit { key: actual, stale: false } if actual.as_ref() == key)).count(),
-        1
+        1, "contract: assert hit"
     );
     assert_eq!(
         events
@@ -57,7 +57,8 @@ fn assert_hit(events: &[CacheEvent], key: &str) {
                 }
             ))
             .count(),
-        1
+        1,
+        "contract: assert hit"
     );
 }
 
@@ -87,9 +88,17 @@ async fn ready_hit_reaches_a_plugin_attached_by_its_clone_callback() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: ready hit reaches a plugin attached by its clone callback"
+    );
     cloner.armed.store(true, Ordering::SeqCst);
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: ready hit reaches a plugin attached by its clone callback"
+    );
     assert_hit(&plugin.0.lock().unwrap(), "tenant:key");
     cache.shutdown().await.unwrap();
 }
@@ -105,11 +114,19 @@ async fn observers_added_after_an_unobserved_hit_receive_the_next_hit() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: observers added after an unobserved hit receive the next hit"
+    );
     let mut subscriber = cache.events().subscribe();
     let plugin = Arc::new(RecordingPlugin::default());
     let registration = cache.register_plugin(plugin.clone()).unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: observers added after an unobserved hit receive the next hit"
+    );
     let mut received = Vec::with_capacity(2);
     while let Ok(event) = subscriber.try_recv() {
         received.push(event);
@@ -168,20 +185,34 @@ async fn ready_hit_reaches_broadcast_observers_created_by_its_clone_callback() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: ready hit reaches broadcast observers created by its clone callback"
+    );
     cloner.armed.store(true, Ordering::SeqCst);
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: ready hit reaches broadcast observers created by its clone callback"
+    );
     let mut observers = cloner.observers.lock().unwrap().take().unwrap();
     let mut logical = Vec::with_capacity(2);
     while let Ok(event) = observers.logical.try_recv() {
         logical.push(event);
     }
     assert_hit(&logical, "tenant:key");
-    assert!(matches!(
-        observers.layers.try_recv().unwrap(),
-        LayerEvent::Memory(MemoryEvent::Hit { key, stale: false }) if key.as_ref() == "tenant:key"
-    ));
-    assert!(observers.layers.try_recv().is_err());
+    assert!(
+        matches!(
+            observers.layers.try_recv().unwrap(),
+            LayerEvent::Memory(MemoryEvent::Hit { key, stale: false }) if key.as_ref() == "tenant:key"
+        ),
+        "contract: ready hit reaches broadcast observers created by its clone callback"
+    );
+    assert!(
+        observers.layers.try_recv().is_err(),
+        "contract: ready hit reaches broadcast observers created by its clone callback"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -201,7 +232,11 @@ async fn raw_broadcast_resubscription_after_other_receivers_drop_keeps_emission(
     std::mem::drop(initial);
     let mut current = retained.resubscribe();
     std::mem::drop(retained);
-    assert_eq!(cache.try_get("key").await.unwrap().unwrap_or(0), 42);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().unwrap_or(0),
+        42,
+        "contract: raw broadcast resubscription after other receivers drop keeps emission"
+    );
     let mut received = Vec::with_capacity(2);
     while let Ok(event) = current.try_recv() {
         received.push(event);

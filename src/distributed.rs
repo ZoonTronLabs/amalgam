@@ -1363,10 +1363,18 @@ mod tests {
         l2.set("k", b"hello".to_vec(), Some(Duration::from_secs(10)))
             .await
             .unwrap();
-        assert_eq!(l2.get("k").await.unwrap(), Some(b"hello".to_vec().into()));
+        assert_eq!(
+            l2.get("k").await.unwrap(),
+            Some(b"hello".to_vec().into()),
+            "contract: in memory l2 round trips and expires"
+        );
 
         clock.advance(Duration::from_secs(11));
-        assert_eq!(l2.get("k").await.unwrap(), None);
+        assert_eq!(
+            l2.get("k").await.unwrap(),
+            None,
+            "contract: in memory l2 round trips and expires"
+        );
     }
 
     fn envelope(
@@ -1471,7 +1479,8 @@ mod tests {
             let fast = canonical_entry::<String>(&bytes).expect("canonical layout");
             assert_eq!(
                 serde_json::to_vec(&fast).unwrap(),
-                serde_json::to_vec(&general(&bytes).unwrap()).unwrap()
+                serde_json::to_vec(&general(&bytes).unwrap()).unwrap(),
+                "contract: canonical envelopes decode exactly like serde"
             );
         }
     }
@@ -1503,15 +1512,20 @@ mod tests {
             match general(bytes) {
                 Ok(expected) => assert_eq!(
                     serde_json::to_vec(&decoded.unwrap()).unwrap(),
-                    serde_json::to_vec(&expected).unwrap()
+                    serde_json::to_vec(&expected).unwrap(),
+                    "contract: non canonical envelopes keep the general decoder and errors"
                 ),
                 Err(expected) => assert_eq!(
                     decoded.unwrap_err().to_string(),
-                    Error::deserialization(expected).to_string()
+                    Error::deserialization(expected).to_string(),
+                    "contract: non canonical envelopes keep the general decoder and errors"
                 ),
             }
         }
-        assert!(canonical_entry::<String>(&escaped).is_none());
+        assert!(
+            canonical_entry::<String>(&escaped).is_none(),
+            "contract: non canonical envelopes keep the general decoder and errors"
+        );
     }
 
     #[test]
@@ -1523,8 +1537,14 @@ mod tests {
             })
             .unwrap();
             let fast = canonical_header(&header).expect("canonical header");
-            assert_eq!(fast.inserted_ticks, ticks);
-            assert!(matches!(fast.retention, WireRetention::Unspecified));
+            assert_eq!(
+                fast.inserted_ticks, ticks,
+                "contract: canonical snapshot header matches serde and others fall back"
+            );
+            assert!(
+                matches!(fast.retention, WireRetention::Unspecified),
+                "contract: canonical snapshot header matches serde and others fall back"
+            );
         }
         let specified = serde_json::to_vec(&SnapshotHeader {
             inserted_ticks: 5,
@@ -1534,14 +1554,20 @@ mod tests {
             },
         })
         .unwrap();
-        assert!(canonical_header(&specified).is_none());
+        assert!(
+            canonical_header(&specified).is_none(),
+            "contract: canonical snapshot header matches serde and others fall back"
+        );
         for other in [
             &br#"{"retention":{"kind":"Unspecified"},"inserted_ticks":5}"#[..],
             br#"{"inserted_ticks":5, "retention":{"kind":"Unspecified"}}"#,
             br#"{"inserted_ticks":-9223372036854775808,"retention":{"kind":"Unspecified"}}"#,
             br#"{"inserted_ticks":05,"retention":{"kind":"Unspecified"}}"#,
         ] {
-            assert!(canonical_header(other).is_none());
+            assert!(
+                canonical_header(other).is_none(),
+                "contract: canonical snapshot header matches serde and others fall back"
+            );
         }
     }
 
@@ -1560,7 +1586,14 @@ mod tests {
         let ser = JsonSerializer;
         let bytes = DistributedSerializer::<String>::serialize(&ser, &entry).unwrap();
         let back = DistributedSerializer::<String>::deserialize(&ser, &bytes).unwrap();
-        assert_eq!(back.value, "v");
-        assert_eq!(back.tags, vec!["t".to_owned()]);
+        assert_eq!(
+            back.value, "v",
+            "contract: json serializer round trips envelope"
+        );
+        assert_eq!(
+            back.tags,
+            vec!["t".to_owned()],
+            "contract: json serializer round trips envelope"
+        );
     }
 }

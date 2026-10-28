@@ -408,15 +408,27 @@ async fn fixture(options: EntryOptions, policy: LeasePolicy, prefix: &str) -> Fi
     }
 }
 async fn found(cache: &Cache<u64>) {
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: lease protected marker refresh keeps its admitted value readable"
+    );
 }
 
 #[tokio::test]
 async fn acquired_refresh_rechecks_and_fences_before_local_admission_and_release() {
     let f = fixture(options(), LeasePolicy::Fenced, "").await;
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 2);
-    assert_eq!(f.store.snapshots.writes(), 1);
+    assert_eq!(
+        f.store.snapshots.reads(),
+        2,
+        "contract: acquired refresh rechecks and fences before local admission and release"
+    );
+    assert_eq!(
+        f.store.snapshots.writes(),
+        1,
+        "contract: acquired refresh rechecks and fences before local admission and release"
+    );
     assert!(
         f.store
             .snapshots
@@ -424,16 +436,26 @@ async fn acquired_refresh_rechecks_and_fences_before_local_admission_and_release
             .lock()
             .unwrap()
             .iter()
-            .any(|(kind, fenced)| *kind == group() && *fenced)
+            .any(|(kind, fenced)| *kind == group() && *fenced),
+        "contract: acquired refresh rechecks and fences before local admission and release"
     );
-    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (1, 1));
+    assert_eq!(
+        (f.locker.acquisitions(), f.locker.releases()),
+        (1, 1),
+        "contract: acquired refresh rechecks and fences before local admission and release"
+    );
     let (key, token) = f.locker.last_tag();
     assert_eq!(
         f.locker.inner.ownership_check(&key, &token),
-        OwnershipCheck::Lost
+        OwnershipCheck::Lost,
+        "contract: acquired refresh rechecks and fences before local admission and release"
     );
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 2);
+    assert_eq!(
+        f.store.snapshots.reads(),
+        2,
+        "contract: acquired refresh rechecks and fences before local admission and release"
+    );
     f.cache.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -442,9 +464,21 @@ async fn peer_fresh_recheck_avoids_duplicate_renewal_and_preserves_age() {
     let peer = MarkerSnapshot::new(version(1), time(9), time(11), time(15)).unwrap();
     *f.locker.acquisition.lock().unwrap() = Acquire::PeerRefresh(peer);
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 2);
-    assert_eq!(f.store.snapshots.writes(), 0);
-    assert_eq!(f.locker.releases(), 1);
+    assert_eq!(
+        f.store.snapshots.reads(),
+        2,
+        "contract: peer fresh recheck avoids duplicate renewal and preserves age"
+    );
+    assert_eq!(
+        f.store.snapshots.writes(),
+        0,
+        "contract: peer fresh recheck avoids duplicate renewal and preserves age"
+    );
+    assert_eq!(
+        f.locker.releases(),
+        1,
+        "contract: peer fresh recheck avoids duplicate renewal and preserves age"
+    );
     assert_eq!(
         f.store
             .snapshots
@@ -453,7 +487,8 @@ async fn peer_fresh_recheck_avoids_duplicate_renewal_and_preserves_age() {
             .await
             .unwrap()
             .snapshot(),
-        Some(peer)
+        Some(peer),
+        "contract: peer fresh recheck avoids duplicate renewal and preserves age"
     );
     f.clock.advance(Duration::from_secs(1));
     *f.locker.acquisition.lock().unwrap() = Acquire::Pass;
@@ -463,7 +498,11 @@ async fn peer_fresh_recheck_avoids_duplicate_renewal_and_preserves_age() {
         4,
         "hydration must not reset the peer logical age"
     );
-    assert_eq!(f.store.snapshots.writes(), 1);
+    assert_eq!(
+        f.store.snapshots.writes(),
+        1,
+        "contract: peer fresh recheck avoids duplicate renewal and preserves age"
+    );
     f.cache.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -475,9 +514,21 @@ async fn skip_locker_uses_one_read_and_unfenced_renewal() {
     )
     .await;
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 1);
-    assert_eq!(f.store.snapshots.writes(), 1);
-    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (0, 0));
+    assert_eq!(
+        f.store.snapshots.reads(),
+        1,
+        "contract: skip locker uses one read and unfenced renewal"
+    );
+    assert_eq!(
+        f.store.snapshots.writes(),
+        1,
+        "contract: skip locker uses one read and unfenced renewal"
+    );
+    assert_eq!(
+        (f.locker.acquisitions(), f.locker.releases()),
+        (0, 0),
+        "contract: skip locker uses one read and unfenced renewal"
+    );
     assert!(
         f.store
             .snapshots
@@ -485,7 +536,8 @@ async fn skip_locker_uses_one_read_and_unfenced_renewal() {
             .lock()
             .unwrap()
             .iter()
-            .all(|(_, fenced)| !fenced)
+            .all(|(_, fenced)| !fenced),
+        "contract: skip locker uses one read and unfenced renewal"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -497,19 +549,39 @@ async fn contention_is_explicit_strict_rejection_or_deliberate_cooperative_facto
         let read = f.cache.try_get("key").await;
         match policy {
             LeasePolicy::Fenced => {
-                assert!(matches!(
-                    read,
-                    Err(Error::Lease(LeaseError::AcquisitionTimeout))
-                ));
-                assert_eq!(f.store.snapshots.writes(), 0);
+                assert!(
+                    matches!(read, Err(Error::Lease(LeaseError::AcquisitionTimeout))),
+                    "contract: contention is explicit strict rejection or deliberate cooperative factory"
+                );
+                assert_eq!(
+                    f.store.snapshots.writes(),
+                    0,
+                    "contract: contention is explicit strict rejection or deliberate cooperative factory"
+                );
             }
             LeasePolicy::Cooperative => {
-                assert_eq!(read.unwrap().as_ref(), Some(&7));
-                assert_eq!(f.store.snapshots.writes(), 1);
+                assert_eq!(
+                    read.unwrap().as_ref(),
+                    Some(&7),
+                    "contract: contention is explicit strict rejection or deliberate cooperative factory"
+                );
+                assert_eq!(
+                    f.store.snapshots.writes(),
+                    1,
+                    "contract: contention is explicit strict rejection or deliberate cooperative factory"
+                );
             }
         }
-        assert_eq!(f.store.snapshots.reads(), 1);
-        assert_eq!(f.locker.releases(), 0);
+        assert_eq!(
+            f.store.snapshots.reads(),
+            1,
+            "contract: contention is explicit strict rejection or deliberate cooperative factory"
+        );
+        assert_eq!(
+            f.locker.releases(),
+            0,
+            "contract: contention is explicit strict rejection or deliberate cooperative factory"
+        );
         f.cache.shutdown().await.unwrap();
     }
 }
@@ -530,12 +602,25 @@ async fn acquisition_original_fault_policy_is_independent_from_value_defaults() 
         let read = f.cache.try_get("key").await;
         if fails {
             assert!(
-                matches!(read, Err(Error::Lease(LeaseError::Backend { source })) if source.downcast_ref::<Cause>().is_some())
+                matches!(read, Err(Error::Lease(LeaseError::Backend { source })) if source.downcast_ref::<Cause>().is_some()),
+                "contract: acquisition original fault policy is independent from value defaults"
             );
-            assert_eq!(f.store.snapshots.writes(), 0);
+            assert_eq!(
+                f.store.snapshots.writes(),
+                0,
+                "contract: acquisition original fault policy is independent from value defaults"
+            );
         } else {
-            assert_eq!(read.unwrap().as_ref(), Some(&7));
-            assert_eq!(f.store.snapshots.writes(), 1);
+            assert_eq!(
+                read.unwrap().as_ref(),
+                Some(&7),
+                "contract: acquisition original fault policy is independent from value defaults"
+            );
+            assert_eq!(
+                f.store.snapshots.writes(),
+                1,
+                "contract: acquisition original fault policy is independent from value defaults"
+            );
         }
         f.cache.shutdown().await.unwrap();
         assert_eq!(
@@ -558,13 +643,26 @@ async fn explicit_release_honors_tag_fault_flag_and_preserves_cause() {
         let read = f.cache.try_get("key").await;
         if rethrow {
             assert!(
-                matches!(read, Err(Error::Lease(LeaseError::Backend { source })) if source.to_string().contains("original marker locker fault"))
+                matches!(read, Err(Error::Lease(LeaseError::Backend { source })) if source.to_string().contains("original marker locker fault")),
+                "contract: explicit release honors tag fault flag and preserves cause"
             );
         } else {
-            assert_eq!(read.unwrap().as_ref(), Some(&7));
+            assert_eq!(
+                read.unwrap().as_ref(),
+                Some(&7),
+                "contract: explicit release honors tag fault flag and preserves cause"
+            );
         }
-        assert_eq!(f.store.snapshots.writes(), 1);
-        assert_eq!(f.locker.releases(), 1);
+        assert_eq!(
+            f.store.snapshots.writes(),
+            1,
+            "contract: explicit release honors tag fault flag and preserves cause"
+        );
+        assert_eq!(
+            f.locker.releases(),
+            1,
+            "contract: explicit release honors tag fault flag and preserves cause"
+        );
         f.cache.shutdown().await.unwrap();
     }
 }
@@ -578,21 +676,34 @@ async fn locker_deadline_does_not_use_value_or_distributed_read_deadlines() {
     let read = tokio::time::timeout(Duration::from_secs(2), f.cache.try_get("key"))
         .await
         .unwrap();
-    assert!(matches!(
-        read,
-        Err(Error::Lease(LeaseError::AcquisitionTimeout))
-    ));
-    assert_eq!(f.store.snapshots.reads(), 1);
-    assert_eq!(f.store.snapshots.writes(), 0);
+    assert!(
+        matches!(read, Err(Error::Lease(LeaseError::AcquisitionTimeout))),
+        "contract: locker deadline does not use value or distributed read deadlines"
+    );
+    assert_eq!(
+        f.store.snapshots.reads(),
+        1,
+        "contract: locker deadline does not use value or distributed read deadlines"
+    );
+    assert_eq!(
+        f.store.snapshots.writes(),
+        0,
+        "contract: locker deadline does not use value or distributed read deadlines"
+    );
     {
         let held = f.locker.acquired.lock().unwrap();
         assert_eq!(
             held.iter().find(|(key, _, _)| tag_lock(key)).unwrap().2,
-            Timeout::After(Duration::from_millis(20))
+            Timeout::After(Duration::from_millis(20)),
+            "contract: locker deadline does not use value or distributed read deadlines"
         );
     }
     f.cache.shutdown().await.unwrap();
-    assert_eq!(f.locker.releases(), 1);
+    assert_eq!(
+        f.locker.releases(),
+        1,
+        "contract: locker deadline does not use value or distributed read deadlines"
+    );
 }
 #[tokio::test]
 async fn cancelling_parked_acquisition_cleans_known_token_and_does_not_degrade() {
@@ -607,15 +718,26 @@ async fn cancelling_parked_acquisition_cleans_known_token_and_does_not_degrade()
     });
     gate.entered().await;
     source.cancel();
-    assert!(matches!(
-        call.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
-    assert_eq!(f.store.snapshots.writes(), 0);
+    assert!(
+        matches!(
+            call.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: cancelling parked acquisition cleans known token and does not degrade"
+    );
+    assert_eq!(
+        f.store.snapshots.writes(),
+        0,
+        "contract: cancelling parked acquisition cleans known token and does not degrade"
+    );
     f.cache.shutdown().await.unwrap();
-    assert_eq!(f.locker.releases(), 1);
+    assert_eq!(
+        f.locker.releases(),
+        1,
+        "contract: cancelling parked acquisition cleans known token and does not degrade"
+    );
 }
 #[tokio::test]
 async fn lost_atomic_ownership_cannot_leave_a_fresh_l1_observation() {
@@ -629,11 +751,15 @@ async fn lost_atomic_ownership_cannot_leave_a_fresh_l1_observation() {
     gate.entered().await;
     f.clock.advance(Duration::from_secs(1));
     gate.allow();
-    assert!(matches!(
-        call.await.unwrap(),
-        Err(Error::Lease(LeaseError::Lost))
-    ));
-    assert_eq!(f.store.snapshots.inner.snapshot_count(), 0);
+    assert!(
+        matches!(call.await.unwrap(), Err(Error::Lease(LeaseError::Lost))),
+        "contract: lost atomic ownership cannot leave a fresh l1 observation"
+    );
+    assert_eq!(
+        f.store.snapshots.inner.snapshot_count(),
+        0,
+        "contract: lost atomic ownership cannot leave a fresh l1 observation"
+    );
     *f.store.snapshots.mode.lock().unwrap() = Write::Pass;
     found(&f.cache).await;
     assert_eq!(
@@ -641,22 +767,41 @@ async fn lost_atomic_ownership_cannot_leave_a_fresh_l1_observation() {
         4,
         "failed fencing cannot be bypassed by a fresh local marker"
     );
-    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 2));
+    assert_eq!(
+        (f.locker.acquisitions(), f.locker.releases()),
+        (2, 2),
+        "contract: lost atomic ownership cannot leave a fresh l1 observation"
+    );
     f.cache.shutdown().await.unwrap();
 }
 #[tokio::test]
 async fn unsupported_atomic_provider_does_not_create_local_refresh_authority() {
     let f = fixture(options(), LeasePolicy::Fenced, "").await;
     *f.store.snapshots.mode.lock().unwrap() = Write::Unsupported;
-    assert!(matches!(
-        f.cache.try_get("key").await,
-        Err(Error::Lease(LeaseError::UnsupportedFencing))
-    ));
-    assert_eq!(f.store.snapshots.inner.snapshot_count(), 0);
+    assert!(
+        matches!(
+            f.cache.try_get("key").await,
+            Err(Error::Lease(LeaseError::UnsupportedFencing))
+        ),
+        "contract: unsupported atomic provider does not create local refresh authority"
+    );
+    assert_eq!(
+        f.store.snapshots.inner.snapshot_count(),
+        0,
+        "contract: unsupported atomic provider does not create local refresh authority"
+    );
     *f.store.snapshots.mode.lock().unwrap() = Write::Pass;
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 4);
-    assert_eq!(f.locker.releases(), 2);
+    assert_eq!(
+        f.store.snapshots.reads(),
+        4,
+        "contract: unsupported atomic provider does not create local refresh authority"
+    );
+    assert_eq!(
+        f.locker.releases(),
+        2,
+        "contract: unsupported atomic provider does not create local refresh authority"
+    );
     f.cache.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -674,17 +819,34 @@ async fn background_refresh_keeps_lease_after_caller_completion_until_write_and_
     let (key, token) = f.locker.last_tag();
     assert_eq!(
         f.locker.inner.ownership_check(&key, &token),
-        OwnershipCheck::Held
+        OwnershipCheck::Held,
+        "contract: background refresh keeps lease after caller completion until write and release"
     );
-    assert_eq!(f.locker.releases(), 0);
+    assert_eq!(
+        f.locker.releases(),
+        0,
+        "contract: background refresh keeps lease after caller completion until write and release"
+    );
     gate.allow();
     tokio::time::timeout(Duration::from_secs(2), f.locker.release_finished.notified())
         .await
         .unwrap();
-    assert_eq!(f.locker.releases(), 1);
-    assert_eq!(f.store.snapshots.inner.snapshot_count(), 1);
+    assert_eq!(
+        f.locker.releases(),
+        1,
+        "contract: background refresh keeps lease after caller completion until write and release"
+    );
+    assert_eq!(
+        f.store.snapshots.inner.snapshot_count(),
+        1,
+        "contract: background refresh keeps lease after caller completion until write and release"
+    );
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 2);
+    assert_eq!(
+        f.store.snapshots.reads(),
+        2,
+        "contract: background refresh keeps lease after caller completion until write and release"
+    );
     f.cache.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -700,21 +862,32 @@ async fn shutdown_cancels_parked_background_refresh_and_drains_exactly_one_relea
     found(&f.cache).await;
     gate.entered().await;
     f.cache.shutdown().await.unwrap();
-    assert_eq!(f.locker.releases(), 1);
-    assert_eq!(f.store.snapshots.inner.snapshot_count(), 0);
-    assert!(matches!(
-        f.store
-            .snapshots
-            .tokens
-            .lock()
-            .unwrap()
-            .last()
-            .unwrap()
-            .check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert_eq!(
+        f.locker.releases(),
+        1,
+        "contract: shutdown cancels parked background refresh and drains exactly one release"
+    );
+    assert_eq!(
+        f.store.snapshots.inner.snapshot_count(),
+        0,
+        "contract: shutdown cancels parked background refresh and drains exactly one release"
+    );
+    assert!(
+        matches!(
+            f.store
+                .snapshots
+                .tokens
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown cancels parked background refresh and drains exactly one release"
+    );
 }
 #[tokio::test]
 async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
@@ -722,7 +895,11 @@ async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
     let second = fixture(options(), LeasePolicy::Fenced, "tenant/one:/two:").await;
     found(&first.cache).await;
     found(&second.cache).await;
-    assert_ne!(first.locker.last_tag().0, second.locker.last_tag().0);
+    assert_ne!(
+        first.locker.last_tag().0,
+        second.locker.last_tag().0,
+        "contract: marker lock identities separate scopes and ordinary value flights"
+    );
     assert_eq!(
         first
             .cache
@@ -732,7 +909,8 @@ async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
             )
             .await
             .unwrap(),
-        11
+        11,
+        "contract: marker lock identities separate scopes and ordinary value flights"
     );
     {
         let acquired = first.locker.acquired.lock().unwrap();
@@ -745,7 +923,10 @@ async fn marker_lock_identities_separate_scopes_and_ordinary_value_flights() {
             .iter()
             .filter(|(key, _, _)| key.contains("marker-locks/"))
         {
-            assert_ne!(key, value_key);
+            assert_ne!(
+                key, value_key,
+                "contract: marker lock identities separate scopes and ordinary value flights"
+            );
         }
     }
     first.cache.shutdown().await.unwrap();
@@ -808,8 +989,16 @@ async fn skipped_read_still_runs_known_factory_and_independent_locker_or_write()
             populated + 1,
             "known revision renews independently after explicit population"
         );
-        assert_eq!(f.locker.acquisitions(), usize::from(!skip_locker));
-        assert_eq!(f.locker.releases(), usize::from(!skip_locker));
+        assert_eq!(
+            f.locker.acquisitions(),
+            usize::from(!skip_locker),
+            "contract: skipped read still runs known factory and independent locker or write"
+        );
+        assert_eq!(
+            f.locker.releases(),
+            usize::from(!skip_locker),
+            "contract: skipped read still runs known factory and independent locker or write"
+        );
         let snapshot = f
             .store
             .snapshots
@@ -821,11 +1010,13 @@ async fn skipped_read_still_runs_known_factory_and_independent_locker_or_write()
             .unwrap();
         assert_eq!(
             (snapshot.version(), snapshot.created()),
-            (version(1), time(10))
+            (version(1), time(10)),
+            "contract: skipped read still runs known factory and independent locker or write"
         );
         assert_eq!(
             f.store.read(&scope(""), &group()).await.unwrap(),
-            Some(version(1))
+            Some(version(1)),
+            "contract: skipped read still runs known factory and independent locker or write"
         );
         f.cache.shutdown().await.unwrap();
     }
@@ -843,7 +1034,8 @@ async fn skipped_read_still_runs_known_factory_and_independent_locker_or_write()
             f.store.snapshots.writes(),
             f.locker.acquisitions()
         ),
-        (0, 0, 0)
+        (0, 0, 0),
+        "contract: skipped read still runs known factory and independent locker or write"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -864,7 +1056,11 @@ async fn a_cold_skipped_or_failed_read_never_becomes_fresh_negative_authority() 
         let mut events = f.cache.events().subscribe();
         found(&f.cache).await;
         found(&f.cache).await;
-        assert_eq!(f.store.snapshots.writes(), 0);
+        assert_eq!(
+            f.store.snapshots.writes(),
+            0,
+            "contract: a cold skipped or failed read never becomes fresh negative authority"
+        );
         assert_eq!(
             f.store.snapshots.reads(),
             if skipped { 0 } else { 2 },
@@ -883,7 +1079,11 @@ async fn a_cold_skipped_or_failed_read_never_becomes_fresh_negative_authority() 
         } else {
             MarkerReadOutcome::Unavailable(MarkerReadFailure::Backend)
         };
-        assert_eq!(outcomes, vec![expected, expected]);
+        assert_eq!(
+            outcomes,
+            vec![expected, expected],
+            "contract: a cold skipped or failed read never becomes fresh negative authority"
+        );
         f.cache.shutdown().await.unwrap();
     }
 }
@@ -907,9 +1107,14 @@ async fn suppressed_read_fault_renews_known_fact_even_without_fail_safe() {
             found(&f.cache).await;
             assert_eq!(
                 (f.store.snapshots.reads(), f.store.snapshots.writes()),
-                (4, 2)
+                (4, 2),
+                "contract: suppressed read fault renews known fact even without fail safe"
             );
-            assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 2));
+            assert_eq!(
+                (f.locker.acquisitions(), f.locker.releases()),
+                (2, 2),
+                "contract: suppressed read fault renews known fact even without fail safe"
+            );
             let snapshot = f
                 .store
                 .snapshots
@@ -921,10 +1126,15 @@ async fn suppressed_read_fault_renews_known_fact_even_without_fail_safe() {
                 .unwrap();
             assert_eq!(
                 (snapshot.version(), snapshot.created()),
-                (version(1), time(12))
+                (version(1), time(12)),
+                "contract: suppressed read fault renews known fact even without fail safe"
             );
             found(&f.cache).await;
-            assert_eq!(f.store.snapshots.reads(), 4);
+            assert_eq!(
+                f.store.snapshots.reads(),
+                4,
+                "contract: suppressed read fault renews known fact even without fail safe"
+            );
             f.cache.shutdown().await.unwrap();
         }
     }
@@ -949,10 +1159,14 @@ async fn propagated_marker_read_fault_stops_before_locker_and_preserves_cause() 
         let Error::Marker(error) = error else {
             panic!("expected original marker error")
         };
-        assert!(std::error::Error::source(&error).unwrap().is::<ReadCause>());
+        assert!(
+            std::error::Error::source(&error).unwrap().is::<ReadCause>(),
+            "contract: propagated marker read fault stops before locker and preserves cause"
+        );
         assert_eq!(
             (f.locker.acquisitions(), f.store.snapshots.writes()),
-            (0, 0)
+            (0, 0),
+            "contract: propagated marker read fault stops before locker and preserves cause"
         );
         f.cache.shutdown().await.unwrap();
     }
@@ -967,11 +1181,18 @@ async fn excluded_foreground_marker_factory_awaits_release_before_error() {
         "",
     )
     .await;
-    assert!(matches!(
-        f.cache.try_get("key").await,
-        Err(Error::FactoryTimeout { .. })
-    ));
-    assert_eq!(f.locker.acquired.lock().unwrap().len(), 1);
+    assert!(
+        matches!(
+            f.cache.try_get("key").await,
+            Err(Error::FactoryTimeout { .. })
+        ),
+        "contract: excluded foreground marker factory awaits release before error"
+    );
+    assert_eq!(
+        f.locker.acquired.lock().unwrap().len(),
+        1,
+        "contract: excluded foreground marker factory awaits release before error"
+    );
     assert_eq!(
         f.locker.released.lock().unwrap().len(),
         1,
@@ -991,7 +1212,11 @@ async fn due_marker_eager_refresh_returns_immediately_and_owns_one_fenced_write(
     for _ in 0..8 {
         found(&f.cache).await;
     }
-    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 1));
+    assert_eq!(
+        (f.locker.acquisitions(), f.locker.releases()),
+        (2, 1),
+        "contract: due marker eager refresh returns immediately and owns one fenced write"
+    );
     assert_eq!(
         f.locker
             .acquired
@@ -1001,11 +1226,16 @@ async fn due_marker_eager_refresh_returns_immediately_and_owns_one_fenced_write(
             .rfind(|(key, _, _)| tag_lock(key))
             .unwrap()
             .2,
-        Timeout::After(Duration::ZERO)
+        Timeout::After(Duration::ZERO),
+        "contract: due marker eager refresh returns immediately and owns one fenced write"
     );
     gate.allow();
     until(|| f.locker.releases() == 2).await;
-    assert_eq!(f.store.snapshots.writes(), 2);
+    assert_eq!(
+        f.store.snapshots.writes(),
+        2,
+        "contract: due marker eager refresh returns immediately and owns one fenced write"
+    );
     let snapshot = f
         .store
         .snapshots
@@ -1017,11 +1247,13 @@ async fn due_marker_eager_refresh_returns_immediately_and_owns_one_fenced_write(
         .unwrap();
     assert_eq!(
         (snapshot.version(), snapshot.created()),
-        (version(1), time(16))
+        (version(1), time(16)),
+        "contract: due marker eager refresh returns immediately and owns one fenced write"
     );
     assert_eq!(
         f.store.read(&scope(""), &group()).await.unwrap(),
-        Some(version(1))
+        Some(version(1)),
+        "contract: due marker eager refresh returns immediately and owns one fenced write"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -1042,7 +1274,8 @@ async fn a_newer_fresh_peer_snapshot_hydrates_eager_without_locker_or_duplicate_
     tokio::task::yield_now().await;
     assert_eq!(
         (f.locker.acquisitions(), f.store.snapshots.writes()),
-        (1, 1)
+        (1, 1),
+        "contract: a newer fresh peer snapshot hydrates eager without locker or duplicate write"
     );
     f.clock.set(time(20));
     found(&f.cache).await;
@@ -1068,9 +1301,14 @@ async fn eager_contention_stops_and_consumes_attempt_for_both_lease_policies() {
         }
         assert_eq!(
             (f.store.snapshots.reads(), f.store.snapshots.writes()),
-            (3, 1)
+            (3, 1),
+            "contract: eager contention stops and consumes attempt for both lease policies"
         );
-        assert_eq!(f.locker.acquisitions(), 2);
+        assert_eq!(
+            f.locker.acquisitions(),
+            2,
+            "contract: eager contention stops and consumes attempt for both lease policies"
+        );
         f.cache.shutdown().await.unwrap();
     }
 }
@@ -1128,7 +1366,8 @@ async fn eager_ignores_factory_zero_and_disabled_timed_out_completion() {
             .snapshot()
             .unwrap()
             .created(),
-        time(15)
+        time(15),
+        "contract: eager ignores factory zero and disabled timed out completion"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -1144,21 +1383,25 @@ async fn shutdown_cancels_eager_preflight_read_without_acquiring_or_writing() {
     f.cache.shutdown().await.unwrap();
     assert_eq!(
         (f.locker.acquisitions(), f.store.snapshots.writes()),
-        (1, 1)
+        (1, 1),
+        "contract: shutdown cancels eager preflight read without acquiring or writing"
     );
-    assert!(matches!(
-        f.store
-            .snapshots
-            .read_tokens
-            .lock()
-            .unwrap()
-            .last()
-            .unwrap()
-            .check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            f.store
+                .snapshots
+                .read_tokens
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown cancels eager preflight read without acquiring or writing"
+    );
 }
 #[tokio::test]
 async fn shutdown_cancels_eager_write_and_drains_its_native_lease() {
@@ -1170,20 +1413,27 @@ async fn shutdown_cancels_eager_write_and_drains_its_native_lease() {
     found(&f.cache).await;
     gate.entered().await;
     f.cache.shutdown().await.unwrap();
-    assert_eq!((f.locker.acquisitions(), f.locker.releases()), (2, 2));
-    assert!(matches!(
-        f.store
-            .snapshots
-            .tokens
-            .lock()
-            .unwrap()
-            .last()
-            .unwrap()
-            .check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert_eq!(
+        (f.locker.acquisitions(), f.locker.releases()),
+        (2, 2),
+        "contract: shutdown cancels eager write and drains its native lease"
+    );
+    assert!(
+        matches!(
+            f.store
+                .snapshots
+                .tokens
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown cancels eager write and drains its native lease"
+    );
     assert_eq!(
         f.store
             .snapshots
@@ -1194,7 +1444,8 @@ async fn shutdown_cancels_eager_write_and_drains_its_native_lease() {
             .snapshot()
             .unwrap()
             .created(),
-        time(10)
+        time(10),
+        "contract: shutdown cancels eager write and drains its native lease"
     );
 }
 
@@ -1211,7 +1462,8 @@ async fn same_created_longer_l2_lifetime_hydrates_eager_without_duplicate_factor
     found(&f.cache).await;
     assert_eq!(
         (f.store.snapshots.reads(), f.store.snapshots.writes()),
-        (2, 1)
+        (2, 1),
+        "contract: same created longer l2 lifetime hydrates eager without duplicate factory"
     );
     f.clock.set(time(11));
     found(&f.cache).await;
@@ -1219,7 +1471,8 @@ async fn same_created_longer_l2_lifetime_hydrates_eager_without_duplicate_factor
     tokio::task::yield_now().await;
     assert_eq!(
         (f.locker.acquisitions(), f.store.snapshots.writes()),
-        (1, 1)
+        (1, 1),
+        "contract: same created longer l2 lifetime hydrates eager without duplicate factory"
     );
     f.clock.set(time(12));
     found(&f.cache).await;
@@ -1243,7 +1496,8 @@ async fn same_created_longer_l2_lifetime_hydrates_eager_without_duplicate_factor
             snapshot.created(),
             snapshot.logical_expiration()
         ),
-        (version(1), time(10), time(20))
+        (version(1), time(10), time(20)),
+        "contract: same created longer l2 lifetime hydrates eager without duplicate factory"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -1259,16 +1513,25 @@ async fn skip_when_stale_also_suppresses_eager_preflight_and_owned_recheck() {
     )
     .await;
     found(&f.cache).await;
-    assert_eq!(f.store.snapshots.reads(), 2);
+    assert_eq!(
+        f.store.snapshots.reads(),
+        2,
+        "contract: skip when stale also suppresses eager preflight and owned recheck"
+    );
     *f.store.snapshots.read_mode.lock().unwrap() = Read::Backend;
     f.clock.set(time(16));
     found(&f.cache).await;
     until(|| f.locker.releases() == 2).await;
     assert_eq!(
         (f.store.snapshots.reads(), f.store.snapshots.writes()),
-        (2, 2)
+        (2, 2),
+        "contract: skip when stale also suppresses eager preflight and owned recheck"
     );
-    assert_eq!(f.locker.acquisitions(), 2);
+    assert_eq!(
+        f.locker.acquisitions(),
+        2,
+        "contract: skip when stale also suppresses eager preflight and owned recheck"
+    );
     let snapshot = f
         .store
         .snapshots
@@ -1280,7 +1543,8 @@ async fn skip_when_stale_also_suppresses_eager_preflight_and_owned_recheck() {
         .unwrap();
     assert_eq!(
         (snapshot.version(), snapshot.created()),
-        (version(1), time(16))
+        (version(1), time(16)),
+        "contract: skip when stale also suppresses eager preflight and owned recheck"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -1294,15 +1558,27 @@ async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() 
     )
     .await;
     *f.store.snapshots.mode.lock().unwrap() = Write::Backend;
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
     let ticket = f.cache.marker_snapshot_recovery_ticket(&group()).unwrap();
     let RecoveryWork::MarkerSnapshot(work) = ticket.work() else {
         panic!("expected captured snapshot");
     };
-    assert_eq!(work.participation(), MarkerSnapshotParticipation::Fenced);
+    assert_eq!(
+        work.participation(),
+        MarkerSnapshotParticipation::Fenced,
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
     let captured = work.snapshot();
     let original_token = f.locker.last_tag().1;
-    assert_eq!(f.locker.releases(), 1);
+    assert_eq!(
+        f.locker.releases(),
+        1,
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
     f.clock.set(time(12));
     *f.store.snapshots.mode.lock().unwrap() = Write::Pass;
     tokio::time::advance(RecoveryConfig::default().delay).await;
@@ -1313,8 +1589,16 @@ async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() 
     })
     .await
     .unwrap();
-    assert_ne!(f.locker.last_tag().1, original_token);
-    assert_eq!(f.locker.releases(), 2);
+    assert_ne!(
+        f.locker.last_tag().1,
+        original_token,
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
+    assert_eq!(
+        f.locker.releases(),
+        2,
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
     assert!(
         f.store
             .snapshots
@@ -1323,7 +1607,8 @@ async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() 
             .unwrap()
             .iter()
             .filter(|(kind, _)| *kind == group())
-            .all(|(_, fenced)| *fenced)
+            .all(|(_, fenced)| *fenced),
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
     );
     let actual = f
         .store
@@ -1334,8 +1619,20 @@ async fn failed_fenced_snapshot_replay_reacquires_new_token_and_preserves_age() 
         .unwrap()
         .snapshot()
         .unwrap();
-    assert_eq!(actual.created(), captured.created());
-    assert_eq!(actual.logical_expiration(), captured.logical_expiration());
-    assert_eq!(actual.physical_expiration(), captured.physical_expiration());
+    assert_eq!(
+        actual.created(),
+        captured.created(),
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
+    assert_eq!(
+        actual.logical_expiration(),
+        captured.logical_expiration(),
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
+    assert_eq!(
+        actual.physical_expiration(),
+        captured.physical_expiration(),
+        "contract: failed fenced snapshot replay reacquires new token and preserves age"
+    );
     f.cache.shutdown().await.unwrap();
 }

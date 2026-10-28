@@ -332,13 +332,25 @@ mod tests {
         let first = locks.lock("ordered-key").await;
         let mut queued = std::pin::pin!(locks.lock("ordered-key"));
         let initial = std::future::poll_fn(|cx| Poll::Ready(queued.as_mut().poll(cx))).await;
-        assert!(initial.is_pending());
+        assert!(
+            initial.is_pending(),
+            "contract: ready acquisition does not bypass an already queued waiter"
+        );
         std::mem::drop(first);
-        assert!(locks.try_lock("ordered-key").is_none());
+        assert!(
+            locks.try_lock("ordered-key").is_none(),
+            "contract: ready acquisition does not bypass an already queued waiter"
+        );
         let second = queued.await;
-        assert!(locks.try_lock("ordered-key").is_none());
+        assert!(
+            locks.try_lock("ordered-key").is_none(),
+            "contract: ready acquisition does not bypass an already queued waiter"
+        );
         std::mem::drop(second);
-        assert!(locks.try_lock("ordered-key").is_some());
+        assert!(
+            locks.try_lock("ordered-key").is_some(),
+            "contract: ready acquisition does not bypass an already queued waiter"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -364,7 +376,11 @@ mod tests {
             h.await.unwrap();
         }
         // Never more than one holder of the same key at once.
-        assert_eq!(max_seen.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            1,
+            "contract: same key serializes"
+        );
     }
 
     #[test]
@@ -374,15 +390,22 @@ mod tests {
         let identity = Arc::downgrade(&first);
         std::mem::drop(first);
         let next = slots.get("reused", || panic!("an idle scalar control was rebuilt"));
-        assert!(Arc::ptr_eq(&identity.upgrade().unwrap(), &next));
+        assert!(
+            Arc::ptr_eq(&identity.upgrade().unwrap(), &next),
+            "contract: scalar controls reuse idle identity and explicit maintenance reclaims it"
+        );
         std::mem::drop(next);
         slots.clean(1024);
-        assert!(identity.upgrade().is_none());
+        assert!(
+            identity.upgrade().is_none(),
+            "contract: scalar controls reuse idle identity and explicit maintenance reclaims it"
+        );
         assert!(
             slots
                 .shards
                 .iter()
-                .all(|shard| shard.lock().entries.is_empty())
+                .all(|shard| shard.lock().entries.is_empty()),
+            "contract: scalar controls reuse idle identity and explicit maintenance reclaims it"
         );
     }
 
@@ -395,19 +418,27 @@ mod tests {
             .take(RETAINED_CONTROLS_PER_SHARD + 1)
             .map(|key| Arc::downgrade(&slots.get(&key, || Mutex::new(()))))
             .collect();
-        assert!(identities[0].upgrade().is_none());
+        assert!(
+            identities[0].upgrade().is_none(),
+            "contract: scalar control retention is bounded per shard"
+        );
         assert_eq!(
             identities
                 .iter()
                 .filter(|identity| identity.upgrade().is_some())
                 .count(),
-            RETAINED_CONTROLS_PER_SHARD
+            RETAINED_CONTROLS_PER_SHARD,
+            "contract: scalar control retention is bounded per shard"
         );
         let shard = slots.shards[0].lock();
         let ControlRetention::Reuse(controls) = &shard.controls else {
             panic!("scalar controls must select bounded reuse")
         };
-        assert_eq!(controls.len(), RETAINED_CONTROLS_PER_SHARD);
+        assert_eq!(
+            controls.len(),
+            RETAINED_CONTROLS_PER_SHARD,
+            "contract: scalar control retention is bounded per shard"
+        );
     }
 
     #[tokio::test]
@@ -417,7 +448,10 @@ mod tests {
         let identity = Arc::downgrade(&locks.mutex_for("held"));
         let mut queued = std::pin::pin!(locks.lock("held"));
         let initial = std::future::poll_fn(|cx| Poll::Ready(queued.as_mut().poll(cx))).await;
-        assert!(initial.is_pending());
+        assert!(
+            initial.is_pending(),
+            "contract: pool eviction and maintenance preserve holder and queued waiter identity"
+        );
         let shard = locks.locks.hash.hash_one("held") as usize & (SLOT_SHARDS - 1);
         for key in (0..)
             .map(|index| format!("eviction-{index}"))
@@ -429,19 +463,25 @@ mod tests {
             std::mem::drop(locks.mutex_for(&key));
         }
         locks.clean_idle(1024);
-        assert!(Arc::ptr_eq(
-            &identity.upgrade().unwrap(),
-            &locks.mutex_for("held")
-        ));
+        assert!(
+            Arc::ptr_eq(&identity.upgrade().unwrap(), &locks.mutex_for("held")),
+            "contract: pool eviction and maintenance preserve holder and queued waiter identity"
+        );
         std::mem::drop(first);
         assert!(
             locks.try_lock("held").is_none(),
             "a queued waiter was bypassed"
         );
         let second = queued.await;
-        assert!(locks.try_lock("held").is_none());
+        assert!(
+            locks.try_lock("held").is_none(),
+            "contract: pool eviction and maintenance preserve holder and queued waiter identity"
+        );
         std::mem::drop(second);
-        assert!(locks.try_lock("held").is_some());
+        assert!(
+            locks.try_lock("held").is_some(),
+            "contract: pool eviction and maintenance preserve holder and queued waiter identity"
+        );
     }
 
     #[test]
@@ -471,8 +511,14 @@ mod tests {
             .iter()
             .map(|shard| shard.lock().entries.len())
             .sum();
-        assert_eq!(remaining, 1);
-        assert!(Arc::ptr_eq(&first, &slots.get(&keys[0], || Mutex::new(()))));
+        assert_eq!(
+            remaining, 1,
+            "contract: bounded maintenance visits idle shards despite a live first shard"
+        );
+        assert!(
+            Arc::ptr_eq(&first, &slots.get(&keys[0], || Mutex::new(()))),
+            "contract: bounded maintenance visits idle shards despite a live first shard"
+        );
     }
 
     #[test]
@@ -484,7 +530,10 @@ mod tests {
             .map(|key| slots.get(key, || Mutex::new(())))
             .collect();
         for (key, value) in keys.iter().zip(&values) {
-            assert!(Arc::ptr_eq(value, &slots.get(key, || Mutex::new(()))));
+            assert!(
+                Arc::ptr_eq(value, &slots.get(key, || Mutex::new(()))),
+                "contract: fifty thousand active slots keep identity and reclaim after drop"
+            );
         }
         let entries: usize = slots
             .shards
@@ -496,13 +545,24 @@ mod tests {
             .iter()
             .map(|shard| shard.lock().sweep.len())
             .sum();
-        assert_eq!(entries, keys.len());
-        assert_eq!(queued, keys.len());
+        assert_eq!(
+            entries,
+            keys.len(),
+            "contract: fifty thousand active slots keep identity and reclaim after drop"
+        );
+        assert_eq!(
+            queued,
+            keys.len(),
+            "contract: fifty thousand active slots keep identity and reclaim after drop"
+        );
         std::mem::drop(values);
         slots.clean(keys.len());
-        assert!(slots.shards.iter().all(|shard| {
-            let shard = shard.lock();
-            shard.entries.is_empty() && shard.sweep.is_empty()
-        }));
+        assert!(
+            slots.shards.iter().all(|shard| {
+                let shard = shard.lock();
+                shard.entries.is_empty() && shard.sweep.is_empty()
+            }),
+            "contract: fifty thousand active slots keep identity and reclaim after drop"
+        );
     }
 }

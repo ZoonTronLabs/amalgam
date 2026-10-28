@@ -42,25 +42,35 @@ fn ready_factory_and_receipt_finish_without_a_runtime() {
             .with_receipt(),
     )
     .unwrap();
-    assert_eq!(value.value, 7);
-    assert!(matches!(
-        value.commit,
-        amalgam::advanced::CommitReceipt::Mutation(MutationReceipt::Completed(_))
-    ));
+    assert_eq!(
+        value.value, 7,
+        "contract: ready factory and receipt finish without a runtime"
+    );
+    assert!(
+        matches!(
+            value.commit,
+            amalgam::advanced::CommitReceipt::Mutation(MutationReceipt::Completed(_))
+        ),
+        "contract: ready factory and receipt finish without a runtime"
+    );
     let token = token.lock().unwrap().take().unwrap();
-    assert!(matches!(
-        token.check(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::ScopeFinished
-        })
-    ));
+    assert!(
+        matches!(
+            token.check(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::ScopeFinished
+            })
+        ),
+        "contract: ready factory and receipt finish without a runtime"
+    );
     assert_eq!(
         ready(cache.get_or_set::<_, _>(
             "ready",
             typed_factory(|_| async { panic!("already cached") })
         ))
         .unwrap(),
-        7
+        7,
+        "contract: ready factory and receipt finish without a runtime"
     );
 }
 
@@ -80,7 +90,10 @@ impl Future for PinnedFactory {
         if first == 0 {
             this.address.store(address, Ordering::SeqCst);
         } else {
-            assert_eq!(first, address);
+            assert_eq!(
+                first, address,
+                "contract: caller handoff keeps the retained factory at its first poll address"
+            );
         }
         if this.ready.load(Ordering::SeqCst) {
             Poll::Ready(Ok(this.context.borrow_mut().take().unwrap().value(9)))
@@ -96,7 +109,8 @@ impl Drop for PinnedFactory {
     fn drop(&mut self) {
         assert_eq!(
             self.address.load(Ordering::SeqCst),
-            self as *const Self as usize
+            self as *const Self as usize,
+            "contract: the retained factory stays pinned until destruction"
         );
         self.dropped.store(true, Ordering::SeqCst);
     }
@@ -129,14 +143,30 @@ fn dropping_a_caller_keeps_the_pinned_factory_for_a_new_driver() {
             )
             .into_future(),
     );
-    assert!(once(caller.as_mut()).is_pending());
+    assert!(
+        once(caller.as_mut()).is_pending(),
+        "contract: dropping a caller keeps the pinned factory for a new driver"
+    );
     std::mem::drop(caller);
-    assert!(!dropped.load(Ordering::SeqCst));
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "contract: dropping a caller keeps the pinned factory for a new driver"
+    );
     ready.store(true, Ordering::SeqCst);
     let value = ready_value(&cache);
-    assert_eq!(value, 9);
-    assert_eq!(running.load(Ordering::SeqCst), 1);
-    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        value, 9,
+        "contract: dropping a caller keeps the pinned factory for a new driver"
+    );
+    assert_eq!(
+        running.load(Ordering::SeqCst),
+        1,
+        "contract: dropping a caller keeps the pinned factory for a new driver"
+    );
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "contract: dropping a caller keeps the pinned factory for a new driver"
+    );
 }
 fn ready_value(cache: &Cache<u64>) -> u64 {
     ready(cache.get_or_set::<_, _>(
@@ -167,7 +197,10 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
             )
             .into_future(),
     );
-    assert!(once(leader.as_mut()).is_pending());
+    assert!(
+        once(leader.as_mut()).is_pending(),
+        "contract: concurrent waiters share one typed factory failure"
+    );
     let mut followers = Vec::with_capacity(20);
     for _ in 0..20 {
         let mut follower = Box::pin(
@@ -178,7 +211,10 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
                 )
                 .into_future(),
         );
-        assert!(once(follower.as_mut()).is_pending());
+        assert!(
+            once(follower.as_mut()).is_pending(),
+            "contract: concurrent waiters share one typed factory failure"
+        );
         followers.push(follower);
     }
     release.send(()).unwrap();
@@ -204,9 +240,17 @@ async fn concurrent_waiters_share_one_typed_factory_failure() {
             .unwrap()
             .downcast_ref::<IoError>()
             .unwrap();
-        assert_eq!(cause.kind(), ErrorKind::PermissionDenied);
+        assert_eq!(
+            cause.kind(),
+            ErrorKind::PermissionDenied,
+            "contract: concurrent waiters share one typed factory failure"
+        );
     }
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: concurrent waiters share one typed factory failure"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -225,7 +269,10 @@ async fn leader_gets_original_panic_and_followers_get_a_typed_outcome() {
             )
             .into_future(),
     );
-    assert!(once(leader.as_mut()).is_pending());
+    assert!(
+        once(leader.as_mut()).is_pending(),
+        "contract: leader gets original panic and followers get a typed outcome"
+    );
     let mut follower = Box::pin(
         cache
             .get_or_set::<_, _>(
@@ -234,7 +281,10 @@ async fn leader_gets_original_panic_and_followers_get_a_typed_outcome() {
             )
             .into_future(),
     );
-    assert!(once(follower.as_mut()).is_pending());
+    assert!(
+        once(follower.as_mut()).is_pending(),
+        "contract: leader gets original panic and followers get a typed outcome"
+    );
     release.send(()).unwrap();
     let result = tokio::time::timeout(
         Duration::from_secs(2),
@@ -251,13 +301,20 @@ async fn leader_gets_original_panic_and_followers_get_a_typed_outcome() {
     .await
     .unwrap()
     .unwrap_err();
-    assert_eq!(*result.downcast::<u64>().unwrap(), 91);
-    assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(2), follower)
-            .await
-            .unwrap(),
-        Err(Error::FactoryPanicked)
-    ));
+    assert_eq!(
+        *result.downcast::<u64>().unwrap(),
+        91,
+        "contract: leader gets original panic and followers get a typed outcome"
+    );
+    assert!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(2), follower)
+                .await
+                .unwrap(),
+            Err(Error::FactoryPanicked)
+        ),
+        "contract: leader gets original panic and followers get a typed outcome"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -285,9 +342,19 @@ fn a_retained_factory_token_does_not_pin_a_completed_value() {
     let weak = Arc::downgrade(&value);
     std::mem::drop(value);
     ready(cache.remove("drop").with_receipt()).unwrap();
-    assert!(weak.upgrade().is_none());
-    assert_eq!(count.load(Ordering::SeqCst), 1);
-    assert!(token.lock().unwrap().as_ref().unwrap().is_cancelled());
+    assert!(
+        weak.upgrade().is_none(),
+        "contract: a retained factory token does not pin a completed value"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "contract: a retained factory token does not pin a completed value"
+    );
+    assert!(
+        token.lock().unwrap().as_ref().unwrap().is_cancelled(),
+        "contract: a retained factory token does not pin a completed value"
+    );
 }
 
 #[tokio::test]
@@ -316,15 +383,26 @@ async fn disabling_fail_safe_preserves_an_existing_conditional_snapshot() {
         .get_or_set(
             "conditional",
             typed_factory(|ctx| async {
-                assert_eq!(ctx.stale_value(), Some(&7));
-                assert_eq!(ctx.stale_etag(), Some("saved"));
+                assert_eq!(
+                    ctx.stale_value(),
+                    Some(&7),
+                    "contract: disabling fail safe preserves an existing conditional snapshot"
+                );
+                assert_eq!(
+                    ctx.stale_etag(),
+                    Some("saved"),
+                    "contract: disabling fail safe preserves an existing conditional snapshot"
+                );
                 ctx.not_modified()
             }),
         )
         .options(|_| normal)
         .await
         .unwrap();
-    assert_eq!(refreshed, 7);
+    assert_eq!(
+        refreshed, 7,
+        "contract: disabling fail safe preserves an existing conditional snapshot"
+    );
     cache.shutdown().await.unwrap();
 }
 

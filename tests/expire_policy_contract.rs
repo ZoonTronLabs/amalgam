@@ -56,13 +56,21 @@ async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() 
                 .await
                 .unwrap()
                 .as_ref(),
-            Some(&7)
+            Some(&7),
+            "contract: expiration policy keeps l1 stale and selects l2 retention or removal"
         );
         let second = build();
         let remote = second.try_get("key").options(|_| stale_read).await.unwrap();
         match policy {
-            DistributedExpirePolicy::RetainStale => assert_eq!(remote.as_ref(), Some(&7)),
-            DistributedExpirePolicy::Remove => assert!(remote.is_none()),
+            DistributedExpirePolicy::RetainStale => assert_eq!(
+                remote.as_ref(),
+                Some(&7),
+                "contract: expiration policy keeps l1 stale and selects l2 retention or removal"
+            ),
+            DistributedExpirePolicy::Remove => assert!(
+                remote.is_none(),
+                "contract: expiration policy keeps l1 stale and selects l2 retention or removal"
+            ),
         }
         first.shutdown().await.unwrap();
         second.shutdown().await.unwrap();
@@ -89,18 +97,25 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
         .unwrap();
     let source = CancellationSource::new();
     source.cancel();
-    assert!(matches!(
-        cache
-            .expire("key")
-            .distributed_policy(DistributedExpirePolicy::Remove)
-            .cancellation(source.token())
-            .with_receipt()
-            .await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert!(
+        matches!(
+            cache
+                .expire("key")
+                .distributed_policy(DistributedExpirePolicy::Remove)
+                .cancellation(source.token())
+                .with_receipt()
+                .await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit skip and cancellation still control distributed removal"
+    );
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: explicit skip and cancellation still control distributed removal"
+    );
     let report = cache
         .expire("key")
         .options(|_| EntryOptions::default().with_skip_distributed(false, true))
@@ -111,10 +126,16 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.distributed,
-        EffectOutcome::Skipped(SkipReason::Policy)
-    ));
-    assert!(backend.get("v2:key").await.unwrap().is_some());
+    assert!(
+        matches!(
+            report.distributed,
+            EffectOutcome::Skipped(SkipReason::Policy)
+        ),
+        "contract: explicit skip and cancellation still control distributed removal"
+    );
+    assert!(
+        backend.get("v2:key").await.unwrap().is_some(),
+        "contract: explicit skip and cancellation still control distributed removal"
+    );
     cache.shutdown().await.unwrap();
 }

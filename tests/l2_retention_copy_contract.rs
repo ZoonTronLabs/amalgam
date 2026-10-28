@@ -74,7 +74,10 @@ async fn cache_l2_retention_uses_selected_copies_and_preserves_all_metadata() ->
             .await?
             .wait()
             .await?;
-        assert!(memory.get("payload")?.is_none());
+        assert!(
+            memory.get("payload")?.is_none(),
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
+        );
         clock.advance(Duration::from_secs(10));
         ORDINARY_CLONES.store(0, Ordering::SeqCst);
         copy.0.store(0, Ordering::SeqCst);
@@ -98,7 +101,10 @@ async fn cache_l2_retention_uses_selected_copies_and_preserves_all_metadata() ->
                     .await?
             }
         };
-        assert_eq!(result.0, 42);
+        assert_eq!(
+            result.0, 42,
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
+        );
         assert_eq!(
             ORDINARY_CLONES.load(Ordering::SeqCst),
             0,
@@ -111,17 +117,35 @@ async fn cache_l2_retention_uses_selected_copies_and_preserves_all_metadata() ->
         );
         let record = memory.get("payload")?.unwrap();
         let stored = record.entry();
-        assert_eq!(stored.value().0, 42);
-        assert_eq!(stored.meta().created(), created);
-        assert_eq!(stored.meta().size(), Some(EntryWeight::new(9)));
-        assert_eq!(stored.meta().priority(), Priority::High);
+        assert_eq!(
+            stored.value().0,
+            42,
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
+        );
+        assert_eq!(
+            stored.meta().created(),
+            created,
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
+        );
+        assert_eq!(
+            stored.meta().size(),
+            Some(EntryWeight::new(9)),
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
+        );
+        assert_eq!(
+            stored.meta().priority(),
+            Priority::High,
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
+        );
         assert_eq!(
             stored.meta().logical_expiration(),
-            created.saturating_add(Duration::from_secs(17))
+            created.saturating_add(Duration::from_secs(17)),
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
         );
         assert_eq!(
             stored.meta().physical_expiration(),
-            created.saturating_add(Duration::from_secs(120))
+            created.saturating_add(Duration::from_secs(120)),
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
         );
         assert_eq!(
             stored
@@ -130,7 +154,8 @@ async fn cache_l2_retention_uses_selected_copies_and_preserves_all_metadata() ->
                 .iter()
                 .map(|tag| tag.as_str())
                 .collect::<Vec<_>>(),
-            ["alpha", "beta"]
+            ["alpha", "beta"],
+            "contract: cache l2 retention uses selected copies and preserves all metadata"
         );
         std::mem::drop(record);
         cache.shutdown().await?;
@@ -168,10 +193,34 @@ fn public_snapshot_retention_helper_keeps_its_existing_clone_contract() {
     )
     .unwrap();
     let entry = snapshot.try_into_entry(Timestamp::from_ticks(2)).unwrap();
-    assert_eq!(entry.value().0, 7);
-    assert_eq!(entry.meta().size(), Some(EntryWeight::new(9)));
-    assert_eq!(entry.meta().priority(), Priority::High);
-    assert_eq!(entry.meta().etag(), Some("validator"));
-    assert_eq!(entry.meta().last_modified(), Some(Timestamp::from_ticks(1)));
-    assert_eq!(PUBLIC_CLONES.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        entry.value().0,
+        7,
+        "contract: public snapshot retention helper keeps its existing clone contract"
+    );
+    assert_eq!(
+        entry.meta().size(),
+        Some(EntryWeight::new(9)),
+        "contract: public snapshot retention helper keeps its existing clone contract"
+    );
+    assert_eq!(
+        entry.meta().priority(),
+        Priority::High,
+        "contract: public snapshot retention helper keeps its existing clone contract"
+    );
+    assert_eq!(
+        entry.meta().etag(),
+        Some("validator"),
+        "contract: public snapshot retention helper keeps its existing clone contract"
+    );
+    assert_eq!(
+        entry.meta().last_modified(),
+        Some(Timestamp::from_ticks(1)),
+        "contract: public snapshot retention helper keeps its existing clone contract"
+    );
+    assert_eq!(
+        PUBLIC_CLONES.load(Ordering::SeqCst),
+        1,
+        "contract: public snapshot retention helper keeps its existing clone contract"
+    );
 }

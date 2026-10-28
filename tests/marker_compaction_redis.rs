@@ -86,7 +86,11 @@ async fn native_clear_compaction_returns_the_final_authoritative_maximum_once() 
             actual,
             "returned primary clear must equal its committed maximum, even after lower-limit compaction"
         );
-        assert_eq!(actual, version(candidate.max(21)));
+        assert_eq!(
+            actual,
+            version(candidate.max(21)),
+            "contract: native clear compaction returns the final authoritative maximum once"
+        );
         assert!(
             matches!(outcome, MarkerAdvanceOutcome::Advanced(_)),
             "clear-remove compaction has one primary obligation, not a duplicate additional clear"
@@ -96,14 +100,16 @@ async fn native_clear_compaction_returns_the_final_authoritative_maximum_once() 
                 .read(&scope, &MarkerKind::Tag(Tag::new("one").unwrap()))
                 .await
                 .unwrap()
-                .is_none()
+                .is_none(),
+            "contract: native clear compaction returns the final authoritative maximum once"
         );
         assert!(
             store
                 .read(&scope, &MarkerKind::Tag(Tag::new("two").unwrap()))
                 .await
                 .unwrap()
-                .is_none()
+                .is_none(),
+            "contract: native clear compaction returns the final authoritative maximum once"
         );
     }
 }
@@ -178,15 +184,18 @@ async fn native_captured_clear_recovery_survives_lower_limit_compaction() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.distributed,
-        EffectOutcome::RecoveryQueued { .. }
-    ));
+    assert!(
+        matches!(report.distributed, EffectOutcome::RecoveryQueued { .. }),
+        "contract: native captured clear recovery survives lower limit compaction"
+    );
     let ticket = cache
         .marker_recovery_ticket(&MarkerKind::ClearRemove)
         .unwrap();
-    assert!(matches!(ticket.work(), RecoveryWork::MarkerMutation(work)
-        if matches!(work.stage(), MarkerMutationStage::Advance { .. })));
+    assert!(
+        matches!(ticket.work(), RecoveryWork::MarkerMutation(work)
+        if matches!(work.stage(), MarkerMutationStage::Advance { .. })),
+        "contract: native captured clear recovery survives lower limit compaction"
+    );
     clock.set(time(12));
     // RENAME replaces the fault atomically. DEL followed by RENAME lets a
     // concurrent replay commit into an empty journal before the saved journal
@@ -211,10 +220,26 @@ async fn native_captured_clear_recovery_survives_lower_limit_compaction() {
                 .await
                 .unwrap();
             if let Some(snapshot) = read.snapshot() {
-                assert_eq!(snapshot.version(), version(21));
-                assert_eq!(snapshot.created(), time(10));
-                assert_eq!(snapshot.logical_expiration(), time(15));
-                assert_eq!(snapshot.physical_expiration(), time(15));
+                assert_eq!(
+                    snapshot.version(),
+                    version(21),
+                    "contract: native captured clear recovery survives lower limit compaction"
+                );
+                assert_eq!(
+                    snapshot.created(),
+                    time(10),
+                    "contract: native captured clear recovery survives lower limit compaction"
+                );
+                assert_eq!(
+                    snapshot.logical_expiration(),
+                    time(15),
+                    "contract: native captured clear recovery survives lower limit compaction"
+                );
+                assert_eq!(
+                    snapshot.physical_expiration(),
+                    time(15),
+                    "contract: native captured clear recovery survives lower limit compaction"
+                );
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -224,7 +249,8 @@ async fn native_captured_clear_recovery_survives_lower_limit_compaction() {
     .expect("committed global clear must reach snapshot population after compaction");
     assert_eq!(
         store.read(&scope, &MarkerKind::ClearRemove).await.unwrap(),
-        Some(version(21))
+        Some(version(21)),
+        "contract: native captured clear recovery survives lower limit compaction"
     );
     cache.shutdown().await.unwrap();
 }

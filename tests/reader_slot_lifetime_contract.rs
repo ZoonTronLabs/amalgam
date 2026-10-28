@@ -104,7 +104,8 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
         .unwrap();
     assert_eq!(
         cache.try_get("key").into_future().await.unwrap().unwrap().0,
-        1
+        1,
+        "contract: replacement keeps an owned cloner source alive and shutdown drains its last drop"
     );
     gate.armed.store(true, Ordering::SeqCst);
     let reading = cache.clone();
@@ -136,16 +137,20 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
     assert!(
         tokio::time::timeout(Duration::from_millis(20), &mut shutdown)
             .await
-            .is_err()
+            .is_err(),
+        "contract: replacement keeps an owned cloner source alive and shutdown drains its last drop"
     );
     *gate.released.lock().unwrap() = true;
     gate.release.notify_all();
-    assert!(matches!(
-        read.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            read.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: replacement keeps an owned cloner source alive and shutdown drains its last drop"
+    );
     tokio::time::timeout(Duration::from_secs(2), shutdown)
         .await
         .unwrap()

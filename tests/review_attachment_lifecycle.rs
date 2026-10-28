@@ -139,25 +139,33 @@ async fn late_attachment(owner: Owner, teardown: Teardown) {
         .is_ok();
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
-    assert!(registration.join().unwrap().is_err());
+    assert!(
+        registration.join().unwrap().is_err(),
+        "contract: late attachment"
+    );
     let first = owner.shutdown().await;
     let repeated = owner.shutdown().await;
-    assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stopped.load(Ordering::SeqCst),
+        1,
+        "contract: late attachment"
+    );
     assert!(
         !premature,
         "shutdown completed while an admitted startup callback still owned resources"
     );
     match teardown {
         Teardown::Succeed => {
-            assert!(first.is_empty());
-            assert!(repeated.is_empty());
+            assert!(first.is_empty(), "contract: late attachment");
+            assert!(repeated.is_empty(), "contract: late attachment");
         }
         Teardown::Fail => {
-            assert_eq!(first.len(), 1);
-            assert_eq!(repeated.len(), 1);
+            assert_eq!(first.len(), 1, "contract: late attachment");
+            assert_eq!(repeated.len(), 1, "contract: late attachment");
             for errors in [&first, &repeated] {
                 assert!(
-                    matches!(&errors[0], PluginError::Failure { stage: PluginStage::Stop, source, .. } if source.to_string() == "original late attachment stop failure")
+                    matches!(&errors[0], PluginError::Failure { stage: PluginStage::Stop, source, .. } if source.to_string() == "original late attachment stop failure"),
+                    "contract: late attachment"
                 );
             }
         }
@@ -302,9 +310,16 @@ async fn owned_destruction(owner: Owner, boundary: StopBoundary) {
             .is_ok();
     destruction.release();
     worker.join().unwrap();
-    assert!(owner.shutdown().await.is_empty());
+    assert!(
+        owner.shutdown().await.is_empty(),
+        "contract: owned destruction"
+    );
     registration.wait_stopped().await.unwrap();
-    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        dropped.load(Ordering::SeqCst),
+        1,
+        "contract: owned destruction"
+    );
     assert!(
         !early_shutdown,
         "shutdown completed while the owning session destructor was still running"

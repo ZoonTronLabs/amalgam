@@ -60,7 +60,11 @@ async fn l2_lookup_preserves_raw_provider_context_and_explicit_options_precedenc
         .default_options(defaults.clone())
         .default_options_provider(provider.clone())
         .try_build()?;
-    assert_eq!(reader.try_get("ordinary").await?.as_ref(), Some(&11));
+    assert_eq!(
+        reader.try_get("ordinary").await?.as_ref(),
+        Some(&11),
+        "contract: l2 lookup preserves raw provider context and explicit options precedence"
+    );
     assert_eq!(
         reader
             .get_or_set("short", |_| async {
@@ -69,7 +73,8 @@ async fn l2_lookup_preserves_raw_provider_context_and_explicit_options_precedenc
                 Ok::<_, Infallible>(99)
             })
             .await?,
-        12
+        12,
+        "contract: l2 lookup preserves raw provider context and explicit options precedence"
     );
     assert_eq!(
         reader
@@ -77,27 +82,36 @@ async fn l2_lookup_preserves_raw_provider_context_and_explicit_options_precedenc
             .options(|_| defaults)
             .await?
             .as_ref(),
-        Some(&11)
+        Some(&11),
+        "contract: l2 lookup preserves raw provider context and explicit options precedence"
     );
 
     let produced = reader
         .get_or_set(
             "absent",
             source::factory(|ctx| async move {
-                assert_eq!(ctx.options().duration(), Duration::from_secs(3));
+                assert_eq!(ctx.options().duration(), Duration::from_secs(3), "contract: l2 lookup preserves raw provider context and explicit options precedence");
                 Ok::<_, Infallible>(13)
             }),
         )
         .options(|options| options.with_duration(Duration::from_secs(3)))
         .await?;
-    assert_eq!(produced, 13);
-    assert_eq!(reader.entry_options().duration(), Duration::from_secs(10));
+    assert_eq!(
+        produced, 13,
+        "contract: l2 lookup preserves raw provider context and explicit options precedence"
+    );
+    assert_eq!(
+        reader.entry_options().duration(),
+        Duration::from_secs(10),
+        "contract: l2 lookup preserves raw provider context and explicit options precedence"
+    );
     assert_eq!(
         *provider.0.lock().unwrap(),
         vec![
             ("ordinary".to_owned(), Duration::from_secs(10)),
             ("short".to_owned(), Duration::from_secs(10)),
-        ]
+        ],
+        "contract: l2 lookup preserves raw provider context and explicit options precedence"
     );
     reader.shutdown().await?;
     writer.shutdown().await?;
@@ -139,7 +153,7 @@ async fn pending_l2_miss_materializes_independent_adaptive_factory_options() -> 
             .get_or_set(
                 "adaptive",
                 source::factory(|mut ctx| async move {
-                    assert_eq!(ctx.options().duration(), Duration::from_secs(60));
+                    assert_eq!(ctx.options().duration(), Duration::from_secs(60), "contract: pending l2 miss materializes independent adaptive factory options");
                     let options = ctx.options().clone().with_duration(Duration::from_secs(1));
                     *ctx.options_mut() = options;
                     tokio::task::yield_now().await;
@@ -149,11 +163,18 @@ async fn pending_l2_miss_materializes_independent_adaptive_factory_options() -> 
             .with_receipt()
             .await?
             .value,
-        42
+        42, "contract: pending l2 miss materializes independent adaptive factory options"
     );
-    assert_eq!(cache.entry_options().duration(), Duration::from_secs(60));
+    assert_eq!(
+        cache.entry_options().duration(),
+        Duration::from_secs(60),
+        "contract: pending l2 miss materializes independent adaptive factory options"
+    );
     clock.advance(Duration::from_secs(2));
-    assert!(cache.try_get("adaptive").await?.is_none());
+    assert!(
+        cache.try_get("adaptive").await?.is_none(),
+        "contract: pending l2 miss materializes independent adaptive factory options"
+    );
     cache.shutdown().await?;
     Ok(())
 }

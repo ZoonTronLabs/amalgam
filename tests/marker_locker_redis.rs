@@ -277,16 +277,33 @@ async fn native_core_rechecks_fences_repairs_and_releases_before_returning() {
         return;
     };
     let f = fixture(&url, "normal").await;
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
-    assert_eq!(f.store.snapshots.reads.load(Ordering::SeqCst), 2);
-    assert_eq!(f.store.snapshots.proofs.lock().unwrap().len(), 1);
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: native core rechecks fences repairs and releases before returning"
+    );
+    assert_eq!(
+        f.store.snapshots.reads.load(Ordering::SeqCst),
+        2,
+        "contract: native core rechecks fences repairs and releases before returning"
+    );
+    assert_eq!(
+        f.store.snapshots.proofs.lock().unwrap().len(),
+        1,
+        "contract: native core rechecks fences repairs and releases before returning"
+    );
     assert_eq!(
         snapshot(&f).await.snapshot().unwrap().version(),
-        MarkerVersion::new(time(1))
+        MarkerVersion::new(time(1)),
+        "contract: native core rechecks fences repairs and releases before returning"
     );
     let next = replacement(&f, &f.store.snapshots.last_proof()).await;
     next.release().await.unwrap();
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: native core rechecks fences repairs and releases before returning"
+    );
     assert_eq!(
         f.store.snapshots.reads.load(Ordering::SeqCst),
         2,
@@ -314,15 +331,16 @@ async fn native_core_replaced_token_cannot_repair_or_create_fresh_local_authorit
     let next = replacement(&f, &old).await;
     let next_proof = next.proof().unwrap();
     gate.allow();
-    assert!(matches!(
-        call.await.unwrap(),
-        Err(Error::Lease(LeaseError::Lost))
-    ));
+    assert!(
+        matches!(call.await.unwrap(), Err(Error::Lease(LeaseError::Lost))),
+        "contract: native core replaced token cannot repair or create fresh local authority"
+    );
     assert_eq!(
         snapshot(&f).await,
         MarkerSnapshotRead::Missing {
             maximum: Some(MarkerVersion::new(time(1)))
-        }
+        },
+        "contract: native core replaced token cannot repair or create fresh local authority"
     );
     assert_eq!(
         f.locker
@@ -338,7 +356,11 @@ async fn native_core_replaced_token_cannot_repair_or_create_fresh_local_authorit
     );
     next.release().await.unwrap();
     *f.store.snapshots.write.lock().unwrap() = Write::Pass;
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: native core replaced token cannot repair or create fresh local authority"
+    );
     assert_eq!(
         f.store.snapshots.reads.load(Ordering::SeqCst),
         4,
@@ -346,11 +368,13 @@ async fn native_core_replaced_token_cannot_repair_or_create_fresh_local_authorit
     );
     assert_eq!(
         snapshot(&f).await.snapshot().unwrap().version(),
-        MarkerVersion::new(time(1))
+        MarkerVersion::new(time(1)),
+        "contract: native core replaced token cannot repair or create fresh local authority"
     );
     assert_eq!(
         f.store.read(&f.scope, &kind()).await.unwrap(),
-        Some(MarkerVersion::new(time(1)))
+        Some(MarkerVersion::new(time(1))),
+        "contract: native core replaced token cannot repair or create fresh local authority"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -370,17 +394,37 @@ async fn native_eager_returns_before_fenced_write_and_releases_actual_redis_toke
             .with_skip_distributed_locker(false),
     )
     .await;
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: native eager returns before fenced write and releases actual redis token"
+    );
     let gate = Gate::new();
     *f.store.snapshots.write.lock().unwrap() = Write::Park(gate.clone());
     f.clock.set(time(16));
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: native eager returns before fenced write and releases actual redis token"
+    );
     gate.entered().await;
     for _ in 0..4 {
-        assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+        assert_eq!(
+            f.cache.try_get("key").await.unwrap().as_ref(),
+            Some(&7),
+            "contract: native eager returns before fenced write and releases actual redis token"
+        );
     }
-    assert_eq!(f.store.snapshots.proofs.lock().unwrap().len(), 2);
-    assert_eq!(f.store.snapshots.reads.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        f.store.snapshots.proofs.lock().unwrap().len(),
+        2,
+        "contract: native eager returns before fenced write and releases actual redis token"
+    );
+    assert_eq!(
+        f.store.snapshots.reads.load(Ordering::SeqCst),
+        3,
+        "contract: native eager returns before fenced write and releases actual redis token"
+    );
     gate.allow();
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -406,7 +450,8 @@ async fn native_eager_returns_before_fenced_write_and_releases_actual_redis_toke
     next.release().await.unwrap();
     assert_eq!(
         f.store.read(&f.scope, &kind()).await.unwrap(),
-        Some(MarkerVersion::new(time(1)))
+        Some(MarkerVersion::new(time(1))),
+        "contract: native eager returns before fenced write and releases actual redis token"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -428,15 +473,31 @@ async fn native_failed_repair_reacquires_token_and_preserves_original_deadlines(
     )
     .await;
     *f.store.snapshots.write.lock().unwrap() = Write::Backend;
-    assert_eq!(f.cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        f.cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
     let original = f.store.snapshots.last_proof();
     let queued = f.cache.marker_snapshot_recovery_ticket(&kind()).unwrap();
     let RecoveryWork::MarkerSnapshot(work) = queued.work() else {
         panic!("snapshot work required");
     };
-    assert_eq!(work.participation(), MarkerSnapshotParticipation::Fenced);
-    assert_eq!(work.snapshot().created(), time(10));
-    assert_eq!(work.snapshot().physical_expiration(), time(15));
+    assert_eq!(
+        work.participation(),
+        MarkerSnapshotParticipation::Fenced,
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
+    assert_eq!(
+        work.snapshot().created(),
+        time(10),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
+    assert_eq!(
+        work.snapshot().physical_expiration(),
+        time(15),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
     let next = replacement(&f, &original).await;
     next.release().await.unwrap();
     f.clock.set(time(12));
@@ -457,11 +518,31 @@ async fn native_failed_repair_reacquires_token_and_preserves_original_deadlines(
         .unwrap()
         .snapshot()
         .unwrap();
-    assert_eq!(repaired.version(), MarkerVersion::new(time(1)));
-    assert_eq!(repaired.created(), time(10));
-    assert_eq!(repaired.logical_expiration(), time(15));
-    assert_eq!(repaired.physical_expiration(), time(15));
-    assert_ne!(f.store.snapshots.last_proof().token(), original.token());
+    assert_eq!(
+        repaired.version(),
+        MarkerVersion::new(time(1)),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
+    assert_eq!(
+        repaired.created(),
+        time(10),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
+    assert_eq!(
+        repaired.logical_expiration(),
+        time(15),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
+    assert_eq!(
+        repaired.physical_expiration(),
+        time(15),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
+    assert_ne!(
+        f.store.snapshots.last_proof().token(),
+        original.token(),
+        "contract: native failed repair reacquires token and preserves original deadlines"
+    );
     let next = replacement(&f, &f.store.snapshots.last_proof()).await;
     next.release().await.unwrap();
     f.cache.shutdown().await.unwrap();

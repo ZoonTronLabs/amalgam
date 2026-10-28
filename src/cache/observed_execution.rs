@@ -148,11 +148,19 @@ mod tests {
             let mut observer =
                 std::pin::pin!(ObservedExecution::new(Ok(execution), Some(caller.token())));
             let first = std::future::poll_fn(|cx| Poll::Ready(observer.as_mut().poll(cx))).await;
-            assert!(first.is_pending());
-            caller.cancel_with(reason);
-            assert_eq!(*reasons.lock().unwrap(), vec![reason]);
             assert!(
-                matches!(observer.await, Err(Error::OperationCancelled { reason: actual }) if actual == reason)
+                first.is_pending(),
+                "contract: every explicit reason retires pending work before another caller poll"
+            );
+            caller.cancel_with(reason);
+            assert_eq!(
+                *reasons.lock().unwrap(),
+                vec![reason],
+                "contract: every explicit reason retires pending work before another caller poll"
+            );
+            assert!(
+                matches!(observer.await, Err(Error::OperationCancelled { reason: actual }) if actual == reason),
+                "contract: every explicit reason retires pending work before another caller poll"
             );
             scopes.close();
             scopes.drained().await;
@@ -175,18 +183,28 @@ mod tests {
         );
         let mut observer = std::pin::pin!(ObservedExecution::new(Ok(execution), None));
         let first = std::future::poll_fn(|cx| Poll::Ready(observer.as_mut().poll(cx))).await;
-        assert!(first.is_pending());
+        assert!(
+            first.is_pending(),
+            "contract: plain pending observer shutdown retires work without caller repoll"
+        );
         scopes.close();
         tokio::time::timeout(Duration::from_secs(1), scopes.drained())
             .await
             .unwrap();
-        assert_eq!(*reasons.lock().unwrap(), vec![Reason::CacheShutdown]);
-        assert!(matches!(
-            observer.await,
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
+        assert_eq!(
+            *reasons.lock().unwrap(),
+            vec![Reason::CacheShutdown],
+            "contract: plain pending observer shutdown retires work without caller repoll"
+        );
+        assert!(
+            matches!(
+                observer.await,
+                Err(Error::OperationCancelled {
+                    reason: Reason::CacheShutdown
+                })
+            ),
+            "contract: plain pending observer shutdown retires work without caller repoll"
+        );
     }
 
     #[tokio::test]
@@ -205,9 +223,14 @@ mod tests {
         );
         assert_eq!(
             ObservedExecution::new(Ok(execution), None).await.unwrap(),
-            7
+            7,
+            "contract: plain ready observer publishes completion before work retirement"
         );
-        assert_eq!(*reasons.lock().unwrap(), vec![Reason::ScopeFinished]);
+        assert_eq!(
+            *reasons.lock().unwrap(),
+            vec![Reason::ScopeFinished],
+            "contract: plain ready observer publishes completion before work retirement"
+        );
         scopes.close();
         scopes.drained().await;
     }

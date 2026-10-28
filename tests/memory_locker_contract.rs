@@ -86,10 +86,15 @@ impl Provider {
         }))
     }
     fn drained(&self) {
-        assert_eq!(self.active.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            self.active.load(Ordering::SeqCst),
+            0,
+            "contract: drained local coordination releases every acquired guard exactly once"
+        );
         assert_eq!(
             self.acquired.load(Ordering::SeqCst),
-            self.released.load(Ordering::SeqCst)
+            self.released.load(Ordering::SeqCst),
+            "contract: drained local coordination releases every acquired guard exactly once"
         );
     }
 }
@@ -214,9 +219,17 @@ async fn same_key_shares_one_factory_and_fresh_hits_skip_the_provider() {
         }));
     }
     for task in tasks {
-        assert_eq!(task.await.unwrap(), 42);
+        assert_eq!(
+            task.await.unwrap(),
+            42,
+            "contract: same key shares one factory and fresh hits skip the provider"
+        );
     }
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: same key shares one factory and fresh hits skip the provider"
+    );
     provider.drained();
     let calls = provider.requests.lock().unwrap().len();
     assert_eq!(
@@ -226,18 +239,30 @@ async fn same_key_shares_one_factory_and_fresh_hits_skip_the_provider() {
         )
         .await
         .unwrap(),
-        42
+        42,
+        "contract: same key shares one factory and fresh hits skip the provider"
     );
-    assert_eq!(provider.requests.lock().unwrap().len(), calls);
+    assert_eq!(
+        provider.requests.lock().unwrap().len(),
+        calls,
+        "contract: same key shares one factory and fresh hits skip the provider"
+    );
     {
         let requests = provider.requests.lock().unwrap();
-        assert!(requests.iter().all(|r| r.key() == "p:same"
-            && r.context().cache_name() == "profiles"
-            && r.context().instance_id() == "one"));
+        assert!(
+            requests.iter().all(|r| r.key() == "p:same"
+                && r.context().cache_name() == "profiles"
+                && r.context().instance_id() == "one"),
+            "contract: same key shares one factory and fresh hits skip the provider"
+        );
     }
     c.shutdown().await.unwrap();
     c.shutdown().await.unwrap();
-    assert_eq!(*provider.shutdowns.lock().unwrap(), ["one"]);
+    assert_eq!(
+        *provider.shutdowns.lock().unwrap(),
+        ["one"],
+        "contract: same key shares one factory and fresh hits skip the provider"
+    );
 }
 
 #[tokio::test]
@@ -271,7 +296,11 @@ async fn distinct_keys_enter_factories_before_either_is_released() {
         .forget();
     release.add_permits(2);
     for task in tasks {
-        assert_eq!(task.await.unwrap(), 7);
+        assert_eq!(
+            task.await.unwrap(),
+            7,
+            "contract: distinct keys enter factories before either is released"
+        );
     }
     provider.drained();
     c.shutdown().await.unwrap();
@@ -292,17 +321,18 @@ async fn finite_wait_signals_provider_before_drop_and_factory_token_stays_active
         c.get_or_set(
             "deadline",
             amalgam::source::factory(|ctx| async move {
-                assert!(ctx.cancellation().check().is_ok());
+                assert!(ctx.cancellation().check().is_ok(), "contract: finite wait signals provider before drop and factory token stays active");
                 Ok::<_, FactoryError>(ctx.value(9))
             })
         )
         .await
         .unwrap(),
-        9
+        9, "contract: finite wait signals provider before drop and factory token stays active"
     );
     assert_eq!(
         *provider.ended.lock().unwrap(),
-        [Some(FactoryCancellationReason::HardTimeout)]
+        [Some(FactoryCancellationReason::HardTimeout)],
+        "contract: finite wait signals provider before drop and factory token stays active"
     );
     c.shutdown().await.unwrap();
 }
@@ -338,7 +368,8 @@ async fn unavailable_guard_and_lock_timeout_preserve_existing_fallback_rules() {
             )
             .await
             .unwrap(),
-            17
+            17,
+            "contract: unavailable guard and lock timeout preserve existing fallback rules"
         );
         assert_eq!(
             c.get_or_set(
@@ -347,7 +378,8 @@ async fn unavailable_guard_and_lock_timeout_preserve_existing_fallback_rules() {
             )
             .await
             .unwrap(),
-            19
+            19,
+            "contract: unavailable guard and lock timeout preserve existing fallback rules"
         );
         c.shutdown().await.unwrap();
     }
@@ -380,9 +412,14 @@ async fn caller_cancel_and_cache_close_signal_pending_provider_before_drop() {
             FactoryCancellationReason::CallerCancelled
         };
         assert!(
-            matches!(work.await.unwrap(),Err(Error::OperationCancelled {reason}) if reason==expected)
+            matches!(work.await.unwrap(),Err(Error::OperationCancelled {reason}) if reason==expected),
+            "contract: caller cancel and cache close signal pending provider before drop"
         );
-        assert_eq!(*provider.ended.lock().unwrap(), [Some(expected)]);
+        assert_eq!(
+            *provider.ended.lock().unwrap(),
+            [Some(expected)],
+            "contract: caller cancel and cache close signal pending provider before drop"
+        );
         c.shutdown().await.unwrap();
     }
 }
@@ -401,11 +438,15 @@ async fn original_provider_failure_is_not_a_miss_or_factory_failure() {
         .unwrap_err();
     assert_eq!(
         OperationOutcome::from_error(&error),
-        OperationOutcome::LockError
+        OperationOutcome::LockError,
+        "contract: original provider failure is not a miss or factory failure"
     );
     match error {
         Error::MemoryLocker(MemoryLockerError::Provider { source }) => {
-            assert!(source.downcast_ref::<Cause>().is_some())
+            assert!(
+                source.downcast_ref::<Cause>().is_some(),
+                "contract: original provider failure is not a miss or factory failure"
+            )
         }
         other => panic!("lost original cause: {other:?}"),
     }
@@ -425,7 +466,8 @@ async fn release_errors_and_panics_do_not_replace_computed_values_or_double_rele
             )
             .await
             .unwrap(),
-            23
+            23,
+            "contract: release errors and panics do not replace computed values or double release"
         );
         provider.drained();
         c.shutdown().await.unwrap();
@@ -442,9 +484,14 @@ async fn release_errors_and_panics_do_not_replace_computed_values_or_double_rele
     .release()
     .unwrap_err();
     assert!(
-        matches!(error,MemoryLockerError::Provider {source} if source.downcast_ref::<Cause>().is_some())
+        matches!(error,MemoryLockerError::Provider {source} if source.downcast_ref::<Cause>().is_some()),
+        "contract: release errors and panics do not replace computed values or double release"
     );
-    assert_eq!(released.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        released.load(Ordering::SeqCst),
+        1,
+        "contract: release errors and panics do not replace computed values or double release"
+    );
 }
 
 #[tokio::test]
@@ -480,19 +527,27 @@ async fn soft_completion_keeps_the_custom_guard_until_background_factory_finishe
             "background",
             amalgam::source::factory(move |ctx| async move {
                 factory_release.acquire().await.unwrap().forget();
-                assert!(ctx.cancellation().check().is_ok());
+                assert!(ctx.cancellation().check().is_ok(), "contract: soft completion keeps the custom guard until background factory finishes");
                 Ok::<_, FactoryError>(ctx.value(37))
             })
         )
         .await
         .unwrap(),
-        31
+        31, "contract: soft completion keeps the custom guard until background factory finishes"
     );
-    assert_eq!(provider.active.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        provider.active.load(Ordering::SeqCst),
+        1,
+        "contract: soft completion keeps the custom guard until background factory finishes"
+    );
     release.add_permits(1);
     c.flush_pending().await.unwrap();
     provider.drained();
-    assert_eq!(c.try_get("background").await.unwrap(), Some(37));
+    assert_eq!(
+        c.try_get("background").await.unwrap(),
+        Some(37),
+        "contract: soft completion keeps the custom guard until background factory finishes"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -515,7 +570,8 @@ async fn eager_uses_nonblocking_custom_attempt_and_owned_guard() {
         )
         .await
         .unwrap(),
-        41
+        41,
+        "contract: eager uses nonblocking custom attempt and owned guard"
     );
     clock.advance(Duration::from_secs(6));
     assert_eq!(
@@ -525,12 +581,21 @@ async fn eager_uses_nonblocking_custom_attempt_and_owned_guard() {
         )
         .await
         .unwrap(),
-        41
+        41,
+        "contract: eager uses nonblocking custom attempt and owned guard"
     );
     c.flush_pending().await.unwrap();
     provider.drained();
-    assert_eq!(provider.tries.load(Ordering::SeqCst), 1);
-    assert_eq!(c.try_get("eager").await.unwrap(), Some(43));
+    assert_eq!(
+        provider.tries.load(Ordering::SeqCst),
+        1,
+        "contract: eager uses nonblocking custom attempt and owned guard"
+    );
+    assert_eq!(
+        c.try_get("eager").await.unwrap(),
+        Some(43),
+        "contract: eager uses nonblocking custom attempt and owned guard"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -560,7 +625,10 @@ async fn marker_and_entry_equal_text_keys_have_disjoint_custom_coordination() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(result, 47);
+    assert_eq!(
+        result, 47,
+        "contract: marker and entry equal text keys have disjoint custom coordination"
+    );
     c.flush_pending().await.unwrap();
     assert_eq!(
         tokio::time::timeout(
@@ -574,7 +642,8 @@ async fn marker_and_entry_equal_text_keys_have_disjoint_custom_coordination() {
         .await
         .unwrap()
         .unwrap(),
-        47
+        47,
+        "contract: marker and entry equal text keys have disjoint custom coordination"
     );
     {
         let requests = provider.requests.lock().unwrap();
@@ -586,12 +655,24 @@ async fn marker_and_entry_equal_text_keys_have_disjoint_custom_coordination() {
             .iter()
             .find(|r| r.kind() == &MemoryLockKind::Marker(MarkerKind::Tag(tag.clone())))
             .unwrap();
-        assert_eq!(entry.key(), marker.key());
-        assert_ne!(entry.coordination_key(), marker.coordination_key());
+        assert_eq!(
+            entry.key(),
+            marker.key(),
+            "contract: marker and entry equal text keys have disjoint custom coordination"
+        );
+        assert_ne!(
+            entry.coordination_key(),
+            marker.coordination_key(),
+            "contract: marker and entry equal text keys have disjoint custom coordination"
+        );
     }
     provider.drained();
     c.shutdown().await.unwrap();
-    assert_eq!(provider.shutdowns.lock().unwrap().len(), 1);
+    assert_eq!(
+        provider.shutdowns.lock().unwrap().len(),
+        1,
+        "contract: marker and entry equal text keys have disjoint custom coordination"
+    );
 }
 
 #[test]
@@ -607,7 +688,8 @@ fn native_and_async_views_use_one_custom_local_locker() {
             )
             .execute()
             .unwrap(),
-        53
+        53,
+        "contract: native and async views use one custom local locker"
     );
     assert_eq!(
         native
@@ -617,11 +699,16 @@ fn native_and_async_views_use_one_custom_local_locker() {
                 amalgam::source::factory(|ctx| async move { Ok::<_, FactoryError>(ctx.value(59)) })
             ))
             .unwrap(),
-        59
+        59,
+        "contract: native and async views use one custom local locker"
     );
     provider.drained();
     native.shutdown().unwrap();
-    assert_eq!(provider.shutdowns.lock().unwrap().len(), 1);
+    assert_eq!(
+        provider.shutdowns.lock().unwrap().len(),
+        1,
+        "contract: native and async views use one custom local locker"
+    );
 }
 
 #[tokio::test]
@@ -649,15 +736,26 @@ async fn cached_marker_eager_refresh_uses_the_same_custom_provider() {
     .tags(vec![Tag::new("eager-group").unwrap()].into_boxed_slice())
     .await
     .unwrap();
-    assert_eq!(c.try_get("marker-eager").await.unwrap(), Some(61));
+    assert_eq!(
+        c.try_get("marker-eager").await.unwrap(),
+        Some(61),
+        "contract: cached marker eager refresh uses the same custom provider"
+    );
     clock.advance(Duration::from_secs(6));
-    assert_eq!(c.try_get("marker-eager").await.unwrap(), Some(61));
+    assert_eq!(
+        c.try_get("marker-eager").await.unwrap(),
+        Some(61),
+        "contract: cached marker eager refresh uses the same custom provider"
+    );
     c.flush_pending().await.unwrap();
-    assert!(provider.requests.lock().unwrap().iter().any(|r| matches!(
-        r.kind(),
-        MemoryLockKind::Marker(MarkerKind::Tag(_))
-    ) && r.timeout()
-        == Timeout::After(Duration::ZERO)));
+    assert!(
+        provider.requests.lock().unwrap().iter().any(|r| matches!(
+            r.kind(),
+            MemoryLockKind::Marker(MarkerKind::Tag(_))
+        ) && r.timeout()
+            == Timeout::After(Duration::ZERO)),
+        "contract: cached marker eager refresh uses the same custom provider"
+    );
     provider.drained();
     c.shutdown().await.unwrap();
 }
@@ -678,10 +776,14 @@ async fn dropped_caller_ends_the_pending_acquisition_before_destruction() {
     });
     provider.entered.notified().await;
     work.abort();
-    assert!(work.await.unwrap_err().is_cancelled());
+    assert!(
+        work.await.unwrap_err().is_cancelled(),
+        "contract: dropped caller ends the pending acquisition before destruction"
+    );
     assert_eq!(
         *provider.ended.lock().unwrap(),
-        [Some(FactoryCancellationReason::CallerDropped)]
+        [Some(FactoryCancellationReason::CallerDropped)],
+        "contract: dropped caller ends the pending acquisition before destruction"
     );
     c.shutdown().await.unwrap();
 }
@@ -698,14 +800,17 @@ async fn hard_factory_timeout_releases_the_acquired_local_guard() {
         ))
         .try_build()
         .unwrap();
-    assert!(matches!(
-        c.get_or_set::<_, _>(
-            "hard",
-            typed_factory(|_| async { std::future::pending().await })
-        )
-        .await,
-        Err(Error::FactoryTimeout { .. })
-    ));
+    assert!(
+        matches!(
+            c.get_or_set::<_, _>(
+                "hard",
+                typed_factory(|_| async { std::future::pending().await })
+            )
+            .await,
+            Err(Error::FactoryTimeout { .. })
+        ),
+        "contract: hard factory timeout releases the acquired local guard"
+    );
     c.flush_pending().await.unwrap();
     provider.drained();
     c.shutdown().await.unwrap();
@@ -728,18 +833,28 @@ async fn shutdown_preserves_provider_error_or_panic_and_does_not_repeat_the_hook
                     ShutdownFailure::Work(Error::MemoryLocker(MemoryLockerError::Provider {
                         source,
                     })),
-                ) => assert!(source.downcast_ref::<Cause>().is_some()),
+                ) => assert!(
+                    source.downcast_ref::<Cause>().is_some(),
+                    "contract: shutdown preserves provider error or panic and does not repeat the hook"
+                ),
                 (
                     Release::Panic,
                     ShutdownFailure::BackgroundTask {
                         task: ShutdownTask::MemoryLocker,
                         source,
                     },
-                ) => assert!(source.is_panic()),
+                ) => assert!(
+                    source.is_panic(),
+                    "contract: shutdown preserves provider error or panic and does not repeat the hook"
+                ),
                 (_, other) => panic!("wrong teardown cause: {other:?}"),
             }
         }
-        assert_eq!(provider.shutdowns.lock().unwrap().len(), 1);
+        assert_eq!(
+            provider.shutdowns.lock().unwrap().len(),
+            1,
+            "contract: shutdown preserves provider error or panic and does not repeat the hook"
+        );
     }
 }
 
@@ -766,28 +881,44 @@ async fn provider_can_be_shared_without_one_cache_shutdown_closing_the_other() {
         )
         .await
         .unwrap(),
-        71
+        71,
+        "contract: provider can be shared without one cache shutdown closing the other"
     );
     b.shutdown().await.unwrap();
-    assert_eq!(*provider.shutdowns.lock().unwrap(), ["one", "two"]);
+    assert_eq!(
+        *provider.shutdowns.lock().unwrap(),
+        ["one", "two"],
+        "contract: provider can be shared without one cache shutdown closing the other"
+    );
 }
 
 #[tokio::test]
 async fn interrupted_shutdown_reuses_the_already_owned_provider_teardown() {
     let provider = Provider::new();
-    assert_eq!(provider.shutdown_gate.forget_permits(1024), 1024);
+    assert_eq!(
+        provider.shutdown_gate.forget_permits(1024),
+        1024,
+        "contract: interrupted shutdown reuses the already owned provider teardown"
+    );
     let c = cache(&provider);
     let request = c.clone();
     let shutdown = tokio::spawn(async move { request.shutdown().await });
     provider.shutdown_entered.notified().await;
     shutdown.abort();
-    assert!(shutdown.await.unwrap_err().is_cancelled());
+    assert!(
+        shutdown.await.unwrap_err().is_cancelled(),
+        "contract: interrupted shutdown reuses the already owned provider teardown"
+    );
     provider.shutdown_gate.add_permits(1);
     tokio::time::timeout(Duration::from_secs(1), c.shutdown())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(provider.shutdowns.lock().unwrap().len(), 1);
+    assert_eq!(
+        provider.shutdowns.lock().unwrap().len(),
+        1,
+        "contract: interrupted shutdown reuses the already owned provider teardown"
+    );
 }
 
 fn typed_factory<V, F, Fut>(factory: F) -> F

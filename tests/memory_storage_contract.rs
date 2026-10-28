@@ -55,10 +55,13 @@ fn cause(error: &Error) -> Fault {
 async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
     let store = MapStorage::new();
     let c = cache(&store);
-    assert!(Arc::ptr_eq(
-        c.memory_storage().unwrap(),
-        &(store.clone() as Arc<dyn MemoryStorage<u64>>)
-    ));
+    assert!(
+        Arc::ptr_eq(
+            c.memory_storage().unwrap(),
+            &(store.clone() as Arc<dyn MemoryStorage<u64>>)
+        ),
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
     let _ = c
         .set("key", 7)
         .with_receipt()
@@ -69,9 +72,14 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .unwrap();
     assert_eq!(
         store.state.lock().unwrap().records["key"].entry().value(),
-        &7
+        &7,
+        "contract: supplied store is the actual l1 for all basic operations"
     );
-    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(7));
+    assert_eq!(
+        c.try_get("key").into_future().await.unwrap(),
+        Some(7),
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
     assert_eq!(
         c.get_or_set::<_, _>(
             "key",
@@ -79,7 +87,8 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         )
         .await
         .unwrap(),
-        7
+        7,
+        "contract: supplied store is the actual l1 for all basic operations"
     );
     let _ = c
         .expire("key")
@@ -89,7 +98,10 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_none());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
     let _ = c
         .set("key", 8)
         .with_receipt()
@@ -106,7 +118,10 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .wait()
         .await
         .unwrap();
-    assert!(!store.state.lock().unwrap().records.contains_key("key"));
+    assert!(
+        !store.state.lock().unwrap().records.contains_key("key"),
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
     let _ = c
         .set("other", 9)
         .with_receipt()
@@ -123,10 +138,23 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(c.memory_usage().unwrap().entries, 0);
-    assert!(store.ready.load(Ordering::SeqCst) > 0);
-    assert!(store.lookups.load(Ordering::SeqCst) > 0);
-    assert!(store.writes.load(Ordering::SeqCst) >= 4);
+    assert_eq!(
+        c.memory_usage().unwrap().entries,
+        0,
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
+    assert!(
+        store.ready.load(Ordering::SeqCst) > 0,
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
+    assert!(
+        store.lookups.load(Ordering::SeqCst) > 0,
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
+    assert!(
+        store.writes.load(Ordering::SeqCst) >= 4,
+        "contract: supplied store is the actual l1 for all basic operations"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -141,10 +169,13 @@ async fn disabled_store_returns_computed_value_with_rejected_admission() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.local,
-        LocalEffect::Stored(MemoryAdmission::Rejected(CapacityRejection::Oversized))
-    ));
+    assert!(
+        matches!(
+            report.local,
+            LocalEffect::Stored(MemoryAdmission::Rejected(CapacityRejection::Oversized))
+        ),
+        "contract: disabled store returns computed value with rejected admission"
+    );
     assert_eq!(
         c.get_or_set(
             "key",
@@ -152,10 +183,18 @@ async fn disabled_store_returns_computed_value_with_rejected_admission() {
         )
         .await
         .unwrap(),
-        12
+        12,
+        "contract: disabled store returns computed value with rejected admission"
     );
-    assert!(c.try_get("key").into_future().await.unwrap().is_none());
-    assert_eq!(c.memory_usage().unwrap().entries, 0);
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: disabled store returns computed value with rejected admission"
+    );
+    assert_eq!(
+        c.memory_usage().unwrap().entries,
+        0,
+        "contract: disabled store returns computed value with rejected admission"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -179,13 +218,20 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.local,
-        LocalEffect::Stored(MemoryAdmission::Rejected(
-            CapacityRejection::ProtectedCapacity
-        ))
-    ));
-    assert_eq!(c.try_get("pinned").into_future().await.unwrap(), Some(13));
+    assert!(
+        matches!(
+            report.local,
+            LocalEffect::Stored(MemoryAdmission::Rejected(
+                CapacityRejection::ProtectedCapacity
+            ))
+        ),
+        "contract: provider owns capacity and priority without collateral pinned eviction"
+    );
+    assert_eq!(
+        c.try_get("pinned").into_future().await.unwrap(),
+        Some(13),
+        "contract: provider owns capacity and priority without collateral pinned eviction"
+    );
     let _ = c
         .remove("pinned")
         .with_receipt()
@@ -214,12 +260,19 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
         .unwrap();
     // low was inserted before the subscription: select retirement-time capture
     // separately below rather than claiming insertion-time diagnostics exist.
-    assert!(c.try_get("low").into_future().await.unwrap().is_none());
-    assert_eq!(c.try_get("high").into_future().await.unwrap(), Some(16));
-    assert!(matches!(
-        evictions.try_recv(),
-        Err(EvictionReceiveError::Empty)
-    ));
+    assert!(
+        c.try_get("low").into_future().await.unwrap().is_none(),
+        "contract: provider owns capacity and priority without collateral pinned eviction"
+    );
+    assert_eq!(
+        c.try_get("high").into_future().await.unwrap(),
+        Some(16),
+        "contract: provider owns capacity and priority without collateral pinned eviction"
+    );
+    assert!(
+        matches!(evictions.try_recv(), Err(EvictionReceiveError::Empty)),
+        "contract: provider owns capacity and priority without collateral pinned eviction"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -235,7 +288,11 @@ async fn weight_accounting_uses_full_u64_units_and_rejection_is_explicit() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(c.memory_usage().unwrap().weight, u128::from(u32::MAX) + 5);
+    assert_eq!(
+        c.memory_usage().unwrap().weight,
+        u128::from(u32::MAX) + 5,
+        "contract: weight accounting uses full u64 units and rejection is explicit"
+    );
     let report = c
         .set("oversized", 18)
         .options(|_| opts().with_size(i64::from(u32::MAX) + 11))
@@ -245,11 +302,18 @@ async fn weight_accounting_uses_full_u64_units_and_rejection_is_explicit() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.local,
-        LocalEffect::Stored(MemoryAdmission::Rejected(CapacityRejection::Oversized))
-    ));
-    assert_eq!(c.try_get("large").into_future().await.unwrap(), Some(17));
+    assert!(
+        matches!(
+            report.local,
+            LocalEffect::Stored(MemoryAdmission::Rejected(CapacityRejection::Oversized))
+        ),
+        "contract: weight accounting uses full u64 units and rejection is explicit"
+    );
+    assert_eq!(
+        c.try_get("large").into_future().await.unwrap(),
+        Some(17),
+        "contract: weight accounting uses full u64 units and rejection is explicit"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -278,9 +342,17 @@ async fn supplied_memory_preserves_same_key_single_flight() {
         }));
     }
     for task in work {
-        assert_eq!(task.await.unwrap(), 19);
+        assert_eq!(
+            task.await.unwrap(),
+            19,
+            "contract: supplied memory preserves same key single flight"
+        );
     }
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: supplied memory preserves same key single flight"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -308,7 +380,11 @@ async fn unrelated_factories_enter_before_either_completes() {
     })
     .await
     .unwrap();
-    assert_eq!((a, b), (23, 23));
+    assert_eq!(
+        (a, b),
+        (23, 23),
+        "contract: unrelated factories enter before either completes"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -332,12 +408,27 @@ async fn controlled_clock_keeps_values_until_the_actual_physical_deadline() {
         .unwrap();
     let mut evictions = c.memory_evictions().subscribe();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(c.try_get("clock").into_future().await.unwrap(), Some(29));
+    assert_eq!(
+        c.try_get("clock").into_future().await.unwrap(),
+        Some(29),
+        "contract: controlled clock keeps values until the actual physical deadline"
+    );
     clock.advance(Duration::from_millis(20));
-    assert!(c.try_get("clock").into_future().await.unwrap().is_none());
+    assert!(
+        c.try_get("clock").into_future().await.unwrap().is_none(),
+        "contract: controlled clock keeps values until the actual physical deadline"
+    );
     let event = evictions.try_recv().unwrap();
-    assert_eq!(event.value(), &29);
-    assert_eq!(event.reason(), MemoryEvictionReason::Expired);
+    assert_eq!(
+        event.value(),
+        &29,
+        "contract: controlled clock keeps values until the actual physical deadline"
+    );
+    assert_eq!(
+        event.reason(),
+        MemoryEvictionReason::Expired,
+        "contract: controlled clock keeps values until the actual physical deadline"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -357,8 +448,15 @@ async fn system_clock_retires_physically_expired_records() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(c.try_get("clock").into_future().await.unwrap().is_none());
-    assert_eq!(c.memory_usage().unwrap().entries, 0);
+    assert!(
+        c.try_get("clock").into_future().await.unwrap().is_none(),
+        "contract: system clock retires physically expired records"
+    );
+    assert_eq!(
+        c.memory_usage().unwrap().entries,
+        0,
+        "contract: system clock retires physically expired records"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -390,11 +488,13 @@ async fn fail_safe_keeps_the_supplied_representation() {
         )
         .await
         .unwrap(),
-        37
+        37,
+        "contract: fail safe keeps the supplied representation"
     );
     assert_eq!(
         store.state.lock().unwrap().records["stale"].entry().value(),
-        &37
+        &37,
+        "contract: fail safe keeps the supplied representation"
     );
     c.shutdown().await.unwrap();
 }
@@ -426,13 +526,19 @@ async fn eager_refresh_updates_the_supplied_store_in_the_background() {
         )
         .await
         .unwrap(),
-        41
+        41,
+        "contract: eager refresh updates the supplied store in the background"
     );
     c.flush_pending().await.unwrap();
-    assert_eq!(c.try_get("eager").into_future().await.unwrap(), Some(43));
+    assert_eq!(
+        c.try_get("eager").into_future().await.unwrap(),
+        Some(43),
+        "contract: eager refresh updates the supplied store in the background"
+    );
     assert_eq!(
         store.state.lock().unwrap().records["eager"].entry().value(),
-        &43
+        &43,
+        "contract: eager refresh updates the supplied store in the background"
     );
     c.shutdown().await.unwrap();
 }
@@ -449,23 +555,35 @@ async fn lookup_failure_preserves_cause_and_does_not_run_origin_or_emit_miss() {
         )
         .await
         .unwrap_err();
-    assert_eq!(cause(&error), Fault::Get);
+    assert_eq!(
+        cause(&error),
+        Fault::Get,
+        "contract: lookup failure preserves cause and does not run origin or emit miss"
+    );
     assert_eq!(
         OperationOutcome::from_error(&error),
-        OperationOutcome::MemoryError
+        OperationOutcome::MemoryError,
+        "contract: lookup failure preserves cause and does not run origin or emit miss"
     );
     let mut completed = 0;
     while let Ok(event) = events.try_recv() {
         match event {
             CacheEvent::Miss { .. } => panic!("storage error became miss"),
             CacheEvent::OperationCompleted { outcome, .. } => {
-                assert_eq!(outcome, OperationOutcome::MemoryError);
+                assert_eq!(
+                    outcome,
+                    OperationOutcome::MemoryError,
+                    "contract: lookup failure preserves cause and does not run origin or emit miss"
+                );
                 completed += 1;
             }
             _ => {}
         }
     }
-    assert_eq!(completed, 1);
+    assert_eq!(
+        completed, 1,
+        "contract: lookup failure preserves cause and does not run origin or emit miss"
+    );
     *store.fault.lock().unwrap() = None;
     c.shutdown().await.unwrap();
 }
@@ -476,7 +594,8 @@ async fn write_remove_maintenance_and_usage_errors_remain_typed() {
     *store.fault.lock().unwrap() = Some(Fault::Insert);
     assert_eq!(
         cause(&c.set("k", 47).with_receipt().await.unwrap_err()),
-        Fault::Insert
+        Fault::Insert,
+        "contract: write remove maintenance and usage errors remain typed"
     );
     *store.fault.lock().unwrap() = None;
     let _ = c
@@ -490,17 +609,27 @@ async fn write_remove_maintenance_and_usage_errors_remain_typed() {
     *store.fault.lock().unwrap() = Some(Fault::Remove);
     assert_eq!(
         cause(&c.remove("k").with_receipt().await.unwrap_err()),
-        Fault::Remove
+        Fault::Remove,
+        "contract: write remove maintenance and usage errors remain typed"
     );
     *store.fault.lock().unwrap() = Some(Fault::Maintain);
     assert_eq!(
         cause(&c.run_pending_tasks().await.unwrap_err()),
-        Fault::Maintain
+        Fault::Maintain,
+        "contract: write remove maintenance and usage errors remain typed"
     );
     *store.fault.lock().unwrap() = Some(Fault::Usage);
-    assert_eq!(cause(&c.memory_usage().unwrap_err()), Fault::Usage);
+    assert_eq!(
+        cause(&c.memory_usage().unwrap_err()),
+        Fault::Usage,
+        "contract: write remove maintenance and usage errors remain typed"
+    );
     *store.fault.lock().unwrap() = None;
-    assert_eq!(c.try_get("k").into_future().await.unwrap(), Some(53));
+    assert_eq!(
+        c.try_get("k").into_future().await.unwrap(),
+        Some(53),
+        "contract: write remove maintenance and usage errors remain typed"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -518,12 +647,22 @@ async fn failed_physical_clear_still_prevents_old_records_from_becoming_visible(
     *store.fault.lock().unwrap() = Some(Fault::Clear);
     assert_eq!(
         cause(&c.clear(ClearMode::Remove).with_receipt().await.unwrap_err()),
-        Fault::Clear
+        Fault::Clear,
+        "contract: failed physical clear still prevents old records from becoming visible"
     );
-    assert!(store.state.lock().unwrap().records.contains_key("k"));
+    assert!(
+        store.state.lock().unwrap().records.contains_key("k"),
+        "contract: failed physical clear still prevents old records from becoming visible"
+    );
     *store.fault.lock().unwrap() = None;
-    assert!(c.try_get("k").into_future().await.unwrap().is_none());
-    assert!(!store.state.lock().unwrap().records.contains_key("k"));
+    assert!(
+        c.try_get("k").into_future().await.unwrap().is_none(),
+        "contract: failed physical clear still prevents old records from becoming visible"
+    );
+    assert!(
+        !store.state.lock().unwrap().records.contains_key("k"),
+        "contract: failed physical clear still prevents old records from becoming visible"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -546,7 +685,8 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
         )
         .await
         .unwrap(),
-        61
+        61,
+        "contract: shared store is reused and shutdown does not dispose another cache"
     );
     a.shutdown().await.unwrap();
     std::mem::drop(a);
@@ -558,7 +698,11 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.try_get("shared").into_future().await.unwrap(), Some(67));
+    assert_eq!(
+        b.try_get("shared").into_future().await.unwrap(),
+        Some(67),
+        "contract: shared store is reused and shutdown does not dispose another cache"
+    );
     b.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -598,9 +742,20 @@ async fn shared_provider_clear_is_isolated_by_the_actual_key_prefix() {
         .wait()
         .await
         .unwrap();
-    assert!(a.try_get("key").into_future().await.unwrap().is_none());
-    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(73));
-    assert_eq!(b.memory_usage().unwrap().entries, 1);
+    assert!(
+        a.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: shared provider clear is isolated by the actual key prefix"
+    );
+    assert_eq!(
+        b.try_get("key").into_future().await.unwrap(),
+        Some(73),
+        "contract: shared provider clear is isolated by the actual key prefix"
+    );
+    assert_eq!(
+        b.memory_usage().unwrap().entries,
+        1,
+        "contract: shared provider clear is isolated by the actual key prefix"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -654,8 +809,16 @@ fn overlapping_clear_preserves_a_write_admitted_after_its_barrier() {
         .unwrap();
     gate.resume.wait();
     let _ = work.join().unwrap();
-    assert_eq!(b.try_get("key").execute().unwrap(), Some(83));
-    assert_eq!(a.try_get("key").execute().unwrap(), Some(83));
+    assert_eq!(
+        b.try_get("key").execute().unwrap(),
+        Some(83),
+        "contract: overlapping clear preserves a write admitted after its barrier"
+    );
+    assert_eq!(
+        a.try_get("key").execute().unwrap(),
+        Some(83),
+        "contract: overlapping clear preserves a write admitted after its barrier"
+    );
     a.shutdown().unwrap();
     b.shutdown().unwrap();
 }
@@ -679,7 +842,8 @@ fn native_and_async_views_use_the_same_supplied_store_and_typed_failure() {
             )
             .execute()
             .unwrap(),
-        89
+        89,
+        "contract: native and async views use the same supplied store and typed failure"
     );
     let runtime = RuntimeBuilder::new_current_thread()
         .enable_all()
@@ -689,12 +853,14 @@ fn native_and_async_views_use_the_same_supplied_store_and_typed_failure() {
         runtime
             .block_on(native.as_async().try_get("native").into_future())
             .unwrap(),
-        Some(89)
+        Some(89),
+        "contract: native and async views use the same supplied store and typed failure"
     );
     *store.fault.lock().unwrap() = Some(Fault::Get);
     assert_eq!(
         cause(&native.try_get("native").execute().unwrap_err()),
-        Fault::Get
+        Fault::Get,
+        "contract: native and async views use the same supplied store and typed failure"
     );
     *store.fault.lock().unwrap() = None;
     native.shutdown().unwrap();
@@ -713,7 +879,8 @@ async fn skipped_memory_options_do_not_touch_the_provider() {
         .options(|_| skipped.clone())
         .await
         .unwrap(),
-        97
+        97,
+        "contract: skipped memory options do not touch the provider"
     );
     *store.fault.lock().unwrap() = Some(Fault::Insert);
     let _ = c
@@ -725,9 +892,21 @@ async fn skipped_memory_options_do_not_touch_the_provider() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(store.lookups.load(Ordering::SeqCst), 0);
-    assert_eq!(store.ready.load(Ordering::SeqCst), 0);
-    assert_eq!(store.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        store.lookups.load(Ordering::SeqCst),
+        0,
+        "contract: skipped memory options do not touch the provider"
+    );
+    assert_eq!(
+        store.ready.load(Ordering::SeqCst),
+        0,
+        "contract: skipped memory options do not touch the provider"
+    );
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        0,
+        "contract: skipped memory options do not touch the provider"
+    );
     *store.fault.lock().unwrap() = None;
     c.shutdown().await.unwrap();
 }
@@ -742,10 +921,13 @@ fn builtin_capacity_settings_are_not_silently_ignored_for_supplied_storage() {
         Ok(_) => panic!("conflicting limits accepted"),
         Err(e) => e,
     };
-    assert!(matches!(
-        error,
-        Error::Config(ConfigError::SuppliedMemoryWithBuiltinLimits)
-    ));
+    assert!(
+        matches!(
+            error,
+            Error::Config(ConfigError::SuppliedMemoryWithBuiltinLimits)
+        ),
+        "contract: builtin capacity settings are not silently ignored for supplied storage"
+    );
 }
 struct Unstable;
 impl MemoryStorage<u64> for Unstable {
@@ -789,10 +971,13 @@ fn unstable_generation_identity_is_rejected_before_cache_construction() {
         Ok(_) => panic!("unstable epoch accepted"),
         Err(e) => e,
     };
-    assert!(matches!(
-        error,
-        Error::Config(ConfigError::UnstableMemoryStorageEpoch)
-    ));
+    assert!(
+        matches!(
+            error,
+            Error::Config(ConfigError::UnstableMemoryStorageEpoch)
+        ),
+        "contract: unstable generation identity is rejected before cache construction"
+    );
 }
 #[tokio::test]
 async fn retired_values_are_reported_to_the_inserting_cache_of_a_shared_store() {
@@ -822,13 +1007,25 @@ async fn retired_values_are_reported_to_the_inserting_cache_of_a_shared_store() 
         .await
         .unwrap();
     let event = original.try_recv().unwrap();
-    assert_eq!(event.key(), "key");
-    assert_eq!(event.value(), &103);
-    assert_eq!(event.reason(), MemoryEvictionReason::Replaced);
-    assert!(matches!(
-        replacing.try_recv(),
-        Err(EvictionReceiveError::Empty)
-    ));
+    assert_eq!(
+        event.key(),
+        "key",
+        "contract: retired values are reported to the inserting cache of a shared store"
+    );
+    assert_eq!(
+        event.value(),
+        &103,
+        "contract: retired values are reported to the inserting cache of a shared store"
+    );
+    assert_eq!(
+        event.reason(),
+        MemoryEvictionReason::Replaced,
+        "contract: retired values are reported to the inserting cache of a shared store"
+    );
+    assert!(
+        matches!(replacing.try_recv(), Err(EvictionReceiveError::Empty)),
+        "contract: retired values are reported to the inserting cache of a shared store"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -908,9 +1105,19 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
         .unwrap();
     let selected = store.state.lock().unwrap().records["value"].entry().clone();
     pause.resume.add_permits(1);
-    assert!(work.await.unwrap().unwrap().is_some());
-    assert!(store.state.lock().unwrap().records["value"].is_same_entry(&selected));
-    assert_eq!(a.try_get("value").into_future().await.unwrap(), Some(113));
+    assert!(
+        work.await.unwrap().unwrap().is_some(),
+        "contract: older l2 hydration cannot replace another cache shared l1 write"
+    );
+    assert!(
+        store.state.lock().unwrap().records["value"].is_same_entry(&selected),
+        "contract: older l2 hydration cannot replace another cache shared l1 write"
+    );
+    assert_eq!(
+        a.try_get("value").into_future().await.unwrap(),
+        Some(113),
+        "contract: older l2 hydration cannot replace another cache shared l1 write"
+    );
     source.shutdown().await.unwrap();
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -957,12 +1164,17 @@ async fn soft_timeout_retains_background_completion_in_supplied_storage() {
         )
         .await
         .unwrap(),
-        127
+        127,
+        "contract: soft timeout retains background completion in supplied storage"
     );
     entered.notified().await;
     resume.add_permits(1);
     c.flush_pending().await.unwrap();
-    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(131));
+    assert_eq!(
+        c.try_get("key").into_future().await.unwrap(),
+        Some(131),
+        "contract: soft timeout retains background completion in supplied storage"
+    );
     c.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -987,9 +1199,16 @@ async fn hard_timeout_does_not_admit_a_late_value_in_supplied_storage() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::FactoryTimeout { .. }));
+    assert!(
+        matches!(error, Error::FactoryTimeout { .. }),
+        "contract: hard timeout does not admit a late value in supplied storage"
+    );
     c.flush_pending().await.unwrap();
-    assert_eq!(c.memory_usage().unwrap().entries, 0);
+    assert_eq!(
+        c.memory_usage().unwrap().entries,
+        0,
+        "contract: hard timeout does not admit a late value in supplied storage"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -1063,7 +1282,11 @@ async fn original_value_destruction_follows_provider_and_factory_guards() {
         .unwrap();
     std::mem::drop(value);
     c.flush_pending().await.unwrap();
-    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "contract: original value destruction follows provider and factory guards"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -1138,8 +1361,16 @@ fn shared_original_observer_can_reenter_replacing_cache_after_its_commit_guard()
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(observer.callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(b.try_get("key").execute().unwrap(), Some(149));
+    assert_eq!(
+        observer.callbacks.load(Ordering::SeqCst),
+        1,
+        "contract: shared original observer can reenter replacing cache after its commit guard"
+    );
+    assert_eq!(
+        b.try_get("key").execute().unwrap(),
+        Some(149),
+        "contract: shared original observer can reenter replacing cache after its commit guard"
+    );
     a.shutdown().unwrap();
     b.shutdown().unwrap();
 }
@@ -1182,14 +1413,16 @@ async fn conditional_refresh_preserves_replaced_validators_in_supplied_records()
         )
         .await
         .unwrap(),
-        151
+        151,
+        "contract: conditional refresh preserves replaced validators in supplied records"
     );
     assert_eq!(
         store.state.lock().unwrap().records["conditional"]
             .entry()
             .meta()
             .etag(),
-        Some("v2")
+        Some("v2"),
+        "contract: conditional refresh preserves replaced validators in supplied records"
     );
     c.shutdown().await.unwrap();
 }
@@ -1213,17 +1446,24 @@ async fn non_copy_values_use_the_same_public_storage_contract() {
     let condition = MemoryCondition::Same(&selected);
     let copied = condition;
     let again = condition;
-    assert!(copied.matches(
-        store.state.lock().unwrap().records.get("key"),
-        SystemClock.now()
-    ));
-    assert!(again.matches(
-        store.state.lock().unwrap().records.get("key"),
-        SystemClock.now()
-    ));
+    assert!(
+        copied.matches(
+            store.state.lock().unwrap().records.get("key"),
+            SystemClock.now()
+        ),
+        "contract: non copy values use the same public storage contract"
+    );
+    assert!(
+        again.matches(
+            store.state.lock().unwrap().records.get("key"),
+            SystemClock.now()
+        ),
+        "contract: non copy values use the same public storage contract"
+    );
     assert_eq!(
         c.try_get("key").into_future().await.unwrap().as_deref(),
-        Some("first")
+        Some("first"),
+        "contract: non copy values use the same public storage contract"
     );
     let _ = c
         .remove("key")
@@ -1233,7 +1473,11 @@ async fn non_copy_values_use_the_same_public_storage_contract() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(c.memory_usage().unwrap().entries, 0);
+    assert_eq!(
+        c.memory_usage().unwrap().entries,
+        0,
+        "contract: non copy values use the same public storage contract"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -1266,12 +1510,15 @@ fn native_warm_unused_factory_drop_precedes_final_cancellation_check() {
         )
         .cancellation(cancellation.token())
         .execute();
-    assert!(matches!(
-        result,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: native warm unused factory drop precedes final cancellation check"
+    );
     c.shutdown().unwrap();
 }
 

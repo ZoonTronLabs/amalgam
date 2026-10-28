@@ -47,7 +47,10 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
     tokio::time::timeout(
         Duration::from_secs(2),
         future::poll_fn(|cx| {
-            assert!(operation.as_mut().poll(cx).is_pending());
+            assert!(
+                operation.as_mut().poll(cx).is_pending(),
+                "contract: explicit caller cancellation releases a parked origin before repoll"
+            );
             if entered.load(Ordering::SeqCst) == 1 {
                 Poll::Ready(())
             } else {
@@ -63,13 +66,19 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
         1,
         "cancellation itself must drop the parked origin"
     );
-    assert!(matches!(
-        operation.await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
-    assert!(cache.try_get("parked").await.expect("read").is_none());
+    assert!(
+        matches!(
+            operation.await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit caller cancellation releases a parked origin before repoll"
+    );
+    assert!(
+        cache.try_get("parked").await.expect("read").is_none(),
+        "contract: explicit caller cancellation releases a parked origin before repoll"
+    );
     assert_eq!(
         cache
             .get_or_set(
@@ -78,7 +87,8 @@ async fn explicit_caller_cancellation_releases_a_parked_origin_before_repoll() {
             )
             .await
             .expect("new origin owns released key"),
-        7
+        7,
+        "contract: explicit caller cancellation releases a parked origin before repoll"
     );
     cache.shutdown().await.expect("cleanup");
 }

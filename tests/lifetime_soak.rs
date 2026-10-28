@@ -61,8 +61,16 @@ async fn repeated_last_handle_drop_releases_workers_even_with_live_event_observe
             caches.push(surviving_handle);
         }
         let expected = (round + 1) * 64;
-        assert_eq!(counts.started.load(Ordering::SeqCst), expected);
-        assert_eq!(counts.stopped.load(Ordering::SeqCst), round * 64);
+        assert_eq!(
+            counts.started.load(Ordering::SeqCst),
+            expected,
+            "contract: repeated last handle drop releases workers even with live event observers"
+        );
+        assert_eq!(
+            counts.stopped.load(Ordering::SeqCst),
+            round * 64,
+            "contract: repeated last handle drop releases workers even with live event observers"
+        );
         std::mem::drop(caches);
         tokio::time::timeout(Duration::from_secs(3), async {
             while counts.stopped.load(Ordering::SeqCst) != expected
@@ -74,8 +82,20 @@ async fn repeated_last_handle_drop_releases_workers_even_with_live_event_observe
         .await
         .expect("last public handle must release cache-owned sessions and providers");
         assert_eq!(observers.len(), 64, "external event observers remain alive");
-        assert_eq!(Arc::strong_count(&counts), 1);
+        assert_eq!(
+            Arc::strong_count(&counts),
+            1,
+            "contract: repeated last handle drop releases workers even with live event observers"
+        );
     }
-    assert_eq!(counts.started.load(Ordering::SeqCst), 512);
-    assert_eq!(counts.stopped.load(Ordering::SeqCst), 512);
+    assert_eq!(
+        counts.started.load(Ordering::SeqCst),
+        512,
+        "contract: repeated last handle drop releases workers even with live event observers"
+    );
+    assert_eq!(
+        counts.stopped.load(Ordering::SeqCst),
+        512,
+        "contract: repeated last handle drop releases workers even with live event observers"
+    );
 }

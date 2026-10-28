@@ -227,20 +227,25 @@ mod tests {
         scopes.close();
         assert_eq!(
             execution::lock(&child_token).as_ref().unwrap().reason(),
-            Some(Reason::CacheShutdown)
+            Some(Reason::CacheShutdown),
+            "contract: close drains ready child callback through its parent"
         );
         assert!(
             tokio::time::timeout(Duration::from_millis(10), scopes.drained())
                 .await
-                .is_err()
+                .is_err(),
+            "contract: close drains ready child callback through its parent"
         );
         release.send(()).unwrap();
-        assert!(matches!(
-            result.await.unwrap(),
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
+        assert!(
+            matches!(
+                result.await.unwrap(),
+                Err(Error::OperationCancelled {
+                    reason: Reason::CacheShutdown
+                })
+            ),
+            "contract: close drains ready child callback through its parent"
+        );
         tokio::time::timeout(Duration::from_secs(1), scopes.drained())
             .await
             .unwrap();
@@ -271,7 +276,10 @@ mod tests {
         );
         let initial =
             std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut execution).poll(cx))).await;
-        assert!(initial.is_pending());
+        assert!(
+            initial.is_pending(),
+            "contract: pending child has one parent task and retires before drain without repoll"
+        );
         assert_eq!(
             scopes.tasks.len(),
             1,
@@ -280,17 +288,21 @@ mod tests {
         scopes.close();
         assert_eq!(
             observation.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(Reason::CacheShutdown)
+            Some(Reason::CacheShutdown),
+            "contract: pending child has one parent task and retires before drain without repoll"
         );
         tokio::time::timeout(Duration::from_secs(1), scopes.drained())
             .await
             .unwrap();
-        assert!(matches!(
-            execution.await,
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
+        assert!(
+            matches!(
+                execution.await,
+                Err(Error::OperationCancelled {
+                    reason: Reason::CacheShutdown
+                })
+            ),
+            "contract: pending child has one parent task and retires before drain without repoll"
+        );
     }
 
     #[tokio::test]
@@ -321,15 +333,19 @@ mod tests {
                 source,
             )
             .await;
-        assert!(matches!(
-            result,
-            Err(Error::OperationCancelled {
-                reason: Reason::CacheShutdown
-            })
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(Error::OperationCancelled {
+                    reason: Reason::CacheShutdown
+                })
+            ),
+            "contract: close before child poll prevents user work and publishes drop cause"
+        );
         assert_eq!(
             observation.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(Reason::CacheShutdown)
+            Some(Reason::CacheShutdown),
+            "contract: close before child poll prevents user work and publishes drop cause"
         );
     }
 
@@ -366,10 +382,14 @@ mod tests {
             },
             source,
         );
-        assert!(tokio::spawn(execution).await.unwrap_err().is_panic());
+        assert!(
+            tokio::spawn(execution).await.unwrap_err().is_panic(),
+            "contract: panic publishes child drop cause before retiring pinned user work"
+        );
         assert_eq!(
             observation.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(Reason::CallerDropped)
+            Some(Reason::CallerDropped),
+            "contract: panic publishes child drop cause before retiring pinned user work"
         );
         tokio::time::timeout(Duration::from_secs(1), scopes.drained())
             .await

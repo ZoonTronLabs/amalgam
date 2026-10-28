@@ -266,39 +266,49 @@ async fn fixture(
 fn validated_lifetimes_and_explicit_capability_errors() {
     assert_eq!(
         MarkerSnapshot::new(version(1), time(3), time(2), time(5)),
-        Err(MarkerSnapshotValidationError::InvalidDeadlines)
+        Err(MarkerSnapshotValidationError::InvalidDeadlines),
+        "contract: validated lifetimes and explicit capability errors"
     );
     assert_eq!(
         MarkerSnapshot::new(version(1), time(1), time(4), time(3)),
-        Err(MarkerSnapshotValidationError::InvalidDeadlines)
+        Err(MarkerSnapshotValidationError::InvalidDeadlines),
+        "contract: validated lifetimes and explicit capability errors"
     );
     assert_eq!(
         MarkerSnapshotLimits::new(0),
-        Err(MarkerSnapshotValidationError::ZeroCapacity)
+        Err(MarkerSnapshotValidationError::ZeroCapacity),
+        "contract: validated lifetimes and explicit capability errors"
     );
-    assert!(matches!(
-        Cache::<u64>::builder()
-            .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
-            .try_build(),
-        Err(Error::Config(
-            ConfigError::MarkerLifecycleRequiresControlledReads
-        ))
-    ));
-    assert!(matches!(
-        Cache::<u64>::builder()
-            .marker_read_policy(MarkerReadPolicy::OptionsControlled)
-            .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
-            .try_build(),
-        Err(Error::Config(
-            ConfigError::MarkerSnapshotCapabilityUnavailable
-        ))
-    ));
+    assert!(
+        matches!(
+            Cache::<u64>::builder()
+                .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
+                .try_build(),
+            Err(Error::Config(
+                ConfigError::MarkerLifecycleRequiresControlledReads
+            ))
+        ),
+        "contract: validated lifetimes and explicit capability errors"
+    );
+    assert!(
+        matches!(
+            Cache::<u64>::builder()
+                .marker_read_policy(MarkerReadPolicy::OptionsControlled)
+                .marker_lifecycle_policy(MarkerLifecyclePolicy::CachedSnapshots)
+                .try_build(),
+            Err(Error::Config(
+                ConfigError::MarkerSnapshotCapabilityUnavailable
+            ))
+        ),
+        "contract: validated lifetimes and explicit capability errors"
+    );
     assert_eq!(
         Cache::<u64>::builder()
             .try_build()
             .unwrap()
             .marker_lifecycle_policy(),
-        MarkerLifecyclePolicy::DurableOnly
+        MarkerLifecyclePolicy::DurableOnly,
+        "contract: validated lifetimes and explicit capability errors"
     );
 }
 
@@ -314,7 +324,11 @@ async fn provider_renewal_keeps_higher_facts_and_later_insertions_without_expiri
     else {
         panic!()
     };
-    assert_eq!(merged.version(), version(5));
+    assert_eq!(
+        merged.version(),
+        version(5),
+        "contract: provider renewal keeps higher facts and later insertions without expiring journal"
+    );
     let newer = MarkerSnapshot::new(version(5), time(11), time(13), time(21)).unwrap();
     store
         .renew_snapshot(&scope(), &kind(), newer, time(11), token())
@@ -325,7 +339,8 @@ async fn provider_renewal_keeps_higher_facts_and_later_insertions_without_expiri
             .renew_snapshot(&scope(), &kind(), merged, time(11), token())
             .await
             .unwrap(),
-        MarkerSnapshotRenewal::KeptNewer(newer)
+        MarkerSnapshotRenewal::KeptNewer(newer),
+        "contract: provider renewal keeps higher facts and later insertions without expiring journal"
     );
     assert_eq!(
         store
@@ -333,18 +348,21 @@ async fn provider_renewal_keeps_higher_facts_and_later_insertions_without_expiri
             .await
             .unwrap()
             .snapshot(),
-        None
+        None,
+        "contract: provider renewal keeps higher facts and later insertions without expiring journal"
     );
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
-        Some(version(5))
+        Some(version(5)),
+        "contract: provider renewal keeps higher facts and later insertions without expiring journal"
     );
     assert_eq!(
         store
             .renew_snapshot(&scope(), &kind(), low, time(20), token())
             .await
             .unwrap(),
-        MarkerSnapshotRenewal::Expired
+        MarkerSnapshotRenewal::Expired,
+        "contract: provider renewal keeps higher facts and later insertions without expiring journal"
     );
 }
 
@@ -366,12 +384,21 @@ async fn snapshot_eviction_is_bounded_and_cannot_evict_durable_facts_or_other_sc
         .renew_snapshot(&other, &kind(), snapshot, time(10), token())
         .await
         .unwrap();
-    assert_eq!(store.snapshot_count(), 1);
+    assert_eq!(
+        store.snapshot_count(),
+        1,
+        "contract: snapshot eviction is bounded and cannot evict durable facts or other scopes"
+    );
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
-        Some(version(1))
+        Some(version(1)),
+        "contract: snapshot eviction is bounded and cannot evict durable facts or other scopes"
     );
-    assert_eq!(store.read(&other, &kind()).await.unwrap(), Some(version(2)));
+    assert_eq!(
+        store.read(&other, &kind()).await.unwrap(),
+        Some(version(2)),
+        "contract: snapshot eviction is bounded and cannot evict durable facts or other scopes"
+    );
     assert_eq!(
         store
             .read_snapshot(&other, &kind(), time(10), token())
@@ -380,7 +407,8 @@ async fn snapshot_eviction_is_bounded_and_cannot_evict_durable_facts_or_other_sc
             .snapshot()
             .unwrap()
             .version(),
-        version(2)
+        version(2),
+        "contract: snapshot eviction is bounded and cannot evict durable facts or other scopes"
     );
 }
 
@@ -389,12 +417,32 @@ async fn nonzero_miss_repairs_independent_distributed_deadlines_without_backplan
  {
     let (_, _, store, cache) = fixture(tags(), true).await;
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+    );
     let writes = store.cache.writes.lock().unwrap().clone();
-    assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0].version(), version(1));
-    assert_eq!(writes[0].logical_expiration(), time(15));
-    assert_eq!(writes[0].physical_expiration(), time(22));
+    assert_eq!(
+        writes.len(),
+        1,
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+    );
+    assert_eq!(
+        writes[0].version(),
+        version(1),
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+    );
+    assert_eq!(
+        writes[0].logical_expiration(),
+        time(15),
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+    );
+    assert_eq!(
+        writes[0].physical_expiration(),
+        time(22),
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+    );
     std::mem::drop(writes);
     let mut completed = false;
     while let Ok(event) = events.try_recv() {
@@ -405,12 +453,19 @@ async fn nonzero_miss_repairs_independent_distributed_deadlines_without_backplan
         {
             completed |= *selected == kind();
         }
-        assert!(!matches!(event, CacheEvent::MessagePublished { .. }));
+        assert!(
+            !matches!(event, CacheEvent::MessagePublished { .. }),
+            "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+        );
     }
-    assert!(completed);
+    assert!(
+        completed,
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
+    );
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
-        Some(version(1))
+        Some(version(1)),
+        "contract: nonzero miss repairs independent distributed deadlines without backplane or revision change"
     );
     cache.shutdown().await.unwrap();
 }
@@ -419,11 +474,27 @@ async fn nonzero_miss_repairs_independent_distributed_deadlines_without_backplan
 async fn absent_revision_is_locally_cached_but_never_written_to_snapshot_storage() {
     let (_, _, store, cache) = fixture(tags(), false).await;
     for _ in 0..3 {
-        assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap().as_ref(),
+            Some(&7),
+            "contract: absent revision is locally cached but never written to snapshot storage"
+        );
     }
-    assert_eq!(store.cache.count(), 0);
-    assert_eq!(store.cache.reads.load(Ordering::Relaxed), 1);
-    assert_eq!(store.inner.snapshot_count(), 0);
+    assert_eq!(
+        store.cache.count(),
+        0,
+        "contract: absent revision is locally cached but never written to snapshot storage"
+    );
+    assert_eq!(
+        store.cache.reads.load(Ordering::Relaxed),
+        1,
+        "contract: absent revision is locally cached but never written to snapshot storage"
+    );
+    assert_eq!(
+        store.inner.snapshot_count(),
+        0,
+        "contract: absent revision is locally cached but never written to snapshot storage"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -433,11 +504,27 @@ async fn local_factory_lifetime_is_independent_of_shorter_l2_and_fresh_hydration
         .with_memory_duration(Duration::from_secs(10))
         .with_distributed_duration(Duration::from_secs(1));
     let (clock, backend, store, cache) = fixture(options.clone(), true).await;
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: local factory lifetime is independent of shorter l2 and fresh hydration never renews l2"
+    );
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
-    assert_eq!(store.cache.reads.load(Ordering::Relaxed), 1);
-    assert_eq!(store.cache.count(), 1);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: local factory lifetime is independent of shorter l2 and fresh hydration never renews l2"
+    );
+    assert_eq!(
+        store.cache.reads.load(Ordering::Relaxed),
+        1,
+        "contract: local factory lifetime is independent of shorter l2 and fresh hydration never renews l2"
+    );
+    assert_eq!(
+        store.cache.count(),
+        1,
+        "contract: local factory lifetime is independent of shorter l2 and fresh hydration never renews l2"
+    );
     cache.shutdown().await.unwrap();
     let fresh = MarkerSnapshot::new(version(1), time(12), time(17), time(22)).unwrap();
     store
@@ -447,7 +534,11 @@ async fn local_factory_lifetime_is_independent_of_shorter_l2_and_fresh_hydration
         .unwrap();
     let second = reader(clock.clone(), backend, store.clone(), options);
     second.try_get("key").await.unwrap();
-    assert_eq!(store.cache.count(), 1);
+    assert_eq!(
+        store.cache.count(),
+        1,
+        "contract: local factory lifetime is independent of shorter l2 and fresh hydration never renews l2"
+    );
     clock.advance(Duration::from_secs(5));
     second.try_get("key").await.unwrap();
     assert_eq!(
@@ -468,15 +559,28 @@ async fn logically_stale_and_physically_expired_snapshots_repair_without_forgett
         .await
         .unwrap();
     cache.try_get("key").await.unwrap();
-    assert_eq!(store.cache.count(), 1);
-    assert_eq!(store.cache.writes.lock().unwrap()[0].version(), version(1));
+    assert_eq!(
+        store.cache.count(),
+        1,
+        "contract: logically stale and physically expired snapshots repair without forgetting facts"
+    );
+    assert_eq!(
+        store.cache.writes.lock().unwrap()[0].version(),
+        version(1),
+        "contract: logically stale and physically expired snapshots repair without forgetting facts"
+    );
     clock.advance(Duration::from_secs(12));
     *store.cache.read_mode.lock().unwrap() = Mode::Miss;
     cache.try_get("key").await.unwrap();
-    assert_eq!(store.cache.count(), 2);
+    assert_eq!(
+        store.cache.count(),
+        2,
+        "contract: logically stale and physically expired snapshots repair without forgetting facts"
+    );
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
-        Some(version(1))
+        Some(version(1)),
+        "contract: logically stale and physically expired snapshots repair without forgetting facts"
     );
     cache.shutdown().await.unwrap();
 }
@@ -489,10 +593,14 @@ async fn all_observations_expiring_cannot_resurrect_an_invalidated_value() {
     cache.shutdown().await.unwrap();
     clock.advance(Duration::from_secs(100));
     let fresh_reader = reader(clock, backend, store.clone(), tags());
-    assert!(fresh_reader.try_get("key").await.unwrap().is_none());
+    assert!(
+        fresh_reader.try_get("key").await.unwrap().is_none(),
+        "contract: all observations expiring cannot resurrect an invalidated value"
+    );
     assert_eq!(
         store.read(&scope(), &kind()).await.unwrap(),
-        Some(version(11))
+        Some(version(11)),
+        "contract: all observations expiring cannot resurrect an invalidated value"
     );
     fresh_reader.shutdown().await.unwrap();
 }
@@ -501,7 +609,11 @@ async fn all_observations_expiring_cannot_resurrect_an_invalidated_value() {
 async fn explicit_write_skip_prevents_renewal_but_suppressed_read_fault_runs_known_factory() {
     let (_, _, store, cache) = fixture(tags().with_skip_distributed(false, true), true).await;
     cache.try_get("key").await.unwrap();
-    assert_eq!(store.cache.count(), 0);
+    assert_eq!(
+        store.cache.count(),
+        0,
+        "contract: explicit write skip prevents renewal but suppressed read fault runs known factory"
+    );
     cache.shutdown().await.unwrap();
     let (clock, _, store, cache) = fixture(tags(), true).await;
     cache.try_get("key").await.unwrap();
@@ -515,10 +627,15 @@ async fn explicit_write_skip_prevents_renewal_but_suppressed_read_fault_runs_kno
     );
     {
         let writes = store.cache.writes.lock().unwrap();
-        assert_eq!(writes[0].version(), writes[1].version());
+        assert_eq!(
+            writes[0].version(),
+            writes[1].version(),
+            "contract: explicit write skip prevents renewal but suppressed read fault runs known factory"
+        );
         assert_eq!(
             (writes[0].created(), writes[1].created()),
-            (time(10), time(12))
+            (time(10), time(12)),
+            "contract: explicit write skip prevents renewal but suppressed read fault runs known factory"
         );
     }
     cache.shutdown().await.unwrap();
@@ -541,11 +658,22 @@ async fn renewal_faults_honor_independent_flags_and_preserve_original_causes() {
                 let Error::Marker(error) = result.unwrap_err() else {
                     panic!()
                 };
-                assert!(error.source().unwrap().downcast_ref::<Cause>().is_some());
+                assert!(
+                    error.source().unwrap().downcast_ref::<Cause>().is_some(),
+                    "contract: renewal faults honor independent flags and preserve original causes"
+                );
             } else {
-                assert_eq!(result.unwrap().as_ref(), Some(&7));
+                assert_eq!(
+                    result.unwrap().as_ref(),
+                    Some(&7),
+                    "contract: renewal faults honor independent flags and preserve original causes"
+                );
             }
-            assert_eq!(store.cache.count(), 1);
+            assert_eq!(
+                store.cache.count(),
+                1,
+                "contract: renewal faults honor independent flags and preserve original causes"
+            );
             cache.shutdown().await.unwrap();
         }
     }
@@ -567,9 +695,16 @@ async fn foreground_renewal_is_awaited_and_not_capped_by_read_timeout() {
     });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(50)).await;
-    assert!(!call.is_finished());
+    assert!(
+        !call.is_finished(),
+        "contract: foreground renewal is awaited and not capped by read timeout"
+    );
     gate.release.add_permits(1);
-    assert_eq!(call.await.unwrap().unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        call.await.unwrap().unwrap().as_ref(),
+        Some(&7),
+        "contract: foreground renewal is awaited and not capped by read timeout"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -582,15 +717,27 @@ async fn background_renewal_survives_completed_foreground_and_shutdown_cancels_i
     .await;
     let gate = Gate::new();
     *store.cache.write_mode.lock().unwrap() = Mode::Park(gate.clone());
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: background renewal survives completed foreground and shutdown cancels its real token"
+    );
     gate.entered.notified().await;
-    assert!(store.cache.ended.lock().unwrap().is_empty());
+    assert!(
+        store.cache.ended.lock().unwrap().is_empty(),
+        "contract: background renewal survives completed foreground and shutdown cancels its real token"
+    );
     cache.shutdown().await.unwrap();
     assert_eq!(
         *store.cache.ended.lock().unwrap(),
-        vec![Some(FactoryCancellationReason::CacheShutdown)]
+        vec![Some(FactoryCancellationReason::CacheShutdown)],
+        "contract: background renewal survives completed foreground and shutdown cancels its real token"
     );
-    assert_eq!(store.inner.snapshot_count(), 0);
+    assert_eq!(
+        store.inner.snapshot_count(),
+        0,
+        "contract: background renewal survives completed foreground and shutdown cancels its real token"
+    );
 }
 
 #[tokio::test]
@@ -611,7 +758,10 @@ async fn parked_old_renewal_cannot_overwrite_concurrent_higher_invalidation_or_l
         .await
         .unwrap();
     gate.release.add_permits(1);
-    assert!(call.await.unwrap().unwrap().is_none());
+    assert!(
+        call.await.unwrap().unwrap().is_none(),
+        "contract: parked old renewal cannot overwrite concurrent higher invalidation or later snapshot"
+    );
     assert_eq!(
         store
             .inner
@@ -619,7 +769,8 @@ async fn parked_old_renewal_cannot_overwrite_concurrent_higher_invalidation_or_l
             .await
             .unwrap()
             .snapshot(),
-        Some(newer)
+        Some(newer),
+        "contract: parked old renewal cannot overwrite concurrent higher invalidation or later snapshot"
     );
     cache.shutdown().await.unwrap();
 }
@@ -632,19 +783,30 @@ async fn zero_hard_factory_budget_does_not_run_renewal_and_cold_soft_is_ineligib
     )
     .await;
     cache.try_get("key").await.unwrap();
-    assert_eq!(store.cache.count(), 0);
+    assert_eq!(
+        store.cache.count(),
+        0,
+        "contract: zero hard factory budget does not run renewal and cold soft is ineligible"
+    );
     cache.shutdown().await.unwrap();
     let options = tags()
         .with_fail_safe(false, None, None)
         .with_factory_timeouts(Timeout::Infinite, Timeout::After(Duration::ZERO), false);
     let (_, _, store, cache) = fixture(options, true).await;
-    assert!(matches!(
-        cache.try_get("key").await,
-        Err(Error::FactoryTimeout {
-            elapsed: Duration::ZERO
-        })
-    ));
-    assert_eq!(store.cache.count(), 0);
+    assert!(
+        matches!(
+            cache.try_get("key").await,
+            Err(Error::FactoryTimeout {
+                elapsed: Duration::ZERO
+            })
+        ),
+        "contract: zero hard factory budget does not run renewal and cold soft is ineligible"
+    );
+    assert_eq!(
+        store.cache.count(),
+        0,
+        "contract: zero hard factory budget does not run renewal and cold soft is ineligible"
+    );
     cache.shutdown().await.unwrap();
     let (_, _, store, cache) = fixture(
         tags().with_factory_timeouts(Timeout::After(Duration::ZERO), Timeout::Infinite, false),
@@ -652,7 +814,11 @@ async fn zero_hard_factory_budget_does_not_run_renewal_and_cold_soft_is_ineligib
     )
     .await;
     cache.try_get("key").await.unwrap();
-    assert_eq!(store.cache.count(), 1);
+    assert_eq!(
+        store.cache.count(),
+        1,
+        "contract: zero hard factory budget does not run renewal and cold soft is ineligible"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -668,8 +834,16 @@ async fn zero_soft_factory_budget_is_eligible_for_retained_l2_without_local_obse
         .await
         .unwrap();
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
-    assert_eq!(store.cache.count(), 0);
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: zero soft factory budget is eligible for retained l2 without local observation"
+    );
+    assert_eq!(
+        store.cache.count(),
+        0,
+        "contract: zero soft factory budget is eligible for retained l2 without local observation"
+    );
     assert!(
         std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
             event,
@@ -677,7 +851,8 @@ async fn zero_soft_factory_budget_is_eligible_for_retained_l2_without_local_obse
                 kind: MarkerKind::Tag(_),
                 outcome: MarkerReadOutcome::StaleFallback(MarkerReadFailure::FactorySoftTimeout)
             }
-        ))
+        )),
+        "contract: zero soft factory budget is eligible for retained l2 without local observation"
     );
     assert_eq!(
         store
@@ -686,7 +861,8 @@ async fn zero_soft_factory_budget_is_eligible_for_retained_l2_without_local_obse
             .await
             .unwrap()
             .snapshot(),
-        Some(stale)
+        Some(stale),
+        "contract: zero soft factory budget is eligible for retained l2 without local observation"
     );
     cache.shutdown().await.unwrap();
 }
@@ -704,17 +880,25 @@ async fn explicit_cancellation_of_foreground_write_cannot_be_suppressed_as_a_sto
     });
     gate.entered.notified().await;
     source.cancel();
-    assert!(matches!(
-        call.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            call.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit cancellation of foreground write cannot be suppressed as a storage fault"
+    );
     assert_eq!(
         *store.cache.ended.lock().unwrap(),
-        vec![Some(FactoryCancellationReason::CallerCancelled)]
+        vec![Some(FactoryCancellationReason::CallerCancelled)],
+        "contract: explicit cancellation of foreground write cannot be suppressed as a storage fault"
     );
-    assert_eq!(store.inner.snapshot_count(), 0);
+    assert_eq!(
+        store.inner.snapshot_count(),
+        0,
+        "contract: explicit cancellation of foreground write cannot be suppressed as a storage fault"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -735,19 +919,25 @@ async fn native_memory_snapshot_renewal_requires_current_atomic_lease_ownership(
     .unwrap();
     let proof = lease.proof().unwrap();
     let snapshot = MarkerSnapshot::fresh(version(1), &tags(), time(10));
-    assert!(matches!(
-        store
-            .renew_snapshot_with_lease(&scope(), &kind(), snapshot, time(10), &proof, token())
-            .await
-            .unwrap(),
-        MarkerSnapshotRenewal::Stored(_)
-    ));
+    assert!(
+        matches!(
+            store
+                .renew_snapshot_with_lease(&scope(), &kind(), snapshot, time(10), &proof, token())
+                .await
+                .unwrap(),
+            MarkerSnapshotRenewal::Stored(_)
+        ),
+        "contract: native memory snapshot renewal requires current atomic lease ownership"
+    );
     clock.advance(Duration::from_secs(1));
-    assert!(matches!(
-        store
-            .renew_snapshot_with_lease(&scope(), &kind(), snapshot, time(11), &proof, token())
-            .await,
-        Err(MarkerSnapshotCacheError::Lease(LeaseError::Lost))
-    ));
+    assert!(
+        matches!(
+            store
+                .renew_snapshot_with_lease(&scope(), &kind(), snapshot, time(11), &proof, token())
+                .await,
+            Err(MarkerSnapshotCacheError::Lease(LeaseError::Lost))
+        ),
+        "contract: native memory snapshot renewal requires current atomic lease ownership"
+    );
     lease.release().await.unwrap();
 }

@@ -126,16 +126,36 @@ async fn own_markers_prefetch_clear_markers_with_the_value() {
     provider.separate_reads();
     provider.marked_reads();
 
-    assert_eq!(cache.try_get("plain").await.unwrap(), Some(1));
+    assert_eq!(
+        cache.try_get("plain").await.unwrap(),
+        Some(1),
+        "contract: own markers prefetch clear markers with the value"
+    );
     let clear = vec![MarkerKind::ClearRemove, MarkerKind::ClearExpire];
-    assert_eq!(provider.marked_reads(), vec![clear.clone()]);
-    assert!(provider.separate_reads().is_empty());
+    assert_eq!(
+        provider.marked_reads(),
+        vec![clear.clone()],
+        "contract: own markers prefetch clear markers with the value"
+    );
+    assert!(
+        provider.separate_reads().is_empty(),
+        "contract: own markers prefetch clear markers with the value"
+    );
 
-    assert_eq!(cache.try_get("tagged").await.unwrap(), Some(2));
-    assert_eq!(provider.marked_reads(), vec![clear]);
+    assert_eq!(
+        cache.try_get("tagged").await.unwrap(),
+        Some(2),
+        "contract: own markers prefetch clear markers with the value"
+    );
+    assert_eq!(
+        provider.marked_reads(),
+        vec![clear],
+        "contract: own markers prefetch clear markers with the value"
+    );
     assert_eq!(
         provider.separate_reads(),
-        vec![vec![MarkerKind::Tag(Tag::new("users").unwrap())]]
+        vec![vec![MarkerKind::Tag(Tag::new("users").unwrap())]],
+        "contract: own markers prefetch clear markers with the value"
     );
     cache.shutdown().await.unwrap();
 }
@@ -147,14 +167,30 @@ async fn prefetched_markers_invalidate_cold_reads_on_another_node() {
     let reader = node(&provider);
     writer.set("plain", 1).await.unwrap();
     writer.set("tagged", 2).tags(["users"]).await.unwrap();
-    assert_eq!(reader.try_get("plain").await.unwrap(), Some(1));
+    assert_eq!(
+        reader.try_get("plain").await.unwrap(),
+        Some(1),
+        "contract: prefetched markers invalidate cold reads on another node"
+    );
 
     writer.remove_by_tag("users").await.unwrap();
-    assert_eq!(reader.try_get("tagged").await.unwrap(), None);
-    assert_eq!(reader.try_get("plain").await.unwrap(), Some(1));
+    assert_eq!(
+        reader.try_get("tagged").await.unwrap(),
+        None,
+        "contract: prefetched markers invalidate cold reads on another node"
+    );
+    assert_eq!(
+        reader.try_get("plain").await.unwrap(),
+        Some(1),
+        "contract: prefetched markers invalidate cold reads on another node"
+    );
 
     writer.clear(ClearMode::Remove).await.unwrap();
-    assert_eq!(reader.try_get("plain").await.unwrap(), None);
+    assert_eq!(
+        reader.try_get("plain").await.unwrap(),
+        None,
+        "contract: prefetched markers invalidate cold reads on another node"
+    );
     writer.shutdown().await.unwrap();
     reader.shutdown().await.unwrap();
 }
@@ -176,11 +212,19 @@ async fn a_separately_supplied_marker_store_keeps_its_own_reads() {
     cache.set("plain", 1).await.unwrap();
     separate.reads.lock().unwrap().clear();
 
-    assert_eq!(cache.try_get("plain").await.unwrap(), Some(1));
-    assert!(provider.marked_reads().is_empty());
+    assert_eq!(
+        cache.try_get("plain").await.unwrap(),
+        Some(1),
+        "contract: a separately supplied marker store keeps its own reads"
+    );
+    assert!(
+        provider.marked_reads().is_empty(),
+        "contract: a separately supplied marker store keeps its own reads"
+    );
     assert_eq!(
         std::mem::take(&mut *separate.reads.lock().unwrap()),
-        vec![vec![MarkerKind::ClearRemove, MarkerKind::ClearExpire]]
+        vec![vec![MarkerKind::ClearRemove, MarkerKind::ClearExpire]],
+        "contract: a separately supplied marker store keeps its own reads"
     );
     cache.shutdown().await.unwrap();
 }

@@ -140,7 +140,11 @@ async fn max_items_rejects_new_item_when_full_and_nothing_evictable() {
 
     service.enqueue(item("a", RecoveryAction::Set, 1, FAR_FUTURE));
     service.enqueue(item("b", RecoveryAction::Set, 1, FAR_FUTURE));
-    assert_eq!(service.len(), 2);
+    assert_eq!(
+        service.len(),
+        2,
+        "contract: max items rejects new item when full and nothing evictable"
+    );
 
     service.enqueue(item("c", RecoveryAction::Set, 1, FAR_FUTURE));
     assert_eq!(service.len(), 2, "the queue stayed at its bound");
@@ -156,7 +160,11 @@ async fn max_items_rejects_new_item_when_full_and_nothing_evictable() {
         .iter()
         .map(|k| k.to_string())
         .collect();
-    assert_eq!(seen, HashSet::from(["a".to_owned(), "b".to_owned()]));
+    assert_eq!(
+        seen,
+        HashSet::from(["a".to_owned(), "b".to_owned()]),
+        "contract: max items rejects new item when full and nothing evictable"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -169,7 +177,11 @@ async fn max_items_evicts_sooner_expiring_item_to_admit_newer() {
     let soon = Timestamp::from_ticks(10); // > now(0) but well before FAR_FUTURE
     service.enqueue(item("a", RecoveryAction::Set, 1, soon));
     service.enqueue(item("b", RecoveryAction::Set, 1, FAR_FUTURE));
-    assert_eq!(service.len(), 2);
+    assert_eq!(
+        service.len(),
+        2,
+        "contract: max items evicts sooner expiring item to admit newer"
+    );
 
     service.enqueue(item("c", RecoveryAction::Set, 1, FAR_FUTURE));
     assert_eq!(service.len(), 2, "still at capacity after the swap");
@@ -184,7 +196,11 @@ async fn max_items_evicts_sooner_expiring_item_to_admit_newer() {
         .iter()
         .map(|k| k.to_string())
         .collect();
-    assert_eq!(seen, HashSet::from(["b".to_owned(), "c".to_owned()]));
+    assert_eq!(
+        seen,
+        HashSet::from(["b".to_owned(), "c".to_owned()]),
+        "contract: max items evicts sooner expiring item to admit newer"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -197,7 +213,11 @@ async fn max_retries_exhaustion_drops_item() {
     mock.fail_all.store(true, Ordering::SeqCst);
 
     service.enqueue(item("k", RecoveryAction::Set, 1, FAR_FUTURE));
-    assert_eq!(service.len(), 1);
+    assert_eq!(
+        service.len(),
+        1,
+        "contract: max retries exhaustion drops item"
+    );
 
     service.drain_once(mock.as_ref()).await; // failure #1: budget 1 ⇒ 0, kept
     assert_eq!(service.len(), 1, "item retained while retries remain");
@@ -221,7 +241,11 @@ async fn drain_once_removes_succeeded_and_keeps_failed() {
 
     service.enqueue(item("ok", RecoveryAction::Set, 1, FAR_FUTURE));
     service.enqueue(item("bad", RecoveryAction::Remove, 1, FAR_FUTURE));
-    assert_eq!(service.len(), 2);
+    assert_eq!(
+        service.len(),
+        2,
+        "contract: drain once removes succeeded and keeps failed"
+    );
 
     service.drain_once(mock.as_ref()).await;
     assert_eq!(

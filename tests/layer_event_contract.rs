@@ -75,16 +75,22 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
         )
         .await
         .unwrap(),
-        17
+        17,
+        "contract: component memory attempts do not change the legacy stream"
     );
-    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "contract: component memory attempts do not change the legacy stream"
+    );
     assert_eq!(
         drain(&mut layer),
         vec![
             LayerEvent::Memory(MemoryEvent::Miss { key: key("k") }),
             LayerEvent::Memory(MemoryEvent::Miss { key: key("k") }),
             LayerEvent::Memory(MemoryEvent::Set { key: key("k") }),
-        ]
+        ],
+        "contract: component memory attempts do not change the legacy stream"
     );
     let mut logical_set = 0;
     while let Ok(event) = legacy.try_recv() {
@@ -92,14 +98,22 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
             logical_set += 1;
         }
     }
-    assert_eq!(logical_set, 1);
-    assert_eq!(c.try_get("k").await.unwrap().as_ref(), Some(&17));
+    assert_eq!(
+        logical_set, 1,
+        "contract: component memory attempts do not change the legacy stream"
+    );
+    assert_eq!(
+        c.try_get("k").await.unwrap().as_ref(),
+        Some(&17),
+        "contract: component memory attempts do not change the legacy stream"
+    );
     assert_eq!(
         drain(&mut layer),
         vec![LayerEvent::Memory(MemoryEvent::Hit {
             key: key("k"),
             stale: false
-        })]
+        })],
+        "contract: component memory attempts do not change the legacy stream"
     );
     let _ = c
         .remove("absent")
@@ -113,7 +127,8 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
         drain(&mut layer),
         vec![LayerEvent::Memory(MemoryEvent::Remove {
             key: key("absent")
-        })]
+        })],
+        "contract: component memory attempts do not change the legacy stream"
     );
     let _ = c
         .expire("absent")
@@ -123,7 +138,10 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
         .wait()
         .await
         .unwrap();
-    assert!(drain(&mut layer).is_empty());
+    assert!(
+        drain(&mut layer).is_empty(),
+        "contract: component memory attempts do not change the legacy stream"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -139,11 +157,17 @@ async fn rejected_and_skipped_memory_admission_never_claim_a_set() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        receipt.local,
-        LocalEffect::Stored(MemoryAdmission::Rejected(_))
-    ));
-    assert!(drain(&mut events).is_empty());
+    assert!(
+        matches!(
+            receipt.local,
+            LocalEffect::Stored(MemoryAdmission::Rejected(_))
+        ),
+        "contract: rejected and skipped memory admission never claim a set"
+    );
+    assert!(
+        drain(&mut events).is_empty(),
+        "contract: rejected and skipped memory admission never claim a set"
+    );
     let skipped = options().with_skip_memory(false, true);
     let _ = c
         .set("skipped", 2)
@@ -154,7 +178,10 @@ async fn rejected_and_skipped_memory_admission_never_claim_a_set() {
         .wait()
         .await
         .unwrap();
-    assert!(drain(&mut events).is_empty());
+    assert!(
+        drain(&mut events).is_empty(),
+        "contract: rejected and skipped memory admission never claim a set"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -188,14 +215,18 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .await
         .unwrap();
     drain(&mut events);
-    assert!(c.try_get("tagged").await.unwrap().is_none());
+    assert!(
+        c.try_get("tagged").await.unwrap().is_none(),
+        "contract: memory hit records expiry before final acceptance and secondary tags"
+    );
     let facts = drain(&mut events);
     assert_eq!(
         facts.first(),
         Some(&LayerEvent::Memory(MemoryEvent::Hit {
             key: key("tagged"),
             stale: false
-        }))
+        })),
+        "contract: memory hit records expiry before final acceptance and secondary tags"
     );
     let _ = c
         .set("stale", 4)
@@ -218,15 +249,20 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         drain(&mut events),
         vec![LayerEvent::Memory(MemoryEvent::Expire {
             key: key("stale")
-        })]
+        })],
+        "contract: memory hit records expiry before final acceptance and secondary tags"
     );
-    assert!(c.try_get("stale").await.unwrap().is_none());
+    assert!(
+        c.try_get("stale").await.unwrap().is_none(),
+        "contract: memory hit records expiry before final acceptance and secondary tags"
+    );
     assert_eq!(
         drain(&mut events),
         vec![LayerEvent::Memory(MemoryEvent::Hit {
             key: key("stale"),
             stale: true
-        })]
+        })],
+        "contract: memory hit records expiry before final acceptance and secondary tags"
     );
     c.shutdown().await.unwrap();
 }
@@ -264,9 +300,14 @@ async fn decoded_l2_hit_and_memory_promotion_are_distinct_actual_facts() {
         vec![
             LayerEvent::Memory(MemoryEvent::Set { key: key("k") }),
             LayerEvent::Distributed(DistributedEvent::Set { key: key("k") }),
-        ]
+        ],
+        "contract: decoded l2 hit and memory promotion are distinct actual facts"
     );
-    assert_eq!(b.try_get("k").await.unwrap().as_ref(), Some(&5));
+    assert_eq!(
+        b.try_get("k").await.unwrap().as_ref(),
+        Some(&5),
+        "contract: decoded l2 hit and memory promotion are distinct actual facts"
+    );
     assert_eq!(
         drain(&mut rb),
         vec![
@@ -276,7 +317,8 @@ async fn decoded_l2_hit_and_memory_promotion_are_distinct_actual_facts() {
                 stale: false
             }),
             LayerEvent::Memory(MemoryEvent::Set { key: key("k") }),
-        ]
+        ],
+        "contract: decoded l2 hit and memory promotion are distinct actual facts"
     );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -307,18 +349,23 @@ async fn l2_hit_precedes_durable_tag_rejection_without_a_fabricated_miss() {
         .unwrap();
     let b = hybrid(clock, store);
     let mut events = b.events().subscribe_layers();
-    assert!(b.try_get("k").await.unwrap().is_none());
+    assert!(
+        b.try_get("k").await.unwrap().is_none(),
+        "contract: l2 hit precedes durable tag rejection without a fabricated miss"
+    );
     let facts = drain(&mut events);
     assert!(
         facts.contains(&LayerEvent::Distributed(DistributedEvent::Hit {
             key: key("k"),
             stale: false
-        }))
+        })),
+        "contract: l2 hit precedes durable tag rejection without a fabricated miss"
     );
     assert!(
         !facts
             .iter()
-            .any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Miss { .. })))
+            .any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Miss { .. }))),
+        "contract: l2 hit precedes durable tag rejection without a fabricated miss"
     );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
@@ -387,39 +434,67 @@ async fn suppressed_transport_fault_misses_once_but_open_circuit_skips_the_attem
     let store = Arc::new(Store::new(clock.clone(), Phase::Unavailable));
     let c = hybrid(clock.clone(), store.clone());
     let mut events = c.events().subscribe_layers();
-    assert_eq!(c.get_or_default("first", 7).await.unwrap(), 7);
+    assert_eq!(
+        c.get_or_default("first", 7).await.unwrap(),
+        7,
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
     let first = drain(&mut events);
-    assert!(first.contains(&LayerEvent::Distributed(
-        DistributedEvent::CircuitBreakerChange { closed: false }
-    )));
+    assert!(
+        first.contains(&LayerEvent::Distributed(
+            DistributedEvent::CircuitBreakerChange { closed: false }
+        )),
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
     assert_eq!(
         first
             .iter()
             .filter(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Miss { .. })))
             .count(),
-        1
+        1,
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
     );
     let reads = store.reads.load(Ordering::SeqCst);
-    assert_eq!(c.get_or_default("second", 8).await.unwrap(), 8);
-    assert_eq!(reads, store.reads.load(Ordering::SeqCst));
+    assert_eq!(
+        c.get_or_default("second", 8).await.unwrap(),
+        8,
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
+    assert_eq!(
+        reads,
+        store.reads.load(Ordering::SeqCst),
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
     assert!(
         !drain(&mut events)
             .iter()
-            .any(|e| matches!(e, LayerEvent::Distributed(_)))
+            .any(|e| matches!(e, LayerEvent::Distributed(_))),
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
     );
     store.recover();
     clock.advance(Duration::from_secs(3));
-    assert!(c.try_get("recovered").await.unwrap().is_none());
+    assert!(
+        c.try_get("recovered").await.unwrap().is_none(),
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
     let after = drain(&mut events);
-    assert!(after.contains(&LayerEvent::Distributed(
-        DistributedEvent::CircuitBreakerChange { closed: true }
-    )));
+    assert!(
+        after.contains(&LayerEvent::Distributed(
+            DistributedEvent::CircuitBreakerChange { closed: true }
+        )),
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
     assert!(
         after.contains(&LayerEvent::Distributed(DistributedEvent::Miss {
             key: key("recovered")
-        }))
+        })),
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
     );
-    assert_eq!(store.reads.load(Ordering::SeqCst), reads + 1);
+    assert_eq!(
+        store.reads.load(Ordering::SeqCst),
+        reads + 1,
+        "contract: suppressed transport fault misses once but open circuit skips the attempt"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -432,18 +507,23 @@ async fn cache_read_deadline_is_typed_and_never_trips_the_transport_circuit() {
     let budget = Duration::from_millis(15);
     let opts = options().with_distributed_timeouts(Timeout::After(budget), Timeout::After(budget));
     assert!(
-        matches!(c.try_get("timed").options(|_| opts.clone().with_rethrow_distributed_exceptions(true)).await, Err(Error::DistributedTimeout { elapsed }) if elapsed == budget)
+        matches!(c.try_get("timed").options(|_| opts.clone().with_rethrow_distributed_exceptions(true)).await, Err(Error::DistributedTimeout { elapsed }) if elapsed == budget),
+        "contract: cache read deadline is typed and never trips the transport circuit"
     );
-    assert!(!drain(&mut events).iter().any(|e| matches!(
-        e,
-        LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange { .. })
-    )));
+    assert!(
+        !drain(&mut events).iter().any(|e| matches!(
+            e,
+            LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange { .. })
+        )),
+        "contract: cache read deadline is typed and never trips the transport circuit"
+    );
     assert_eq!(
         c.get_or_default("suppressed", 9)
             .options(|_| opts)
             .await
             .unwrap(),
-        9
+        9,
+        "contract: cache read deadline is typed and never trips the transport circuit"
     );
     let facts = drain(&mut events);
     assert_eq!(
@@ -451,18 +531,26 @@ async fn cache_read_deadline_is_typed_and_never_trips_the_transport_circuit() {
             .iter()
             .filter(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Miss { .. })))
             .count(),
-        1
+        1,
+        "contract: cache read deadline is typed and never trips the transport circuit"
     );
-    assert!(!facts.iter().any(|e| matches!(
-        e,
-        LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange { .. })
-    )));
+    assert!(
+        !facts.iter().any(|e| matches!(
+            e,
+            LayerEvent::Distributed(DistributedEvent::CircuitBreakerChange { .. })
+        )),
+        "contract: cache read deadline is typed and never trips the transport circuit"
+    );
     store.recover();
-    assert!(c.try_get("healthy").await.unwrap().is_none());
+    assert!(
+        c.try_get("healthy").await.unwrap().is_none(),
+        "contract: cache read deadline is typed and never trips the transport circuit"
+    );
     assert!(
         drain(&mut events).contains(&LayerEvent::Distributed(DistributedEvent::Miss {
             key: key("healthy")
-        }))
+        })),
+        "contract: cache read deadline is typed and never trips the transport circuit"
     );
     c.shutdown().await.unwrap();
 }
@@ -481,16 +569,20 @@ async fn caller_cancellation_does_not_become_a_layer_miss_or_codec_failure() {
         .await
         .unwrap();
     source.cancel();
-    assert!(matches!(
-        task.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            task.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: caller cancellation does not become a layer miss or codec failure"
+    );
     assert!(
         !drain(&mut events)
             .iter()
-            .any(|e| matches!(e, LayerEvent::Distributed(_)))
+            .any(|e| matches!(e, LayerEvent::Distributed(_))),
+        "contract: caller cancellation does not become a layer miss or codec failure"
     );
     c.shutdown().await.unwrap();
 }
@@ -529,22 +621,31 @@ async fn codec_failures_keep_causes_and_do_not_claim_transport_success_or_open_a
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        result.distributed,
-        EffectOutcome::FailedSuppressed {
-            cause: Error::Codec(_)
-        }
-    ));
+    assert!(
+        matches!(
+            result.distributed,
+            EffectOutcome::FailedSuppressed {
+                cause: Error::Codec(_)
+            }
+        ),
+        "contract: codec failures keep causes and do not claim transport success or open a circuit"
+    );
     let facts = drain(&mut events);
-    assert!(facts.contains(&LayerEvent::Distributed(
-        DistributedEvent::SerializationError { key: key("encode") }
-    )));
-    assert!(!facts.iter().any(|e| matches!(
-        e,
-        LayerEvent::Distributed(
-            DistributedEvent::Set { .. } | DistributedEvent::CircuitBreakerChange { .. }
-        )
-    )));
+    assert!(
+        facts.contains(&LayerEvent::Distributed(
+            DistributedEvent::SerializationError { key: key("encode") }
+        )),
+        "contract: codec failures keep causes and do not claim transport success or open a circuit"
+    );
+    assert!(
+        !facts.iter().any(|e| matches!(
+            e,
+            LayerEvent::Distributed(
+                DistributedEvent::Set { .. } | DistributedEvent::CircuitBreakerChange { .. }
+            )
+        )),
+        "contract: codec failures keep causes and do not claim transport success or open a circuit"
+    );
     let read = hybrid(clock, store.clone());
     let mut reader = read.events().subscribe_layers();
     store
@@ -557,7 +658,8 @@ async fn codec_failures_keep_causes_and_do_not_claim_transport_success_or_open_a
             .options(|_| opts)
             .await
             .unwrap(),
-        11
+        11,
+        "contract: codec failures keep causes and do not claim transport success or open a circuit"
     );
     assert_eq!(
         drain(&mut reader),
@@ -565,7 +667,8 @@ async fn codec_failures_keep_causes_and_do_not_claim_transport_success_or_open_a
             LayerEvent::Memory(MemoryEvent::Miss { key: key("decode") }),
             LayerEvent::Distributed(DistributedEvent::DeserializationError { key: key("decode") }),
             LayerEvent::Distributed(DistributedEvent::Miss { key: key("decode") }),
-        ]
+        ],
+        "contract: codec failures keep causes and do not claim transport success or open a circuit"
     );
     c.shutdown().await.unwrap();
     read.shutdown().await.unwrap();
@@ -607,11 +710,14 @@ async fn rich_backplane_frames_preserve_source_revision_action_key_and_rejected_
         .await
         .unwrap();
     let facts = drain(&mut events);
-    assert!(facts.iter().any(|e| matches!(e, LayerEvent::Backplane(BackplaneEvent::MessagePublished { command: BackplaneCommand::Data(m) }) if m.source_id.as_ref()=="local" && m.key.as_ref()=="v2:k" && m.action==BackplaneAction::Set && m.timestamp==clock.now())));
-    assert!(!facts.iter().any(|e| matches!(
-        e,
-        LayerEvent::Backplane(BackplaneEvent::MessageReceived { .. })
-    )));
+    assert!(facts.iter().any(|e| matches!(e, LayerEvent::Backplane(BackplaneEvent::MessagePublished { command: BackplaneCommand::Data(m) }) if m.source_id.as_ref()=="local" && m.key.as_ref()=="v2:k" && m.action==BackplaneAction::Set && m.timestamp==clock.now())), "contract: rich backplane frames preserve source revision action key and rejected envelopes");
+    assert!(
+        !facts.iter().any(|e| matches!(
+            e,
+            LayerEvent::Backplane(BackplaneEvent::MessageReceived { .. })
+        )),
+        "contract: rich backplane frames preserve source revision action key and rejected envelopes"
+    );
     let foreign = BackplaneMessage {
         source_id: key("remote"),
         timestamp: clock.now(),
@@ -619,7 +725,11 @@ async fn rich_backplane_frames_preserve_source_revision_action_key_and_rejected_
         key: key("v2:k"),
     };
     bp.publish(foreign.clone()).await.unwrap();
-    assert_eq!(receive(&mut events).await, foreign);
+    assert_eq!(
+        receive(&mut events).await,
+        foreign,
+        "contract: rich backplane frames preserve source revision action key and rejected envelopes"
+    );
     let invalid = BackplaneMessage {
         source_id: key("\u{1f}amalgam-control-v2:not-hex"),
         timestamp: clock.now(),
@@ -627,7 +737,11 @@ async fn rich_backplane_frames_preserve_source_revision_action_key_and_rejected_
         key: key("invalid"),
     };
     bp.publish(invalid.clone()).await.unwrap();
-    assert_eq!(receive(&mut events).await, invalid);
+    assert_eq!(
+        receive(&mut events).await,
+        invalid,
+        "contract: rich backplane frames preserve source revision action key and rejected envelopes"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -659,8 +773,14 @@ async fn explicit_layer_skips_and_ignore_incoming_emit_no_false_component_calls(
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("skip").options(|_| skip).await.unwrap().is_none());
-    assert!(drain(&mut events).is_empty());
+    assert!(
+        c.try_get("skip").options(|_| skip).await.unwrap().is_none(),
+        "contract: explicit layer skips and ignore incoming emit no false component calls"
+    );
+    assert!(
+        drain(&mut events).is_empty(),
+        "contract: explicit layer skips and ignore incoming emit no false component calls"
+    );
     bp.publish(BackplaneMessage {
         source_id: key("remote"),
         timestamp: Timestamp::from_ticks(1),
@@ -672,7 +792,8 @@ async fn explicit_layer_skips_and_ignore_incoming_emit_no_false_component_calls(
     assert!(
         tokio::time::timeout(Duration::from_millis(30), events.recv())
             .await
-            .is_err()
+            .is_err(),
+        "contract: explicit layer skips and ignore incoming emit no false component calls"
     );
     c.shutdown().await.unwrap();
 }
@@ -688,14 +809,26 @@ async fn layer_loss_and_close_are_independent_of_logical_delivery() {
         }));
     }
     events.emit(CacheEvent::Clear);
-    assert_eq!(legacy.recv().await.unwrap(), CacheEvent::Clear);
+    assert_eq!(
+        legacy.recv().await.unwrap(),
+        CacheEvent::Clear,
+        "contract: layer loss and close are independent of logical delivery"
+    );
     assert_eq!(
         rx.recv().await.unwrap(),
-        LayerEvent::Memory(MemoryEvent::Miss { key: key("4") })
+        LayerEvent::Memory(MemoryEvent::Miss { key: key("4") }),
+        "contract: layer loss and close are independent of logical delivery"
     );
-    assert_eq!(rx.lost_events(), 4);
+    assert_eq!(
+        rx.lost_events(),
+        4,
+        "contract: layer loss and close are independent of logical delivery"
+    );
     std::mem::drop(events);
-    assert!(rx.recv().await.is_err());
+    assert!(
+        rx.recv().await.is_err(),
+        "contract: layer loss and close are independent of logical delivery"
+    );
 }
 
 #[cfg(feature = "redis")]
@@ -741,9 +874,10 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
         )
         .await
         .unwrap(),
-        19
+        19,
+        "contract: actual redis layers cover fenced factory cold peer and pubsub remove"
     );
-    assert!(drain(&mut ea).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Set { key }) if key.as_ref()==format!("{prefix}k"))));
+    assert!(drain(&mut ea).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Set { key }) if key.as_ref()==format!("{prefix}k"))), "contract: actual redis layers cover fenced factory cold peer and pubsub remove");
     // Node B has not read before this point: incoming Set does not create a cold L1.
     assert_eq!(
         b.get_or_set::<_, _>(
@@ -752,9 +886,10 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
         )
         .await
         .unwrap(),
-        19
+        19,
+        "contract: actual redis layers cover fenced factory cold peer and pubsub remove"
     );
-    assert!(drain(&mut eb).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Hit { key, stale:false }) if key.as_ref()==format!("{prefix}k"))));
+    assert!(drain(&mut eb).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Hit { key, stale:false }) if key.as_ref()==format!("{prefix}k"))), "contract: actual redis layers cover fenced factory cold peer and pubsub remove");
     let _ = a
         .remove("k")
         .with_receipt()
@@ -779,12 +914,21 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
         .await
         .unwrap()
     };
-    assert_eq!(message.source_id.as_ref(), format!("{name}-a"));
-    assert_eq!(message.key.as_ref(), format!("v2:{prefix}k"));
+    assert_eq!(
+        message.source_id.as_ref(),
+        format!("{name}-a"),
+        "contract: actual redis layers cover fenced factory cold peer and pubsub remove"
+    );
+    assert_eq!(
+        message.key.as_ref(),
+        format!("v2:{prefix}k"),
+        "contract: actual redis layers cover fenced factory cold peer and pubsub remove"
+    );
     assert!(
         drain(&mut ea)
             .iter()
-            .any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Remove { .. })))
+            .any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Remove { .. }))),
+        "contract: actual redis layers cover fenced factory cold peer and pubsub remove"
     );
     let expected_remove = LayerEvent::Memory(MemoryEvent::Remove {
         key: key(&format!("{prefix}k")),
@@ -804,7 +948,10 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
     })
     .await
     .unwrap();
-    assert!(removal_seen);
+    assert!(
+        removal_seen,
+        "contract: actual redis layers cover fenced factory cold peer and pubsub remove"
+    );
     for node in nodes {
         node.shutdown().await.unwrap();
     }
@@ -857,19 +1004,29 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        receipt.backplane,
-        EffectOutcome::FailedSuppressed { .. }
-    ));
+    assert!(
+        matches!(receipt.backplane, EffectOutcome::FailedSuppressed { .. }),
+        "contract: invalid foreign frame closes transport circuit before validation and still invalidates strict l1"
+    );
     let before = drain(&mut events);
-    assert!(before.contains(&LayerEvent::Backplane(
-        BackplaneEvent::CircuitBreakerChange { closed: false }
-    )));
-    assert!(!before.iter().any(|e| matches!(
-        e,
-        LayerEvent::Backplane(BackplaneEvent::MessagePublished { .. })
-    )));
-    assert_eq!(c.try_get("warm").await.unwrap().as_ref(), Some(&23));
+    assert!(
+        before.contains(&LayerEvent::Backplane(
+            BackplaneEvent::CircuitBreakerChange { closed: false }
+        )),
+        "contract: invalid foreign frame closes transport circuit before validation and still invalidates strict l1"
+    );
+    assert!(
+        !before.iter().any(|e| matches!(
+            e,
+            LayerEvent::Backplane(BackplaneEvent::MessagePublished { .. })
+        )),
+        "contract: invalid foreign frame closes transport circuit before validation and still invalidates strict l1"
+    );
+    assert_eq!(
+        c.try_get("warm").await.unwrap().as_ref(),
+        Some(&23),
+        "contract: invalid foreign frame closes transport circuit before validation and still invalidates strict l1"
+    );
     drain(&mut events);
     let invalid = BackplaneMessage {
         source_id: key("\u{1f}amalgam-control-v2:not-hex"),
@@ -881,11 +1038,13 @@ async fn invalid_foreign_frame_closes_transport_circuit_before_validation_and_st
     let closed = events.recv().await.unwrap();
     assert_eq!(
         closed,
-        LayerEvent::Backplane(BackplaneEvent::CircuitBreakerChange { closed: true })
+        LayerEvent::Backplane(BackplaneEvent::CircuitBreakerChange { closed: true }),
+        "contract: invalid foreign frame closes transport circuit before validation and still invalidates strict l1"
     );
     assert_eq!(
         events.recv().await.unwrap(),
-        LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: invalid })
+        LayerEvent::Backplane(BackplaneEvent::MessageReceived { message: invalid }),
+        "contract: invalid foreign frame closes transport circuit before validation and still invalidates strict l1"
     );
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -954,7 +1113,8 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
             .options(|_| opts)
             .await
             .unwrap(),
-        29
+        29,
+        "contract: decoded hit followed by marker timeout never claims an additional component miss"
     );
     assert_eq!(
         drain(&mut events),
@@ -964,7 +1124,8 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
                 key: key("key"),
                 stale: false
             }),
-        ]
+        ],
+        "contract: decoded hit followed by marker timeout never claims an additional component miss"
     );
     reader.shutdown().await.unwrap();
 }

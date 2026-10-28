@@ -71,11 +71,16 @@ async fn populated(cache: &Cache<i32>) {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("k").await.unwrap().unwrap_or(0), 7);
+    assert_eq!(
+        cache.try_get("k").await.unwrap().unwrap_or(0),
+        7,
+        "contract: the fixture completes its seed mutation before starting lookup races"
+    );
 }
 fn cancelled(result: StdResult<i32, Error>, reason: FactoryCancellationReason) {
     assert!(
-        matches!(result, Err(Error::OperationCancelled { reason: actual }) if actual == reason)
+        matches!(result, Err(Error::OperationCancelled { reason: actual }) if actual == reason),
+        "contract: a cancelled lookup retains its original cancellation reason"
     );
 }
 
@@ -89,7 +94,8 @@ async fn close_while_blocked<V: Clone + Send + Sync + 'static>(
     let closing = cache.clone();
     assert_eq!(
         std::thread::spawn(move || closing.close()).join().unwrap(),
-        CloseOutcome::Started
+        CloseOutcome::Started,
+        "contract: close while blocked"
     );
     let draining = cache.clone();
     let shutdown = tokio::spawn(async move { draining.shutdown().await });
@@ -104,7 +110,11 @@ async fn close_while_blocked<V: Clone + Send + Sync + 'static>(
         FactoryCancellationReason::CacheShutdown,
     );
     shutdown.await.unwrap().unwrap();
-    assert_eq!(completions(&mut events), vec![OperationOutcome::Cancelled]);
+    assert_eq!(
+        completions(&mut events),
+        vec![OperationOutcome::Cancelled],
+        "contract: close while blocked"
+    );
 }
 
 struct CloneGate {
@@ -142,7 +152,11 @@ async fn unused_canonical_default_is_dropped_inside_counted_completion() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("k").await.unwrap().unwrap().number, 7);
+    assert_eq!(
+        cache.try_get("k").await.unwrap().unwrap().number,
+        7,
+        "contract: unused canonical default is dropped inside counted completion"
+    );
     gate.arm();
     let reading = cache.clone();
     let default = DefaultDrop {
@@ -172,7 +186,11 @@ async fn unused_default_drop_retains_explicit_cancellation_and_shutdown_drain() 
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("k").await.unwrap().unwrap().number, 7);
+    assert_eq!(
+        cache.try_get("k").await.unwrap().unwrap().number,
+        7,
+        "contract: unused default drop retains explicit cancellation and shutdown drain"
+    );
     gate.arm();
     let reading = cache.clone();
     let default = DefaultDrop {
@@ -232,7 +250,11 @@ async fn ordinary_value_clone_is_counted_as_user_work() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("k").await.unwrap().unwrap().number, 7);
+    assert_eq!(
+        cache.try_get("k").await.unwrap().unwrap().number,
+        7,
+        "contract: ordinary value clone is counted as user work"
+    );
     gate.arm();
     let reading = cache.clone();
     let operation = tokio::spawn(async move { Ok(reading.try_get("k").await?.unwrap().number) });
@@ -316,7 +338,11 @@ async fn blocked_ready_hit_plugin_is_cancelled_and_drained_once() {
             .await
     });
     close_while_blocked(&cache, &gate, operation).await;
-    assert_eq!(stops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        1,
+        "contract: blocked ready hit plugin is cancelled and drained once"
+    );
 }
 
 struct UnusedFactory(Arc<Gate>);
@@ -347,7 +373,10 @@ async fn shutdown_waits_a_cancelled_parked_future_destructor_before_claiming_dra
             .into_future(),
     );
     future::poll_fn(|cx| {
-        assert!(operation.as_mut().poll(cx).is_pending());
+        assert!(
+            operation.as_mut().poll(cx).is_pending(),
+            "contract: shutdown waits a cancelled parked future destructor before claiming drainage"
+        );
         if entered.load(Ordering::SeqCst) {
             Poll::Ready(())
         } else {
@@ -367,7 +396,11 @@ async fn shutdown_waits_a_cancelled_parked_future_destructor_before_claiming_dra
         "terminal state must not hide an active destructor"
     );
     gate.unblock();
-    assert_eq!(closer.join().unwrap(), CloseOutcome::Started);
+    assert_eq!(
+        closer.join().unwrap(),
+        CloseOutcome::Started,
+        "contract: shutdown waits a cancelled parked future destructor before claiming drainage"
+    );
     cancelled(operation.await, FactoryCancellationReason::CacheShutdown);
     shutdown.await.unwrap().unwrap();
 }
@@ -429,7 +462,11 @@ async fn ready_hit_plugin_explicit_cancellation_has_one_precise_observer() {
             .await,
         FactoryCancellationReason::CallerCancelled,
     );
-    assert_eq!(completions(&mut events), vec![OperationOutcome::Cancelled]);
+    assert_eq!(
+        completions(&mut events),
+        vec![OperationOutcome::Cancelled],
+        "contract: ready hit plugin explicit cancellation has one precise observer"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -467,8 +504,15 @@ async fn ready_cloner_reentrant_close_rejects_value_before_hit() {
             _ => {}
         }
     }
-    assert_eq!(hits, 0);
-    assert_eq!(outcomes, vec![OperationOutcome::Cancelled]);
+    assert_eq!(
+        hits, 0,
+        "contract: ready cloner reentrant close rejects value before hit"
+    );
+    assert_eq!(
+        outcomes,
+        vec![OperationOutcome::Cancelled],
+        "contract: ready cloner reentrant close rejects value before hit"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -477,7 +521,11 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
     let cache = Cache::new();
     populated(&cache).await;
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("k").await.unwrap().unwrap_or(0), 7);
+    assert_eq!(
+        cache.try_get("k").await.unwrap().unwrap_or(0),
+        7,
+        "contract: ready and owned fallback each keep one observer and copy failure"
+    );
     assert_eq!(
         cache
             .get_or_set::<_, _>(
@@ -486,15 +534,24 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: ready and owned fallback each keep one observer and copy failure"
     );
     assert_eq!(
         completions(&mut events),
-        vec![OperationOutcome::Hit, OperationOutcome::Hit]
+        vec![OperationOutcome::Hit, OperationOutcome::Hit],
+        "contract: ready and owned fallback each keep one observer and copy failure"
     );
     let missing = cache.try_get("missing").await.unwrap();
-    assert!(missing.is_none());
-    assert_eq!(completions(&mut events), vec![OperationOutcome::Miss]);
+    assert!(
+        missing.is_none(),
+        "contract: ready and owned fallback each keep one observer and copy failure"
+    );
+    assert_eq!(
+        completions(&mut events),
+        vec![OperationOutcome::Miss],
+        "contract: ready and owned fallback each keep one observer and copy failure"
+    );
     let _ = cache
         .get_or_set::<_, _>(
             "failure",
@@ -504,16 +561,21 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
         .unwrap_err();
     assert_eq!(
         completions(&mut events),
-        vec![OperationOutcome::FactoryError]
+        vec![OperationOutcome::FactoryError],
+        "contract: ready and owned fallback each keep one observer and copy failure"
     );
     let invalid = EntryOptions::default().with_enable_auto_clone(true);
-    assert!(matches!(
-        cache.try_get("k").options(|_| invalid).await,
-        Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
-    ));
+    assert!(
+        matches!(
+            cache.try_get("k").options(|_| invalid).await,
+            Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
+        ),
+        "contract: ready and owned fallback each keep one observer and copy failure"
+    );
     assert_eq!(
         completions(&mut events),
-        vec![OperationOutcome::ConfigurationError]
+        vec![OperationOutcome::ConfigurationError],
+        "contract: ready and owned fallback each keep one observer and copy failure"
     );
     cache.shutdown().await.unwrap();
 }
@@ -548,9 +610,20 @@ async fn ready_clone_failure_preserves_error_source_without_factory_or_hit() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(&error, Error::Clone(CloneError::Custom { .. })));
-    assert_eq!(error.source().unwrap().to_string(), "original copy failure");
-    assert_eq!(completions(&mut events), vec![OperationOutcome::CloneError]);
+    assert!(
+        matches!(&error, Error::Clone(CloneError::Custom { .. })),
+        "contract: ready clone failure preserves error source without factory or hit"
+    );
+    assert_eq!(
+        error.source().unwrap().to_string(),
+        "original copy failure",
+        "contract: ready clone failure preserves error source without factory or hit"
+    );
+    assert_eq!(
+        completions(&mut events),
+        vec![OperationOutcome::CloneError],
+        "contract: ready clone failure preserves error source without factory or hit"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -575,7 +648,11 @@ async fn already_cancelled_ready_read_skips_user_copy() {
             .map(|value| value.unwrap_or(0)),
         FactoryCancellationReason::CallerCancelled,
     );
-    assert_eq!(completions(&mut events), vec![OperationOutcome::Cancelled]);
+    assert_eq!(
+        completions(&mut events),
+        vec![OperationOutcome::Cancelled],
+        "contract: already cancelled ready read skips user copy"
+    );
     cache.shutdown().await.unwrap();
 }
 

@@ -187,7 +187,11 @@ async fn stale_distributed_only_read_is_attributed_to_distributed_layer() {
         })
         .await
         .unwrap();
-    assert_eq!(observed.as_ref(), Some(&7));
+    assert_eq!(
+        observed.as_ref(),
+        Some(&7),
+        "contract: stale distributed only read is attributed to distributed layer"
+    );
     let level = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if let CacheEvent::OperationCompleted { level, .. } = events.recv().await.unwrap() {
@@ -198,7 +202,11 @@ async fn stale_distributed_only_read_is_attributed_to_distributed_layer() {
     .await
     .unwrap();
     cache.shutdown().await.unwrap();
-    assert_eq!(level, Some(CacheLevel::Distributed));
+    assert_eq!(
+        level,
+        Some(CacheLevel::Distributed),
+        "contract: stale distributed only read is attributed to distributed layer"
+    );
 }
 
 #[tokio::test]
@@ -340,9 +348,17 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
     if premature_wait {
         read.await.unwrap().unwrap();
     } else {
-        assert_eq!(observed.unwrap().as_ref(), Some(&1));
+        assert_eq!(
+            observed.unwrap().as_ref(),
+            Some(&1),
+            "contract: optional hydration does not wait on a newer parked commit"
+        );
     }
-    assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&2));
+    assert_eq!(
+        cache.try_get("key").await.unwrap().as_ref(),
+        Some(&2),
+        "contract: optional hydration does not wait on a newer parked commit"
+    );
     cache.shutdown().await.unwrap();
     assert!(
         !premature_wait,

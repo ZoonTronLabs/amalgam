@@ -33,8 +33,15 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(first.try_get("null").await.unwrap().as_ref(), Some(&None));
-    assert!(first.try_get("missing").await.unwrap().is_none());
+    assert_eq!(
+        first.try_get("null").await.unwrap().as_ref(),
+        Some(&None),
+        "contract: cached none is a hit in memory and l2 with auto clone enabled"
+    );
+    assert!(
+        first.try_get("missing").await.unwrap().is_none(),
+        "contract: cached none is a hit in memory and l2 with auto clone enabled"
+    );
     let second = build();
     let calls = Arc::new(AtomicUsize::new(0));
     let factory_calls = calls.clone();
@@ -49,10 +56,19 @@ async fn cached_none_is_a_hit_in_memory_and_l2_with_auto_clone_enabled() {
             )
             .await
             .unwrap(),
-        None
+        None,
+        "contract: cached none is a hit in memory and l2 with auto clone enabled"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(second.try_get("null").await.unwrap().as_ref(), Some(&None));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: cached none is a hit in memory and l2 with auto clone enabled"
+    );
+    assert_eq!(
+        second.try_get("null").await.unwrap().as_ref(),
+        Some(&None),
+        "contract: cached none is a hit in memory and l2 with auto clone enabled"
+    );
     first.shutdown().await.unwrap();
     second.shutdown().await.unwrap();
 }
@@ -84,15 +100,27 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
             .get_or_set(
                 "null",
                 amalgam::source::factory(|ctx| async move {
-                    assert!(ctx.has_stale_value());
-                    assert_eq!(ctx.stale_value(), Some(&None));
-                    assert_eq!(ctx.stale_etag(), Some("null-etag"));
+                    assert!(
+                        ctx.has_stale_value(),
+                        "contract: null stale snapshot supports not modified and fail safe"
+                    );
+                    assert_eq!(
+                        ctx.stale_value(),
+                        Some(&None),
+                        "contract: null stale snapshot supports not modified and fail safe"
+                    );
+                    assert_eq!(
+                        ctx.stale_etag(),
+                        Some("null-etag"),
+                        "contract: null stale snapshot supports not modified and fail safe"
+                    );
                     ctx.not_modified()
                 })
             )
             .await
             .unwrap(),
-        None
+        None,
+        "contract: null stale snapshot supports not modified and fail safe"
     );
     clock.advance(Duration::from_secs(2));
     assert_eq!(
@@ -103,7 +131,8 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
             )
             .await
             .unwrap(),
-        None
+        None,
+        "contract: null stale snapshot supports not modified and fail safe"
     );
     assert_eq!(
         cache
@@ -112,7 +141,8 @@ async fn null_stale_snapshot_supports_not_modified_and_fail_safe() {
             .await
             .unwrap()
             .as_ref(),
-        Some(&None)
+        Some(&None),
+        "contract: null stale snapshot supports not modified and fail safe"
     );
     cache.shutdown().await.unwrap();
 }
@@ -131,18 +161,22 @@ async fn present_null_fallback_is_distinct_from_absent_fallback() {
             .fail_safe_default(Some(None))
             .await
             .unwrap(),
-        None
+        None,
+        "contract: present null fallback is distinct from absent fallback"
     );
-    assert!(matches!(
-        cache
-            .get_or_set(
-                "absent",
-                typed_factory(|ctx| async move { Err(ctx.fail("expected failure")) })
-            )
-            .options(|_| options)
-            .await,
-        Err(Error::Factory { .. })
-    ));
+    assert!(
+        matches!(
+            cache
+                .get_or_set(
+                    "absent",
+                    typed_factory(|ctx| async move { Err(ctx.fail("expected failure")) })
+                )
+                .options(|_| options)
+                .await,
+            Err(Error::Factory { .. })
+        ),
+        "contract: present null fallback is distinct from absent fallback"
+    );
     cache.shutdown().await.unwrap();
 }
 

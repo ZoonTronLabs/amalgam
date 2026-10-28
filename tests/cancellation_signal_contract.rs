@@ -31,17 +31,25 @@ async fn concurrent_cancellation_records_one_request_and_wakes_every_waiter() {
     for request in requests {
         accepted += usize::from(request.await.unwrap() == CancellationRequest::Cancelled);
     }
-    assert_eq!(accepted, 1);
+    assert_eq!(
+        accepted, 1,
+        "contract: concurrent cancellation records one request and wakes every waiter"
+    );
     for waiter in waiters {
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(2), waiter)
                 .await
                 .unwrap()
                 .unwrap(),
-            FactoryCancellationReason::CallerCancelled
+            FactoryCancellationReason::CallerCancelled,
+            "contract: concurrent cancellation records one request and wakes every waiter"
         );
     }
-    assert_eq!(source.cancel(), CancellationRequest::AlreadyCancelled);
+    assert_eq!(
+        source.cancel(),
+        CancellationRequest::AlreadyCancelled,
+        "contract: concurrent cancellation records one request and wakes every waiter"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -62,7 +70,8 @@ async fn cancellation_before_or_during_wait_registration_never_loses_a_wakeup() 
                 .await
                 .unwrap()
                 .unwrap(),
-            FactoryCancellationReason::CallerCancelled
+            FactoryCancellationReason::CallerCancelled,
+            "contract: cancellation before or during wait registration never loses a wakeup"
         );
     }
 }

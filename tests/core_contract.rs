@@ -78,7 +78,10 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
             .into_future(),
     );
     future::poll_fn(|cx| {
-        assert!(operation.as_mut().poll(cx).is_pending());
+        assert!(
+            operation.as_mut().poll(cx).is_pending(),
+            "contract: close cancels a parked origin and finishes its observer before repoll"
+        );
         if token_rx.try_recv().is_ok() {
             Poll::Ready(())
         } else {
@@ -86,8 +89,16 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
         }
     })
     .await;
-    assert_eq!(cache.close(), CloseOutcome::Started);
-    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cache.close(),
+        CloseOutcome::Started,
+        "contract: close cancels a parked origin and finishes its observer before repoll"
+    );
+    assert_eq!(
+        dropped.load(Ordering::SeqCst),
+        1,
+        "contract: close cancels a parked origin and finishes its observer before repoll"
+    );
     let mut completions = 0;
     while let Ok(event) = events.try_recv() {
         if matches!(
@@ -101,19 +112,25 @@ async fn close_cancels_a_parked_origin_and_finishes_its_observer_before_repoll()
             completions += 1;
         }
     }
-    assert_eq!(completions, 1);
+    assert_eq!(
+        completions, 1,
+        "contract: close cancels a parked origin and finishes its observer before repoll"
+    );
     cache.shutdown().await.unwrap();
     cache.shutdown().await.unwrap();
-    assert!(matches!(
-        operation.await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
-    assert!(matches!(
-        cache.try_get("any").await,
-        Err(Error::CacheClosed)
-    ));
+    assert!(
+        matches!(
+            operation.await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: close cancels a parked origin and finishes its observer before repoll"
+    );
+    assert!(
+        matches!(cache.try_get("any").await, Err(Error::CacheClosed)),
+        "contract: close cancels a parked origin and finishes its observer before repoll"
+    );
 }
 
 #[tokio::test]
@@ -156,12 +173,20 @@ async fn soft_timeout_disposes_origin_with_precise_reason_and_retains_failsafe()
         )
         .await
         .unwrap();
-    assert_eq!(result, 1);
+    assert_eq!(
+        result, 1,
+        "contract: soft timeout disposes origin with precise reason and retains failsafe"
+    );
     assert_eq!(
         token_rx.await.unwrap().cancelled().await,
-        FactoryCancellationReason::SoftTimeout
+        FactoryCancellationReason::SoftTimeout,
+        "contract: soft timeout disposes origin with precise reason and retains failsafe"
     );
-    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        dropped.load(Ordering::SeqCst),
+        1,
+        "contract: soft timeout disposes origin with precise reason and retains failsafe"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -207,18 +232,22 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
     };
     entered_rx.await.unwrap();
     source.cancel();
-    assert!(matches!(
-        caller.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            caller.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: explicit cancel bypasses failsafe and releases origin"
+    );
     assert_eq!(
         cache
             .get_or_set("k", amalgam::source::value(3))
             .await
             .unwrap(),
-        3
+        3,
+        "contract: explicit cancel bypasses failsafe and releases origin"
     );
     cache.shutdown().await.unwrap();
 }
@@ -249,10 +278,12 @@ fn failing_cache(options: EntryOptions) -> Cache<i32> {
 async fn canonical_reads_preserve_error_and_default_only_on_successful_miss() {
     let cache = failing_cache(opts().with_rethrow_distributed_exceptions(true));
     assert!(
-        matches!(cache.try_get("k").await,Err(Error::Distributed(message)) if message=="actual read cause")
+        matches!(cache.try_get("k").await,Err(Error::Distributed(message)) if message=="actual read cause"),
+        "contract: canonical reads preserve error and default only on successful miss"
     );
     assert!(
-        matches!(cache.get_or_default("k", 42).await,Err(Error::Distributed(message)) if message=="actual read cause")
+        matches!(cache.get_or_default("k", 42).await,Err(Error::Distributed(message)) if message=="actual read cause"),
+        "contract: canonical reads preserve error and default only on successful miss"
     );
     cache.shutdown().await.unwrap();
 }
@@ -268,16 +299,24 @@ async fn mutation_receipts_preserve_suppressed_and_rethrown_failures() {
         .await
         .unwrap();
     assert!(
-        matches!(report.distributed,EffectOutcome::FailedSuppressed {cause:Error::Distributed(message)} if message=="actual write cause")
+        matches!(report.distributed,EffectOutcome::FailedSuppressed {cause:Error::Distributed(message)} if message=="actual write cause"),
+        "contract: mutation receipts preserve suppressed and rethrown failures"
     );
-    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&1));
+    assert_eq!(
+        cache.try_get("k").await.unwrap().as_ref(),
+        Some(&1),
+        "contract: mutation receipts preserve suppressed and rethrown failures"
+    );
     let error = cache
         .remove("k")
         .options(|_| opts().with_rethrow_distributed_exceptions(true))
         .with_receipt()
         .await
         .unwrap_err();
-    assert!(matches!(error,Error::Distributed(message) if message=="actual remove cause"));
+    assert!(
+        matches!(error,Error::Distributed(message) if message=="actual remove cause"),
+        "contract: mutation receipts preserve suppressed and rethrown failures"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -330,14 +369,26 @@ async fn scheduled_receipt_has_owned_completion_and_flush_ignores_listener_servi
         .with_receipt()
         .await
         .unwrap();
-    assert!(matches!(receipt, MutationReceipt::Scheduled(_)));
+    assert!(
+        matches!(receipt, MutationReceipt::Scheduled(_)),
+        "contract: scheduled receipt has owned completion and flush ignores listener services"
+    );
     l2.started.notified().await;
     source.cancel();
-    assert!(messages.try_recv().is_err());
+    assert!(
+        messages.try_recv().is_err(),
+        "contract: scheduled receipt has owned completion and flush ignores listener services"
+    );
     l2.release.add_permits(1);
     let report = receipt.wait().await.unwrap();
-    assert!(matches!(report.distributed, EffectOutcome::Applied));
-    assert!(messages.recv().await.is_ok());
+    assert!(
+        matches!(report.distributed, EffectOutcome::Applied),
+        "contract: scheduled receipt has owned completion and flush ignores listener services"
+    );
+    assert!(
+        messages.recv().await.is_ok(),
+        "contract: scheduled receipt has owned completion and flush ignores listener services"
+    );
     tokio::time::timeout(Duration::from_millis(100), cache.flush_pending())
         .await
         .unwrap()
@@ -363,13 +414,19 @@ async fn shutdown_cancels_scheduled_commit_and_retains_typed_completion() {
     let receipt = cache.set("k", 7).with_receipt().await.unwrap();
     l2.started.notified().await;
     cache.shutdown().await.unwrap();
-    assert!(matches!(
-        receipt.wait().await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
-    assert!(l2.get("v2:k").await.unwrap().is_none());
+    assert!(
+        matches!(
+            receipt.wait().await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shutdown cancels scheduled commit and retains typed completion"
+    );
+    assert!(
+        l2.get("v2:k").await.unwrap().is_none(),
+        "contract: shutdown cancels scheduled commit and retains typed completion"
+    );
 }
 
 #[derive(Default)]
@@ -397,17 +454,28 @@ async fn dynamic_registration_stops_once_and_is_owned_by_cache_shutdown() {
     let cache = Cache::<i32>::new();
     let plugin = Arc::new(CountPlugin::default());
     let registration = cache.register_plugin(plugin.clone()).unwrap();
-    assert_eq!(plugin.start.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        plugin.start.load(Ordering::SeqCst),
+        1,
+        "contract: dynamic registration stops once and is owned by cache shutdown"
+    );
     cache.set("k", 1).with_receipt().await.unwrap();
-    assert!(plugin.events.load(Ordering::SeqCst) > 0);
+    assert!(
+        plugin.events.load(Ordering::SeqCst) > 0,
+        "contract: dynamic registration stops once and is owned by cache shutdown"
+    );
     registration.stop().unwrap();
     registration.wait_stopped().await.unwrap();
     cache.shutdown().await.unwrap();
-    assert_eq!(plugin.stop.load(Ordering::SeqCst), 1);
-    assert!(matches!(
-        cache.register_plugin(plugin),
-        Err(Error::CacheClosed)
-    ));
+    assert_eq!(
+        plugin.stop.load(Ordering::SeqCst),
+        1,
+        "contract: dynamic registration stops once and is owned by cache shutdown"
+    );
+    assert!(
+        matches!(cache.register_plugin(plugin), Err(Error::CacheClosed)),
+        "contract: dynamic registration stops once and is owned by cache shutdown"
+    );
 }
 
 #[tokio::test]
@@ -420,9 +488,16 @@ async fn plain_memory_expiry_uses_controlled_clock_and_never_periodic_invalidati
         .unwrap();
     cache.set("k", 1).with_receipt().await.unwrap();
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&1));
+    assert_eq!(
+        cache.try_get("k").await.unwrap().as_ref(),
+        Some(&1),
+        "contract: plain memory expiry uses controlled clock and never periodic invalidation"
+    );
     clock.advance(Duration::from_millis(21));
-    assert!(cache.try_get("k").await.unwrap().is_none());
+    assert!(
+        cache.try_get("k").await.unwrap().is_none(),
+        "contract: plain memory expiry uses controlled clock and never periodic invalidation"
+    );
     cache.shutdown().await.unwrap();
 }
 #[tokio::test]
@@ -435,25 +510,38 @@ async fn huge_finite_budget_is_typed_before_origin_or_storage_effects() {
     let cache = Cache::<i32>::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let origin_calls = calls.clone();
-    assert!(matches!(
-        cache
-            .get_or_set(
-                "k",
-                typed_factory(move |ctx| async move {
-                    origin_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok::<_, FactoryError>(ctx.value(1))
-                })
-            )
-            .options(|_| huge.clone())
-            .await,
-        Err(Error::Config(ConfigError::DeadlineOutOfRange))
-    ));
-    assert!(matches!(
-        cache.set("k", 1).options(|_| huge).with_receipt().await,
-        Err(Error::Config(ConfigError::DeadlineOutOfRange))
-    ));
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(cache.try_get("k").await.unwrap().is_none());
+    assert!(
+        matches!(
+            cache
+                .get_or_set(
+                    "k",
+                    typed_factory(move |ctx| async move {
+                        origin_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, FactoryError>(ctx.value(1))
+                    })
+                )
+                .options(|_| huge.clone())
+                .await,
+            Err(Error::Config(ConfigError::DeadlineOutOfRange))
+        ),
+        "contract: huge finite budget is typed before origin or storage effects"
+    );
+    assert!(
+        matches!(
+            cache.set("k", 1).options(|_| huge).with_receipt().await,
+            Err(Error::Config(ConfigError::DeadlineOutOfRange))
+        ),
+        "contract: huge finite budget is typed before origin or storage effects"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: huge finite budget is typed before origin or storage effects"
+    );
+    assert!(
+        cache.try_get("k").await.unwrap().is_none(),
+        "contract: huge finite budget is typed before origin or storage effects"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -469,10 +557,13 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
             }),
         )
         .await;
-    assert!(matches!(
-        result,
-        Err(Error::Config(ConfigError::NegativeEntryWeight { .. }))
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(Error::Config(ConfigError::NegativeEntryWeight { .. }))
+        ),
+        "contract: adaptive validation and raw tag failure do not store invalid products"
+    );
     let result = cache
         .get_or_set(
             "bad-tag",
@@ -482,9 +573,18 @@ async fn adaptive_validation_and_raw_tag_failure_do_not_store_invalid_products()
             }),
         )
         .await;
-    assert!(matches!(result, Err(Error::Tag(TagError::Blank))));
-    assert!(cache.try_get("bad-size").await.unwrap().is_none());
-    assert!(cache.try_get("bad-tag").await.unwrap().is_none());
+    assert!(
+        matches!(result, Err(Error::Tag(TagError::Blank))),
+        "contract: adaptive validation and raw tag failure do not store invalid products"
+    );
+    assert!(
+        cache.try_get("bad-size").await.unwrap().is_none(),
+        "contract: adaptive validation and raw tag failure do not store invalid products"
+    );
+    assert!(
+        cache.try_get("bad-tag").await.unwrap().is_none(),
+        "contract: adaptive validation and raw tag failure do not store invalid products"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -547,24 +647,43 @@ async fn native_backend_fence_loss_does_not_commit_l1_l2_or_publish() {
             }),
         )
         .await;
-    assert!(matches!(result, Err(Error::Lease(LeaseError::Lost))));
+    assert!(
+        matches!(result, Err(Error::Lease(LeaseError::Lost))),
+        "contract: native backend fence loss does not commit l1 l2 or publish"
+    );
     assert_eq!(
         token_rx.await.unwrap().cancelled().await,
-        FactoryCancellationReason::LeaseLost
+        FactoryCancellationReason::LeaseLost,
+        "contract: native backend fence loss does not commit l1 l2 or publish"
     );
-    assert_eq!(l2.attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        l2.attempts.load(Ordering::SeqCst),
+        1,
+        "contract: native backend fence loss does not commit l1 l2 or publish"
+    );
     assert!(
         cache
             .try_get("k")
             .options(|_| opts().with_skip_distributed(true, false))
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: native backend fence loss does not commit l1 l2 or publish"
     );
-    assert!(l2.get("v2:k").await.unwrap().is_none());
-    assert!(messages.try_recv().is_err());
+    assert!(
+        l2.get("v2:k").await.unwrap().is_none(),
+        "contract: native backend fence loss does not commit l1 l2 or publish"
+    );
+    assert!(
+        messages.try_recv().is_err(),
+        "contract: native backend fence loss does not commit l1 l2 or publish"
+    );
     cache.shutdown().await.unwrap();
-    assert_eq!(locker.held_count(), 0);
+    assert_eq!(
+        locker.held_count(),
+        0,
+        "contract: native backend fence loss does not commit l1 l2 or publish"
+    );
 }
 
 #[test]
@@ -729,16 +848,30 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
             );
             backend.gate.add_permits(1);
             let _ = newer.await.unwrap();
-            assert!(!ticket.fence_is_current());
+            assert!(
+                !ticket.fence_is_current(),
+                "contract: newer completed set remains after already started set or remove recovery"
+            );
             tokio::time::sleep(Duration::from_millis(70)).await;
             let bytes = backend.get("v2:k").await.unwrap().unwrap();
             let snapshot: DistributedSnapshot<i32> =
                 JsonSerializer.deserialize_snapshot(&bytes).unwrap();
-            assert_eq!(snapshot.entry().value, 2);
-            assert_eq!(cache.pending_recovery(), 0);
+            assert_eq!(
+                snapshot.entry().value,
+                2,
+                "contract: newer completed set remains after already started set or remove recovery"
+            );
+            assert_eq!(
+                cache.pending_recovery(),
+                0,
+                "contract: newer completed set remains after already started set or remove recovery"
+            );
             let mut last = Timestamp::MIN;
             while let Ok(message) = messages.try_recv() {
-                assert!(message.timestamp >= last);
+                assert!(
+                    message.timestamp >= last,
+                    "contract: newer completed set remains after already started set or remove recovery"
+                );
                 last = message.timestamp;
             }
             cache.shutdown().await.unwrap();
@@ -818,19 +951,43 @@ async fn coalesced_gap_retains_exact_ticket_until_successful_l2_and_marker_recon
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
         cache.recovery_ticket("k").unwrap().identity(),
-        ticket.identity()
+        ticket.identity(),
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
     );
-    assert!(ticket.fence_is_current());
-    assert_eq!(backend.commits.load(Ordering::SeqCst), 0);
-    assert_eq!(bp.published.load(Ordering::SeqCst), 0);
+    assert!(
+        ticket.fence_is_current(),
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
+    );
+    assert_eq!(
+        backend.commits.load(Ordering::SeqCst),
+        0,
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
+    );
+    assert_eq!(
+        bp.published.load(Ordering::SeqCst),
+        0,
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
+    );
     backend.read_down.store(false, Ordering::SeqCst);
     until(|| cache.pending_recovery() == 0).await;
-    assert_eq!(backend.commits.load(Ordering::SeqCst), 1);
-    assert_eq!(bp.published.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        backend.commits.load(Ordering::SeqCst),
+        1,
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
+    );
+    assert_eq!(
+        bp.published.load(Ordering::SeqCst),
+        1,
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
+    );
     let stored: DistributedSnapshot<i32> = JsonSerializer
         .deserialize_snapshot(&backend.get("v2:k").await.unwrap().unwrap())
         .unwrap();
-    assert_eq!(stored.entry().value, 7);
+    assert_eq!(
+        stored.entry().value,
+        7,
+        "contract: coalesced gap retains exact ticket until successful l2 and marker reconciliation"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -903,28 +1060,48 @@ async fn failed_origin_commit_recovery_reacquires_and_uses_native_fenced_write()
             .get_or_set("k", amalgam::source::value(7))
             .await
             .unwrap(),
-        7
+        7,
+        "contract: failed origin commit recovery reacquires and uses native fenced write"
     );
     tokio::time::timeout(Duration::from_secs(2), backend.replay_entered.notified())
         .await
         .expect("recovery must enter the second fenced write");
-    assert!(matches!(
-        cache.recovery_ticket("k").unwrap().work(),
-        RecoveryWork::Data {
-            mutation: PendingMutation::FencedCommit { .. },
-            ..
-        }
-    ));
+    assert!(
+        matches!(
+            cache.recovery_ticket("k").unwrap().work(),
+            RecoveryWork::Data {
+                mutation: PendingMutation::FencedCommit { .. },
+                ..
+            }
+        ),
+        "contract: failed origin commit recovery reacquires and uses native fenced write"
+    );
     backend.replay_release.notify_one();
     until(|| cache.pending_recovery() == 0).await;
-    assert_eq!(backend.fenced.load(Ordering::SeqCst), 2);
-    assert_eq!(backend.ordinary.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        backend.fenced.load(Ordering::SeqCst),
+        2,
+        "contract: failed origin commit recovery reacquires and uses native fenced write"
+    );
+    assert_eq!(
+        backend.ordinary.load(Ordering::SeqCst),
+        0,
+        "contract: failed origin commit recovery reacquires and uses native fenced write"
+    );
     let stored: DistributedSnapshot<i32> = JsonSerializer
         .deserialize_snapshot(&backend.get("v2:k").await.unwrap().unwrap())
         .unwrap();
-    assert_eq!(stored.entry().value, 7);
+    assert_eq!(
+        stored.entry().value,
+        7,
+        "contract: failed origin commit recovery reacquires and uses native fenced write"
+    );
     cache.shutdown().await.unwrap();
-    assert_eq!(locker.held_count(), 0);
+    assert_eq!(
+        locker.held_count(),
+        0,
+        "contract: failed origin commit recovery reacquires and uses native fenced write"
+    );
 }
 
 #[tokio::test]
@@ -945,15 +1122,21 @@ async fn initial_native_ack_gates_operations_and_close_releases_parked_admission
         tokio::spawn(async move { cache.set("k", 1).with_receipt().await })
     };
     tokio::time::sleep(Duration::from_millis(10)).await;
-    assert!(!caller.is_finished());
+    assert!(
+        !caller.is_finished(),
+        "contract: initial native ack gates operations and close releases parked admission"
+    );
     bp.state.send_replace(BackplaneState::Connected {
         epoch: ContinuityEpoch::INITIAL,
     });
     let _ = caller.await.unwrap().unwrap().wait().await.unwrap();
-    assert!(matches!(
-        cache.ready().await.unwrap(),
-        BackplaneReadiness::Acknowledged(_)
-    ));
+    assert!(
+        matches!(
+            cache.ready().await.unwrap(),
+            BackplaneReadiness::Acknowledged(_)
+        ),
+        "contract: initial native ack gates operations and close releases parked admission"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -1082,22 +1265,33 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
                 )
                 .await
                 .unwrap(),
-            1
+            1,
+            "contract: off runtime close drains owned lease release and retains its original failure"
         );
-        assert_eq!(locker.inner.held_count(), 1);
+        assert_eq!(
+            locker.inner.held_count(),
+            1,
+            "contract: off runtime close drains owned lease release and retains its original failure"
+        );
         let closing = cache.clone();
         assert_eq!(
             std::thread::spawn(move || closing.close()).join().unwrap(),
-            CloseOutcome::Started
+            CloseOutcome::Started,
+            "contract: off runtime close drains owned lease release and retains its original failure"
         );
         assert_eq!(
             token_rx.await.unwrap().cancelled().await,
-            FactoryCancellationReason::CacheShutdown
+            FactoryCancellationReason::CacheShutdown,
+            "contract: off runtime close drains owned lease release and retains its original failure"
         );
         tokio::time::timeout(Duration::from_secs(2), finished.notified())
             .await
             .unwrap();
-        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            1,
+            "contract: off runtime close drains owned lease release and retains its original failure"
+        );
         locker.release_entered.notified().await;
         let shutting = {
             let cache = cache.clone();
@@ -1110,15 +1304,22 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
         );
         locker.release_gate.add_permits(1);
         let result = shutting.await.unwrap();
-        assert_eq!(locker.inner.held_count(), 0);
+        assert_eq!(
+            locker.inner.held_count(),
+            0,
+            "contract: off runtime close drains owned lease release and retains its original failure"
+        );
         if fail {
             match result {
                 Err(Error::Shutdown(error)) => {
-                    assert!(error.failures().iter().any(|failure|matches!(failure,ShutdownFailure::Work(Error::Lease(LeaseError::Backend {source})) if source.to_string().contains("original release cause"))));
+                    assert!(error.failures().iter().any(|failure|matches!(failure,ShutdownFailure::Work(Error::Lease(LeaseError::Backend {source})) if source.to_string().contains("original release cause"))), "contract: off runtime close drains owned lease release and retains its original failure");
                 }
                 other => panic!("cleanup failure was discarded: {other:?}"),
             };
-            assert!(matches!(cache.shutdown().await, Err(Error::Shutdown(_))));
+            assert!(
+                matches!(cache.shutdown().await, Err(Error::Shutdown(_))),
+                "contract: off runtime close drains owned lease release and retains its original failure"
+            );
         } else {
             result.unwrap();
             cache.shutdown().await.unwrap();
@@ -1156,30 +1357,51 @@ async fn cancelled_uncertain_acquisition_is_supervised_before_ownership_transfer
             .into_future(),
     );
     future::poll_fn(|cx| {
-        assert!(caller.as_mut().poll(cx).is_pending());
+        assert!(
+            caller.as_mut().poll(cx).is_pending(),
+            "contract: cancelled uncertain acquisition is supervised before ownership transfer"
+        );
         Poll::Ready(())
     })
     .await;
     locker.acquire_entered.notified().await;
-    assert_eq!(locker.inner.held_count(), 1);
+    assert_eq!(
+        locker.inner.held_count(),
+        1,
+        "contract: cancelled uncertain acquisition is supervised before ownership transfer"
+    );
     source.cancel();
     locker.release_entered.notified().await;
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "contract: cancelled uncertain acquisition is supervised before ownership transfer"
+    );
     let shutting = {
         let cache = cache.clone();
         tokio::spawn(async move { cache.shutdown().await })
     };
     tokio::time::sleep(Duration::from_millis(10)).await;
-    assert!(!shutting.is_finished());
+    assert!(
+        !shutting.is_finished(),
+        "contract: cancelled uncertain acquisition is supervised before ownership transfer"
+    );
     locker.release_gate.add_permits(1);
     shutting.await.unwrap().unwrap();
-    assert_eq!(locker.inner.held_count(), 0);
-    assert!(matches!(
-        caller.await,
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert_eq!(
+        locker.inner.held_count(),
+        0,
+        "contract: cancelled uncertain acquisition is supervised before ownership transfer"
+    );
+    assert!(
+        matches!(
+            caller.await,
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: cancelled uncertain acquisition is supervised before ownership transfer"
+    );
 }
 
 #[tokio::test]
@@ -1203,18 +1425,21 @@ async fn not_modified_validates_adaptive_raw_tags_before_retention() {
         .await
         .unwrap();
     clock.advance(Duration::from_secs(2));
-    assert!(matches!(
-        cache
-            .get_or_set(
-                "k",
-                amalgam::source::factory(|mut ctx| async move {
-                    ctx.set_tags([" "]);
-                    ctx.not_modified()
-                })
-            )
-            .await,
-        Err(Error::Tag(TagError::Blank))
-    ));
+    assert!(
+        matches!(
+            cache
+                .get_or_set(
+                    "k",
+                    amalgam::source::factory(|mut ctx| async move {
+                        ctx.set_tags([" "]);
+                        ctx.not_modified()
+                    })
+                )
+                .await,
+            Err(Error::Tag(TagError::Blank))
+        ),
+        "contract: not modified validates adaptive raw tags before retention"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -1238,12 +1463,15 @@ fn runtime_dependent_options_are_rejected_before_effects_on_std_thread() {
                 .into_future(),
         );
         let mut context = Context::from_waker(Waker::noop());
-        assert!(matches!(
-            operation.as_mut().poll(&mut context),
-            Poll::Ready(Err(Error::Config(ConfigError::MissingRuntime {
-                component: RuntimeComponent::Execution
-            })))
-        ));
+        assert!(
+            matches!(
+                operation.as_mut().poll(&mut context),
+                Poll::Ready(Err(Error::Config(ConfigError::MissingRuntime {
+                    component: RuntimeComponent::Execution
+                })))
+            ),
+            "contract: runtime dependent options are rejected before effects on std thread"
+        );
     })
     .join()
     .unwrap();
@@ -1291,32 +1519,44 @@ async fn cold_expire_read_failure_retains_intent_and_original_physical_deadline(
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        report.distributed,
-        EffectOutcome::RecoveryQueued { .. }
-    ));
-    assert!(matches!(
-        cache.recovery_ticket("k").unwrap().work(),
-        RecoveryWork::Data {
-            mutation: PendingMutation::ColdExpire { .. },
-            ..
-        }
-    ));
+    assert!(
+        matches!(report.distributed, EffectOutcome::RecoveryQueued { .. }),
+        "contract: cold expire read failure retains intent and original physical deadline"
+    );
+    assert!(
+        matches!(
+            cache.recovery_ticket("k").unwrap().work(),
+            RecoveryWork::Data {
+                mutation: PendingMutation::ColdExpire { .. },
+                ..
+            }
+        ),
+        "contract: cold expire read failure retains intent and original physical deadline"
+    );
     backend.read_down.store(false, Ordering::SeqCst);
     until(|| cache.pending_recovery() == 0).await;
     let expired: DistributedSnapshot<i32> = JsonSerializer
         .deserialize_snapshot(&backend.get("v2:k").await.unwrap().unwrap())
         .unwrap();
-    assert_eq!(expired.entry().value, 7);
+    assert_eq!(
+        expired.entry().value,
+        7,
+        "contract: cold expire read failure retains intent and original physical deadline"
+    );
     assert_eq!(
         expired.entry().physical_expiration_ticks,
-        original.entry().physical_expiration_ticks
+        original.entry().physical_expiration_ticks,
+        "contract: cold expire read failure retains intent and original physical deadline"
     );
     assert_eq!(
         expired.entry().logical_expiration_ticks,
-        clock.now().ticks()
+        clock.now().ticks(),
+        "contract: cold expire read failure retains intent and original physical deadline"
     );
-    assert!(cache.try_get("k").await.unwrap().is_none());
+    assert!(
+        cache.try_get("k").await.unwrap().is_none(),
+        "contract: cold expire read failure retains intent and original physical deadline"
+    );
     cache.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
@@ -1377,7 +1617,11 @@ async fn recovered_storage_then_failed_notification_never_rewrites_storage_on_re
         })
     })
     .await;
-    assert_eq!(backend.commits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        backend.commits.load(Ordering::SeqCst),
+        1,
+        "contract: recovered storage then failed notification never rewrites storage on retry"
+    );
     let snapshot: DistributedSnapshot<i32> = JsonSerializer
         .deserialize_snapshot(&backend.get("v2:k").await.unwrap().unwrap())
         .unwrap();
@@ -1396,11 +1640,19 @@ async fn recovered_storage_then_failed_notification_never_rewrites_storage_on_re
         .unwrap();
     bp.down.store(false, Ordering::SeqCst);
     until(|| cache.pending_recovery() == 0).await;
-    assert_eq!(backend.commits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        backend.commits.load(Ordering::SeqCst),
+        1,
+        "contract: recovered storage then failed notification never rewrites storage on retry"
+    );
     let final_value: DistributedSnapshot<i32> = JsonSerializer
         .deserialize_snapshot(&backend.get("v2:k").await.unwrap().unwrap())
         .unwrap();
-    assert_eq!(final_value.entry().value, 99);
+    assert_eq!(
+        final_value.entry().value,
+        99,
+        "contract: recovered storage then failed notification never rewrites storage on retry"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -1438,7 +1690,11 @@ async fn delayed_clear_marker_does_not_evict_a_newer_snapshot() {
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(cache.try_get("k").await.unwrap().as_ref(), Some(&7));
+    assert_eq!(
+        cache.try_get("k").await.unwrap().as_ref(),
+        Some(&7),
+        "contract: delayed clear marker does not evict a newer snapshot"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -1447,14 +1703,17 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
     let cache = Cache::<i32>::new();
     let invalid = EntryOptions::default().with_lock_timeout(Timeout::After(Duration::MAX));
     let memory_repaired = invalid.clone().with_memory_lock_timeout(Timeout::Infinite);
-    assert!(matches!(
-        cache
-            .set("invalid", 1)
-            .options(|_| memory_repaired.clone())
-            .with_receipt()
-            .await,
-        Err(Error::Config(ConfigError::DeadlineOutOfRange))
-    ));
+    assert!(
+        matches!(
+            cache
+                .set("invalid", 1)
+                .options(|_| memory_repaired.clone())
+                .with_receipt()
+                .await,
+            Err(Error::Config(ConfigError::DeadlineOutOfRange))
+        ),
+        "contract: changing timeout requests revalidates the configuration before effects"
+    );
     let repaired = memory_repaired.with_distributed_lock_timeout(Timeout::Infinite);
     let _ = cache
         .set("repaired", 7)
@@ -1465,8 +1724,15 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
         .wait()
         .await
         .unwrap();
-    assert_eq!(cache.try_get("repaired").await.unwrap(), Some(7));
-    assert!(cache.try_get("invalid").await.unwrap().is_none());
+    assert_eq!(
+        cache.try_get("repaired").await.unwrap(),
+        Some(7),
+        "contract: changing timeout requests revalidates the configuration before effects"
+    );
+    assert!(
+        cache.try_get("invalid").await.unwrap().is_none(),
+        "contract: changing timeout requests revalidates the configuration before effects"
+    );
     let invalid = EntryOptions::default().with_factory_timeouts(
         Timeout::Infinite,
         Timeout::After(Duration::MAX),
@@ -1482,7 +1748,8 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
             .options(|_| repaired)
             .await
             .unwrap(),
-        9
+        9,
+        "contract: changing timeout requests revalidates the configuration before effects"
     );
     cache.shutdown().await.unwrap();
 }

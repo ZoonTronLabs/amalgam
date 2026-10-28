@@ -47,7 +47,10 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
         let mut cx = Context::from_waker(Waker::noop());
         read.as_mut().poll(&mut cx)
     }));
-    assert!(panicked.is_err());
+    assert!(
+        panicked.is_err(),
+        "contract: late observer sees one panic and cache is usable after clone unwinds"
+    );
     let mut receiver = state.receiver.lock().unwrap().take().unwrap();
     let mut outcomes = Vec::new();
     while let Ok(event) = receiver.try_recv() {
@@ -55,9 +58,16 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
             outcomes.push(outcome);
         }
     }
-    assert_eq!(outcomes, vec![OperationOutcome::Panicked]);
+    assert_eq!(
+        outcomes,
+        vec![OperationOutcome::Panicked],
+        "contract: late observer sees one panic and cache is usable after clone unwinds"
+    );
     std::mem::drop(receiver);
-    assert!(cache.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        cache.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: late observer sees one panic and cache is usable after clone unwinds"
+    );
     let _ = cache
         .remove("key")
         .with_receipt()
@@ -112,24 +122,34 @@ async fn observer_admitted_by_unused_default_drop_receives_the_hit_completion() 
         )
         .await
         .unwrap();
-    assert_eq!(value.number, 7);
+    assert_eq!(
+        value.number, 7,
+        "contract: observer admitted by unused default drop receives the hit completion"
+    );
     let mut receiver = state.receiver.lock().unwrap().take().unwrap();
     assert!(
-        matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if &*key == "key")
+        matches!(receiver.try_recv().unwrap(), CacheEvent::Hit { key, stale: false } if &*key == "key"),
+        "contract: observer admitted by unused default drop receives the hit completion"
     );
-    assert!(matches!(
-        receiver.try_recv().unwrap(),
-        CacheEvent::OperationCompleted {
-            operation: amalgam::CacheOperation::GetOrDefault,
-            outcome: OperationOutcome::Hit,
-            level: Some(amalgam::CacheLevel::Memory),
-            ..
-        }
-    ));
-    assert!(matches!(
-        receiver.try_recv(),
-        Err(broadcast::error::TryRecvError::Empty)
-    ));
+    assert!(
+        matches!(
+            receiver.try_recv().unwrap(),
+            CacheEvent::OperationCompleted {
+                operation: amalgam::CacheOperation::GetOrDefault,
+                outcome: OperationOutcome::Hit,
+                level: Some(amalgam::CacheLevel::Memory),
+                ..
+            }
+        ),
+        "contract: observer admitted by unused default drop receives the hit completion"
+    );
+    assert!(
+        matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ),
+        "contract: observer admitted by unused default drop receives the hit completion"
+    );
     std::mem::drop(receiver);
     cache.shutdown().await.unwrap();
 }

@@ -157,7 +157,7 @@ fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same
                         loop {
                             let began = Instant::now();
                             for _ in 0..BATCH {
-                                assert_eq!(H::value(cache, key).await, index as u64 + 1);
+                                assert_eq!(H::value(cache, key).await, index as u64 + 1, "contract: parallel warmed hits preserve each worker's seeded key and checksum");
                             }
                             if warmup.record(began.elapsed(), BATCH) {
                                 break;
@@ -171,7 +171,7 @@ fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same
                             checksum += hint::black_box(H::value(cache, key).await);
                         }
                         let allocations = end_counting();
-                        assert_eq!(checksum, OPERATIONS as u64 * (index as u64 + 1));
+                        assert_eq!(checksum, OPERATIONS as u64 * (index as u64 + 1), "contract: parallel warmed hits preserve each worker's seeded key and checksum");
                         allocations
                     })
                 })
@@ -216,7 +216,7 @@ fn synchronous_hit<H: WarmHit>() {
     loop {
         let began = Instant::now();
         for _ in 0..BATCH {
-            assert_eq!(H::native(&cache, "sync"), 1);
+            assert_eq!(H::native(&cache, "sync"), 1, "contract: synchronous hit");
         }
         if warmup.record(began.elapsed(), BATCH) {
             break;
@@ -230,7 +230,7 @@ fn synchronous_hit<H: WarmHit>() {
     }
     let elapsed = began.elapsed();
     let allocations = end_counting();
-    assert_eq!(checksum, OPERATIONS as u64);
+    assert_eq!(checksum, OPERATIONS as u64, "contract: synchronous hit");
     assert_eq!(allocations, 0, "a warmed native hit allocated");
     println!(
         "sync,1,{OPERATIONS},{:.3},{allocations}",
@@ -276,7 +276,8 @@ fn mutations(rt: &Runtime) {
                 .into_future()
                 .await
                 .unwrap_or_else(|error| panic!("benchmark read must succeed: {error:?}")),
-            Some(SET_OPERATIONS as u64)
+            Some(SET_OPERATIONS as u64),
+            "contract: mutation and cold origin workloads expose the values they wrote"
         );
         // Reuse the key strings, never the entries. A fresh bounded-size cache
         // per warmup batch preserves real misses without unbounded growth.
@@ -297,7 +298,8 @@ fn mutations(rt: &Runtime) {
                     .unwrap_or_else(|error| panic!(
                         "benchmark origin operation must succeed: {error:?}"
                     )),
-                    7
+                    7,
+                    "contract: mutation and cold origin workloads expose the values they wrote"
                 );
             }
             let elapsed = began.elapsed();
@@ -329,7 +331,8 @@ fn mutations(rt: &Runtime) {
                             "benchmark origin operation must succeed: {error:?}"
                         ))
                 ),
-                7
+                7,
+                "contract: mutation and cold origin workloads expose the values they wrote"
             );
         }
         let elapsed = began.elapsed();
@@ -614,15 +617,25 @@ fn metadata_costs() {
             .unwrap_or_else(|error| panic!("benchmark entry fixture must be valid: {error:?}"))
         };
         let source = fresh();
-        assert_eq!(source.value(), &7);
-        assert_eq!(source.meta().created(), now);
+        assert_eq!(source.value(), &7, "contract: metadata costs");
+        assert_eq!(source.meta().created(), now, "contract: metadata costs");
         match case {
             MetadataCase::Plain => {
-                assert!(source.meta().tags().is_empty());
-                assert!(source.meta().eager_refresh_at().is_none());
+                assert!(source.meta().tags().is_empty(), "contract: metadata costs");
+                assert!(
+                    source.meta().eager_refresh_at().is_none(),
+                    "contract: metadata costs"
+                );
             }
-            MetadataCase::Eager => assert!(source.meta().eager_refresh_at().is_some()),
-            MetadataCase::Tagged => assert_eq!(source.meta().tags(), std::slice::from_ref(&tag)),
+            MetadataCase::Eager => assert!(
+                source.meta().eager_refresh_at().is_some(),
+                "contract: metadata costs"
+            ),
+            MetadataCase::Tagged => assert_eq!(
+                source.meta().tags(),
+                std::slice::from_ref(&tag),
+                "contract: metadata costs"
+            ),
         }
         metadata_cost(&format!("entry_{}", case.label()), || {
             std::mem::drop(hint::black_box(fresh()));
@@ -665,7 +678,8 @@ fn metadata_costs() {
                     .into_future()
                     .await
                     .unwrap_or_else(|error| panic!("benchmark read must succeed: {error:?}")),
-                Some(7)
+                Some(7),
+                "contract: metadata costs"
             );
             metadata_cost(&format!("set_after_read_{}", case.label()), &mut replace);
             cache.shutdown().await.unwrap_or_else(|error| {
@@ -716,7 +730,7 @@ fn distributed<H: WarmHit>() {
         loop {
             let began = Instant::now();
             for _ in 0..BATCH {
-                assert_eq!(H::value(&cache, "l2-json").await, 7);
+                assert_eq!(H::value(&cache, "l2-json").await, 7, "contract: distributed only reads decode the shared value despite a different local seed");
             }
             if warmup.record(began.elapsed(), BATCH) {
                 break;
@@ -730,7 +744,7 @@ fn distributed<H: WarmHit>() {
         }
         let elapsed = began.elapsed();
         let allocations = end_counting();
-        assert_eq!(checksum, 7 * OPERATIONS as u64);
+        assert_eq!(checksum, 7 * OPERATIONS as u64, "contract: distributed only reads decode the shared value despite a different local seed");
         println!("scenario,threads,operations,ns_per_op,allocations");
         println!(
             "l2_json,1,{OPERATIONS},{:.3},{allocations}",

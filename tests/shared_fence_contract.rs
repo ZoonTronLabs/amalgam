@@ -62,15 +62,19 @@ async fn shared_slot_publication_drains_a_started_clone_and_rejects_its_result()
     assert!(
         tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
             .await
-            .is_err()
+            .is_err(),
+        "contract: shared slot publication drains a started clone and rejects its result"
     );
     release.send(()).unwrap();
-    assert!(matches!(
-        reader.join().unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            reader.join().unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: shared slot publication drains a started clone and rejects its result"
+    );
     tokio::time::timeout(Duration::from_secs(2), shutdown)
         .await
         .unwrap()
@@ -94,11 +98,14 @@ fn a_closed_plain_read_does_not_invoke_value_clone() {
     .unwrap();
     block.store(true, Ordering::SeqCst);
     cache.close();
-    assert!(matches!(
-        ready(cache.try_get("hit")),
-        Err(Error::CacheClosed)
-    ));
-    assert!(entry.try_recv().is_err());
+    assert!(
+        matches!(ready(cache.try_get("hit")), Err(Error::CacheClosed)),
+        "contract: a closed plain read does not invoke value clone"
+    );
+    assert!(
+        entry.try_recv().is_err(),
+        "contract: a closed plain read does not invoke value clone"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -130,15 +137,19 @@ async fn native_shared_slot_publication_drains_a_started_clone_and_rejects_its_r
     assert!(
         tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
             .await
-            .is_err()
+            .is_err(),
+        "contract: native shared slot publication drains a started clone and rejects its result"
     );
     release.send(()).unwrap();
-    assert!(matches!(
-        reader.join().unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CacheShutdown
-        })
-    ));
+    assert!(
+        matches!(
+            reader.join().unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CacheShutdown
+            })
+        ),
+        "contract: native shared slot publication drains a started clone and rejects its result"
+    );
     tokio::time::timeout(Duration::from_secs(2), shutdown)
         .await
         .unwrap()
@@ -167,10 +178,13 @@ fn a_closed_native_read_does_not_invoke_value_clone() {
         .unwrap();
     block.store(true, Ordering::SeqCst);
     cache.as_async().close();
-    assert!(matches!(
-        cache.try_get("hit").execute(),
-        Err(Error::CacheClosed)
-    ));
-    assert!(entry.try_recv().is_err());
+    assert!(
+        matches!(cache.try_get("hit").execute(), Err(Error::CacheClosed)),
+        "contract: a closed native read does not invoke value clone"
+    );
+    assert!(
+        entry.try_recv().is_err(),
+        "contract: a closed native read does not invoke value clone"
+    );
     cache.shutdown().unwrap();
 }

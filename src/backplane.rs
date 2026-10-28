@@ -407,13 +407,17 @@ mod tests {
             key: "control".into(),
         };
         let error = BackplaneCommand::from_message(message).unwrap_err();
-        assert!(matches!(error, MarkerError::ProtocolWithSource { .. }));
+        assert!(
+            matches!(error, MarkerError::ProtocolWithSource { .. }),
+            "contract: malformed typed control keeps the original json error"
+        );
         assert!(
             error
                 .source()
                 .unwrap()
                 .downcast_ref::<serde_json::Error>()
-                .is_some()
+                .is_some(),
+            "contract: malformed typed control keeps the original json error"
         );
     }
 
@@ -434,7 +438,13 @@ mod tests {
         let BackplaneCommand::Data(decoded) = decoded else {
             panic!("ordinary key became control")
         };
-        assert_eq!(decoded.source_id, message.source_id);
-        assert_eq!(decoded.key, message.key);
+        assert_eq!(
+            decoded.source_id, message.source_id,
+            "contract: reserved source and magic data key stay data"
+        );
+        assert_eq!(
+            decoded.key, message.key,
+            "contract: reserved source and magic data key stay data"
+        );
     }
 }

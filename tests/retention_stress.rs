@@ -72,11 +72,26 @@ async fn bounded_retention_churn_preserves_rejected_contents_and_releases_expire
         let usage = store.usage();
         assert!(usage.entries <= 8, "entry limit exceeded: {usage:?}");
         assert!(usage.weight <= 32, "weighted limit exceeded: {usage:?}");
-        assert_eq!(usage.entries as usize, after.len());
+        assert_eq!(
+            usage.entries as usize,
+            after.len(),
+            "contract: bounded retention churn preserves rejected contents and releases expired weight"
+        );
     }
     clock.advance(Duration::from_secs(1));
     store.run_pending_tasks().await;
-    assert!(visible(&store, clock.now()).await.is_empty());
-    assert_eq!(store.usage().entries, 0);
-    assert_eq!(store.usage().weight, 0);
+    assert!(
+        visible(&store, clock.now()).await.is_empty(),
+        "contract: bounded retention churn preserves rejected contents and releases expired weight"
+    );
+    assert_eq!(
+        store.usage().entries,
+        0,
+        "contract: bounded retention churn preserves rejected contents and releases expired weight"
+    );
+    assert_eq!(
+        store.usage().weight,
+        0,
+        "contract: bounded retention churn preserves rejected contents and releases expired weight"
+    );
 }

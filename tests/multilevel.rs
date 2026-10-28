@@ -52,7 +52,11 @@ async fn l2_read_through_across_instances() {
             .await
             .unwrap();
     }
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: l2 read through across instances"
+    );
 
     // A second instance with an empty L1 but the same L2.
     let cache2: Cache<String> = Cache::builder()
@@ -170,7 +174,10 @@ async fn backplane_set_makes_peer_repull_new_value() {
             )
             .await
             .unwrap();
-        assert_eq!(v, "v1");
+        assert_eq!(
+            v, "v1",
+            "contract: backplane set makes peer repull new value"
+        );
     }
 
     // cache1 updates the value → backplane Set → cache2 drops its stale L1 copy.
@@ -234,7 +241,10 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
         )
         .await
         .unwrap();
-    assert_eq!(v, "v1");
+    assert_eq!(
+        v, "v1",
+        "contract: backplane set eagerly refreshes present l1"
+    );
 
     // cache1 updates the value → backplane Set. FusionCache "passive update": a
     // peer that already holds the key eagerly refreshes its L1 from L2 instead of
@@ -249,7 +259,11 @@ async fn backplane_set_eagerly_refreshes_present_l1() {
         got.is_some(),
         "peer L1 was eagerly refreshed from L2, not just evicted"
     );
-    assert_eq!(got.as_deref(), Some("v2"));
+    assert_eq!(
+        got.as_deref(),
+        Some("v2"),
+        "contract: backplane set eagerly refreshes present l1"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

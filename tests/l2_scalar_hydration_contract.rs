@@ -71,20 +71,37 @@ async fn scalar_l2_lookup_returns_the_source_while_l1_keeps_its_shorter_limits()
                     .await?
             }
         };
-        assert_eq!(value, 7);
+        assert_eq!(
+            value, 7,
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
+        );
         let record = memory.get("scalar")?.unwrap();
         let entry = record.entry();
-        assert_eq!(entry.meta().created(), created);
+        assert_eq!(
+            entry.meta().created(),
+            created,
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
+        );
         assert_eq!(
             entry.meta().logical_expiration(),
-            created.saturating_add(Duration::from_secs(15))
+            created.saturating_add(Duration::from_secs(15)),
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
         );
         assert_eq!(
             entry.meta().physical_expiration(),
-            created.saturating_add(Duration::from_secs(20))
+            created.saturating_add(Duration::from_secs(20)),
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
         );
-        assert_eq!(entry.meta().size(), Some(EntryWeight::new(9)));
-        assert_eq!(entry.meta().priority(), Priority::High);
+        assert_eq!(
+            entry.meta().size(),
+            Some(EntryWeight::new(9)),
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
+        );
+        assert_eq!(
+            entry.meta().priority(),
+            Priority::High,
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
+        );
         assert_eq!(
             entry
                 .meta()
@@ -92,7 +109,8 @@ async fn scalar_l2_lookup_returns_the_source_while_l1_keeps_its_shorter_limits()
                 .iter()
                 .map(|tag| tag.as_str())
                 .collect::<Vec<_>>(),
-            ["alpha", "beta"]
+            ["alpha", "beta"],
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
         );
         std::mem::drop(record);
         clock.advance(Duration::from_secs(6));
@@ -105,9 +123,14 @@ async fn scalar_l2_lookup_returns_the_source_while_l1_keeps_its_shorter_limits()
                 .try_get("scalar")
                 .options(|_| local_only)
                 .await?
-                .is_none()
+                .is_none(),
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
         );
-        assert_eq!(cache.try_get("scalar").await?, Some(7));
+        assert_eq!(
+            cache.try_get("scalar").await?,
+            Some(7),
+            "contract: scalar l2 lookup returns the source while l1 keeps its shorter limits"
+        );
         cache.shutdown().await?;
     }
     Ok(())
@@ -141,14 +164,14 @@ async fn scalar_stale_factory_keeps_source_fallback_after_the_hydrated_l1_expire
         .get_or_set(
             "stale",
             source::factory(move |ctx| async move {
-                assert_eq!(ctx.stale_value(), Some(&7));
+                assert_eq!(ctx.stale_value(), Some(&7), "contract: scalar stale factory keeps source fallback after the hydrated l1 expires");
                 assert_eq!(
                     ctx.stale_tags()
                         .unwrap()
                         .iter()
                         .map(|tag| tag.as_str())
                         .collect::<Vec<_>>(),
-                    ["source"]
+                    ["source"], "contract: scalar stale factory keeps source fallback after the hydrated l1 expires"
                 );
                 factory_clock.advance(Duration::from_secs(2));
                 Err::<u64, _>(ctx.fail("source unavailable"))
@@ -191,9 +214,17 @@ async fn scalar_call_override_preserves_both_selected_auto_clone_copies() -> ama
         .await?
         .wait()
         .await?;
-    assert_eq!(copy.0.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        copy.0.load(Ordering::SeqCst),
+        0,
+        "contract: scalar call override preserves both selected auto clone copies"
+    );
     let options = cache.entry_options().with_enable_auto_clone(true);
-    assert_eq!(cache.try_get("copied").options(|_| options).await?, Some(7));
+    assert_eq!(
+        cache.try_get("copied").options(|_| options).await?,
+        Some(7),
+        "contract: scalar call override preserves both selected auto clone copies"
+    );
     assert_eq!(
         copy.0.load(Ordering::SeqCst),
         2,

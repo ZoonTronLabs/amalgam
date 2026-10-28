@@ -238,8 +238,12 @@ mod postcard_serializer {
             let ser = PostcardSerializer;
             let bytes = DistributedSerializer::<String>::serialize(&ser, &entry).unwrap();
             let back = DistributedSerializer::<String>::deserialize(&ser, &bytes).unwrap();
-            assert_eq!(back.value, "v");
-            assert_eq!(back.tags, vec!["t".to_owned()]);
+            assert_eq!(back.value, "v", "contract: round trips envelope");
+            assert_eq!(
+                back.tags,
+                vec!["t".to_owned()],
+                "contract: round trips envelope"
+            );
         }
     }
 }

@@ -18,7 +18,11 @@ impl Clock for ReentrantClock {
     fn now(&self) -> Timestamp {
         let store = self.store.lock().unwrap().upgrade();
         if let Some(store) = store {
-            assert_eq!(store.usage().entries, 0);
+            assert_eq!(
+                store.usage().entries,
+                0,
+                "contract: maintenance samples the custom clock before taking the storage lock"
+            );
             self.calls.fetch_add(1, Ordering::SeqCst);
         }
         Timestamp::from_ticks(10_000_000)
@@ -44,7 +48,11 @@ fn bounded_maintenance_samples_custom_clock_before_storage_lock() {
             .build()
             .unwrap()
             .block_on(store.run_pending_tasks());
-        assert_eq!(clock.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            clock.calls.load(Ordering::SeqCst),
+            1,
+            "contract: bounded maintenance samples custom clock before storage lock"
+        );
         done.send(()).unwrap();
     });
     wait.recv_timeout(Duration::from_secs(3))

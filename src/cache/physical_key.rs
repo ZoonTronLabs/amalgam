@@ -119,24 +119,58 @@ mod tests {
             let expected = format!("{}{raw}", prefix.unwrap_or(""));
             let shared = prefix.map(Arc::<str>::from);
             let parts = KeyParts::new(shared.as_ref(), raw);
-            assert_eq!(parts.prefix().is_some(), !prefix.unwrap_or("").is_empty());
-            assert_eq!(&*parts.physical(), expected);
-            assert_eq!(parts.physical().to_string(), expected);
-            assert_eq!(&*parts.to_shared(), expected);
+            assert_eq!(
+                parts.prefix().is_some(),
+                !prefix.unwrap_or("").is_empty(),
+                "contract: keys join identically inline and on the heap"
+            );
+            assert_eq!(
+                &*parts.physical(),
+                expected,
+                "contract: keys join identically inline and on the heap"
+            );
+            assert_eq!(
+                parts.physical().to_string(),
+                expected,
+                "contract: keys join identically inline and on the heap"
+            );
+            assert_eq!(
+                &*parts.to_shared(),
+                expected,
+                "contract: keys join identically inline and on the heap"
+            );
         }
         let prefix: Arc<str> = Arc::from("ref:");
         let ref_key = |raw| KeyParts::new(Some(&prefix), raw).physical();
         assert_eq!(
             std::mem::size_of::<KeyParts<'_>>(),
-            std::mem::size_of::<std::borrow::Cow<'_, str>>()
+            std::mem::size_of::<std::borrow::Cow<'_, str>>(),
+            "contract: keys join identically inline and on the heap"
         );
-        assert_eq!(ref_key(&long).into_owned(), format!("ref:{long}"));
-        assert_eq!(ref_key(&fits).into_owned(), format!("ref:{fits}"));
-        assert!(matches!(ref_key(&fits), PhysicalKey::Inline { .. }));
-        assert!(matches!(ref_key(&long), PhysicalKey::Owned(_)));
-        assert!(matches!(
-            KeyParts::new(None, "currencies").physical(),
-            PhysicalKey::Borrowed(_)
-        ));
+        assert_eq!(
+            ref_key(&long).into_owned(),
+            format!("ref:{long}"),
+            "contract: keys join identically inline and on the heap"
+        );
+        assert_eq!(
+            ref_key(&fits).into_owned(),
+            format!("ref:{fits}"),
+            "contract: keys join identically inline and on the heap"
+        );
+        assert!(
+            matches!(ref_key(&fits), PhysicalKey::Inline { .. }),
+            "contract: keys join identically inline and on the heap"
+        );
+        assert!(
+            matches!(ref_key(&long), PhysicalKey::Owned(_)),
+            "contract: keys join identically inline and on the heap"
+        );
+        assert!(
+            matches!(
+                KeyParts::new(None, "currencies").physical(),
+                PhysicalKey::Borrowed(_)
+            ),
+            "contract: keys join identically inline and on the heap"
+        );
     }
 }

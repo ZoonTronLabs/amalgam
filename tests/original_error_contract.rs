@@ -44,19 +44,25 @@ fn assert_encode_source<E: std::error::Error + 'static>(
     codec: &dyn DistributedSerializer<RejectedValue>,
 ) {
     let error = codec.serialize(&entry()).unwrap_err();
-    assert!(matches!(
-        error,
-        Error::Codec(CodecError::Serialization { .. })
-    ));
-    assert!(error.source().unwrap().downcast_ref::<E>().is_some());
+    assert!(
+        matches!(error, Error::Codec(CodecError::Serialization { .. })),
+        "contract: assert encode source"
+    );
+    assert!(
+        error.source().unwrap().downcast_ref::<E>().is_some(),
+        "contract: assert encode source"
+    );
 }
 fn assert_decode_source<E: std::error::Error + 'static>(codec: &dyn DistributedSerializer<u64>) {
     let error = codec.deserialize(&[]).unwrap_err();
-    assert!(matches!(
-        error,
-        Error::Codec(CodecError::Deserialization { .. })
-    ));
-    assert!(error.source().unwrap().downcast_ref::<E>().is_some());
+    assert!(
+        matches!(error, Error::Codec(CodecError::Deserialization { .. })),
+        "contract: assert decode source"
+    );
+    assert!(
+        error.source().unwrap().downcast_ref::<E>().is_some(),
+        "contract: assert decode source"
+    );
 }
 
 #[test]
@@ -106,7 +112,8 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
             .source()
             .unwrap()
             .downcast_ref::<serde_json::Error>()
-            .is_some()
+            .is_some(),
+        "contract: preserved codec source uses codec policy without tripping the transport circuit"
     );
     let value = cache
         .get_or_set(
@@ -117,7 +124,10 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
         )
         .await
         .unwrap();
-    assert_eq!(value, 7);
+    assert_eq!(
+        value, 7,
+        "contract: preserved codec source uses codec policy without tripping the transport circuit"
+    );
     let mut decode_events = 0;
     let mut circuit_events = 0;
     while let Ok(event) = events.try_recv() {
@@ -127,8 +137,14 @@ async fn preserved_codec_source_uses_codec_policy_without_tripping_the_transport
             _ => {}
         }
     }
-    assert_eq!(decode_events, 2);
-    assert_eq!(circuit_events, 0);
+    assert_eq!(
+        decode_events, 2,
+        "contract: preserved codec source uses codec policy without tripping the transport circuit"
+    );
+    assert_eq!(
+        circuit_events, 0,
+        "contract: preserved codec source uses codec policy without tripping the transport circuit"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -154,8 +170,15 @@ fn provider_adapters_keep_original_identity_and_component_classification() {
             .unwrap()
             .downcast_ref::<OriginalSource>()
             .unwrap();
-        assert!(Arc::ptr_eq(&id, &source.0));
-        assert_eq!(OperationOutcome::from_error(&error), expected);
+        assert!(
+            Arc::ptr_eq(&id, &source.0),
+            "contract: provider adapters keep original identity and component classification"
+        );
+        assert_eq!(
+            OperationOutcome::from_error(&error),
+            expected,
+            "contract: provider adapters keep original identity and component classification"
+        );
     }
 }
 
@@ -168,14 +191,16 @@ async fn redis_connection_boundaries_retain_native_errors_without_network_access
         .unwrap();
     assert_eq!(
         OperationOutcome::from_error(&distributed),
-        OperationOutcome::DistributedError
+        OperationOutcome::DistributedError,
+        "contract: redis connection boundaries retain native errors without network access"
     );
     assert!(
         distributed
             .source()
             .unwrap()
             .downcast_ref::<redis::RedisError>()
-            .is_some()
+            .is_some(),
+        "contract: redis connection boundaries retain native errors without network access"
     );
     let backplane = RedisBackplane::connect("invalid://connection")
         .await
@@ -183,13 +208,15 @@ async fn redis_connection_boundaries_retain_native_errors_without_network_access
         .unwrap();
     assert_eq!(
         OperationOutcome::from_error(&backplane),
-        OperationOutcome::BackplaneError
+        OperationOutcome::BackplaneError,
+        "contract: redis connection boundaries retain native errors without network access"
     );
     assert!(
         backplane
             .source()
             .unwrap()
             .downcast_ref::<redis::RedisError>()
-            .is_some()
+            .is_some(),
+        "contract: redis connection boundaries retain native errors without network access"
     );
 }

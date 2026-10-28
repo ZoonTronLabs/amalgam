@@ -98,24 +98,44 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
             .await
             .unwrap();
         for _ in 0..1000 {
-            assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&17));
+            assert_eq!(
+                cache.try_get("key").await.unwrap().as_ref(),
+                Some(&17),
+                "contract: legacy interest has no new callbacks and selected counts survive stream lag"
+            );
         }
-        assert!(matches!(
-            stream.try_recv(),
-            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
-        ));
+        assert!(
+            matches!(
+                stream.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+            ),
+            "contract: legacy interest has no new callbacks and selected counts survive stream lag"
+        );
         let expected = match observations {
             PluginObservations::Logical => 0,
             PluginObservations::All => 1000,
         };
-        assert_eq!(counts.hits.load(Ordering::SeqCst), expected);
-        assert_eq!(counts.reads.load(Ordering::SeqCst), expected);
+        assert_eq!(
+            counts.hits.load(Ordering::SeqCst),
+            expected,
+            "contract: legacy interest has no new callbacks and selected counts survive stream lag"
+        );
+        assert_eq!(
+            counts.reads.load(Ordering::SeqCst),
+            expected,
+            "contract: legacy interest has no new callbacks and selected counts survive stream lag"
+        );
         assert_eq!(
             counts.starts.load(Ordering::SeqCst),
-            if expected == 0 { 0 } else { 1001 }
+            if expected == 0 { 0 } else { 1001 },
+            "contract: legacy interest has no new callbacks and selected counts survive stream lag"
         );
         cache.shutdown().await.unwrap();
-        assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            counts.stops.load(Ordering::SeqCst),
+            1,
+            "contract: legacy interest has no new callbacks and selected counts survive stream lag"
+        );
     }
 }
 
@@ -142,7 +162,11 @@ async fn late_layer_attachment_counts_retirement_of_preexisting_values() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(counts.evictions.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        counts.evictions.load(Ordering::SeqCst),
+        1,
+        "contract: late layer attachment counts retirement of preexisting values"
+    );
     registration.stop().unwrap();
     cache.shutdown().await.unwrap();
 }
@@ -187,7 +211,8 @@ impl PluginSession for ReentrantSession {
                 |error| PluginError::from_source("reentrant-layer", PluginStage::Event, error);
             assert_eq!(
                 cache.try_get("caller").execute().map_err(map)?.as_ref(),
-                Some(&23)
+                Some(&23),
+                "contract: on layer event"
             );
             let _ = cache
                 .remove("caller")
@@ -226,8 +251,15 @@ fn cache_aware_layer_hook_can_read_and_mutate_the_same_key_after_lane_release() 
             .unwrap()
             .wait()
             .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert!(cache.try_get("caller").execute().unwrap().is_none());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "contract: cache aware layer hook can read and mutate the same key after lane release"
+        );
+        assert!(
+            cache.try_get("caller").execute().unwrap().is_none(),
+            "contract: cache aware layer hook can read and mutate the same key after lane release"
+        );
         registration.stop().unwrap();
         cache.shutdown().unwrap();
     }
@@ -287,22 +319,41 @@ async fn detach_waits_for_captured_layer_callbacks_and_cancellation_does_not_los
             0,
             "layer callback must wait for the lane"
         );
-        assert_eq!(registration.stop().unwrap(), PluginStopOutcome::Pending);
-        assert_eq!(counts.stops.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            registration.stop().unwrap(),
+            PluginStopOutcome::Pending,
+            "contract: detach waits for captured layer callbacks and cancellation does not lose them"
+        );
+        assert_eq!(
+            counts.stops.load(Ordering::SeqCst),
+            0,
+            "contract: detach waits for captured layer callbacks and cancellation does not lose them"
+        );
         if complete {
             backend.released.add_permits(1);
             let _ = writer.await.unwrap();
         } else {
             writer.abort();
-            assert!(writer.await.unwrap_err().is_cancelled());
+            assert!(
+                writer.await.unwrap_err().is_cancelled(),
+                "contract: detach waits for captured layer callbacks and cancellation does not lose them"
+            );
             backend.released.add_permits(1);
         }
         tokio::time::timeout(Duration::from_secs(5), registration.wait_stopped())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(counts.sets.load(Ordering::SeqCst), 1);
-        assert_eq!(counts.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            counts.sets.load(Ordering::SeqCst),
+            1,
+            "contract: detach waits for captured layer callbacks and cancellation does not lose them"
+        );
+        assert_eq!(
+            counts.stops.load(Ordering::SeqCst),
+            1,
+            "contract: detach waits for captured layer callbacks and cancellation does not lose them"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -364,9 +415,20 @@ fn checked_layer_emission_retains_the_original_failure_and_still_sends_the_strea
         key: Arc::from("key"),
     });
     let result = events.emit_layer_checked(event.clone());
-    assert_eq!(result.subscribers, 1);
-    assert_eq!(stream.try_recv().unwrap(), event);
-    assert_eq!(result.plugin_errors.len(), 1);
+    assert_eq!(
+        result.subscribers, 1,
+        "contract: checked layer emission retains the original failure and still sends the stream"
+    );
+    assert_eq!(
+        stream.try_recv().unwrap(),
+        event,
+        "contract: checked layer emission retains the original failure and still sends the stream"
+    );
+    assert_eq!(
+        result.plugin_errors.len(),
+        1,
+        "contract: checked layer emission retains the original failure and still sends the stream"
+    );
     let PluginError::Failure {
         source: original,
         stage: PluginStage::Event,
@@ -375,12 +437,19 @@ fn checked_layer_emission_retains_the_original_failure_and_still_sends_the_strea
     else {
         panic!("original handler cause must be retained")
     };
-    assert!(Arc::ptr_eq(
-        original.downcast_ref::<Arc<IoError>>().unwrap(),
-        &source
-    ));
-    assert!(host.stop_all().is_empty());
-    assert_eq!(stops.load(Ordering::SeqCst), 1);
+    assert!(
+        Arc::ptr_eq(original.downcast_ref::<Arc<IoError>>().unwrap(), &source),
+        "contract: checked layer emission retains the original failure and still sends the stream"
+    );
+    assert!(
+        host.stop_all().is_empty(),
+        "contract: checked layer emission retains the original failure and still sends the stream"
+    );
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        1,
+        "contract: checked layer emission retains the original failure and still sends the stream"
+    );
 }
 
 struct PanickingInterest {
@@ -416,16 +485,23 @@ impl Plugin for BadInterest {
 fn rejected_interest_introspection_stops_the_already_created_session() {
     let cache = Cache::<u64>::builder().try_build().unwrap();
     let stops = Arc::new(AtomicUsize::new(0));
-    assert!(matches!(
-        cache.register_plugin(Arc::new(BadInterest {
-            stops: stops.clone()
-        })),
-        Err(Error::Plugin(PluginError::Panicked {
-            stage: PluginStage::Start,
-            ..
-        }))
-    ));
-    assert_eq!(stops.load(Ordering::SeqCst), 1);
+    assert!(
+        matches!(
+            cache.register_plugin(Arc::new(BadInterest {
+                stops: stops.clone()
+            })),
+            Err(Error::Plugin(PluginError::Panicked {
+                stage: PluginStage::Start,
+                ..
+            }))
+        ),
+        "contract: rejected interest introspection stops the already created session"
+    );
+    assert_eq!(
+        stops.load(Ordering::SeqCst),
+        1,
+        "contract: rejected interest introspection stops the already created session"
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -573,7 +649,8 @@ fn marker_observer_after_value_commit(fact: MarkerFact) {
             )
             .execute()
             .unwrap(),
-        29
+        29,
+        "contract: marker observer after value commit"
     );
     cache.flush_pending().unwrap();
     assert!(

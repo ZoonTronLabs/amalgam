@@ -108,9 +108,14 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
         )
         .await;
     assert!(
-        matches!(acquisition, Err(Error::Lease(LeaseError::Backend { source })) if source.to_string() == "original lost acquisition reply")
+        matches!(acquisition, Err(Error::Lease(LeaseError::Backend { source })) if source.to_string() == "original lost acquisition reply"),
+        "contract: failed caller token acquisition is cleaned and shutdown retains both causes"
     );
-    assert_eq!(origin_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        origin_calls.load(Ordering::SeqCst),
+        0,
+        "contract: failed caller token acquisition is cleaned and shutdown retains both causes"
+    );
     tokio::time::timeout(Duration::from_secs(1), locker.release_entered.notified())
         .await
         .expect("the known uncertain token was not scheduled for cleanup");
@@ -127,11 +132,19 @@ async fn failed_caller_token_acquisition_is_cleaned_and_shutdown_retains_both_ca
         !premature,
         "shutdown did not retain the owned uncertain-token cleanup"
     );
-    assert_eq!(locker.releases.load(Ordering::SeqCst), 1);
-    assert!(locker.held.lock().unwrap().is_none());
+    assert_eq!(
+        locker.releases.load(Ordering::SeqCst),
+        1,
+        "contract: failed caller token acquisition is cleaned and shutdown retains both causes"
+    );
+    assert!(
+        locker.held.lock().unwrap().is_none(),
+        "contract: failed caller token acquisition is cleaned and shutdown retains both causes"
+    );
     for result in [first, repeated] {
         assert!(
-            matches!(result, Err(Error::Shutdown(error)) if error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::Work(Error::Lease(LeaseError::Backend { source })) if source.to_string().contains("original uncertain release failure"))))
+            matches!(result, Err(Error::Shutdown(error)) if error.failures().iter().any(|failure| matches!(failure, ShutdownFailure::Work(Error::Lease(LeaseError::Backend { source })) if source.to_string().contains("original uncertain release failure")))),
+            "contract: failed caller token acquisition is cleaned and shutdown retains both causes"
         );
     }
 }
@@ -147,7 +160,17 @@ async fn a_contended_receipt_does_not_fabricate_uncertain_ownership_cleanup() {
     )
     .await
     .unwrap();
-    assert!(receipt.is_none());
-    assert_eq!(locker.releases.load(Ordering::SeqCst), 0);
-    assert!(locker.held.lock().unwrap().is_none());
+    assert!(
+        receipt.is_none(),
+        "contract: a contended receipt does not fabricate uncertain ownership cleanup"
+    );
+    assert_eq!(
+        locker.releases.load(Ordering::SeqCst),
+        0,
+        "contract: a contended receipt does not fabricate uncertain ownership cleanup"
+    );
+    assert!(
+        locker.held.lock().unwrap().is_none(),
+        "contract: a contended receipt does not fabricate uncertain ownership cleanup"
+    );
 }

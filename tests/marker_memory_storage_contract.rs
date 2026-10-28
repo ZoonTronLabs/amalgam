@@ -85,26 +85,59 @@ async fn actual_records_include_local_authority_independent_metadata_and_ready_r
         .try_build()
         .unwrap();
     let provider: Arc<dyn MemoryStorage<MarkerObservation>> = store.clone();
-    assert!(Arc::ptr_eq(c.marker_memory_storage().unwrap(), &provider));
+    assert!(
+        Arc::ptr_eq(c.marker_memory_storage().unwrap(), &provider),
+        "contract: actual records include local authority independent metadata and ready reads"
+    );
     tagged(&c, 7).await;
-    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(7));
+    assert_eq!(
+        c.try_get("key").into_future().await.unwrap(),
+        Some(7),
+        "contract: actual records include local authority independent metadata and ready reads"
+    );
     {
         let state = store.state.lock().unwrap();
-        assert_eq!(state.records.len(), 3);
+        assert_eq!(
+            state.records.len(),
+            3,
+            "contract: actual records include local authority independent metadata and ready reads"
+        );
         for record in state.records.values() {
-            assert!(record.key().contains("/local/"));
+            assert!(
+                record.key().contains("/local/"),
+                "contract: actual records include local authority independent metadata and ready reads"
+            );
             assert_eq!(
                 *record.entry().value(),
-                MarkerObservation::Local(MarkerPresence::Absent)
+                MarkerObservation::Local(MarkerPresence::Absent),
+                "contract: actual records include local authority independent metadata and ready reads"
             );
-            assert_eq!(record.entry().meta().created(), clock.now());
-            assert_eq!(record.weight(), 11);
-            assert_eq!(record.entry().meta().priority(), Priority::High);
-            assert!(record.entry().meta().tags().is_empty());
+            assert_eq!(
+                record.entry().meta().created(),
+                clock.now(),
+                "contract: actual records include local authority independent metadata and ready reads"
+            );
+            assert_eq!(
+                record.weight(),
+                11,
+                "contract: actual records include local authority independent metadata and ready reads"
+            );
+            assert_eq!(
+                record.entry().meta().priority(),
+                Priority::High,
+                "contract: actual records include local authority independent metadata and ready reads"
+            );
+            assert!(
+                record.entry().meta().tags().is_empty(),
+                "contract: actual records include local authority independent metadata and ready reads"
+            );
         }
-        assert!(state.epochs.keys().any(|n| n.purpose()
-            == MemoryNamespacePurpose::LocalMarkerObservations
-            && n.key_prefix() == "raw:/λ:"));
+        assert!(
+            state.epochs.keys().any(|n| n.purpose()
+                == MemoryNamespacePurpose::LocalMarkerObservations
+                && n.key_prefix() == "raw:/λ:"),
+            "contract: actual records include local authority independent metadata and ready reads"
+        );
     }
     let gets = store.lookups.load(Ordering::SeqCst);
     let ready = store.ready.load(Ordering::SeqCst);
@@ -115,11 +148,23 @@ async fn actual_records_include_local_authority_independent_metadata_and_ready_r
         )
         .await
         .unwrap(),
-        7
+        7,
+        "contract: actual records include local authority independent metadata and ready reads"
     );
-    assert_eq!(store.lookups.load(Ordering::SeqCst), gets);
-    assert!(store.ready.load(Ordering::SeqCst) >= ready + 3);
-    assert_eq!(c.marker_memory_usage().unwrap().unwrap().weight, 33);
+    assert_eq!(
+        store.lookups.load(Ordering::SeqCst),
+        gets,
+        "contract: actual records include local authority independent metadata and ready reads"
+    );
+    assert!(
+        store.ready.load(Ordering::SeqCst) >= ready + 3,
+        "contract: actual records include local authority independent metadata and ready reads"
+    );
+    assert_eq!(
+        c.marker_memory_usage().unwrap().unwrap().weight,
+        33,
+        "contract: actual records include local authority independent metadata and ready reads"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -130,7 +175,11 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
     let a = node(&store, &clock, "shared:");
     let b = node(&store, &clock, "shared:");
     tagged(&b, 13).await;
-    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(13));
+    assert_eq!(
+        b.try_get("key").into_future().await.unwrap(),
+        Some(13),
+        "contract: shared local tag fact is accepted before a ready value is returned"
+    );
     clock.advance(Duration::from_millis(1));
     let _ = a
         .remove_by_tag(tag())
@@ -153,9 +202,14 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
         .tags([tag()])
         .await
         .unwrap(),
-        17
+        17,
+        "contract: shared local tag fact is accepted before a ready value is returned"
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "contract: shared local tag fact is accepted before a ready value is returned"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -175,7 +229,11 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
             .wait()
             .await
             .unwrap();
-        assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(19));
+        assert_eq!(
+            b.try_get("key").into_future().await.unwrap(),
+            Some(19),
+            "contract: shared remove and expire clear reach independent value stores"
+        );
         clock.advance(Duration::from_millis(1));
         let _ = a
             .clear(mode)
@@ -210,7 +268,10 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .unwrap();
     tagged(&b, 23).await;
     let original = values.state.lock().unwrap().records["key"].clone();
-    assert!(b.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: a foreign fact remains a host boundary after provider eviction"
+    );
     clock.advance(Duration::from_millis(1));
     let _ = a
         .remove_by_tag(tag())
@@ -220,7 +281,10 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .wait()
         .await
         .unwrap();
-    assert!(b.try_get("key").into_future().await.unwrap().is_none());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: a foreign fact remains a host boundary after provider eviction"
+    );
     store.state.lock().unwrap().records.clear();
     values
         .state
@@ -228,7 +292,10 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
         .unwrap()
         .records
         .insert(Arc::from("key"), original);
-    assert!(b.try_get("key").into_future().await.unwrap().is_none());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: a foreign fact remains a host boundary after provider eviction"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -250,14 +317,18 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
         .unwrap();
     tagged(&b, 29).await;
     tagged(&durable, 31).await;
-    assert!(b.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: distinct prefixes and local durable authorities do not share facts"
+    );
     assert!(
         durable
             .try_get("key")
             .into_future()
             .await
             .unwrap()
-            .is_some()
+            .is_some(),
+        "contract: distinct prefixes and local durable authorities do not share facts"
     );
     clock.advance(Duration::from_millis(1));
     let _ = a
@@ -268,20 +339,32 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(29));
+    assert_eq!(
+        b.try_get("key").into_future().await.unwrap(),
+        Some(29),
+        "contract: distinct prefixes and local durable authorities do not share facts"
+    );
     assert_eq!(
         durable.try_get("key").into_future().await.unwrap(),
-        Some(31)
+        Some(31),
+        "contract: distinct prefixes and local durable authorities do not share facts"
     );
     {
         let state = store.state.lock().unwrap();
-        assert!(state.records.keys().any(|key| key.contains("/local/")));
-        assert!(state.records.keys().any(|key| key.contains("/durable/")));
+        assert!(
+            state.records.keys().any(|key| key.contains("/local/")),
+            "contract: distinct prefixes and local durable authorities do not share facts"
+        );
+        assert!(
+            state.records.keys().any(|key| key.contains("/durable/")),
+            "contract: distinct prefixes and local durable authorities do not share facts"
+        );
         assert!(
             state
                 .epochs
                 .keys()
-                .any(|n| n.purpose() == MemoryNamespacePurpose::DurableMarkerObservations)
+                .any(|n| n.purpose() == MemoryNamespacePurpose::DurableMarkerObservations),
+            "contract: distinct prefixes and local durable authorities do not share facts"
         );
     }
     a.shutdown().await.unwrap();
@@ -316,7 +399,10 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
     }
     for c in &caches {
         tagged(c, 37).await;
-        assert!(c.try_get("key").into_future().await.unwrap().is_some());
+        assert!(
+            c.try_get("key").into_future().await.unwrap().is_some(),
+            "contract: durable wire scopes are isolated in one observation provider"
+        );
     }
     clock.advance(Duration::from_millis(1));
     let _ = caches[0]
@@ -333,12 +419,21 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
             .into_future()
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: durable wire scopes are isolated in one observation provider"
     );
     for c in &caches[1..] {
-        assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(37));
+        assert_eq!(
+            c.try_get("key").into_future().await.unwrap(),
+            Some(37),
+            "contract: durable wire scopes are isolated in one observation provider"
+        );
     }
-    assert_eq!(store.state.lock().unwrap().records.len(), 9);
+    assert_eq!(
+        store.state.lock().unwrap().records.len(),
+        9,
+        "contract: durable wire scopes are isolated in one observation provider"
+    );
     for c in caches {
         c.shutdown().await.unwrap();
     }
@@ -371,8 +466,16 @@ async fn marker_lookup_and_admission_failures_keep_causes_and_do_not_run_origin(
             )
             .await
             .unwrap_err();
-        assert_eq!(cause(&error), fault);
-        assert_eq!(called.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            cause(&error),
+            fault,
+            "contract: marker lookup and admission failures keep causes and do not run origin"
+        );
+        assert_eq!(
+            called.load(Ordering::SeqCst),
+            0,
+            "contract: marker lookup and admission failures keep causes and do not run origin"
+        );
         *store.fault.lock().unwrap() = None;
         c.shutdown().await.unwrap();
     }
@@ -391,14 +494,22 @@ async fn marker_maintenance_and_usage_keep_their_original_channels() {
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: marker maintenance and usage keep their original channels"
+    );
     *store.fault.lock().unwrap() = Some(Fault::Maintain);
     assert_eq!(
         cause(&c.run_pending_tasks().await.unwrap_err()),
-        Fault::Maintain
+        Fault::Maintain,
+        "contract: marker maintenance and usage keep their original channels"
     );
     *store.fault.lock().unwrap() = Some(Fault::Usage);
-    assert_eq!(cause(&c.marker_memory_usage().unwrap_err()), Fault::Usage);
+    assert_eq!(
+        cause(&c.marker_memory_usage().unwrap_err()),
+        Fault::Usage,
+        "contract: marker maintenance and usage keep their original channels"
+    );
     *store.fault.lock().unwrap() = None;
     c.shutdown().await.unwrap();
 }
@@ -435,14 +546,18 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
             .wait()
             .await
             .unwrap();
-        assert!(c.try_get("key").into_future().await.unwrap().is_some());
+        assert!(
+            c.try_get("key").into_future().await.unwrap().is_some(),
+            "contract: wrong key and wrong epoch are explicit provider contract failures"
+        );
         assert!(
             foreign
                 .try_get("key")
                 .into_future()
                 .await
                 .unwrap()
-                .is_some()
+                .is_some(),
+            "contract: wrong key and wrong epoch are explicit provider contract failures"
         );
         let target = store
             .state
@@ -468,7 +583,8 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
         };
         store.state.lock().unwrap().records.insert(target, record);
         assert!(
-            matches!(c.try_get("key").into_future().await.unwrap_err(), Error::MarkerMemoryStorage(MemoryStorageError::InvalidRecord { violation: got }) if got == violation)
+            matches!(c.try_get("key").into_future().await.unwrap_err(), Error::MarkerMemoryStorage(MemoryStorageError::InvalidRecord { violation: got }) if got == violation),
+            "contract: wrong key and wrong epoch are explicit provider contract failures"
         );
         c.shutdown().await.unwrap();
         foreign.shutdown().await.unwrap();
@@ -478,14 +594,17 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
 #[test]
 fn provider_policy_limits_and_epoch_identity_are_validated_independent_of_setter_order() {
     let provider = MapStorage::<MarkerObservation>::new();
-    assert!(matches!(
-        Cache::<u64>::builder()
-            .marker_memory_storage(provider.clone())
-            .try_build()
-            .err()
-            .unwrap(),
-        Error::Config(ConfigError::SuppliedMarkerMemoryRequiresControlledReads)
-    ));
+    assert!(
+        matches!(
+            Cache::<u64>::builder()
+                .marker_memory_storage(provider.clone())
+                .try_build()
+                .err()
+                .unwrap(),
+            Error::Config(ConfigError::SuppliedMarkerMemoryRequiresControlledReads)
+        ),
+        "contract: provider policy limits and epoch identity are validated independent of setter order"
+    );
     for first in [true, false] {
         let b = Cache::<u64>::builder().marker_read_policy(MarkerReadPolicy::OptionsControlled);
         let b = if first {
@@ -495,17 +614,21 @@ fn provider_policy_limits_and_epoch_identity_are_validated_independent_of_setter
             b.marker_read_limits(MemoryLimits::new(Some(3), None))
                 .marker_memory_storage(provider.clone())
         };
-        assert!(matches!(
-            b.try_build().err().unwrap(),
-            Error::Config(ConfigError::SuppliedMemoryWithBuiltinLimits)
-        ));
+        assert!(
+            matches!(
+                b.try_build().err().unwrap(),
+                Error::Config(ConfigError::SuppliedMemoryWithBuiltinLimits)
+            ),
+            "contract: provider policy limits and epoch identity are validated independent of setter order"
+        );
     }
     assert!(
         Cache::<u64>::builder()
             .marker_read_policy(MarkerReadPolicy::OptionsControlled)
             .marker_memory_storage(provider)
             .try_build()
-            .is_ok()
+            .is_ok(),
+        "contract: provider policy limits and epoch identity are validated independent of setter order"
     );
 }
 
@@ -522,11 +645,24 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
-    assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 0);
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
+    assert_eq!(
+        c.marker_memory_usage().unwrap().unwrap().entries,
+        0,
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
     let writes = store.writes.load(Ordering::SeqCst);
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
-    assert!(store.writes.load(Ordering::SeqCst) > writes);
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
+    assert!(
+        store.writes.load(Ordering::SeqCst) > writes,
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
     c.shutdown().await.unwrap();
     let store = MapStorage::new();
     let c: Cache<u64> = Cache::builder()
@@ -545,12 +681,27 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
     clock.advance(Duration::from_secs(2));
     c.run_pending_tasks().await.unwrap();
-    assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 0);
-    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(67));
-    assert_eq!(c.marker_memory_usage().unwrap().unwrap().entries, 2);
+    assert_eq!(
+        c.marker_memory_usage().unwrap().unwrap().entries,
+        0,
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
+    assert_eq!(
+        c.try_get("key").into_future().await.unwrap(),
+        Some(67),
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
+    assert_eq!(
+        c.marker_memory_usage().unwrap().unwrap().entries,
+        2,
+        "contract: provider owned capacity and expiry do not create a shadow observation store"
+    );
     c.shutdown().await.unwrap();
 }
 
@@ -574,10 +725,25 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
-    assert_eq!(store.lookups.load(Ordering::SeqCst), 0);
-    assert_eq!(store.ready.load(Ordering::SeqCst), 0);
-    assert_eq!(store.writes.load(Ordering::SeqCst), 0);
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: marker skips and zero factory budgets are independent of value options"
+    );
+    assert_eq!(
+        store.lookups.load(Ordering::SeqCst),
+        0,
+        "contract: marker skips and zero factory budgets are independent of value options"
+    );
+    assert_eq!(
+        store.ready.load(Ordering::SeqCst),
+        0,
+        "contract: marker skips and zero factory budgets are independent of value options"
+    );
+    assert_eq!(
+        store.writes.load(Ordering::SeqCst),
+        0,
+        "contract: marker skips and zero factory budgets are independent of value options"
+    );
     c.shutdown().await.unwrap();
     let c: Cache<u64> = Cache::builder()
         .clock(clock.clone())
@@ -600,7 +766,8 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .await
         .unwrap();
     assert!(
-        matches!(c.try_get("key").into_future().await.unwrap_err(), Error::FactoryTimeout { elapsed } if elapsed.is_zero())
+        matches!(c.try_get("key").into_future().await.unwrap_err(), Error::FactoryTimeout { elapsed } if elapsed.is_zero()),
+        "contract: marker skips and zero factory budgets are independent of value options"
     );
     c.shutdown().await.unwrap();
 }
@@ -624,7 +791,11 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
         .unwrap()
         .wait()
         .unwrap();
-    assert_eq!(c.try_get("key").execute().unwrap(), Some(79));
+    assert_eq!(
+        c.try_get("key").execute().unwrap(),
+        Some(79),
+        "contract: native and async views share actual marker records and provider lifetime"
+    );
     let rt = RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
@@ -632,16 +803,22 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
     assert_eq!(
         rt.block_on(c.as_async().try_get("key").into_future())
             .unwrap(),
-        Some(79)
+        Some(79),
+        "contract: native and async views share actual marker records and provider lifetime"
     );
-    assert_eq!(store.state.lock().unwrap().records.len(), 2);
+    assert_eq!(
+        store.state.lock().unwrap().records.len(),
+        2,
+        "contract: native and async views share actual marker records and provider lifetime"
+    );
     c.shutdown().unwrap();
     let other = node(&store, &clock, "");
     rt.block_on(other.set("key", 83).with_receipt().into_future())
         .unwrap();
     assert_eq!(
         rt.block_on(other.try_get("key").into_future()).unwrap(),
-        Some(83)
+        Some(83),
+        "contract: native and async views share actual marker records and provider lifetime"
     );
     rt.block_on(other.shutdown()).unwrap();
 }
@@ -668,11 +845,18 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
         .wait()
         .await
         .unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: eager local marker refresh is owned and replaces actual records"
+    );
     let created = clock.now();
     clock.advance(Duration::from_secs(6));
     let mut events = c.events().subscribe();
-    assert_eq!(c.try_get("key").into_future().await.unwrap(), Some(89));
+    assert_eq!(
+        c.try_get("key").into_future().await.unwrap(),
+        Some(89),
+        "contract: eager local marker refresh is owned and replaces actual records"
+    );
     c.flush_pending().await.unwrap();
     let mut count = 0;
     while let Ok(event) = events.try_recv() {
@@ -680,7 +864,10 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
             count += 1;
         }
     }
-    assert_eq!(count, 2);
+    assert_eq!(
+        count, 2,
+        "contract: eager local marker refresh is owned and replaces actual records"
+    );
     assert!(
         store
             .state
@@ -688,7 +875,8 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
             .unwrap()
             .records
             .values()
-            .all(|record| record.entry().meta().created() > created)
+            .all(|record| record.entry().meta().created() > created),
+        "contract: eager local marker refresh is owned and replaces actual records"
     );
     c.shutdown().await.unwrap();
 }
@@ -700,7 +888,10 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
     let a = node(&store, &clock, "cas:");
     let b = node(&store, &clock, "cas:");
     tagged(&a, 97).await;
-    assert!(a.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        a.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: a delayed lower admission accepts the concurrent shared maximum before serving"
+    );
     let key = store
         .state
         .lock()
@@ -729,11 +920,17 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
         .await
         .unwrap();
     gate.resume.wait();
-    assert!(pending.await.unwrap().unwrap().is_none());
-    assert!(matches!(
-        *store.state.lock().unwrap().records[&key].entry().value(),
-        MarkerObservation::KnownMaximum(_)
-    ));
+    assert!(
+        pending.await.unwrap().unwrap().is_none(),
+        "contract: a delayed lower admission accepts the concurrent shared maximum before serving"
+    );
+    assert!(
+        matches!(
+            *store.state.lock().unwrap().records[&key].entry().value(),
+            MarkerObservation::KnownMaximum(_)
+        ),
+        "contract: a delayed lower admission accepts the concurrent shared maximum before serving"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -812,7 +1009,10 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
             .wait()
             .await
             .unwrap();
-        assert!(c.try_get("key").into_future().await.unwrap().is_some());
+        assert!(
+            c.try_get("key").into_future().await.unwrap().is_some(),
+            "contract: failed gap cleanup advances both layers and preserves one or both causes"
+        );
         let old = values.state.lock().unwrap().records["key"].clone();
         let old_markers: Vec<_> = markers
             .state
@@ -836,20 +1036,35 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
                 let MemoryStorageError::Provider { source } = source else {
                     panic!("cause lost")
                 };
-                assert_eq!(*source.downcast_ref::<Fault>().unwrap(), Fault::Clear);
+                assert_eq!(
+                    *source.downcast_ref::<Fault>().unwrap(),
+                    Fault::Clear,
+                    "contract: failed gap cleanup advances both layers and preserves one or both causes"
+                );
             }
         } else {
-            assert_eq!(cause(&error), Fault::Clear);
+            assert_eq!(
+                cause(&error),
+                Fault::Clear,
+                "contract: failed gap cleanup advances both layers and preserves one or both causes"
+            );
         }
-        assert!(!old.is_live_at(clock.now()));
+        assert!(
+            !old.is_live_at(clock.now()),
+            "contract: failed gap cleanup advances both layers and preserves one or both causes"
+        );
         assert!(
             old_markers
                 .iter()
-                .all(|record| !record.is_live_at(clock.now()))
+                .all(|record| !record.is_live_at(clock.now())),
+            "contract: failed gap cleanup advances both layers and preserves one or both causes"
         );
         *values.fault.lock().unwrap() = None;
         *markers.fault.lock().unwrap() = None;
-        assert!(c.try_get("key").into_future().await.unwrap().is_none());
+        assert!(
+            c.try_get("key").into_future().await.unwrap().is_none(),
+            "contract: failed gap cleanup advances both layers and preserves one or both causes"
+        );
         c.shutdown().await.unwrap();
     }
 }
@@ -877,7 +1092,10 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .wait()
         .await
         .unwrap();
-    assert!(a.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        a.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
     let old: Vec<_> = markers
         .state
         .lock()
@@ -895,7 +1113,10 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
     let reader = a.clone();
     let pending = tokio::spawn(async move { reader.try_get("key").into_future().await });
     gate.entered.wait();
-    assert!(old.iter().all(|record| !record.is_live_at(clock.now())));
+    assert!(
+        old.iter().all(|record| !record.is_live_at(clock.now())),
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
     clock.advance(Duration::from_millis(1));
     let _ = b
         .set("key", 107)
@@ -905,7 +1126,11 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .wait()
         .await
         .unwrap();
-    assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(107));
+    assert_eq!(
+        b.try_get("key").into_future().await.unwrap(),
+        Some(107),
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
     let new: Vec<_> = markers
         .state
         .lock()
@@ -915,11 +1140,26 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .filter(|record| record.is_live_at(clock.now()))
         .cloned()
         .collect();
-    assert_eq!(new.len(), 2);
+    assert_eq!(
+        new.len(),
+        2,
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
     gate.resume.wait();
-    assert_eq!(pending.await.unwrap().unwrap(), Some(107));
-    assert!(new.iter().all(|record| record.is_live_at(clock.now())));
-    assert_eq!(a.try_get("key").into_future().await.unwrap(), Some(107));
+    assert_eq!(
+        pending.await.unwrap().unwrap(),
+        Some(107),
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
+    assert!(
+        new.iter().all(|record| record.is_live_at(clock.now())),
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
+    assert_eq!(
+        a.try_get("key").into_future().await.unwrap(),
+        Some(107),
+        "contract: delayed value cleanup already hides old markers and preserves new writes in both layers"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -982,7 +1222,10 @@ fn marker_generation_cannot_be_unstable_or_alias_the_value_namespace() {
             .try_build()
             .err()
             .unwrap();
-        assert!(matches!(error, Error::Config(error) if error == expected));
+        assert!(
+            matches!(error, Error::Config(error) if error == expected),
+            "contract: marker generation cannot be unstable or alias the value namespace"
+        );
     }
 }
 
@@ -1000,8 +1243,14 @@ impl MemoryLocker for ProbeLocker {
         &self,
         request: MemoryLockRequest,
     ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
-        assert!(matches!(request.kind(), MemoryLockKind::Marker(_)));
-        assert!(request.coordination_key().contains("/local/"));
+        assert!(
+            matches!(request.kind(), MemoryLockKind::Marker(_)),
+            "contract: supplied marker storage uses the async local marker coordination namespace"
+        );
+        assert!(
+            request.coordination_key().contains("/local/"),
+            "contract: supplied marker storage uses the async local marker coordination namespace"
+        );
         self.asynchronous.fetch_add(1, Ordering::SeqCst);
         Ok(MemoryLockOutcome::Unavailable)
     }
@@ -1015,8 +1264,14 @@ impl BlockingMemoryLocker for ProbeNative {
         &self,
         request: MemoryLockRequest,
     ) -> StdResult<MemoryLockOutcome, MemoryLockerError> {
-        assert!(matches!(request.kind(), MemoryLockKind::Marker(_)));
-        assert!(request.coordination_key().contains("/local/"));
+        assert!(
+            matches!(request.kind(), MemoryLockKind::Marker(_)),
+            "contract: supplied marker storage uses the native local marker coordination namespace"
+        );
+        assert!(
+            request.coordination_key().contains("/local/"),
+            "contract: supplied marker storage uses the native local marker coordination namespace"
+        );
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(MemoryLockOutcome::Unavailable)
     }
@@ -1040,9 +1295,20 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
         .unwrap()
         .wait()
         .unwrap();
-    assert!(c.try_get("key").execute().unwrap().is_some());
-    assert_eq!(locker.native.load(Ordering::SeqCst), 2);
-    assert_eq!(locker.asynchronous.load(Ordering::SeqCst), 0);
+    assert!(
+        c.try_get("key").execute().unwrap().is_some(),
+        "contract: supplied marker store keeps native and async locker method selection"
+    );
+    assert_eq!(
+        locker.native.load(Ordering::SeqCst),
+        2,
+        "contract: supplied marker store keeps native and async locker method selection"
+    );
+    assert_eq!(
+        locker.asynchronous.load(Ordering::SeqCst),
+        0,
+        "contract: supplied marker store keeps native and async locker method selection"
+    );
     markers.state.lock().unwrap().records.clear();
     let rt = RuntimeBuilder::new_current_thread()
         .enable_all()
@@ -1051,10 +1317,19 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
     assert!(
         rt.block_on(c.as_async().try_get("key").into_future())
             .unwrap()
-            .is_some()
+            .is_some(),
+        "contract: supplied marker store keeps native and async locker method selection"
     );
-    assert_eq!(locker.native.load(Ordering::SeqCst), 2);
-    assert_eq!(locker.asynchronous.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        locker.native.load(Ordering::SeqCst),
+        2,
+        "contract: supplied marker store keeps native and async locker method selection"
+    );
+    assert_eq!(
+        locker.asynchronous.load(Ordering::SeqCst),
+        2,
+        "contract: supplied marker store keeps native and async locker method selection"
+    );
     c.shutdown().unwrap();
 }
 
@@ -1086,7 +1361,10 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
         .unwrap();
     clock.advance(Duration::from_millis(1));
     tagged(&c, 113).await;
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: distributed snapshot hydration and repair use the actual external observation store"
+    );
     let key = store
         .state
         .lock()
@@ -1106,23 +1384,31 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
     };
     clock.advance(Duration::from_secs(3));
     c.run_pending_tasks().await.unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: distributed snapshot hydration and repair use the actual external observation store"
+    );
     assert_eq!(
         store.state.lock().unwrap().records[&key]
             .entry()
             .value()
             .presence(),
-        MarkerPresence::Present(version)
+        MarkerPresence::Present(version),
+        "contract: distributed snapshot hydration and repair use the actual external observation store"
     );
     clock.advance(Duration::from_secs(31));
     c.run_pending_tasks().await.unwrap();
-    assert!(c.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        c.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: distributed snapshot hydration and repair use the actual external observation store"
+    );
     assert_eq!(
         store.state.lock().unwrap().records[&key]
             .entry()
             .value()
             .presence(),
-        MarkerPresence::Present(version)
+        MarkerPresence::Present(version),
+        "contract: distributed snapshot hydration and repair use the actual external observation store"
     );
     c.shutdown().await.unwrap();
 }
@@ -1134,7 +1420,10 @@ async fn ready_clear_invalidation_stops_before_a_later_provider_contract_fault()
     let a = node(&store, &clock, "stop:");
     let b = node(&store, &clock, "stop:");
     tagged(&b, 127).await;
-    assert!(b.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: ready clear invalidation stops before a later provider contract fault"
+    );
     clock.advance(Duration::from_millis(1));
     let _ = a
         .clear(ClearMode::Remove)
@@ -1160,7 +1449,10 @@ async fn ready_clear_invalidation_stops_before_a_later_provider_contract_fault()
             .clone();
         state.records.insert(target, unrelated);
     }
-    assert!(b.try_get("key").into_future().await.unwrap().is_none());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: ready clear invalidation stops before a later provider contract fault"
+    );
     a.shutdown().await.unwrap();
     b.shutdown().await.unwrap();
 }
@@ -1216,9 +1508,13 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         )
         .await
         .unwrap(),
-        131
+        131,
+        "contract: real redis l2 backplane fenced locker and external marker storage interoperate"
     );
-    assert!(b.try_get("key").into_future().await.unwrap().is_some());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_some(),
+        "contract: real redis l2 backplane fenced locker and external marker storage interoperate"
+    );
     let _ = a
         .remove_by_tag(tag())
         .with_receipt()
@@ -1227,7 +1523,10 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         .wait()
         .await
         .unwrap();
-    assert!(b.try_get("key").into_future().await.unwrap().is_none());
+    assert!(
+        b.try_get("key").into_future().await.unwrap().is_none(),
+        "contract: real redis l2 backplane fenced locker and external marker storage interoperate"
+    );
     tokio::time::sleep(Duration::from_millis(100)).await;
     tagged(a, 137).await;
     assert_eq!(
@@ -1239,7 +1538,8 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         )
         .await
         .unwrap(),
-        137
+        137,
+        "contract: real redis l2 backplane fenced locker and external marker storage interoperate"
     );
     b.run_pending_tasks().await.unwrap();
     assert!(
@@ -1249,7 +1549,8 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
             .unwrap()
             .records
             .values()
-            .all(|record| record.key().contains("/durable/"))
+            .all(|record| record.key().contains("/durable/")),
+        "contract: real redis l2 backplane fenced locker and external marker storage interoperate"
     );
     let _ = a
         .clear(ClearMode::Remove)

@@ -31,8 +31,15 @@ async fn compare_at_boundaries(
             .try_get("value")
             .options(|_| options.clone())
             .await?;
-        assert_eq!(default_value, explicit_value);
-        assert_eq!(default_value, present.then_some(7));
+        assert_eq!(
+            default_value, explicit_value,
+            "contract: compare at boundaries"
+        );
+        assert_eq!(
+            default_value,
+            present.then_some(7),
+            "contract: compare at boundaries"
+        );
     }
     default.shutdown().await?;
     explicit.shutdown().await?;
@@ -93,7 +100,10 @@ async fn local_default_fail_safe_keeps_its_distinct_physical_deadline() -> amalg
             source::factory(|ctx| async move { Err::<u64, _>(ctx.fail("origin unavailable")) }),
         )
         .await?;
-    assert_eq!(value, 7);
+    assert_eq!(
+        value, 7,
+        "contract: local default fail safe keeps its distinct physical deadline"
+    );
     cache.shutdown().await?;
     Ok(())
 }

@@ -598,9 +598,19 @@ mod tests {
 
     #[test]
     fn tag_construction_and_deserialization_reject_blank() {
-        assert_eq!(Tag::new(" "), Err(TagError::Blank));
-        assert!(serde_json::from_str::<Tag>("\" \"").is_err());
-        assert!(try_collect_tags(["ok", " "]).is_err());
+        assert_eq!(
+            Tag::new(" "),
+            Err(TagError::Blank),
+            "contract: tag construction and deserialization reject blank"
+        );
+        assert!(
+            serde_json::from_str::<Tag>("\" \"").is_err(),
+            "contract: tag construction and deserialization reject blank"
+        );
+        assert!(
+            try_collect_tags(["ok", " "]).is_err(),
+            "contract: tag construction and deserialization reject blank"
+        );
     }
 
     #[test]
@@ -610,13 +620,19 @@ mod tests {
         registry.mark_tag(Tag::new("a").unwrap(), at);
         assert_eq!(
             registry.evaluate(at, &[Tag::new("a").unwrap()], RemoveByTagBehavior::Expire),
-            TagVerdict::Expire
+            TagVerdict::Expire,
+            "contract: inclusive markers and compaction never forget invalidation"
         );
         registry.mark_tag(Tag::new("b").unwrap(), Timestamp::from_ticks(43));
-        assert_eq!(registry.len(), 0);
+        assert_eq!(
+            registry.len(),
+            0,
+            "contract: inclusive markers and compaction never forget invalidation"
+        );
         assert_eq!(
             registry.evaluate(at, &[Tag::new("a").unwrap()], RemoveByTagBehavior::Expire),
-            TagVerdict::Remove
+            TagVerdict::Remove,
+            "contract: inclusive markers and compaction never forget invalidation"
         );
     }
 
@@ -638,14 +654,23 @@ mod tests {
             );
             assert_eq!(
                 Some(outcome.marker().version()),
-                state.read(&MarkerKind::ClearRemove)
+                state.read(&MarkerKind::ClearRemove),
+                "contract: lowered capacity clear reports one actual maximum"
             );
             assert_eq!(
                 outcome.marker().version().timestamp().ticks(),
-                candidate.max(21)
+                candidate.max(21),
+                "contract: lowered capacity clear reports one actual maximum"
             );
-            assert!(matches!(outcome, MarkerAdvanceOutcome::Advanced(_)));
-            assert_eq!(state.tag_count(), 0);
+            assert!(
+                matches!(outcome, MarkerAdvanceOutcome::Advanced(_)),
+                "contract: lowered capacity clear reports one actual maximum"
+            );
+            assert_eq!(
+                state.tag_count(),
+                0,
+                "contract: lowered capacity clear reports one actual maximum"
+            );
         }
     }
 
@@ -656,14 +681,18 @@ mod tests {
             .into_iter()
             .map(|ticks| MarkerVersion::new(Timestamp::from_ticks(ticks)).ordered_hex())
             .collect();
-        assert!(encodings.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(
+            encodings.windows(2).all(|pair| pair[0] < pair[1]),
+            "contract: storage order covers full signed range"
+        );
         for (ticks, encoded) in values.into_iter().zip(encodings) {
             assert_eq!(
                 MarkerVersion::from_ordered_hex(&encoded)
                     .unwrap()
                     .timestamp()
                     .ticks(),
-                ticks
+                ticks,
+                "contract: storage order covers full signed range"
             );
         }
     }

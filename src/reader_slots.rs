@@ -460,7 +460,7 @@ mod tests {
                     gate.wait();
                     for _ in 0..10_000 {
                         let value = lock.read();
-                        assert_eq!(value.0, value.1);
+                        assert_eq!(value.0, value.1, "contract: readers never see torn values with colliding indices and competing writers");
                     }
                 });
             }
@@ -478,14 +478,25 @@ mod tests {
             }
             gate.wait();
         });
-        assert_eq!(*lock.read(), (40_000, 40_000));
+        assert_eq!(
+            *lock.read(),
+            (40_000, 40_000),
+            "contract: readers never see torn values with colliding indices and competing writers"
+        );
     }
     #[test]
     fn rejected_writer_reopens_the_gate_and_panic_releases_both_kinds_of_guard() {
         let lock = ReaderSlots::new(7_u64);
         let read = lock.read();
-        assert!(lock.try_write().is_none());
-        assert_eq!(*lock.read(), 7);
+        assert!(
+            lock.try_write().is_none(),
+            "contract: rejected writer reopens the gate and panic releases both kinds of guard"
+        );
+        assert_eq!(
+            *lock.read(),
+            7,
+            "contract: rejected writer reopens the gate and panic releases both kinds of guard"
+        );
         std::mem::drop(read);
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -493,17 +504,26 @@ mod tests {
                 *guard = 9;
                 panic!("writer panic");
             }))
-            .is_err()
+            .is_err(),
+            "contract: rejected writer reopens the gate and panic releases both kinds of guard"
         );
-        assert_eq!(*lock.read(), 9);
+        assert_eq!(
+            *lock.read(),
+            9,
+            "contract: rejected writer reopens the gate and panic releases both kinds of guard"
+        );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _guard = lock.read();
                 panic!("reader panic");
             }))
-            .is_err()
+            .is_err(),
+            "contract: rejected writer reopens the gate and panic releases both kinds of guard"
         );
-        assert!(lock.try_write().is_some());
+        assert!(
+            lock.try_write().is_some(),
+            "contract: rejected writer reopens the gate and panic releases both kinds of guard"
+        );
     }
 }
 
@@ -516,8 +536,14 @@ mod compatibility_tests {
     #[test]
     fn slots_cover_available_parallelism() {
         let lock = ReaderSlots::new(());
-        assert!(lock.slots.len() >= std::thread::available_parallelism().map_or(1, usize::from));
-        assert!(lock.slots.len().is_power_of_two());
+        assert!(
+            lock.slots.len() >= std::thread::available_parallelism().map_or(1, usize::from),
+            "contract: slots cover available parallelism"
+        );
+        assert!(
+            lock.slots.len().is_power_of_two(),
+            "contract: slots cover available parallelism"
+        );
     }
 
     #[test]
@@ -525,7 +551,10 @@ mod compatibility_tests {
         let lock = Arc::new(ReaderSlots::with_slots((0_u64, 0_u64), 32));
         // A rejected writer must reopen admission for every reader slot.
         let guard = lock.read();
-        assert!(lock.try_write().is_none());
+        assert!(
+            lock.try_write().is_none(),
+            "contract: failed writer releases every partial slot and readers never see torn values"
+        );
         std::mem::drop(guard);
         *lock.try_write().unwrap() = (1, 1);
         let barrier = Arc::new(Barrier::new(33));
@@ -537,7 +566,7 @@ mod compatibility_tests {
                     barrier.wait();
                     for _ in 0..2_000 {
                         let pair = lock.read();
-                        assert_eq!(pair.0, pair.1);
+                        assert_eq!(pair.0, pair.1, "contract: failed writer releases every partial slot and readers never see torn values");
                     }
                 });
             }
@@ -546,7 +575,11 @@ mod compatibility_tests {
                 *lock.write() = (generation, generation);
             }
         });
-        assert_eq!(*lock.read(), (1999, 1999));
+        assert_eq!(
+            *lock.read(),
+            (1999, 1999),
+            "contract: failed writer releases every partial slot and readers never see torn values"
+        );
     }
 
     #[test]
@@ -565,16 +598,25 @@ mod compatibility_tests {
                 });
             }
         });
-        assert_eq!(*lock.read(), 16_000);
+        assert_eq!(
+            *lock.read(),
+            16_000,
+            "contract: competing writers have exclusive access and panics release every slot"
+        );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut guard = lock.write();
                 *guard += 1;
                 panic!("writer callback");
             }))
-            .is_err()
+            .is_err(),
+            "contract: competing writers have exclusive access and panics release every slot"
         );
-        assert_eq!(*lock.try_write().unwrap(), 16_001);
+        assert_eq!(
+            *lock.try_write().unwrap(),
+            16_001,
+            "contract: competing writers have exclusive access and panics release every slot"
+        );
     }
 
     /// Loom checks only the fenced equivalent of the admission handshakes, so
@@ -584,7 +626,11 @@ mod compatibility_tests {
     /// writer reopens the gate.
     #[test]
     fn every_handshake_access_stays_sequentially_consistent() {
-        assert_eq!(HANDSHAKE, Ordering::SeqCst);
+        assert_eq!(
+            HANDSHAKE,
+            Ordering::SeqCst,
+            "contract: every handshake access stays sequentially consistent"
+        );
         let primitive = include_str!("reader_slots.rs")
             .split("#[cfg(all(test, not(loom)))]")
             .next()
@@ -608,10 +654,15 @@ mod compatibility_tests {
                 let _guard = lock.read();
                 panic!("reader callback");
             }))
-            .is_err()
+            .is_err(),
+            "contract: panicking reader releases its slot"
         );
         *lock.try_write().unwrap() = 9;
-        assert_eq!(*lock.read(), 9);
+        assert_eq!(
+            *lock.read(),
+            9,
+            "contract: panicking reader releases its slot"
+        );
     }
 }
 

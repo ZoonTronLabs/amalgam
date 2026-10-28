@@ -246,14 +246,16 @@ mod tests {
                 store.finish_insert(committed),
                 super::super::MemoryAdmission::Rejected(
                     crate::provider::CapacityRejection::VersionChanged
-                )
+                ),
+                "contract: mutation and factory version are compared in the storage commit"
             );
             assert_eq!(
                 *store
                     .ready_at_for_mutation("same", Timestamp::from_ticks(10_000))
                     .unwrap()
                     .value(),
-                2
+                2,
+                "contract: mutation and factory version are compared in the storage commit"
             );
         }
     }
@@ -282,12 +284,14 @@ mod tests {
                 store.finish_insert(store.apply_origin(write, &old)),
                 super::super::MemoryAdmission::Rejected(
                     crate::provider::CapacityRejection::PhysicallyExpired
-                )
+                ),
+                "contract: an expired old factory does not invalidate a newer origin"
             );
             let write = store.prepare_insert(key, entry(3), now);
             assert_eq!(
                 store.finish_insert(store.apply_origin(write, &newer)),
-                super::super::MemoryAdmission::Replaced
+                super::super::MemoryAdmission::Replaced,
+                "contract: an expired old factory does not invalidate a newer origin"
             );
         }
     }
@@ -307,9 +311,13 @@ mod tests {
                 store.finish_insert(store.apply_borrowed_origin(write, &old)),
                 super::super::MemoryAdmission::Rejected(
                     crate::provider::CapacityRejection::VersionChanged
-                )
+                ),
+                "contract: borrowed origins detect clear and cannot invalidate a newer completion"
             );
-            assert!(!store.skip_borrowed_origin(&key, &old));
+            assert!(
+                !store.skip_borrowed_origin(&key, &old),
+                "contract: borrowed origins detect clear and cannot invalidate a newer completion"
+            );
             std::mem::drop(old);
             let current = store
                 .capture_borrowed_origin_from(&key, Some(revision.clone()))
@@ -317,7 +325,8 @@ mod tests {
             let write = store.prepare_insert(key.clone(), entry(2), now);
             assert_eq!(
                 store.finish_insert(store.apply_borrowed_origin(write, &current)),
-                super::super::MemoryAdmission::Admitted
+                super::super::MemoryAdmission::Admitted,
+                "contract: borrowed origins detect clear and cannot invalidate a newer completion"
             );
             std::mem::drop(current);
             // A retained factory token must not keep idle revision registration.
@@ -327,7 +336,11 @@ mod tests {
                 2,
                 "only the accepted commit advances this revision"
             );
-            assert_eq!(*store.ready_at_for_mutation(&key, now).unwrap().value(), 2);
+            assert_eq!(
+                *store.ready_at_for_mutation(&key, now).unwrap().value(),
+                2,
+                "contract: borrowed origins detect clear and cannot invalidate a newer completion"
+            );
         }
     }
     #[test]
@@ -336,21 +349,34 @@ mod tests {
         for id in 0..1000 {
             let key: Arc<str> = Arc::from(format!("key-{id}"));
             let (revision, captured) = origins.capture(&key).unwrap();
-            assert_eq!(captured, 1);
+            assert_eq!(
+                captured, 1,
+                "contract: terminal revision is never reused and idle keys leave no tombstone"
+            );
             origins.forget(&key, &revision);
-            assert!(origins.active.is_empty());
+            assert!(
+                origins.active.is_empty(),
+                "contract: terminal revision is never reused and idle keys leave no tombstone"
+            );
         }
         let key: Arc<str> = Arc::from("terminal");
         let revision = Arc::new(Revision(AtomicU64::new(u64::MAX - 1)));
         origins.capture_from(&key, Some(revision.clone())).unwrap();
         origins.advance(&key);
         origins.advance(&key);
-        assert_eq!(revision.current(), u64::MAX);
-        assert!(matches!(
-            origins.capture(&key),
-            Err(crate::Error::Recovery(
-                crate::advanced::RecoveryError::GenerationExhausted
-            ))
-        ));
+        assert_eq!(
+            revision.current(),
+            u64::MAX,
+            "contract: terminal revision is never reused and idle keys leave no tombstone"
+        );
+        assert!(
+            matches!(
+                origins.capture(&key),
+                Err(crate::Error::Recovery(
+                    crate::advanced::RecoveryError::GenerationExhausted
+                ))
+            ),
+            "contract: terminal revision is never reused and idle keys leave no tombstone"
+        );
     }
 }

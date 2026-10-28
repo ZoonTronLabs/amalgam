@@ -317,13 +317,19 @@ async fn provider_reported_cancellation_cannot_be_suppressed_as_marker_failure()
         )
         .await
         .unwrap_err();
-    assert!(matches!(
-        error,
-        Error::OperationCancelled {
-            reason: FactoryCancellationReason::LeaseLost
-        }
-    ));
-    assert!(marker_events(&mut events).is_empty());
+    assert!(
+        matches!(
+            error,
+            Error::OperationCancelled {
+                reason: FactoryCancellationReason::LeaseLost
+            }
+        ),
+        "contract: provider reported cancellation cannot be suppressed as marker failure"
+    );
+    assert!(
+        marker_events(&mut events).is_empty(),
+        "contract: provider reported cancellation cannot be suppressed as marker failure"
+    );
     assert!(
         cache
             .try_get("key")
@@ -348,9 +354,20 @@ async fn explicit_marker_skip_is_independent_of_value_read_and_does_not_fabricat
         control_options().with_skip_distributed(true, false),
     );
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert!(store.reads.lock().unwrap().is_empty());
-    assert_eq!(marker_events(&mut events), vec![MarkerReadOutcome::Skipped]);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: explicit marker skip is independent of value read and does not fabricate absence"
+    );
+    assert!(
+        store.reads.lock().unwrap().is_empty(),
+        "contract: explicit marker skip is independent of value read and does not fabricate absence"
+    );
+    assert_eq!(
+        marker_events(&mut events),
+        vec![MarkerReadOutcome::Skipped],
+        "contract: explicit marker skip is independent of value read and does not fabricate absence"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -361,12 +378,28 @@ async fn confirmed_negative_observations_are_reused_and_expire_while_the_value_s
     let store = Store::new();
     let cache = reader(clock.clone(), backend, store.clone(), control_options());
     for _ in 0..2 {
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: confirmed negative observations are reused and expire while the value stays fresh"
+        );
     }
-    assert_eq!(store.tag_count(), 1);
+    assert_eq!(
+        store.tag_count(),
+        1,
+        "contract: confirmed negative observations are reused and expire while the value stays fresh"
+    );
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert_eq!(store.tag_count(), 2);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: confirmed negative observations are reused and expire while the value stays fresh"
+    );
+    assert_eq!(
+        store.tag_count(),
+        2,
+        "contract: confirmed negative observations are reused and expire while the value stays fresh"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -381,10 +414,22 @@ async fn marker_memory_read_and_write_skips_affect_existing_value_l1_hits() {
         let store = Store::new();
         let cache = reader(clock, backend, store.clone(), tags);
         for _ in 0..2 {
-            assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+            assert_eq!(
+                cache.try_get("key").await.unwrap(),
+                Some(7),
+                "contract: marker memory read and write skips affect existing value l1 hits"
+            );
         }
-        assert_eq!(store.tag_count(), 2);
-        assert_eq!(store.count(&MarkerKind::ClearRemove), 2);
+        assert_eq!(
+            store.tag_count(),
+            2,
+            "contract: marker memory read and write skips affect existing value l1 hits"
+        );
+        assert_eq!(
+            store.count(&MarkerKind::ClearRemove),
+            2,
+            "contract: marker memory read and write skips affect existing value l1 hits"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -404,9 +449,21 @@ async fn stale_marker_remote_skip_does_not_depend_on_value_staleness() {
     clock.advance(Duration::from_secs(2));
     store.mode(Mode::Backend);
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert_eq!(store.tag_count(), 1);
-    assert_eq!(marker_events(&mut events), vec![MarkerReadOutcome::Skipped]);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: stale marker remote skip does not depend on value staleness"
+    );
+    assert_eq!(
+        store.tag_count(),
+        1,
+        "contract: stale marker remote skip does not depend on value staleness"
+    );
+    assert_eq!(
+        marker_events(&mut events),
+        vec![MarkerReadOutcome::Skipped],
+        "contract: stale marker remote skip does not depend on value staleness"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -427,21 +484,30 @@ async fn cold_marker_ignores_soft_budget_and_signals_hard_deadline_before_drop()
     let task = tokio::spawn(async move { task_cache.try_get("key").await });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(6)).await;
-    assert!(!task.is_finished());
+    assert!(
+        !task.is_finished(),
+        "contract: cold marker ignores soft budget and signals hard deadline before drop"
+    );
     tokio::time::advance(Duration::from_millis(20)).await;
-    assert_eq!(task.await.unwrap().unwrap(), Some(7));
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        Some(7),
+        "contract: cold marker ignores soft budget and signals hard deadline before drop"
+    );
     assert!(
         store
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::HardTimeout))
+            .contains(&Some(FactoryCancellationReason::HardTimeout)),
+        "contract: cold marker ignores soft budget and signals hard deadline before drop"
     );
     assert_eq!(
         marker_events(&mut events),
         vec![MarkerReadOutcome::Unavailable(
             MarkerReadFailure::HardTimeout
-        )]
+        )],
+        "contract: cold marker ignores soft budget and signals hard deadline before drop"
     );
     cache.shutdown().await.unwrap();
 }
@@ -465,21 +531,31 @@ async fn only_retained_marker_enables_soft_deadline_and_throttle_preserves_reten
     let task = tokio::spawn(async move { task_cache.try_get("key").await });
     gate.entered.notified().await;
     tokio::time::advance(Duration::from_millis(6)).await;
-    assert_eq!(task.await.unwrap().unwrap(), Some(7));
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        Some(7),
+        "contract: only retained marker enables soft deadline and throttle preserves retention"
+    );
     assert!(
         store
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::SoftTimeout))
+            .contains(&Some(FactoryCancellationReason::SoftTimeout)),
+        "contract: only retained marker enables soft deadline and throttle preserves retention"
     );
     assert_eq!(
         marker_events(&mut events),
         vec![MarkerReadOutcome::StaleFallback(
             MarkerReadFailure::SoftTimeout
-        )]
+        )],
+        "contract: only retained marker enables soft deadline and throttle preserves retention"
     );
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: only retained marker enables soft deadline and throttle preserves retention"
+    );
     assert_eq!(
         store.tag_count(),
         2,
@@ -512,17 +588,23 @@ async fn marker_budget_runs_after_and_independently_of_value_deadline() {
             .try_build()
             .unwrap();
     let mut events = cache.events().subscribe();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: marker budget runs after and independently of value deadline"
+    );
     assert_eq!(
         marker_events(&mut events),
-        vec![MarkerReadOutcome::Observed]
+        vec![MarkerReadOutcome::Observed],
+        "contract: marker budget runs after and independently of value deadline"
     );
     assert!(
         !store
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::HardTimeout))
+            .contains(&Some(FactoryCancellationReason::HardTimeout)),
+        "contract: marker budget runs after and independently of value deadline"
     );
     cache.shutdown().await.unwrap();
 }
@@ -557,7 +639,10 @@ async fn marker_fault_flags_are_independent_and_rethrow_original_cause_even_in_g
             ) => source,
             other => panic!("unexpected {other:?}"),
         };
-        assert!(source.downcast_ref::<Cause>().is_some());
+        assert!(
+            source.downcast_ref::<Cause>().is_some(),
+            "contract: marker fault flags are independent and rethrow original cause even in get or set"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -572,13 +657,22 @@ async fn suppressed_fault_is_explicit_and_is_never_negative_cached() {
         let cache = reader(clock, backend, store.clone(), control_options());
         let mut events = cache.events().subscribe();
         for _ in 0..2 {
-            assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+            assert_eq!(
+                cache.try_get("key").await.unwrap(),
+                Some(7),
+                "contract: suppressed fault is explicit and is never negative cached"
+            );
         }
-        assert_eq!(store.tag_count(), 2);
+        assert_eq!(
+            store.tag_count(),
+            2,
+            "contract: suppressed fault is explicit and is never negative cached"
+        );
         assert!(
             marker_events(&mut events)
                 .iter()
-                .all(|outcome| matches!(outcome, MarkerReadOutcome::Unavailable(_)))
+                .all(|outcome| matches!(outcome, MarkerReadOutcome::Unavailable(_))),
+            "contract: suppressed fault is explicit and is never negative cached"
         );
         cache.shutdown().await.unwrap();
     }
@@ -600,7 +694,11 @@ async fn lost_or_expired_observation_cannot_forget_a_known_invalidation() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: lost or expired observation cannot forget a known invalidation"
+    );
     clock.advance(Duration::from_secs(2));
     let scope = CacheScope::new("", "v2", KeyModifierMode::Prefix).unwrap();
     store
@@ -611,7 +709,10 @@ async fn lost_or_expired_observation_cannot_forget_a_known_invalidation() {
         )
         .await
         .unwrap();
-    assert!(cache.try_get("key").await.unwrap().is_none());
+    assert!(
+        cache.try_get("key").await.unwrap().is_none(),
+        "contract: lost or expired observation cannot forget a known invalidation"
+    );
     clock.advance(Duration::from_secs(2));
     store.mode(Mode::Absent);
     assert!(
@@ -636,22 +737,34 @@ async fn cancelled_marker_read_never_hydrates_or_reports_degraded_success() {
         tokio::spawn(async move { task_cache.try_get("key").cancellation(cancellation).await });
     gate.entered.notified().await;
     source.cancel();
-    assert!(matches!(
-        task.await.unwrap(),
-        Err(Error::OperationCancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            task.await.unwrap(),
+            Err(Error::OperationCancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: cancelled marker read never hydrates or reports degraded success"
+    );
     assert!(
         store
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::CallerCancelled))
+            .contains(&Some(FactoryCancellationReason::CallerCancelled)),
+        "contract: cancelled marker read never hydrates or reports degraded success"
     );
     store.mode(Mode::Pass);
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert_eq!(store.tag_count(), 2);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: cancelled marker read never hydrates or reports degraded success"
+    );
+    assert_eq!(
+        store.tag_count(),
+        2,
+        "contract: cancelled marker read never hydrates or reports degraded success"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -672,9 +785,17 @@ async fn rejecting_observation_admission_cannot_change_value_admission_or_ledger
         .try_build()
         .unwrap();
     for _ in 0..2 {
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: rejecting observation admission cannot change value admission or ledger"
+        );
     }
-    assert_eq!(store.tag_count(), 2);
+    assert_eq!(
+        store.tag_count(),
+        2,
+        "contract: rejecting observation admission cannot change value admission or ledger"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -700,7 +821,8 @@ async fn default_durable_policy_preserves_its_existing_combined_budget() {
             .unwrap();
     assert_eq!(
         cache.marker_read_policy(),
-        MarkerReadPolicy::DurableRequired
+        MarkerReadPolicy::DurableRequired,
+        "contract: default durable policy preserves its existing combined budget"
     );
     let task_cache = cache.clone();
     let task = tokio::spawn(async move { task_cache.try_get("key").await });
@@ -711,7 +833,11 @@ async fn default_durable_policy_preserves_its_existing_combined_budget() {
         "default durable reconciliation keeps the value budget"
     );
     gate.release.add_permits(1);
-    assert_eq!(task.await.unwrap().unwrap(), Some(7));
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        Some(7),
+        "contract: default durable policy preserves its existing combined budget"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -732,11 +858,27 @@ async fn initialized_clear_scalars_with_backplane_are_independent_of_marker_memo
         .try_build()
         .unwrap();
     for _ in 0..2 {
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: initialized clear scalars with backplane are independent of marker memory skip"
+        );
     }
-    assert_eq!(store.tag_count(), 2);
-    assert_eq!(store.count(&MarkerKind::ClearRemove), 1);
-    assert_eq!(store.count(&MarkerKind::ClearExpire), 1);
+    assert_eq!(
+        store.tag_count(),
+        2,
+        "contract: initialized clear scalars with backplane are independent of marker memory skip"
+    );
+    assert_eq!(
+        store.count(&MarkerKind::ClearRemove),
+        1,
+        "contract: initialized clear scalars with backplane are independent of marker memory skip"
+    );
+    assert_eq!(
+        store.count(&MarkerKind::ClearExpire),
+        1,
+        "contract: initialized clear scalars with backplane are independent of marker memory skip"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -777,7 +919,7 @@ async fn received_marker_seeding_respects_memory_write_without_losing_the_fact()
                 if let CacheEvent::MarkerReceived { command: received } =
                     events.recv().await.unwrap()
                 {
-                    assert_eq!(received, command);
+                    assert_eq!(received, command, "contract: received marker seeding respects memory write without losing the fact");
                     break;
                 }
             }
@@ -785,8 +927,16 @@ async fn received_marker_seeding_respects_memory_write_without_losing_the_fact()
         .await
         .unwrap();
         store.mode(Mode::Backend);
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-        assert_eq!(store.tag_count(), if skip_write { 2 } else { 1 });
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: received marker seeding respects memory write without losing the fact"
+        );
+        assert_eq!(
+            store.tag_count(),
+            if skip_write { 2 } else { 1 },
+            "contract: received marker seeding respects memory write without losing the fact"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -816,24 +966,37 @@ async fn marker_reads_bypass_value_provider_and_value_operation_override() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: marker reads bypass value provider and value operation override"
+    );
     assert_eq!(
         cache
             .try_get("key")
             .options(|_| value_options().with_skip_memory(true, false))
             .await
             .unwrap(),
-        Some(7)
+        Some(7),
+        "contract: marker reads bypass value provider and value operation override"
     );
     assert_eq!(
         cache
             .get_or_set::<_, _>("key", typed_factory(|_| forbidden_factory("L2 hit")))
             .await
             .unwrap(),
-        7
+        7,
+        "contract: marker reads bypass value provider and value operation override"
     );
-    assert_eq!(*keys.lock().unwrap(), vec!["key", "key"]);
-    assert!(store.reads.lock().unwrap().is_empty());
+    assert_eq!(
+        *keys.lock().unwrap(),
+        vec!["key", "key"],
+        "contract: marker reads bypass value provider and value operation override"
+    );
+    assert!(
+        store.reads.lock().unwrap().is_empty(),
+        "contract: marker reads bypass value provider and value operation override"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -844,10 +1007,13 @@ async fn strict_capability_errors_cannot_be_suppressed_as_marker_absence() {
     let store = Store::new();
     store.mode(Mode::Unsupported);
     let cache = reader(clock, backend, store, control_options());
-    assert!(matches!(
-        cache.try_get("key").await,
-        Err(Error::Marker(MarkerError::Unsupported))
-    ));
+    assert!(
+        matches!(
+            cache.try_get("key").await,
+            Err(Error::Marker(MarkerError::Unsupported))
+        ),
+        "contract: strict capability errors cannot be suppressed as marker absence"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -869,21 +1035,30 @@ async fn dropping_or_shutting_down_a_marker_owner_retains_its_exact_reason() {
         match reason {
             FactoryCancellationReason::CallerDropped => {
                 task.abort();
-                assert!(task.await.unwrap_err().is_cancelled());
+                assert!(
+                    task.await.unwrap_err().is_cancelled(),
+                    "contract: dropping or shutting down a marker owner retains its exact reason"
+                );
             }
             FactoryCancellationReason::CacheShutdown => {
                 cache.shutdown().await.unwrap();
-                assert!(matches!(
-                    task.await.unwrap(),
-                    Err(Error::OperationCancelled {
-                        reason: FactoryCancellationReason::CacheShutdown
-                    })
-                ));
+                assert!(
+                    matches!(
+                        task.await.unwrap(),
+                        Err(Error::OperationCancelled {
+                            reason: FactoryCancellationReason::CacheShutdown
+                        })
+                    ),
+                    "contract: dropping or shutting down a marker owner retains its exact reason"
+                );
             }
             _ => unreachable!(),
         }
         cache.shutdown().await.unwrap();
-        assert!(store.stopped.lock().unwrap().contains(&Some(reason)));
+        assert!(
+            store.stopped.lock().unwrap().contains(&Some(reason)),
+            "contract: dropping or shutting down a marker owner retains its exact reason"
+        );
     }
 }
 
@@ -917,15 +1092,27 @@ async fn marker_memory_duration_and_injected_jitter_are_independent_of_value_lif
         .unwrap();
     cache.try_get("key").await.unwrap();
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: marker memory duration and injected jitter are independent of value lifetime"
+    );
     assert_eq!(
         store.tag_count(),
         1,
         "injected jitter adds two seconds to the marker's L1 window"
     );
     clock.advance(Duration::from_secs(2));
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert_eq!(store.tag_count(), 2);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: marker memory duration and injected jitter are independent of value lifetime"
+    );
+    assert_eq!(
+        store.tag_count(),
+        2,
+        "contract: marker memory duration and injected jitter are independent of value lifetime"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -950,18 +1137,42 @@ async fn two_tags_and_two_clear_markers_each_have_their_own_complete_budget() {
         ),
     );
     let start = tokio::time::Instant::now();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert!(start.elapsed() >= Duration::from_millis(100));
-    assert_eq!(store.count(&MarkerKind::Tag(second)), 1);
-    assert_eq!(store.tag_count(), 1);
-    assert_eq!(store.count(&MarkerKind::ClearRemove), 1);
-    assert_eq!(store.count(&MarkerKind::ClearExpire), 1);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: two tags and two clear markers each have their own complete budget"
+    );
+    assert!(
+        start.elapsed() >= Duration::from_millis(100),
+        "contract: two tags and two clear markers each have their own complete budget"
+    );
+    assert_eq!(
+        store.count(&MarkerKind::Tag(second)),
+        1,
+        "contract: two tags and two clear markers each have their own complete budget"
+    );
+    assert_eq!(
+        store.tag_count(),
+        1,
+        "contract: two tags and two clear markers each have their own complete budget"
+    );
+    assert_eq!(
+        store.count(&MarkerKind::ClearRemove),
+        1,
+        "contract: two tags and two clear markers each have their own complete budget"
+    );
+    assert_eq!(
+        store.count(&MarkerKind::ClearExpire),
+        1,
+        "contract: two tags and two clear markers each have their own complete budget"
+    );
     assert!(
         !store
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::HardTimeout))
+            .contains(&Some(FactoryCancellationReason::HardTimeout)),
+        "contract: two tags and two clear markers each have their own complete budget"
     );
     cache.shutdown().await.unwrap();
 }
@@ -1005,15 +1216,24 @@ async fn marker_hard_budget_wins_and_soft_budget_requires_retained_fail_safe() {
         let task = tokio::spawn(async move { task_cache.try_get("key").await });
         gate.entered.notified().await;
         tokio::time::advance(Duration::from_millis(hard + 1)).await;
-        assert_eq!(task.await.unwrap().unwrap(), Some(7));
+        assert_eq!(
+            task.await.unwrap().unwrap(),
+            Some(7),
+            "contract: marker hard budget wins and soft budget requires retained fail safe"
+        );
         assert!(
             store
                 .stopped
                 .lock()
                 .unwrap()
-                .contains(&Some(FactoryCancellationReason::HardTimeout))
+                .contains(&Some(FactoryCancellationReason::HardTimeout)),
+            "contract: marker hard budget wins and soft budget requires retained fail safe"
         );
-        assert_eq!(marker_events(&mut events), vec![expected]);
+        assert_eq!(
+            marker_events(&mut events),
+            vec![expected],
+            "contract: marker hard budget wins and soft budget requires retained fail safe"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -1038,12 +1258,21 @@ async fn physically_expired_marker_is_unavailable_and_failed_reads_do_not_renew_
     store.mode(Mode::Backend);
     let mut events = cache.events().subscribe();
     for _ in 0..2 {
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: physically expired marker is unavailable and failed reads do not renew it"
+        );
     }
-    assert_eq!(store.tag_count(), 3);
+    assert_eq!(
+        store.tag_count(),
+        3,
+        "contract: physically expired marker is unavailable and failed reads do not renew it"
+    );
     assert_eq!(
         marker_events(&mut events),
-        vec![MarkerReadOutcome::Unavailable(MarkerReadFailure::Backend); 2]
+        vec![MarkerReadOutcome::Unavailable(MarkerReadFailure::Backend); 2],
+        "contract: physically expired marker is unavailable and failed reads do not renew it"
     );
     cache.shutdown().await.unwrap();
 }
@@ -1078,7 +1307,11 @@ async fn contended_marker_lock_uses_stale_fact_without_saving_and_honors_indepen
         let contender = tokio::spawn(async move { task_cache.try_get("key").await });
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_millis(6)).await;
-        assert_eq!(contender.await.unwrap().unwrap(), Some(7));
+        assert_eq!(
+            contender.await.unwrap().unwrap(),
+            Some(7),
+            "contract: contended marker lock uses stale fact without saving and honors independent timeout"
+        );
         assert_eq!(
             store.tag_count(),
             2,
@@ -1088,12 +1321,20 @@ async fn contended_marker_lock_uses_stale_fact_without_saving_and_honors_indepen
             marker_events(&mut events),
             vec![MarkerReadOutcome::StaleFallback(
                 MarkerReadFailure::LockTimeout
-            )]
+            )],
+            "contract: contended marker lock uses stale fact without saving and honors independent timeout"
         );
         owner.abort();
-        assert!(owner.await.unwrap_err().is_cancelled());
+        assert!(
+            owner.await.unwrap_err().is_cancelled(),
+            "contract: contended marker lock uses stale fact without saving and honors independent timeout"
+        );
         store.mode(Mode::Pass);
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: contended marker lock uses stale fact without saving and honors independent timeout"
+        );
         assert_eq!(
             store.tag_count(),
             3,
@@ -1110,7 +1351,7 @@ async fn wait_for_marker(
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if let CacheEvent::MarkerReceived { command } = events.recv().await.unwrap() {
-                assert_eq!(&command, expected);
+                assert_eq!(&command, expected, "contract: wait for marker");
                 return;
             }
         }
@@ -1177,23 +1418,40 @@ async fn parked_reply_cannot_replace_a_newer_peer_observation_or_falsify_authori
             .unwrap();
         wait_for_marker(&mut events, &command).await;
         gate.release.add_permits(1);
-        assert_eq!(task.await.unwrap().unwrap(), Some(7));
+        assert_eq!(
+            task.await.unwrap().unwrap(),
+            Some(7),
+            "contract: parked reply cannot replace a newer peer observation or falsify authority"
+        );
         let expected = if fault {
             MarkerReadOutcome::StaleFallback(MarkerReadFailure::Backend)
         } else {
             MarkerReadOutcome::KnownMaximum
         };
-        assert_eq!(marker_events(&mut events), vec![expected]);
+        assert_eq!(
+            marker_events(&mut events),
+            vec![expected],
+            "contract: parked reply cannot replace a newer peer observation or falsify authority"
+        );
         store.mode(Mode::Backend);
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-        assert_eq!(store.tag_count(), 2);
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: parked reply cannot replace a newer peer observation or falsify authority"
+        );
+        assert_eq!(
+            store.tag_count(),
+            2,
+            "contract: parked reply cannot replace a newer peer observation or falsify authority"
+        );
         assert_eq!(
             marker_events(&mut events),
             vec![if fault {
                 MarkerReadOutcome::Cached
             } else {
                 MarkerReadOutcome::KnownMaximum
-            }]
+            }],
+            "contract: parked reply cannot replace a newer peer observation or falsify authority"
         );
         cache.shutdown().await.unwrap();
     }
@@ -1261,14 +1519,26 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
     .unwrap();
     store.mode(Mode::Pass);
     gate.release.add_permits(1);
-    assert_eq!(task.await.unwrap().unwrap(), Some(7));
+    assert_eq!(
+        task.await.unwrap().unwrap(),
+        Some(7),
+        "contract: gap during marker read revokes old observations before value hydration"
+    );
     assert_eq!(
         store.tag_count(),
         3,
         "post-gap value hydration must re-observe the marker"
     );
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    assert_eq!(store.tag_count(), 3);
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: gap during marker read revokes old observations before value hydration"
+    );
+    assert_eq!(
+        store.tag_count(),
+        3,
+        "contract: gap during marker read revokes old observations before value hydration"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -1325,11 +1595,16 @@ async fn old_marker_provider_adapter_and_marker_weight_admission_preserve_value_
         .unwrap();
     let mut events = cache.events().subscribe();
     for _ in 0..2 {
-        assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+        assert_eq!(
+            cache.try_get("key").await.unwrap(),
+            Some(7),
+            "contract: old marker provider adapter and marker weight admission preserve value hits"
+        );
     }
     assert_eq!(
         marker_events(&mut events),
-        vec![MarkerReadOutcome::Observed; 2]
+        vec![MarkerReadOutcome::Observed; 2],
+        "contract: old marker provider adapter and marker weight admission preserve value hits"
     );
     cache.shutdown().await.unwrap();
 }
@@ -1366,7 +1641,10 @@ async fn first_invalidating_control_stops_before_following_storage_faults() {
             .marker_read_policy(MarkerReadPolicy::OptionsControlled)
             .try_build()
             .unwrap();
-        assert!(cache.try_get("key").await.unwrap().is_none());
+        assert!(
+            cache.try_get("key").await.unwrap().is_none(),
+            "contract: first invalidating control stops before following storage faults"
+        );
         assert_eq!(
             store.count(&following),
             0,
@@ -1407,7 +1685,8 @@ async fn retained_tag_expiry_never_bypasses_a_later_hard_clear_remove() {
             .options(|_| value_options().with_allow_stale_on_read_only(true))
             .await
             .unwrap()
-            .is_none()
+            .is_none(),
+        "contract: retained tag expiry never bypasses a later hard clear remove"
     );
     assert_eq!(
         store.count(&MarkerKind::ClearRemove),
@@ -1446,7 +1725,11 @@ async fn marker_copy_does_not_require_the_ordinary_value_cloner() {
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
+    assert_eq!(
+        cache.try_get("key").await.unwrap(),
+        Some(7),
+        "contract: marker copy does not require the ordinary value cloner"
+    );
     let _ = cache
         .remove_by_tag(tag())
         .options(|_| control_options().with_enable_auto_clone(true))
@@ -1456,13 +1739,16 @@ async fn marker_copy_does_not_require_the_ordinary_value_cloner() {
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        cache
-            .try_get("key")
-            .options(|_| value_options().with_enable_auto_clone(true))
-            .await,
-        Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
-    ));
+    assert!(
+        matches!(
+            cache
+                .try_get("key")
+                .options(|_| value_options().with_enable_auto_clone(true))
+                .await,
+            Err(Error::Config(ConfigError::AutoCloneWithoutCloner))
+        ),
+        "contract: marker copy does not require the ordinary value cloner"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -1515,7 +1801,8 @@ async fn eager_marker_read_is_owned_by_refresh_and_shutdown() {
             )
             .await
             .unwrap(),
-        7
+        7,
+        "contract: eager marker read is owned by refresh and shutdown"
     );
     tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
         .await
@@ -1526,7 +1813,8 @@ async fn eager_marker_read_is_owned_by_refresh_and_shutdown() {
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::CacheShutdown))
+            .contains(&Some(FactoryCancellationReason::CacheShutdown)),
+        "contract: eager marker read is owned by refresh and shutdown"
     );
 }
 
@@ -1586,7 +1874,8 @@ async fn passive_marker_read_is_owned_by_refresh_and_shutdown() {
             .stopped
             .lock()
             .unwrap()
-            .contains(&Some(FactoryCancellationReason::CacheShutdown))
+            .contains(&Some(FactoryCancellationReason::CacheShutdown)),
+        "contract: passive marker read is owned by refresh and shutdown"
     );
 }
 

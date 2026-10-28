@@ -166,10 +166,26 @@ async fn finish(f: &mut Fixture, kind: &MarkerKind) {
         .unwrap()
         .snapshot()
         .unwrap();
-    assert_eq!(snapshot.version(), MarkerVersion::new(time(10)));
-    assert_eq!(snapshot.created(), time(10));
-    assert_eq!(snapshot.logical_expiration(), time(15));
-    assert_eq!(snapshot.physical_expiration(), time(15));
+    assert_eq!(
+        snapshot.version(),
+        MarkerVersion::new(time(10)),
+        "contract: marker recovery preserves original versions and expiration timestamps"
+    );
+    assert_eq!(
+        snapshot.created(),
+        time(10),
+        "contract: marker recovery preserves original versions and expiration timestamps"
+    );
+    assert_eq!(
+        snapshot.logical_expiration(),
+        time(15),
+        "contract: marker recovery preserves original versions and expiration timestamps"
+    );
+    assert_eq!(
+        snapshot.physical_expiration(),
+        time(15),
+        "contract: marker recovery preserves original versions and expiration timestamps"
+    );
     let ttl: i64 = redis::cmd("PTTL")
         .arg(snapshot_key(&f.scope, kind))
         .query_async(&mut f.connection)
@@ -181,7 +197,8 @@ async fn finish(f: &mut Fixture, kind: &MarkerKind) {
     );
     assert_eq!(
         f.journal.read(&f.scope, kind).await.unwrap(),
-        Some(MarkerVersion::new(time(10)))
+        Some(MarkerVersion::new(time(10))),
+        "contract: marker recovery preserves original versions and expiration timestamps"
     );
     f.cache.shutdown().await.unwrap();
 }
@@ -211,16 +228,24 @@ async fn native_snapshot_storage_fault_retries_original_remaining_ttl() {
         )
         .await
         .unwrap();
-        assert!(backend_queued(&report.distributed));
+        assert!(
+            backend_queued(&report.distributed),
+            "contract: native snapshot storage fault retries original remaining ttl"
+        );
         assert_eq!(
             f.journal.read(&f.scope, &kind).await.unwrap(),
-            Some(MarkerVersion::new(time(10)))
+            Some(MarkerVersion::new(time(10))),
+            "contract: native snapshot storage fault retries original remaining ttl"
         );
         let ticket = f.cache.marker_snapshot_recovery_ticket(&kind).unwrap();
         let RecoveryWork::MarkerSnapshot(work) = ticket.work() else {
             panic!("snapshot work required");
         };
-        assert_eq!(work.snapshot().created(), time(10));
+        assert_eq!(
+            work.snapshot().created(),
+            time(10),
+            "contract: native snapshot storage fault retries original remaining ttl"
+        );
         f.clock.set(time(12));
         let _: i64 = redis::cmd("DEL")
             .arg(key)
@@ -254,15 +279,21 @@ async fn native_snapshot_protocol_fault_has_independent_policy_and_replay() {
     let EffectOutcome::Batch(batch) = report.distributed else {
         panic!("durable and snapshot effects required");
     };
-    assert!(batch.stages().iter().any(|effect| matches!(
-        effect,
-        EffectOutcome::RecoveryQueued {
-            cause: Error::Marker(
-                MarkerError::Protocol { .. } | MarkerError::ProtocolWithSource { .. }
-            )
-        }
-    )));
-    assert!(f.cache.marker_snapshot_recovery_ticket(&group()).is_some());
+    assert!(
+        batch.stages().iter().any(|effect| matches!(
+            effect,
+            EffectOutcome::RecoveryQueued {
+                cause: Error::Marker(
+                    MarkerError::Protocol { .. } | MarkerError::ProtocolWithSource { .. }
+                )
+            }
+        )),
+        "contract: native snapshot protocol fault has independent policy and replay"
+    );
+    assert!(
+        f.cache.marker_snapshot_recovery_ticket(&group()).is_some(),
+        "contract: native snapshot protocol fault has independent policy and replay"
+    );
     f.clock.set(time(12));
     let _: i64 = redis::cmd("DEL")
         .arg(key)
@@ -286,13 +317,17 @@ async fn native_durable_advance_fault_replays_original_policy_after_real_wrong_t
         .await
         .unwrap();
     let report = mutate(&f.cache, &group(), None).await.unwrap();
-    assert!(backend_queued(&report.distributed));
+    assert!(
+        backend_queued(&report.distributed),
+        "contract: native durable advance fault replays original policy after real wrong type"
+    );
     let ticket = f.cache.marker_recovery_ticket(&group()).unwrap();
     let RecoveryWork::MarkerMutation(work) = ticket.work() else {
         panic!("mutation work required");
     };
     assert!(
-        matches!(work.stage(), MarkerMutationStage::Advance { snapshot, .. } if snapshot.created() == time(10))
+        matches!(work.stage(), MarkerMutationStage::Advance { snapshot, .. } if snapshot.created() == time(10)),
+        "contract: native durable advance fault replays original policy after real wrong type"
     );
     f.clock.set(time(12));
     let _: i64 = redis::cmd("DEL")

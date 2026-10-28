@@ -991,11 +991,26 @@ mod tests {
 
     #[test]
     fn eager_threshold_rejects_out_of_range() {
-        assert!(EagerThreshold::new(0.5).is_some());
-        assert!(EagerThreshold::new(0.0).is_none());
-        assert!(EagerThreshold::new(1.0).is_none());
-        assert!(EagerThreshold::new(-0.1).is_none());
-        assert!(EagerThreshold::new(1.5).is_none());
+        assert!(
+            EagerThreshold::new(0.5).is_some(),
+            "contract: eager threshold rejects out of range"
+        );
+        assert!(
+            EagerThreshold::new(0.0).is_none(),
+            "contract: eager threshold rejects out of range"
+        );
+        assert!(
+            EagerThreshold::new(1.0).is_none(),
+            "contract: eager threshold rejects out of range"
+        );
+        assert!(
+            EagerThreshold::new(-0.1).is_none(),
+            "contract: eager threshold rejects out of range"
+        );
+        assert!(
+            EagerThreshold::new(1.5).is_none(),
+            "contract: eager threshold rejects out of range"
+        );
     }
 
     #[test]
@@ -1005,7 +1020,11 @@ mod tests {
             Some(Duration::from_secs(100)),
             None,
         );
-        assert_eq!(opts.physical_ttl(), Duration::from_secs(100));
+        assert_eq!(
+            opts.physical_ttl(),
+            Duration::from_secs(100),
+            "contract: physical ttl uses max not sum"
+        );
 
         let opts2 = EntryOptions::new(Duration::from_secs(200)).with_fail_safe(
             true,
@@ -1013,13 +1032,21 @@ mod tests {
             None,
         );
         // max(200, 100) == 200, never the 300 sum.
-        assert_eq!(opts2.physical_ttl(), Duration::from_secs(200));
+        assert_eq!(
+            opts2.physical_ttl(),
+            Duration::from_secs(200),
+            "contract: physical ttl uses max not sum"
+        );
     }
 
     #[test]
     fn physical_ttl_without_fail_safe_is_logical_duration() {
         let opts = EntryOptions::new(Duration::from_secs(10));
-        assert_eq!(opts.physical_ttl(), Duration::from_secs(10));
+        assert_eq!(
+            opts.physical_ttl(),
+            Duration::from_secs(10),
+            "contract: physical ttl without fail safe is logical duration"
+        );
     }
 
     #[test]
@@ -1030,7 +1057,11 @@ mod tests {
             true,
         );
         // Soft timeout requires fail-safe; here fail-safe is off, so infinite.
-        assert_eq!(opts.appropriate_factory_timeout(true), Timeout::Infinite);
+        assert_eq!(
+            opts.appropriate_factory_timeout(true),
+            Timeout::Infinite,
+            "contract: soft timeout ignored without fallback"
+        );
     }
 
     #[test]
@@ -1044,10 +1075,15 @@ mod tests {
             );
         assert_eq!(
             opts.appropriate_factory_timeout(true),
-            Timeout::After(Duration::from_millis(50))
+            Timeout::After(Duration::from_millis(50)),
+            "contract: soft timeout applies with fail safe and fallback"
         );
         // No fallback ⇒ soft timeout does not apply.
-        assert_eq!(opts.appropriate_factory_timeout(false), Timeout::Infinite);
+        assert_eq!(
+            opts.appropriate_factory_timeout(false),
+            Timeout::Infinite,
+            "contract: soft timeout applies with fail safe and fallback"
+        );
     }
 
     #[test]
@@ -1061,7 +1097,8 @@ mod tests {
             );
         assert_eq!(
             opts.appropriate_factory_timeout(true),
-            Timeout::After(Duration::from_millis(20))
+            Timeout::After(Duration::from_millis(20)),
+            "contract: hard timeout wins when shorter"
         );
     }
 
@@ -1075,12 +1112,14 @@ mod tests {
             );
         assert_eq!(
             opts.appropriate_distributed_timeout(true),
-            Timeout::After(Duration::from_millis(50))
+            Timeout::After(Duration::from_millis(50)),
+            "contract: distributed soft timeout applies only with fail safe and fallback"
         );
         // No fallback ⇒ soft does not apply.
         assert_eq!(
             opts.appropriate_distributed_timeout(false),
-            Timeout::Infinite
+            Timeout::Infinite,
+            "contract: distributed soft timeout applies only with fail safe and fallback"
         );
 
         // Fail-safe off ⇒ soft does not apply even with a fallback.
@@ -1090,7 +1129,8 @@ mod tests {
         );
         assert_eq!(
             no_fs.appropriate_distributed_timeout(true),
-            Timeout::Infinite
+            Timeout::Infinite,
+            "contract: distributed soft timeout applies only with fail safe and fallback"
         );
     }
 
@@ -1104,7 +1144,8 @@ mod tests {
             );
         assert_eq!(
             opts.appropriate_distributed_timeout(true),
-            Timeout::After(Duration::from_millis(20))
+            Timeout::After(Duration::from_millis(20)),
+            "contract: distributed hard timeout wins when shorter"
         );
     }
 
@@ -1114,11 +1155,13 @@ mod tests {
             .with_lock_timeout(Timeout::After(Duration::from_millis(100)));
         assert_eq!(
             opts.memory_lock_timeout(),
-            Timeout::After(Duration::from_millis(100))
+            Timeout::After(Duration::from_millis(100)),
+            "contract: lock timeouts inherit general by default"
         );
         assert_eq!(
             opts.distributed_lock_timeout(),
-            Timeout::After(Duration::from_millis(100))
+            Timeout::After(Duration::from_millis(100)),
+            "contract: lock timeouts inherit general by default"
         );
     }
 
@@ -1130,13 +1173,19 @@ mod tests {
             .with_distributed_lock_timeout(Timeout::Infinite);
         assert_eq!(
             opts.memory_lock_timeout(),
-            Timeout::After(Duration::from_millis(20))
+            Timeout::After(Duration::from_millis(20)),
+            "contract: specific lock timeouts override general"
         );
-        assert_eq!(opts.distributed_lock_timeout(), Timeout::Infinite);
+        assert_eq!(
+            opts.distributed_lock_timeout(),
+            Timeout::Infinite,
+            "contract: specific lock timeouts override general"
+        );
         // The general fallback is untouched.
         assert_eq!(
             opts.lock_timeout(),
-            Timeout::After(Duration::from_millis(100))
+            Timeout::After(Duration::from_millis(100)),
+            "contract: specific lock timeouts override general"
         );
     }
 
@@ -1149,7 +1198,11 @@ mod tests {
         // No jitter ⇒ exactly base.
         let plain = EntryOptions::new(base_dur);
         let base_exp = plain.logical_expiration(created);
-        assert_eq!(plain.logical_expiration(created).ticks(), base_exp.ticks());
+        assert_eq!(
+            plain.logical_expiration(created).ticks(),
+            base_exp.ticks(),
+            "contract: jitter widens logical expiration within bound"
+        );
 
         // With jitter ⇒ always in [base, base + jitter], never shorter, never over.
         let jittered = EntryOptions::new(base_dur).with_jitter_max(jitter);
@@ -1168,12 +1221,22 @@ mod tests {
             .with_rethrow_serialization_exceptions(false)
             .with_allow_background_backplane_operations(false)
             .with_distributed_fail_safe_max_duration(Duration::from_secs(7));
-        assert!(o.rethrow_distributed_exceptions());
-        assert!(!o.rethrow_serialization_exceptions());
-        assert!(!o.allow_background_backplane_operations());
+        assert!(
+            o.rethrow_distributed_exceptions(),
+            "contract: rethrow and background setters flip the flags"
+        );
+        assert!(
+            !o.rethrow_serialization_exceptions(),
+            "contract: rethrow and background setters flip the flags"
+        );
+        assert!(
+            !o.allow_background_backplane_operations(),
+            "contract: rethrow and background setters flip the flags"
+        );
         assert_eq!(
             o.resolved_distributed_fail_safe_max_duration(),
-            Duration::from_secs(7)
+            Duration::from_secs(7),
+            "contract: rethrow and background setters flip the flags"
         );
     }
 }

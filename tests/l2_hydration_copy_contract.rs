@@ -53,8 +53,16 @@ async fn l2_hydration_uses_the_supplied_copy_without_an_ordinary_clone() -> amal
     copy.0.store(0, Ordering::SeqCst);
 
     let from_l2 = cache.try_get("payload").await?;
-    assert_eq!(from_l2.as_ref().map(|value| value.0), Some(42));
-    assert_eq!(ORDINARY_CLONES.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        from_l2.as_ref().map(|value| value.0),
+        Some(42),
+        "contract: l2 hydration uses the supplied copy without an ordinary clone"
+    );
+    assert_eq!(
+        ORDINARY_CLONES.load(Ordering::SeqCst),
+        0,
+        "contract: l2 hydration uses the supplied copy without an ordinary clone"
+    );
     assert_eq!(
         copy.0.load(Ordering::SeqCst),
         2,
@@ -69,9 +77,21 @@ async fn l2_hydration_uses_the_supplied_copy_without_an_ordinary_clone() -> amal
                 .with_skip_distributed(true, false)
         })
         .await?;
-    assert_eq!(from_l1.as_ref().map(|value| value.0), Some(42));
-    assert_eq!(ORDINARY_CLONES.load(Ordering::SeqCst), 0);
-    assert_eq!(copy.0.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        from_l1.as_ref().map(|value| value.0),
+        Some(42),
+        "contract: l2 hydration uses the supplied copy without an ordinary clone"
+    );
+    assert_eq!(
+        ORDINARY_CLONES.load(Ordering::SeqCst),
+        0,
+        "contract: l2 hydration uses the supplied copy without an ordinary clone"
+    );
+    assert_eq!(
+        copy.0.load(Ordering::SeqCst),
+        3,
+        "contract: l2 hydration uses the supplied copy without an ordinary clone"
+    );
     cache.shutdown().await?;
     Ok(())
 }

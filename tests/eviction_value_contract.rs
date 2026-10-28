@@ -57,9 +57,20 @@ async fn replacement_and_removal_carry_exact_stored_payload_in_both_backends() {
             .await
             .unwrap();
         let event = events.try_recv().unwrap();
-        assert_eq!(event.key(), "key");
-        assert_eq!(event.reason(), MemoryEvictionReason::Replaced);
-        assert!(Arc::ptr_eq(event.value(), &first));
+        assert_eq!(
+            event.key(),
+            "key",
+            "contract: replacement and removal carry exact stored payload in both backends"
+        );
+        assert_eq!(
+            event.reason(),
+            MemoryEvictionReason::Replaced,
+            "contract: replacement and removal carry exact stored payload in both backends"
+        );
+        assert!(
+            Arc::ptr_eq(event.value(), &first),
+            "contract: replacement and removal carry exact stored payload in both backends"
+        );
         let _ = cache
             .remove("key")
             .with_receipt()
@@ -69,8 +80,15 @@ async fn replacement_and_removal_carry_exact_stored_payload_in_both_backends() {
             .await
             .unwrap();
         let event = events.try_recv().unwrap();
-        assert_eq!(event.reason(), MemoryEvictionReason::Removed);
-        assert!(Arc::ptr_eq(event.value(), &second));
+        assert_eq!(
+            event.reason(),
+            MemoryEvictionReason::Removed,
+            "contract: replacement and removal carry exact stored payload in both backends"
+        );
+        assert!(
+            Arc::ptr_eq(event.value(), &second),
+            "contract: replacement and removal carry exact stored payload in both backends"
+        );
         let _ = cache
             .remove("key")
             .with_receipt()
@@ -79,10 +97,10 @@ async fn replacement_and_removal_carry_exact_stored_payload_in_both_backends() {
             .wait()
             .await
             .unwrap();
-        assert!(matches!(
-            events.try_recv(),
-            Err(EvictionReceiveError::Empty)
-        ));
+        assert!(
+            matches!(events.try_recv(), Err(EvictionReceiveError::Empty)),
+            "contract: replacement and removal carry exact stored payload in both backends"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -134,10 +152,24 @@ async fn observation_and_multiple_receivers_never_clone_the_user_value() {
         let original = a.try_recv().unwrap();
         let peer = b.try_recv().unwrap();
         let copy = original.clone();
-        assert!(std::ptr::eq(original.value(), peer.value()));
-        assert!(std::ptr::eq(original.value(), copy.value()));
-        assert_eq!(original.value().value, 7);
-        assert_eq!(clones.load(Ordering::SeqCst), before);
+        assert!(
+            std::ptr::eq(original.value(), peer.value()),
+            "contract: observation and multiple receivers never clone the user value"
+        );
+        assert!(
+            std::ptr::eq(original.value(), copy.value()),
+            "contract: observation and multiple receivers never clone the user value"
+        );
+        assert_eq!(
+            original.value().value,
+            7,
+            "contract: observation and multiple receivers never clone the user value"
+        );
+        assert_eq!(
+            clones.load(Ordering::SeqCst),
+            before,
+            "contract: observation and multiple receivers never clone the user value"
+        );
         cache.shutdown().await.unwrap();
     }
 }
@@ -168,11 +200,15 @@ async fn insertion_capture_and_retirement_capture_have_explicit_late_subscriptio
                 .await
                 .unwrap();
             match capture {
-                EvictionCapture::AtInsertion => assert!(matches!(
-                    events.try_recv(),
-                    Err(EvictionReceiveError::Empty)
-                )),
-                EvictionCapture::AtRetirement => assert_eq!(*events.try_recv().unwrap().value(), 9),
+                EvictionCapture::AtInsertion => assert!(
+                    matches!(events.try_recv(), Err(EvictionReceiveError::Empty)),
+                    "contract: insertion capture and retirement capture have explicit late subscription behavior"
+                ),
+                EvictionCapture::AtRetirement => assert_eq!(
+                    *events.try_recv().unwrap().value(),
+                    9,
+                    "contract: insertion capture and retirement capture have explicit late subscription behavior"
+                ),
             }
             cache.shutdown().await.unwrap();
         }
@@ -211,10 +247,10 @@ async fn logical_expire_is_metadata_only_and_preserves_original_capture_admissio
                 .wait()
                 .await
                 .unwrap();
-            assert!(matches!(
-                events.try_recv(),
-                Err(EvictionReceiveError::Empty)
-            ));
+            assert!(
+                matches!(events.try_recv(), Err(EvictionReceiveError::Empty)),
+                "contract: logical expire is metadata only and preserves original capture admission"
+            );
             let _ = cache
                 .remove("k")
                 .with_receipt()
@@ -224,12 +260,15 @@ async fn logical_expire_is_metadata_only_and_preserves_original_capture_admissio
                 .await
                 .unwrap();
             if subscribed_before {
-                assert!(Arc::ptr_eq(events.try_recv().unwrap().value(), &original));
+                assert!(
+                    Arc::ptr_eq(events.try_recv().unwrap().value(), &original),
+                    "contract: logical expire is metadata only and preserves original capture admission"
+                );
             } else {
-                assert!(matches!(
-                    events.try_recv(),
-                    Err(EvictionReceiveError::Empty)
-                ));
+                assert!(
+                    matches!(events.try_recv(), Err(EvictionReceiveError::Empty)),
+                    "contract: logical expire is metadata only and preserves original capture admission"
+                );
             }
             cache.shutdown().await.unwrap();
         }
@@ -251,10 +290,21 @@ async fn physical_expiry_and_capacity_report_the_actual_cause_and_value() {
             .await
             .unwrap();
         clock.advance(Duration::from_secs(61));
-        assert!(cache.try_get("expiry").await.unwrap().is_none());
+        assert!(
+            cache.try_get("expiry").await.unwrap().is_none(),
+            "contract: physical expiry and capacity report the actual cause and value"
+        );
         let event = events.try_recv().unwrap();
-        assert_eq!(event.reason(), MemoryEvictionReason::Expired);
-        assert_eq!(*event.value(), 8);
+        assert_eq!(
+            event.reason(),
+            MemoryEvictionReason::Expired,
+            "contract: physical expiry and capacity report the actual cause and value"
+        );
+        assert_eq!(
+            *event.value(),
+            8,
+            "contract: physical expiry and capacity report the actual cause and value"
+        );
         cache.shutdown().await.unwrap();
     }
     let cache = builder::<u64>(Some(1), clock()).try_build().unwrap();
@@ -276,9 +326,21 @@ async fn physical_expiry_and_capacity_report_the_actual_cause_and_value() {
         .await
         .unwrap();
     let event = events.try_recv().unwrap();
-    assert_eq!(event.key(), "victim");
-    assert_eq!(event.reason(), MemoryEvictionReason::Capacity);
-    assert_eq!(*event.value(), 11);
+    assert_eq!(
+        event.key(),
+        "victim",
+        "contract: physical expiry and capacity report the actual cause and value"
+    );
+    assert_eq!(
+        event.reason(),
+        MemoryEvictionReason::Capacity,
+        "contract: physical expiry and capacity report the actual cause and value"
+    );
+    assert_eq!(
+        *event.value(),
+        11,
+        "contract: physical expiry and capacity report the actual cause and value"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -306,16 +368,27 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
             .await
             .unwrap();
         // Clear visibility is immediate; unbounded physical extraction is lazy.
-        assert!(cache.try_get("a").await.unwrap().is_none());
+        assert!(
+            cache.try_get("a").await.unwrap().is_none(),
+            "contract: clear reports original entries and rejected candidates do not invent evictions"
+        );
         cache.run_pending_tasks().await.unwrap();
         let mut values = Vec::new();
         for _ in 0..2 {
             let event = events.try_recv().unwrap();
-            assert_eq!(event.reason(), MemoryEvictionReason::Removed);
+            assert_eq!(
+                event.reason(),
+                MemoryEvictionReason::Removed,
+                "contract: clear reports original entries and rejected candidates do not invent evictions"
+            );
             values.push(*event.value());
         }
         values.sort_unstable();
-        assert_eq!(values, vec![1, 2]);
+        assert_eq!(
+            values,
+            vec![1, 2],
+            "contract: clear reports original entries and rejected candidates do not invent evictions"
+        );
         cache.shutdown().await.unwrap();
     }
     let cache = builder::<u64>(Some(0), clock()).try_build().unwrap();
@@ -328,10 +401,10 @@ async fn clear_reports_original_entries_and_rejected_candidates_do_not_invent_ev
         .wait()
         .await
         .unwrap();
-    assert!(matches!(
-        events.try_recv(),
-        Err(EvictionReceiveError::Empty)
-    ));
+    assert!(
+        matches!(events.try_recv(), Err(EvictionReceiveError::Empty)),
+        "contract: clear reports original entries and rejected candidates do not invent evictions"
+    );
     cache.shutdown().await.unwrap();
 }
 
@@ -360,15 +433,38 @@ async fn lag_is_bounded_independent_and_remaining_records_drain_after_producer_c
             .wait()
             .await
             .unwrap();
-        assert_eq!(*fast.recv().await.unwrap().value(), value);
+        assert_eq!(
+            *fast.recv().await.unwrap().value(),
+            value,
+            "contract: lag is bounded independent and remaining records drain after producer close"
+        );
     }
-    assert_eq!(*slow.try_recv().unwrap().value(), 3);
-    assert_eq!(slow.lost_events(), 2);
-    assert_eq!(fast.lost_events(), 0);
+    assert_eq!(
+        *slow.try_recv().unwrap().value(),
+        3,
+        "contract: lag is bounded independent and remaining records drain after producer close"
+    );
+    assert_eq!(
+        slow.lost_events(),
+        2,
+        "contract: lag is bounded independent and remaining records drain after producer close"
+    );
+    assert_eq!(
+        fast.lost_events(),
+        0,
+        "contract: lag is bounded independent and remaining records drain after producer close"
+    );
     cache.shutdown().await.unwrap();
     std::mem::drop(cache);
-    assert_eq!(*slow.recv().await.unwrap().value(), 4);
-    assert!(matches!(slow.try_recv(), Err(EvictionReceiveError::Closed)));
+    assert_eq!(
+        *slow.recv().await.unwrap().value(),
+        4,
+        "contract: lag is bounded independent and remaining records drain after producer close"
+    );
+    assert!(
+        matches!(slow.try_recv(), Err(EvictionReceiveError::Closed)),
+        "contract: lag is bounded independent and remaining records drain after producer close"
+    );
 }
 
 struct Probe {
@@ -445,7 +541,11 @@ fn ordinary_remove_and_replace_destructors_reenter_the_same_public_native_key() 
                         .wait()
                         .unwrap();
                 }
-                assert_eq!(runs.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    runs.load(Ordering::SeqCst),
+                    1,
+                    "contract: ordinary remove and replace destructors reenter the same public native key"
+                );
                 cache.shutdown().unwrap();
             }
         }
@@ -503,7 +603,11 @@ fn factory_replacement_releases_origin_coordination_before_old_value_destructor(
                 )
                 .execute()
                 .unwrap();
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "contract: factory replacement releases origin coordination before old value destructor"
+            );
             cache.shutdown().unwrap();
         }
     });
@@ -553,7 +657,11 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
                 .unwrap()
                 .wait()
                 .unwrap();
-            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "contract: overwritten queue slots reenter after outer lane release"
+            );
             let _ = cache
                 .set("k", quiet())
                 .with_receipt()
@@ -568,12 +676,21 @@ fn overwritten_queue_slots_reenter_after_outer_lane_release() {
                 .unwrap()
                 .wait()
                 .unwrap();
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "contract: overwritten queue slots reenter after outer lane release"
+            );
             assert_eq!(
                 events.try_recv().unwrap().reason(),
-                MemoryEvictionReason::Removed
+                MemoryEvictionReason::Removed,
+                "contract: overwritten queue slots reenter after outer lane release"
             );
-            assert_eq!(events.lost_events(), 1);
+            assert_eq!(
+                events.lost_events(),
+                1,
+                "contract: overwritten queue slots reenter after outer lane release"
+            );
             cache.shutdown().unwrap();
         }
     });
@@ -618,9 +735,17 @@ fn last_receiver_releases_retained_values_after_queue_unlock() {
             .unwrap()
             .wait()
             .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "contract: last receiver releases retained values after queue unlock"
+        );
         std::mem::drop(events);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "contract: last receiver releases retained values after queue unlock"
+        );
         cache.shutdown().unwrap();
     });
 }
@@ -646,7 +771,10 @@ fn standalone_store_preserves_original_entry_identity() {
                 .unwrap();
             runtime.block_on(store.insert_at(Arc::from("k"), entry.clone(), clock.now()));
             std::mem::drop(runtime.block_on(store.remove("k")));
-            assert!(events.try_recv().unwrap().entry().is_same_instance(&entry));
+            assert!(
+                events.try_recv().unwrap().entry().is_same_instance(&entry),
+                "contract: standalone store preserves original entry identity"
+            );
         }
     });
 }
@@ -761,11 +889,15 @@ fn cancelling_a_suspended_foreground_write_releases_lane_before_retirement_destr
                         .unwrap()
                         .unwrap(),
                     Err(Error::OperationCancelled { .. })
-                ));
+                ), "contract: cancelling a suspended foreground write releases lane before retirement destructor");
             });
             wait.recv_timeout(Duration::from_secs(2))
                 .expect("cancelled write must release all guards before destructor reentry");
-            assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
+            assert_eq!(
+                backend.calls.load(Ordering::SeqCst),
+                2,
+                "contract: cancelling a suspended foreground write releases lane before retirement destructor"
+            );
             cache.shutdown().unwrap();
         }
     });
@@ -796,16 +928,31 @@ async fn replacement_preserves_late_value_capture_and_original_metadata() {
                 .await
                 .unwrap();
             match capture {
-                EvictionCapture::AtInsertion => assert!(matches!(
-                    events.try_recv(),
-                    Err(EvictionReceiveError::Empty)
-                )),
+                EvictionCapture::AtInsertion => assert!(
+                    matches!(events.try_recv(), Err(EvictionReceiveError::Empty)),
+                    "contract: replacement preserves late value capture and original metadata"
+                ),
                 EvictionCapture::AtRetirement => {
                     let old = events.try_recv().unwrap();
-                    assert!(Arc::ptr_eq(old.value(), &first));
-                    assert_eq!(old.reason(), MemoryEvictionReason::Replaced);
-                    assert_eq!(old.entry().meta().created(), created);
-                    assert_eq!(old.entry().meta().tags(), &[Tag::new("first-tag").unwrap()]);
+                    assert!(
+                        Arc::ptr_eq(old.value(), &first),
+                        "contract: replacement preserves late value capture and original metadata"
+                    );
+                    assert_eq!(
+                        old.reason(),
+                        MemoryEvictionReason::Replaced,
+                        "contract: replacement preserves late value capture and original metadata"
+                    );
+                    assert_eq!(
+                        old.entry().meta().created(),
+                        created,
+                        "contract: replacement preserves late value capture and original metadata"
+                    );
+                    assert_eq!(
+                        old.entry().meta().tags(),
+                        &[Tag::new("first-tag").unwrap()],
+                        "contract: replacement preserves late value capture and original metadata"
+                    );
                 }
             }
             let _ = cache
@@ -817,11 +964,19 @@ async fn replacement_preserves_late_value_capture_and_original_metadata() {
                 .await
                 .unwrap();
             let current = events.try_recv().unwrap();
-            assert!(Arc::ptr_eq(current.value(), &second));
-            assert_eq!(current.reason(), MemoryEvictionReason::Removed);
+            assert!(
+                Arc::ptr_eq(current.value(), &second),
+                "contract: replacement preserves late value capture and original metadata"
+            );
+            assert_eq!(
+                current.reason(),
+                MemoryEvictionReason::Removed,
+                "contract: replacement preserves late value capture and original metadata"
+            );
             assert_eq!(
                 current.entry().meta().tags(),
-                &[Tag::new("second-tag").unwrap()]
+                &[Tag::new("second-tag").unwrap()],
+                "contract: replacement preserves late value capture and original metadata"
             );
             cache.shutdown().await.unwrap();
         }

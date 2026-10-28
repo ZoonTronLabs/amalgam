@@ -19,7 +19,8 @@ fn first_marker_is_visible_even_at_the_smallest_timestamp() {
         let registry = TagRegistry::new();
         assert_eq!(
             registry.evaluate(at, std::slice::from_ref(&tag), RemoveByTagBehavior::Expire),
-            TagVerdict::Valid
+            TagVerdict::Valid,
+            "contract: first marker is visible even at the smallest timestamp"
         );
         let expected = match &kind {
             MarkerKind::Tag(_) | MarkerKind::ClearExpire => TagVerdict::Expire,
@@ -28,7 +29,8 @@ fn first_marker_is_visible_even_at_the_smallest_timestamp() {
         registry.advance(kind, MarkerVersion::new(at));
         assert_eq!(
             registry.evaluate(at, std::slice::from_ref(&tag), RemoveByTagBehavior::Expire),
-            expected
+            expected,
+            "contract: first marker is visible even at the smallest timestamp"
         );
     }
 }
@@ -39,14 +41,19 @@ fn compacted_empty_tag_map_keeps_its_global_remove_fence() {
     let at = Timestamp::from_ticks(42);
     registry.mark_tag(Tag::new("a").unwrap(), at);
     registry.mark_tag(Tag::new("b").unwrap(), at);
-    assert!(registry.is_empty());
+    assert!(
+        registry.is_empty(),
+        "contract: compacted empty tag map keeps its global remove fence"
+    );
     assert_eq!(
         registry.evaluate(at, &[], RemoveByTagBehavior::Expire),
-        TagVerdict::Remove
+        TagVerdict::Remove,
+        "contract: compacted empty tag map keeps its global remove fence"
     );
     assert_eq!(
         registry.evaluate(Timestamp::from_ticks(43), &[], RemoveByTagBehavior::Expire),
-        TagVerdict::Valid
+        TagVerdict::Valid,
+        "contract: compacted empty tag map keeps its global remove fence"
     );
 }
 
@@ -69,7 +76,8 @@ fn completed_clear_advances_are_visible_to_concurrent_readers() {
                                 &[],
                                 RemoveByTagBehavior::Expire,
                             ),
-                            TagVerdict::Remove
+                            TagVerdict::Remove,
+                            "contract: completed clear advances are visible to concurrent readers"
                         );
                         barrier.wait();
                     }

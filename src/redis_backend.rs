@@ -1680,9 +1680,16 @@ mod tests {
     fn terminal_health_cannot_be_reopened_by_a_late_ack_or_disconnect() {
         let inner = disconnected_inner();
         inner.state.send_replace(BackplaneState::Stopped);
-        assert!(!admit_connected(&inner, ContinuityEpoch::INITIAL));
+        assert!(
+            !admit_connected(&inner, ContinuityEpoch::INITIAL),
+            "contract: terminal health cannot be reopened by a late ack or disconnect"
+        );
         disconnect(&inner.state);
-        assert_eq!(*inner.state.borrow(), BackplaneState::Stopped);
+        assert_eq!(
+            *inner.state.borrow(),
+            BackplaneState::Stopped,
+            "contract: terminal health cannot be reopened by a late ack or disconnect"
+        );
     }
 
     #[test]
@@ -1705,8 +1712,15 @@ mod tests {
                 barrier.wait();
                 stop_backplane(&inner);
             });
-            assert_eq!(*inner.state.borrow(), BackplaneState::Stopped);
-            assert!(*inner.stop.borrow());
+            assert_eq!(
+                *inner.state.borrow(),
+                BackplaneState::Stopped,
+                "contract: stop wins against concurrent connection admission and disconnect"
+            );
+            assert!(
+                *inner.stop.borrow(),
+                "contract: stop wins against concurrent connection admission and disconnect"
+            );
         }
     }
 
@@ -1722,10 +1736,22 @@ mod tests {
             BackplaneAction::Remove,
             BackplaneAction::Expire,
         ] {
-            assert_eq!(action_from_byte(action_byte(action)), Some(action));
+            assert_eq!(
+                action_from_byte(action_byte(action)),
+                Some(action),
+                "contract: action byte round trips"
+            );
         }
-        assert_eq!(action_from_byte(0), None);
-        assert_eq!(action_from_byte(99), None);
+        assert_eq!(
+            action_from_byte(0),
+            None,
+            "contract: action byte round trips"
+        );
+        assert_eq!(
+            action_from_byte(99),
+            None,
+            "contract: action byte round trips"
+        );
     }
 
     #[test]
@@ -1735,14 +1761,16 @@ mod tests {
             json.source()
                 .unwrap()
                 .downcast_ref::<serde_json::Error>()
-                .is_some()
+                .is_some(),
+            "contract: malformed wire keeps the original parser failure for diagnostics"
         );
         let utf8 = decode_message(&[0xff]).unwrap_err();
         assert!(
             utf8.source()
                 .unwrap()
                 .downcast_ref::<std::str::Utf8Error>()
-                .is_some()
+                .is_some(),
+            "contract: malformed wire keeps the original parser failure for diagnostics"
         );
         let number = decode_message(b"source|bad-ticks|1|key").unwrap_err();
         assert!(
@@ -1750,12 +1778,16 @@ mod tests {
                 .source()
                 .unwrap()
                 .downcast_ref::<std::num::ParseIntError>()
-                .is_some()
+                .is_some(),
+            "contract: malformed wire keeps the original parser failure for diagnostics"
         );
-        assert!(matches!(
-            decode_message(b"source|10|255|key"),
-            Err(IncomingFrameError::Action(255))
-        ));
+        assert!(
+            matches!(
+                decode_message(b"source|10|255|key"),
+                Err(IncomingFrameError::Action(255))
+            ),
+            "contract: malformed wire keeps the original parser failure for diagnostics"
+        );
     }
 
     #[test]
@@ -1768,24 +1800,57 @@ mod tests {
         };
         let decoded =
             decode_message(encode_message(&original).as_bytes()).expect("encoded message decodes");
-        assert_eq!(&*decoded.source_id, "node-a");
-        assert_eq!(decoded.timestamp, original.timestamp);
-        assert_eq!(decoded.action, BackplaneAction::Expire);
-        assert_eq!(&*decoded.key, "tenant|42|user:7");
+        assert_eq!(
+            &*decoded.source_id, "node-a",
+            "contract: message round trips through wire including separator in key"
+        );
+        assert_eq!(
+            decoded.timestamp, original.timestamp,
+            "contract: message round trips through wire including separator in key"
+        );
+        assert_eq!(
+            decoded.action,
+            BackplaneAction::Expire,
+            "contract: message round trips through wire including separator in key"
+        );
+        assert_eq!(
+            &*decoded.key, "tenant|42|user:7",
+            "contract: message round trips through wire including separator in key"
+        );
     }
 
     #[test]
     fn decode_rejects_malformed_input() {
-        assert!(decode_message(b"not-enough-fields").is_err());
-        assert!(decode_message(b"src|not-a-number|1|key").is_err());
-        assert!(decode_message(b"src|10|255|key").is_err()); // unknown action
-        assert!(decode_message(&[0xff, 0xfe]).is_err()); // invalid UTF-8
+        assert!(
+            decode_message(b"not-enough-fields").is_err(),
+            "contract: decode rejects malformed input"
+        );
+        assert!(
+            decode_message(b"src|not-a-number|1|key").is_err(),
+            "contract: decode rejects malformed input"
+        );
+        assert!(
+            decode_message(b"src|10|255|key").is_err(),
+            "contract: decode rejects malformed input"
+        ); // unknown action
+        assert!(
+            decode_message(&[0xff, 0xfe]).is_err(),
+            "contract: decode rejects malformed input"
+        ); // invalid UTF-8
     }
 
     #[test]
     fn duration_to_millis_floors_to_one() {
-        assert_eq!(duration_to_millis(Duration::from_micros(1)), 1);
-        assert_eq!(duration_to_millis(Duration::from_millis(250)), 250);
+        assert_eq!(
+            duration_to_millis(Duration::from_micros(1)),
+            1,
+            "contract: duration to millis floors to one"
+        );
+        assert_eq!(
+            duration_to_millis(Duration::from_millis(250)),
+            250,
+            "contract: duration to millis floors to one"
+        );
     }
 
     #[tokio::test]
@@ -1798,7 +1863,11 @@ mod tests {
             .expect("connect to redis");
         let key = unique_key("cache");
 
-        assert_eq!(cache.get(&key).await.unwrap(), None);
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            None,
+            "contract: cache set get remove round trip"
+        );
 
         cache
             .set(&key, b"hello".to_vec(), Some(Duration::from_secs(30)))
@@ -1806,11 +1875,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             cache.get(&key).await.unwrap(),
-            Some(b"hello".to_vec().into())
+            Some(b"hello".to_vec().into()),
+            "contract: cache set get remove round trip"
         );
 
         cache.remove(&key).await.unwrap();
-        assert_eq!(cache.get(&key).await.unwrap(), None);
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            None,
+            "contract: cache set get remove round trip"
+        );
     }
 
     #[tokio::test]
@@ -1831,10 +1905,17 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(cache.get(&key).await.unwrap().is_some());
+        assert!(
+            cache.get(&key).await.unwrap().is_some(),
+            "contract: cache honours px expiry"
+        );
 
         tokio::time::sleep(Duration::from_millis(250)).await;
-        assert_eq!(cache.get(&key).await.unwrap(), None);
+        assert_eq!(
+            cache.get(&key).await.unwrap(),
+            None,
+            "contract: cache honours px expiry"
+        );
     }
 
     #[tokio::test]
@@ -1940,9 +2021,23 @@ mod tests {
             .expect("message arrives before timeout")
             .expect("broadcast channel delivers");
 
-        assert_eq!(&*received.source_id, "publisher");
-        assert_eq!(received.timestamp, Timestamp::from_ticks(987_654_321));
-        assert_eq!(received.action, BackplaneAction::Remove);
-        assert_eq!(received.key, key);
+        assert_eq!(
+            &*received.source_id, "publisher",
+            "contract: backplane publish is received by subscriber"
+        );
+        assert_eq!(
+            received.timestamp,
+            Timestamp::from_ticks(987_654_321),
+            "contract: backplane publish is received by subscriber"
+        );
+        assert_eq!(
+            received.action,
+            BackplaneAction::Remove,
+            "contract: backplane publish is received by subscriber"
+        );
+        assert_eq!(
+            received.key, key,
+            "contract: backplane publish is received by subscriber"
+        );
     }
 }

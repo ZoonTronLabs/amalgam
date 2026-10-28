@@ -69,15 +69,19 @@ async fn native_snapshot_has_real_ttl_and_expiry_keeps_its_durable_fact() {
             .unwrap(),
         MarkerSnapshotRead::Missing {
             maximum: Some(revision)
-        }
+        },
+        "contract: native snapshot has real ttl and expiry keeps its durable fact"
     );
-    assert!(matches!(
-        snapshots
-            .renew_snapshot(&scope, &kind(), snapshot, now, token())
-            .await
-            .unwrap(),
-        MarkerSnapshotRenewal::Stored(_)
-    ));
+    assert!(
+        matches!(
+            snapshots
+                .renew_snapshot(&scope, &kind(), snapshot, now, token())
+                .await
+                .unwrap(),
+            MarkerSnapshotRenewal::Stored(_)
+        ),
+        "contract: native snapshot has real ttl and expiry keeps its durable fact"
+    );
     let mut connection = redis::Client::open(url)
         .unwrap()
         .get_multiplexed_async_connection()
@@ -109,7 +113,11 @@ async fn native_snapshot_has_real_ttl_and_expiry_keeps_its_durable_fact() {
         .await
         .unwrap();
     assert_eq!(ttl, -2, "the backend record itself must have expired");
-    assert_eq!(journal.read(&scope, &kind()).await.unwrap(), Some(revision));
+    assert_eq!(
+        journal.read(&scope, &kind()).await.unwrap(),
+        Some(revision),
+        "contract: native snapshot has real ttl and expiry keeps its durable fact"
+    );
     assert_eq!(
         snapshots
             .read_snapshot(&scope, &kind(), SystemClock.now(), token())
@@ -117,7 +125,8 @@ async fn native_snapshot_has_real_ttl_and_expiry_keeps_its_durable_fact() {
             .unwrap(),
         MarkerSnapshotRead::Missing {
             maximum: Some(revision)
-        }
+        },
+        "contract: native snapshot has real ttl and expiry keeps its durable fact"
     );
 }
 
@@ -145,7 +154,11 @@ async fn native_snapshot_preserves_exact_large_revisions_and_later_insertions() 
     else {
         panic!()
     };
-    assert_eq!(merged.version(), high);
+    assert_eq!(
+        merged.version(),
+        high,
+        "contract: native snapshot preserves exact large revisions and later insertions"
+    );
     let later = MarkerSnapshot::new(
         high,
         now.saturating_add(Duration::from_secs(1)),
@@ -162,7 +175,8 @@ async fn native_snapshot_preserves_exact_large_revisions_and_later_insertions() 
             .renew_snapshot(&scope, &kind(), merged, now, token())
             .await
             .unwrap(),
-        MarkerSnapshotRenewal::KeptNewer(later)
+        MarkerSnapshotRenewal::KeptNewer(later),
+        "contract: native snapshot preserves exact large revisions and later insertions"
     );
     assert_eq!(
         snapshots
@@ -170,7 +184,8 @@ async fn native_snapshot_preserves_exact_large_revisions_and_later_insertions() 
             .await
             .unwrap()
             .snapshot(),
-        Some(later)
+        Some(later),
+        "contract: native snapshot preserves exact large revisions and later insertions"
     );
     let max = MarkerVersion::new(Timestamp::MAX);
     journal.advance(&scope, kind(), max).await.unwrap();
@@ -180,7 +195,8 @@ async fn native_snapshot_preserves_exact_large_revisions_and_later_insertions() 
             .await
             .unwrap()
             .maximum(),
-        Some(max)
+        Some(max),
+        "contract: native snapshot preserves exact large revisions and later insertions"
     );
 }
 
@@ -204,14 +220,17 @@ async fn native_snapshot_protocol_and_cancellation_are_typed_failures() {
         .query_async::<()>(&mut connection)
         .await
         .unwrap();
-    assert!(matches!(
-        snapshots
-            .read_snapshot(&scope, &kind(), SystemClock.now(), token())
-            .await,
-        Err(MarkerSnapshotCacheError::Provider(
-            MarkerError::Protocol { .. }
-        ))
-    ));
+    assert!(
+        matches!(
+            snapshots
+                .read_snapshot(&scope, &kind(), SystemClock.now(), token())
+                .await,
+            Err(MarkerSnapshotCacheError::Provider(
+                MarkerError::Protocol { .. }
+            ))
+        ),
+        "contract: native snapshot protocol and cancellation are typed failures"
+    );
     let source = CancellationSource::new();
     source.cancel();
     let snapshot = MarkerSnapshot::fresh(
@@ -219,20 +238,26 @@ async fn native_snapshot_protocol_and_cancellation_are_typed_failures() {
         &EntryOptions::default(),
         SystemClock.now(),
     );
-    assert!(matches!(
-        snapshots
-            .renew_snapshot(&scope, &kind(), snapshot, SystemClock.now(), source.token())
-            .await,
-        Err(MarkerSnapshotCacheError::Cancelled {
-            reason: FactoryCancellationReason::CallerCancelled
-        })
-    ));
+    assert!(
+        matches!(
+            snapshots
+                .renew_snapshot(&scope, &kind(), snapshot, SystemClock.now(), source.token())
+                .await,
+            Err(MarkerSnapshotCacheError::Cancelled {
+                reason: FactoryCancellationReason::CallerCancelled
+            })
+        ),
+        "contract: native snapshot protocol and cancellation are typed failures"
+    );
     let unchanged: String = redis::cmd("GET")
         .arg(physical_key(&scope))
         .query_async(&mut connection)
         .await
         .unwrap();
-    assert_eq!(unchanged, "corrupted-frame");
+    assert_eq!(
+        unchanged, "corrupted-frame",
+        "contract: native snapshot protocol and cancellation are typed failures"
+    );
 }
 
 #[tokio::test]
@@ -263,13 +288,16 @@ async fn native_snapshot_renewal_atomically_rejects_a_replaced_lease() {
         &EntryOptions::new(Duration::from_secs(30)),
         now,
     );
-    assert!(matches!(
-        snapshots
-            .renew_snapshot_with_lease(&scope, &kind(), snapshot, now, &proof, token())
-            .await
-            .unwrap(),
-        MarkerSnapshotRenewal::Stored(_)
-    ));
+    assert!(
+        matches!(
+            snapshots
+                .renew_snapshot_with_lease(&scope, &kind(), snapshot, now, &proof, token())
+                .await
+                .unwrap(),
+            MarkerSnapshotRenewal::Stored(_)
+        ),
+        "contract: native snapshot renewal atomically rejects a replaced lease"
+    );
     lease.release().await.unwrap();
     let replacement = provider::acquire_owned(
         locker,
@@ -281,11 +309,14 @@ async fn native_snapshot_renewal_atomically_rejects_a_replaced_lease() {
     .await
     .unwrap()
     .unwrap();
-    assert!(matches!(
-        snapshots
-            .renew_snapshot_with_lease(&scope, &kind(), snapshot, now, &proof, token())
-            .await,
-        Err(MarkerSnapshotCacheError::Lease(LeaseError::Lost))
-    ));
+    assert!(
+        matches!(
+            snapshots
+                .renew_snapshot_with_lease(&scope, &kind(), snapshot, now, &proof, token())
+                .await,
+            Err(MarkerSnapshotCacheError::Lease(LeaseError::Lost))
+        ),
+        "contract: native snapshot renewal atomically rejects a replaced lease"
+    );
     replacement.release().await.unwrap();
 }
