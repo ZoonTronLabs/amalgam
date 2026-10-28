@@ -7,3 +7,14 @@ Before writing, reviewing, or refactoring code, read [Typed outcomes and closed 
 
 This policy updates older advice about Result, record closure, and exhaustiveness. Preserve all unrelated project rules, public/wire compatibility, and delivery boundaries.
 <!-- owner-engineering-policy:end -->
+
+## Rust style: Google's Rust Style Guide (owner rule, 2026-10-28)
+
+Rust code here follows [Google's Rust Style Guide](https://google.github.io/styleguide/rustguide.html) as adopted in [the owner's Rust style note](docs/engineering/google-rust-style.md). Read that note before writing, reviewing or refactoring Rust. Owner policies stay stricter where they differ:
+
+- expected failure is a typed `Result`;
+- no `unwrap` or `expect` in production paths;
+- closed enums are matched exhaustively;
+- `#[non_exhaustive]` goes only on library APIs consumed outside the workspace.
+
+New code follows the guide fully. Existing code migrates when you touch it, or in refactor passes that preserve behavior.
