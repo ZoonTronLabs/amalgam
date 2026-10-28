@@ -215,6 +215,14 @@ impl BackplaneCommand {
     }
 }
 
+impl TryFrom<BackplaneMessage> for BackplaneCommand {
+    type Error = MarkerError;
+
+    fn try_from(message: BackplaneMessage) -> std::result::Result<Self, Self::Error> {
+        Self::from_message(message)
+    }
+}
+
 fn encode_source(frame: &SourceFrame) -> std::result::Result<String, MarkerError> {
     let bytes = serde_json::to_vec(frame).map_err(MarkerError::protocol)?;
     Ok(format!("{CONTROL_PREFIX}{}", encode_hex(&bytes)))

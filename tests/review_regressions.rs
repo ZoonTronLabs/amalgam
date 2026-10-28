@@ -87,7 +87,7 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
             .unwrap()
     };
     let writer = build();
-    writer
+    let _ = writer
         .set("k", 1)
         .with_receipt()
         .await
@@ -125,7 +125,7 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
     }
     match mutation {
         Mutation::Set => {
-            reader
+            let _ = reader
                 .set("k", 2)
                 .with_receipt()
                 .await
@@ -135,7 +135,7 @@ async fn hydration_race(lookup: Lookup, mutation: Mutation, revision: Revision) 
                 .unwrap();
         }
         Mutation::Remove => {
-            reader
+            let _ = reader
                 .remove("k")
                 .with_receipt()
                 .await
@@ -214,7 +214,7 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             }
         };
         let writer = build();
-        writer
+        let _ = writer
             .set("k", 1)
             .with_receipt()
             .await
@@ -247,7 +247,7 @@ async fn overlapping_hydration(lookup: Lookup, bounded: bool) {
             .await
             .unwrap();
         clock.advance(advance);
-        writer
+        let _ = writer
             .set("k", 2)
             .with_receipt()
             .await
@@ -411,7 +411,7 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
         })
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("continuity-proof", 3)
         .options(|_| opts().with_skip_distributed(false, true))
         .with_receipt()
@@ -420,7 +420,7 @@ async fn malformed_control_does_not_permanently_suspend_connected_recovery() {
         .wait()
         .await
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 7)
         .with_receipt()
         .await

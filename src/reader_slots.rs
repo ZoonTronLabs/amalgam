@@ -339,6 +339,7 @@ impl<T> ReaderSlots<T> {
         }
     }
 }
+#[must_use = "retain the reader guard while reading the protected value"]
 pub(crate) struct ReadGuard<'a, T> {
     #[cfg_attr(loom, allow(dead_code))]
     lock: &'a ReaderSlots<T>,
@@ -403,6 +404,7 @@ impl<T> Drop for WriterHold<'_, T> {
         }
     }
 }
+#[must_use = "retain the writer guard while writing the protected value"]
 pub(crate) struct WriteGuard<'a, T> {
     // End tracked exclusive access before WriterHold reopens admission.
     #[cfg(loom)]

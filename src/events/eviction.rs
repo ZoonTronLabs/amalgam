@@ -50,18 +50,22 @@ impl<V> Clone for MemoryEviction<V> {
 }
 impl<V> MemoryEviction<V> {
     /// The processed logical key.
+    #[must_use]
     pub fn key(&self) -> &str {
         &self.key
     }
     /// The cause of physical retirement.
+    #[must_use]
     pub fn reason(&self) -> MemoryEvictionReason {
         self.reason
     }
     /// Borrows the exact stored value; no user clone was made for diagnostics.
+    #[must_use]
     pub fn value(&self) -> &V {
         self.entry.value()
     }
     /// The actual immutable stored representation, including metadata.
+    #[must_use]
     pub fn entry(&self) -> &Entry<V> {
         &self.entry
     }
@@ -104,6 +108,7 @@ struct Frame<V> {
 
 /// An immediately attempted original-value receive has no value or is closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum EvictionReceiveError {
     /// The live stream currently has no new record.
     #[error("no new memory eviction")]
@@ -238,6 +243,7 @@ impl<V> MemoryEvictionSubscription<V> {
         }
     }
     /// Total overwritten records for this cursor (saturating).
+    #[must_use]
     pub fn lost_events(&self) -> u64 {
         self.lost
     }

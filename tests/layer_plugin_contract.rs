@@ -89,7 +89,7 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
             .try_build()
             .unwrap();
         let mut stream = cache.events().subscribe_layers();
-        cache
+        let _ = cache
             .set("key", 17)
             .with_receipt()
             .await
@@ -122,7 +122,7 @@ async fn legacy_interest_has_no_new_callbacks_and_selected_counts_survive_stream
 #[tokio::test]
 async fn late_layer_attachment_counts_retirement_of_preexisting_values() {
     let cache = Cache::<u64>::builder().try_build().unwrap();
-    cache
+    let _ = cache
         .set("key", 17)
         .with_receipt()
         .await
@@ -134,7 +134,7 @@ async fn late_layer_attachment_counts_retirement_of_preexisting_values() {
     let registration = cache
         .register_plugin(observer(counts.clone(), PluginObservations::All))
         .unwrap();
-    cache
+    let _ = cache
         .remove("key")
         .with_receipt()
         .await
@@ -189,7 +189,7 @@ impl PluginSession for ReentrantSession {
                 cache.try_get("caller").execute().map_err(map)?.as_ref(),
                 Some(&23)
             );
-            cache
+            let _ = cache
                 .remove("caller")
                 .with_receipt()
                 .execute()
@@ -219,7 +219,7 @@ fn cache_aware_layer_hook_can_read_and_mutate_the_same_key_after_lane_release() 
                 calls: calls.clone(),
             }))
             .unwrap();
-        cache
+        let _ = cache
             .set("caller", 23)
             .with_receipt()
             .execute()
@@ -291,7 +291,7 @@ async fn detach_waits_for_captured_layer_callbacks_and_cancellation_does_not_los
         assert_eq!(counts.stops.load(Ordering::SeqCst), 0);
         if complete {
             backend.released.add_permits(1);
-            writer.await.unwrap();
+            let _ = writer.await.unwrap();
         } else {
             writer.abort();
             assert!(writer.await.unwrap_err().is_cancelled());
@@ -532,7 +532,8 @@ fn marker_observer_after_value_commit(fact: MarkerFact) {
             .default_options(opts.clone()),
     )
     .unwrap();
-    seed.set("caller", 17)
+    let _ = seed
+        .set("caller", 17)
         .tags([Tag::new("watched").unwrap()])
         .with_receipt()
         .execute()

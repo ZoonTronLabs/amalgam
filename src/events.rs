@@ -487,6 +487,7 @@ struct EventHub {
 
 /// The explicit result of routing an event to observers and plugins.
 #[derive(Debug)]
+#[must_use = "inspect plugin_errors to observe event delivery failures"]
 pub struct EventEmission {
     /// Number of broadcast observers; zero is a legitimate count.
     pub subscribers: usize,
@@ -504,6 +505,7 @@ pub struct EventSubscription {
 /// The owning event stream closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("cache event stream closed")]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub struct EventStreamClosed;
 
 impl EventSubscription {

@@ -136,7 +136,7 @@ async fn seed(backend: Arc<InMemoryDistributedCache>, clock: Arc<dyn Clock>, opt
         .default_options(opts)
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 1)
         .with_receipt()
         .await
@@ -612,7 +612,7 @@ async fn passive_refresh_codec_is_owned_and_cancelled_by_shutdown() {
         ))
         .try_build()
         .unwrap();
-    target
+    let _ = target
         .set("key", 1)
         .options(|_| EntryOptions::default().with_skip_distributed(false, true))
         .with_receipt()
@@ -629,7 +629,7 @@ async fn passive_refresh_codec_is_owned_and_cancelled_by_shutdown() {
         .try_build()
         .unwrap();
     clock.advance(Duration::from_secs(1));
-    producer
+    let _ = producer
         .set("key", 2)
         .with_receipt()
         .await

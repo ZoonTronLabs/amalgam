@@ -10,6 +10,7 @@ use crate::provider::{CapacityRejection, MemoryUsage};
 
 /// Expected storage failure; a failed lookup never represents an absent key.
 #[derive(Debug, Clone, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum MemoryStorageError {
     /// An implementation preserves its original typed cause.
     #[error("memory storage provider failed: {source}")]
@@ -40,6 +41,7 @@ pub enum MemoryRecordViolation {
 /// Each original cause remains available independently.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("value invalidation failed: {values}; marker invalidation failed: {markers}")]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub struct MemoryInvalidationFailure {
     #[source]
     pub(crate) values: MemoryStorageError,
@@ -95,6 +97,7 @@ impl MemoryNamespace {
         Self(Namespace::DurableMarkers(scope))
     }
     /// The exact configured prefix; no prefix is the empty namespace.
+    #[must_use]
     pub fn key_prefix(&self) -> &str {
         match &self.0 {
             Namespace::Values(prefix) | Namespace::LocalMarkers(prefix) => prefix,
@@ -102,6 +105,7 @@ impl MemoryNamespace {
         }
     }
     /// The validated physical wire scope of durable observations, if applicable.
+    #[must_use]
     pub fn durable_scope(&self) -> Option<&crate::advanced::CacheScope> {
         match &self.0 {
             Namespace::DurableMarkers(scope) => Some(scope),
@@ -109,6 +113,7 @@ impl MemoryNamespace {
         }
     }
     /// Authority of this generation domain; providers partition complete namespaces.
+    #[must_use]
     pub const fn purpose(&self) -> MemoryNamespacePurpose {
         match &self.0 {
             Namespace::Values(_) => MemoryNamespacePurpose::Values,
@@ -129,6 +134,7 @@ impl Default for MemoryStorageEpoch {
 }
 impl MemoryStorageEpoch {
     /// Starts a live, non-reusable record generation.
+    #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(AtomicU64::new(1)))
     }
@@ -177,6 +183,7 @@ pub struct MemoryGeneration {
 }
 impl MemoryGeneration {
     /// Selects records preceding this barrier in this provider's keyspace.
+    #[must_use]
     pub fn precedes<V>(&self, record: &MemoryRecord<V>) -> bool {
         self.epoch.same(&record.inner.generation.epoch)
             && record.inner.generation.value < self.value
@@ -215,19 +222,23 @@ impl<V> Debug for MemoryRecord<V> {
 }
 impl<V> MemoryRecord<V> {
     /// The processed key, including an explicitly configured cache prefix.
+    #[must_use]
     pub fn key(&self) -> &str {
         &self.inner.key
     }
     /// Original value and all expiration, tags, validators and weight metadata.
+    #[must_use]
     pub fn entry(&self) -> &Entry<V> {
         &self.inner.entry
     }
     /// A representation must be both physically live and still read-eligible.
     /// Providers use this inside the same guard as conditional admission.
+    #[must_use]
     pub fn is_live_at(&self, now: Timestamp) -> bool {
         self.retirement_reason(now).is_none()
     }
     /// The physical retirement cause, or None for a live representation.
+    #[must_use]
     pub fn retirement_reason(&self, now: Timestamp) -> Option<MemoryEvictionReason> {
         if !self.inner.generation.is_current() || !self.entry().is_read_eligible() {
             Some(MemoryEvictionReason::Removed)
@@ -243,10 +254,12 @@ impl<V> MemoryRecord<V> {
         }
     }
     /// Identifies the exact immutable representation, never value equality.
+    #[must_use]
     pub fn is_same_entry(&self, entry: &Entry<V>) -> bool {
         self.entry().is_same_instance(entry)
     }
     /// Actual stored weight for capacity accounting.
+    #[must_use]
     pub fn weight(&self) -> u128 {
         u128::from(
             self.entry()
@@ -275,6 +288,7 @@ impl<V> Clone for MemoryCondition<'_, V> {
 }
 impl<V> MemoryCondition<'_, V> {
     /// Evaluate while holding the same provider guard used for insertion.
+    #[must_use]
     pub fn matches(&self, current: Option<&MemoryRecord<V>>, now: Timestamp) -> bool {
         let current = current.filter(|record| record.is_live_at(now));
         match self {
@@ -292,6 +306,7 @@ pub struct MemoryRetirement<V> {
 }
 impl<V> MemoryRetirement<V> {
     /// Return every removed record to the host for observation and reclamation.
+    #[must_use]
     pub fn new(record: MemoryRecord<V>, reason: MemoryEvictionReason) -> Self {
         Self { record, reason }
     }

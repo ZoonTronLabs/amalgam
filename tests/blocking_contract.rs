@@ -84,7 +84,7 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
             .unwrap(),
         None
     );
-    cache
+    let _ = cache
         .remove_by_tag(tag)
         .with_receipt()
         .execute()
@@ -92,14 +92,14 @@ fn native_calls_outside_tokio_keep_inline_affinity_tags_and_present_null() {
         .wait()
         .unwrap();
     assert_eq!(cache.try_get("key").execute().unwrap(), None);
-    cache
+    let _ = cache
         .set("clear", Some(7))
         .with_receipt()
         .execute()
         .unwrap()
         .wait()
         .unwrap();
-    cache
+    let _ = cache
         .clear(ClearMode::Remove)
         .with_receipt()
         .execute()
@@ -254,7 +254,7 @@ fn eager_callback_does_not_occupy_the_single_runtime_worker() {
             .unwrap();
     let options =
         EntryOptions::new(Duration::from_secs(60)).with_eager_refresh(EagerThreshold::new(0.5));
-    cache
+    let _ = cache
         .set("eager", 1)
         .options(|_| options)
         .with_receipt()
@@ -318,7 +318,7 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
         .execute()
         .unwrap();
     assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
-    receipt.wait().unwrap();
+    let _ = receipt.wait().unwrap();
     let peer = BlockingCache::<u64>::on_runtime(
         Cache::builder()
             .distributed(backend)
@@ -327,7 +327,8 @@ fn scheduled_native_receipt_waits_for_actual_l2_visibility() {
     )
     .unwrap();
     assert_eq!(peer.try_get("shared").execute().unwrap(), Some(123));
-    peer.expire("shared")
+    let _ = peer
+        .expire("shared")
         .distributed_policy(DistributedExpirePolicy::Remove)
         .with_receipt()
         .execute()
@@ -385,7 +386,7 @@ fn timed_callback_panic_retains_original_join_in_shutdown_report() {
 #[tokio::test(flavor = "current_thread")]
 async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
     let cache = BlockingCache::<u64>::new().unwrap();
-    cache
+    let _ = cache
         .set("native", 4)
         .with_receipt()
         .execute()
@@ -410,7 +411,7 @@ async fn native_calls_and_last_drop_work_on_foreign_current_thread_tokio() {
     cache.shutdown().unwrap();
     drop(cache);
     let active = BlockingCache::<u64>::new().unwrap();
-    active
+    let _ = active
         .set("drop", 7)
         .with_receipt()
         .execute()

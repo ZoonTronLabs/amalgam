@@ -593,7 +593,7 @@ async fn audit_clear_respects_cache_key_prefix() {
     beta.set("k", 7).await.unwrap();
     clock.advance(Duration::from_secs(1));
     let mut controls = bp.subscribe();
-    alpha
+    let _ = alpha
         .clear(amalgam::ClearMode::Remove)
         .with_receipt()
         .await
@@ -690,7 +690,7 @@ async fn audit_failed_tag_marker_is_recovered_after_backplane_returns() {
         .await
         .unwrap();
     clock.advance(Duration::from_secs(1));
-    sender
+    let _ = sender
         .remove_by_tag(Tag::new("group").unwrap())
         .options(|_| opts())
         .with_receipt()
@@ -858,7 +858,7 @@ async fn audit_background_l2_write_publishes_only_after_the_value_is_visible() {
         "notification must wait for L2 visibility"
     );
     l2.release.add_permits(1);
-    commit.wait().await.unwrap();
+    let _ = commit.wait().await.unwrap();
     received(&mut events, "k").await;
     tokio::time::timeout(Duration::from_secs(1), l2.read.notified())
         .await

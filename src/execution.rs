@@ -109,6 +109,7 @@ impl FactoryCancellation {
         self.request.terminal_reason()
     }
     /// Whether this execution scope has ended or was cancelled.
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.reason().is_some()
     }
@@ -266,6 +267,7 @@ impl Debug for Listener {
 }
 impl CancellationSource {
     /// Creates an active request without needing a runtime.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             request: Arc::new(Request::new()),
@@ -278,6 +280,7 @@ impl CancellationSource {
         Self::from_owner(Arc::new(CacheRequest::new(registry)))
     }
     /// Obtains a read-only token.
+    #[must_use]
     pub fn token(&self) -> FactoryCancellation {
         FactoryCancellation {
             request: Arc::clone(&self.request),
@@ -624,6 +627,7 @@ impl Drop for ThreadActivity<'_> {
         }
     }
 }
+#[must_use = "retain the permit while owned inline work participates in cache shutdown"]
 pub(crate) struct OwnedInlinePermit {
     registry: Arc<Scopes>,
     stripe: StripeIndex,
@@ -663,6 +667,7 @@ impl InlineActivity<'_> {
         }
     }
 }
+#[must_use = "retain the permit while inline work participates in cache shutdown"]
 pub(crate) struct InlinePermit<'a> {
     activity: InlineActivity<'a>,
 }

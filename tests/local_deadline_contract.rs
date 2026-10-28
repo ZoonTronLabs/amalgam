@@ -16,7 +16,7 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
         .try_build()
         .unwrap();
     cache.set("k", 7_u64).await.unwrap();
-    cache
+    let _ = cache
         .expire("k")
         .with_receipt()
         .await
@@ -35,7 +35,7 @@ async fn logical_expire_retains_stale_for_the_factory_but_remove_does_not() {
         .await
         .unwrap();
     assert_eq!(stale, 7);
-    cache
+    let _ = cache
         .remove("k")
         .with_receipt()
         .await
@@ -62,7 +62,7 @@ async fn zero_duration_and_full_range_duration_have_the_same_boundary_in_both_vi
     let cache = BlockingCache::<u64>::new().unwrap();
     let asynchronous = cache.as_async();
     for duration in [Duration::MAX, Duration::ZERO, Duration::MAX] {
-        asynchronous
+        let _ = asynchronous
             .remove("k")
             .with_receipt()
             .await

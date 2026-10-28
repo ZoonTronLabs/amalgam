@@ -28,6 +28,7 @@ pub enum SkipReason {
 }
 /// An actual stage result, including policy-suppressed failure evidence.
 #[derive(Debug)]
+#[must_use = "inspect the effect outcome to observe suppressed failures"]
 pub enum EffectOutcome {
     /// All stage outcomes of a batch, retaining every suppressed failure.
     Batch(EffectBatch),
@@ -50,6 +51,7 @@ pub enum EffectOutcome {
 }
 /// A nonempty collection of acknowledged/degraded stage outcomes.
 #[derive(Debug)]
+#[must_use = "inspect every effect outcome to observe suppressed failures"]
 pub struct EffectBatch {
     stages: Box<[EffectOutcome]>,
 }
@@ -109,6 +111,7 @@ pub enum LocalEffect {
 }
 /// A completed mutation's acknowledged/degraded stages.
 #[derive(Debug)]
+#[must_use = "inspect the commit report to observe distributed and backplane failures"]
 pub struct CommitReport {
     /// In-process admission or invalidation.
     pub local: LocalEffect,

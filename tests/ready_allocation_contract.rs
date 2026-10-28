@@ -102,7 +102,7 @@ fn unobserved_warmed_scalar_ready_reads_do_not_allocate() {
         .try_build()
         .unwrap();
     runtime.block_on(async {
-        cache
+        let _ = cache
             .set("key", 17)
             .with_receipt()
             .await
@@ -137,7 +137,7 @@ fn unobserved_warmed_native_scalar_factories_do_not_allocate() {
         Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
     )
     .unwrap();
-    cache
+    let _ = cache
         .set("key", 19)
         .with_receipt()
         .execute()

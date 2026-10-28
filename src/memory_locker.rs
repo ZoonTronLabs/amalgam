@@ -17,6 +17,7 @@ use crate::{FactoryCancellationReason as Reason, Timeout};
 
 /// Failure of a custom local coordination provider.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum MemoryLockerError {
     /// The provider failed; its complete original cause remains available.
     #[error("local memory locker failed: {source}")]
@@ -49,10 +50,12 @@ pub struct MemoryLockerContext {
 }
 impl MemoryLockerContext {
     /// Diagnostic cache name.
+    #[must_use]
     pub fn cache_name(&self) -> &str {
         &self.name
     }
     /// Owning cache instance, including when the provider is shared.
+    #[must_use]
     pub fn instance_id(&self) -> &str {
         &self.instance_id
     }
@@ -79,10 +82,12 @@ pub struct MemoryLockRequest {
 }
 impl MemoryLockRequest {
     /// Identity of the owning cache.
+    #[must_use]
     pub fn context(&self) -> &MemoryLockerContext {
         &self.context
     }
     /// Processed entry key, or the marker observation key.
+    #[must_use]
     pub fn key(&self) -> &str {
         &self.key
     }
@@ -90,18 +95,22 @@ impl MemoryLockRequest {
     ///
     /// A shared provider may additionally partition by cache name. Cache instance
     /// IDs describe ownership; partitioning by them prevents cross-cache sharing.
+    #[must_use]
     pub fn coordination_key(&self) -> &str {
         &self.coordination_key
     }
     /// The protected data family.
+    #[must_use]
     pub fn kind(&self) -> &MemoryLockKind {
         &self.kind
     }
     /// Maximum acquisition wait. Nonblocking eager attempts use zero.
+    #[must_use]
     pub fn timeout(&self) -> Timeout {
         self.timeout
     }
     /// Acquisition-only token. It ends after success, timeout or cancellation.
+    #[must_use]
     pub fn cancellation(&self) -> &FactoryCancellation {
         &self.cancellation
     }
@@ -127,6 +136,7 @@ enum ReleaseState {
     Released,
 }
 /// Move-only ownership token, released on every completion/cancellation path.
+#[must_use = "dropping the lock releases its ownership; keep the guard until work is complete"]
 pub struct MemoryLock {
     state: ReleaseState,
 }

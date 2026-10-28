@@ -113,9 +113,9 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         panic!("cold supplied value must expose its actual commit");
     };
     assert!(matches!(receipt, BlockingMutationReceipt::Scheduled(_)));
-    receipt.wait().unwrap();
+    let _ = receipt.wait().unwrap();
     assert_eq!(peer.try_get("null").execute().unwrap(), Some(None));
-    first
+    let _ = first
         .remove_by_tag(tag)
         .cancellation(CancellationSource::new().token())
         .with_receipt()
@@ -124,7 +124,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .wait()
         .unwrap();
     miss_after_notification(&peer, "null");
-    first
+    let _ = first
         .set("remove-l2", Some(7))
         .with_receipt()
         .execute()
@@ -132,7 +132,8 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .wait()
         .unwrap();
     assert_eq!(peer.try_get("remove-l2").execute().unwrap(), Some(Some(7)));
-    peer.expire("remove-l2")
+    let _ = peer
+        .expire("remove-l2")
         .distributed_policy(DistributedExpirePolicy::Remove)
         .cancellation(CancellationSource::new().token())
         .with_receipt()
@@ -155,7 +156,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
     );
     cold.ready().unwrap();
     assert!(cold.try_get("remove-l2").execute().unwrap().is_none());
-    first
+    let _ = first
         .set("clear", Some(9))
         .with_receipt()
         .execute()
@@ -163,7 +164,7 @@ fn native_receipts_null_tags_clear_and_expiration_use_real_storage() {
         .wait()
         .unwrap();
     assert_eq!(peer.try_get("clear").execute().unwrap(), Some(Some(9)));
-    first
+    let _ = first
         .clear(ClearMode::Remove)
         .cancellation(CancellationSource::new().token())
         .with_receipt()

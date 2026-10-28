@@ -114,7 +114,7 @@ async fn raw_pending_factory_retains_mutated_options_and_tags() {
     assert_eq!(value, 9);
     clock.advance(Duration::from_secs(1));
     assert_eq!(cache.try_get("adaptive").await.unwrap().as_ref(), Some(&9));
-    cache
+    let _ = cache
         .remove_by_tag(Tag::new("adapted").unwrap())
         .with_receipt()
         .await

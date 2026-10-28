@@ -203,7 +203,7 @@ fn synchronous_hit<H: WarmHit>() {
         Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
     )
     .unwrap_or_else(|error| panic!("benchmark cache configuration must be valid: {error:?}"));
-    cache
+    let _ = cache
         .set("sync", 1_u64)
         .with_receipt()
         .execute()
@@ -376,7 +376,7 @@ fn run<H: WarmHit>() {
     let keys: Vec<_> = (0..8).map(|id| format!("key-{id}")).collect();
     rt.block_on(async {
         for (id, key) in keys.iter().enumerate() {
-            cache
+            let _ = cache
                 .set(key, id as u64 + 1)
                 .with_receipt()
                 .await
@@ -486,7 +486,7 @@ fn ready_costs() {
             panic!("benchmark cache configuration must be valid: {error:?}")
         });
         rt.block_on(async {
-            cache
+            let _ = cache
                 .set("cost", 7_u64)
                 .with_receipt()
                 .await
@@ -515,7 +515,7 @@ fn ready_costs() {
         let native = BlockingCache::from_builder(builder()).unwrap_or_else(|error| {
             panic!("benchmark cache configuration must be valid: {error:?}")
         });
-        native
+        let _ = native
             .set("cost", 7_u64)
             .with_receipt()
             .execute()
@@ -691,7 +691,7 @@ fn distributed<H: WarmHit>() {
             .unwrap_or_else(|error| {
                 panic!("benchmark cache configuration must be valid: {error:?}")
             });
-        cache
+        let _ = cache
             .set("l2-json", 7_u64)
             .with_receipt()
             .await
@@ -701,7 +701,7 @@ fn distributed<H: WarmHit>() {
             .unwrap_or_else(|error| {
                 panic!("benchmark seed mutation must finish its effects: {error:?}")
             });
-        cache
+        let _ = cache
             .set("l2-json", 11)
             .options(|_| options.with_skip_distributed(false, true))
             .with_receipt()

@@ -23,6 +23,7 @@ pub enum PluginStage {
 
 /// A typed plugin failure with a preserved external source.
 #[derive(Debug, Clone, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum PluginError {
     /// A plugin name must identify its implementation.
     #[error("plugin name must not be blank")]
@@ -430,6 +431,7 @@ impl PluginSlot {
     }
 }
 
+#[must_use = "retain the callback lease until the plugin callback is complete"]
 struct CallbackLease {
     // Field order is deliberate: release this callback's dispatch pin BEFORE
     // its guard finishes the final callback and publishes completed teardown.

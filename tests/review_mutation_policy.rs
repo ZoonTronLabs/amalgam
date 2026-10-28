@@ -111,7 +111,7 @@ async fn skipped_marker_write(mutation: MarkerMutation) {
     let cache = build();
     let first = Tag::new("first").unwrap();
     let second = Tag::new("second").unwrap();
-    cache
+    let _ = cache
         .set("key", 7)
         .tags([first.clone(), second.clone()])
         .with_receipt()

@@ -36,6 +36,7 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     }
     /// Borrows the same cache for asynchronous operations; cloned async handles
     /// retain its executor and participate in the same final-owner lifecycle.
+    #[must_use]
     pub fn as_async(&self) -> &Cache<V> {
         match &*self.cache.lifetime {
             PublicLifetime::NativeMemory(view) => view.source(),
@@ -45,30 +46,37 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         }
     }
     /// Borrows the driven executor shared by this cache and its scheduled work.
+    #[must_use]
     pub fn runtime(&self) -> &BlockingRuntime {
         &self.runtime
     }
     /// Cache identity shared with all clones and provider operations.
+    #[must_use]
     pub fn name(&self) -> &str {
         self.cache.name()
     }
     /// Stable source identity for backplane operations.
+    #[must_use]
     pub fn instance_id(&self) -> &str {
         self.cache.instance_id()
     }
     /// The full existing observer/plugin event channel.
+    #[must_use]
     pub fn events(&self) -> &Events {
         self.cache.events()
     }
     /// Independent original-value eviction cursors, shared with the async view.
+    #[must_use]
     pub fn memory_evictions(&self) -> &crate::advanced::MemoryEvictions<V> {
         self.cache.memory_evictions()
     }
     /// Original per-entry defaults.
+    #[must_use]
     pub fn entry_options(&self) -> EntryOptions {
         self.cache.entry_options()
     }
     /// Original marker-operation defaults.
+    #[must_use]
     pub fn tags_entry_options(&self) -> EntryOptions {
         self.cache.tags_entry_options()
     }
@@ -247,10 +255,12 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         self.runtime.run(self.cache.run_pending_tasks())
     }
     /// The explicitly configured shared L1 provider.
+    #[must_use]
     pub fn memory_storage(&self) -> Option<&Arc<dyn crate::provider::MemoryStorage<V>>> {
         self.cache.memory_storage()
     }
     /// The actual supplied secondary observation L1, when configured.
+    #[must_use]
     pub fn marker_memory_storage(
         &self,
     ) -> Option<&Arc<dyn crate::provider::MemoryStorage<crate::advanced::MarkerObservation>>> {
@@ -265,51 +275,61 @@ impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
         self.cache.memory_usage()
     }
     /// The configured distributed byte store, if enabled.
+    #[must_use]
     pub fn distributed_cache(&self) -> Option<&Arc<dyn DistributedCache>> {
         self.cache.distributed_cache()
     }
 
     /// The configured peer notification provider, if enabled.
+    #[must_use]
     pub fn backplane(&self) -> Option<&Arc<dyn Backplane>> {
         self.cache.backplane()
     }
 
     /// The configured distributed ownership provider, if enabled.
+    #[must_use]
     pub fn distributed_locker(&self) -> Option<&Arc<dyn DistributedLocker>> {
         self.cache.distributed_locker()
     }
 
     /// Selected independent secondary marker read policy.
+    #[must_use]
     pub fn marker_read_policy(&self) -> MarkerReadPolicy {
         self.cache.marker_read_policy()
     }
 
     /// Selected marker snapshot lifetime and renewal policy.
+    #[must_use]
     pub fn marker_lifecycle_policy(&self) -> MarkerLifecyclePolicy {
         self.cache.marker_lifecycle_policy()
     }
 
     /// Whether native subscription readiness is required before admission.
+    #[must_use]
     pub fn wait_for_initial_backplane_subscribe(&self) -> bool {
         self.cache.wait_for_initial_backplane_subscribe()
     }
 
     /// Exact queued and in-flight automatic recovery count.
+    #[must_use]
     pub fn pending_recovery(&self) -> usize {
         self.cache.pending_recovery()
     }
 
     /// Immutable diagnostic ticket for the exact data-key commit lane.
+    #[must_use]
     pub fn recovery_ticket(&self, key: impl AsRef<str>) -> Option<ReplayTicket> {
         self.cache.recovery_ticket(key)
     }
 
     /// Immutable tag or clear recovery stage.
+    #[must_use]
     pub fn marker_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
         self.cache.marker_recovery_ticket(kind)
     }
 
     /// Immutable finite marker observation repair stage.
+    #[must_use]
     pub fn marker_snapshot_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
         self.cache.marker_snapshot_recovery_ticket(kind)
     }

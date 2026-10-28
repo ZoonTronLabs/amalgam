@@ -113,7 +113,7 @@ fn node(clock: &Arc<ManualClock>, bytes: &Arc<Bytes>, prefix: &str) -> Cache<u64
         .unwrap()
 }
 async fn store(cache: &Cache<u64>) {
-    cache
+    let _ = cache
         .set("key", 42)
         .tags(["group"])
         .with_receipt()
@@ -151,7 +151,7 @@ async fn lazy_tag_write_invalidates_a_cold_node_without_touching_value_bytes() {
         bytes.marker_writes().is_empty(),
         "construction must stay lazy"
     );
-    request.with_receipt().await.unwrap().wait().await.unwrap();
+    let _ = request.with_receipt().await.unwrap().wait().await.unwrap();
     assert!(bytes.inner.get("v2:scope:key").await.unwrap().is_some());
     assert_eq!(bytes.removes.load(Ordering::SeqCst), 0);
     let writes = bytes.marker_writes();

@@ -32,7 +32,8 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
         };
         let a = node("encoding-a").try_build_ready().await.unwrap();
         let b = node("encoding-b").try_build_ready().await.unwrap();
-        a.set("订单:🙂", 1)
+        let _ = a
+            .set("订单:🙂", 1)
             .with_receipt()
             .await
             .unwrap()
@@ -41,7 +42,8 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
             .unwrap();
         assert!(backend.get(physical).await.unwrap().is_some());
         assert_eq!(b.try_get("订单:🙂").await.unwrap(), Some(1));
-        a.set("订单:🙂", 2)
+        let _ = a
+            .set("订单:🙂", 2)
             .with_receipt()
             .await
             .unwrap()
@@ -60,7 +62,8 @@ async fn unicode_data_keys_round_trip_and_peer_updates_use_the_same_namespace() 
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        a.remove("订单:🙂")
+        let _ = a
+            .remove("订单:🙂")
             .with_receipt()
             .await
             .unwrap()

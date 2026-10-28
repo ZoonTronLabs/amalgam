@@ -47,7 +47,7 @@ async fn repeated_last_handle_drop_releases_workers_even_with_live_event_observe
                 .default_options(EntryOptions::new(Duration::from_secs(60)))
                 .try_build()
                 .expect("valid cache");
-            cache
+            let _ = cache
                 .set("value", 42)
                 .with_receipt()
                 .await

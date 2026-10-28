@@ -271,7 +271,7 @@ fn has_queued(effect: &EffectOutcome) -> bool {
 async fn explicit_tag_and_both_clear_modes_populate_original_policy() {
     let f = fixture(recovery());
     for kind in [group(), MarkerKind::ClearExpire, MarkerKind::ClearRemove] {
-        mutate(
+        let _ = mutate(
             &f.cache,
             &kind,
             Some(options().with_distributed_duration(Duration::from_secs(7))),
@@ -379,7 +379,7 @@ async fn mutation_replay_retains_population_then_notification_stages() {
     f.store.advance_fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
     f.bus.fails.store(true, Ordering::SeqCst);
-    mutate(
+    let _ = mutate(
         &f.cache,
         &group(),
         Some(options().with_distributed_duration(Duration::from_secs(9))),
@@ -425,7 +425,7 @@ async fn mutation_replay_retains_population_then_notification_stages() {
 async fn finite_repairs_expire_but_pending_durable_facts_do_not() {
     let f = fixture(recovery());
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
-    mutate(&f.cache, &group(), None).await.unwrap();
+    let _ = mutate(&f.cache, &group(), None).await.unwrap();
     f.clock.set(time(15));
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     until(|| f.cache.pending_recovery() == 0).await;
@@ -445,7 +445,7 @@ async fn finite_repairs_expire_but_pending_durable_facts_do_not() {
     );
     f.store.advance_fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
-    mutate(
+    let _ = mutate(
         &f.cache,
         &MarkerKind::ClearExpire,
         Some(options().with_skip_backplane_notifications(true)),
@@ -482,7 +482,7 @@ async fn failed_replay_consumes_budget_instead_of_becoming_success() {
         ..recovery()
     });
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
-    mutate(&f.cache, &group(), None).await.unwrap();
+    let _ = mutate(&f.cache, &group(), None).await.unwrap();
     until(|| f.cache.pending_recovery() == 0).await;
     assert_eq!(
         f.store.snapshots.writes.lock().unwrap().len(),
@@ -513,7 +513,7 @@ async fn skipped_writes_and_disabled_recovery_are_explicit() {
     assert!(!has_queued(&report.distributed));
     assert_eq!(f.cache.pending_recovery(), 0);
     let attempts = f.store.snapshots.writes.lock().unwrap().len();
-    mutate(
+    let _ = mutate(
         &f.cache,
         &MarkerKind::ClearRemove,
         Some(options().with_skip_distributed(false, true)),
@@ -572,7 +572,7 @@ async fn replacing_tag_recovery_cannot_forget_a_committed_compacted_clear() {
         .unwrap();
     f.store.advance_fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
-    mutate(&f.cache, &group(), None).await.unwrap();
+    let _ = mutate(&f.cache, &group(), None).await.unwrap();
     f.store.advance_fails.store(false, Ordering::SeqCst);
     until(|| matches!(f.cache.marker_recovery_ticket(&group()).as_ref().map(ReplayTicket::work), Some(RecoveryWork::MarkerMutation(work)) if matches!(work.stage(), MarkerMutationStage::Populate { additional, .. } if !additional.is_empty()))).await;
     assert_eq!(
@@ -584,7 +584,7 @@ async fn replacing_tag_recovery_cannot_forget_a_committed_compacted_clear() {
     );
     f.clock.set(time(11));
     f.store.advance_fails.store(true, Ordering::SeqCst);
-    mutate(&f.cache, &group(), None).await.unwrap();
+    let _ = mutate(&f.cache, &group(), None).await.unwrap();
     f.store.advance_fails.store(false, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Pass;
     until(|| f.cache.pending_recovery() == 0).await;
@@ -625,7 +625,7 @@ async fn notification_replacement_retains_compaction_with_one_queue_slot() {
         .unwrap();
     f.store.advance_fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
-    mutate(&f.cache, &group(), None).await.unwrap();
+    let _ = mutate(&f.cache, &group(), None).await.unwrap();
     f.store.advance_fails.store(false, Ordering::SeqCst);
     until(|| {
         matches!(f.cache.marker_recovery_ticket(&group()).as_ref().map(ReplayTicket::work),
@@ -741,7 +741,7 @@ async fn strict_population_replacement_retains_prior_compaction() {
         .unwrap();
     f.store.advance_fails.store(true, Ordering::SeqCst);
     *f.store.snapshots.mode.lock().unwrap() = WriteMode::Fail;
-    mutate(&f.cache, &group(), None).await.unwrap();
+    let _ = mutate(&f.cache, &group(), None).await.unwrap();
     f.store.advance_fails.store(false, Ordering::SeqCst);
     until(|| {
         matches!(f.cache.marker_recovery_ticket(&group()).as_ref().map(ReplayTicket::work),

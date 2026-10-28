@@ -132,7 +132,7 @@ async fn soft_timeout_disposes_origin_with_precise_reason_and_retains_failsafe()
         .default_options(options)
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 1)
         .with_receipt()
         .await
@@ -177,7 +177,7 @@ async fn explicit_cancel_bypasses_failsafe_and_releases_origin() {
         ))
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 1)
         .with_receipt()
         .await
@@ -672,7 +672,7 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
                 builder = builder.backplane(bp.clone());
             }
             let cache = builder.try_build().unwrap();
-            cache
+            let _ = cache
                 .set("k", 0)
                 .with_receipt()
                 .await
@@ -684,7 +684,7 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
             clock.advance(Duration::from_secs(1));
             backend.down.store(true, Ordering::SeqCst);
             if old_remove {
-                cache
+                let _ = cache
                     .remove("k")
                     .with_receipt()
                     .await
@@ -693,7 +693,7 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
                     .await
                     .unwrap();
             } else {
-                cache
+                let _ = cache
                     .set("k", 1)
                     .with_receipt()
                     .await
@@ -728,7 +728,7 @@ async fn newer_completed_set_remains_after_already_started_set_or_remove_recover
                 "newer commit must wait the actual older I/O lane"
             );
             backend.gate.add_permits(1);
-            newer.await.unwrap();
+            let _ = newer.await.unwrap();
             assert!(!ticket.fence_is_current());
             tokio::time::sleep(Duration::from_millis(70)).await;
             let bytes = backend.get("v2:k").await.unwrap().unwrap();
@@ -794,7 +794,7 @@ async fn coalesced_gap_retains_exact_ticket_until_successful_l2_and_marker_recon
         .auto_recovery(recovery_config())
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 7)
         .with_receipt()
         .await
@@ -949,7 +949,7 @@ async fn initial_native_ack_gates_operations_and_close_releases_parked_admission
     bp.state.send_replace(BackplaneState::Connected {
         epoch: ContinuityEpoch::INITIAL,
     });
-    caller.await.unwrap().unwrap().wait().await.unwrap();
+    let _ = caller.await.unwrap().unwrap().wait().await.unwrap();
     assert!(matches!(
         cache.ready().await.unwrap(),
         BackplaneReadiness::Acknowledged(_)
@@ -1052,7 +1052,7 @@ async fn off_runtime_close_drains_owned_lease_release_and_retains_its_original_f
             .auto_recovery(no_recovery())
             .try_build()
             .unwrap();
-        cache
+        let _ = cache
             .set("k", 1)
             .with_receipt()
             .await
@@ -1194,7 +1194,7 @@ async fn not_modified_validates_adaptive_raw_tags_before_retention() {
         ))
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 1)
         .with_receipt()
         .await
@@ -1261,7 +1261,7 @@ async fn cold_expire_read_failure_retains_intent_and_original_physical_deadline(
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("k", 7)
         .with_receipt()
         .await
@@ -1356,7 +1356,7 @@ async fn recovered_storage_then_failed_notification_never_rewrites_storage_on_re
         .auto_recovery(recovery_config())
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 7)
         .with_receipt()
         .await
@@ -1416,7 +1416,7 @@ async fn delayed_clear_marker_does_not_evict_a_newer_snapshot() {
         .auto_recovery(no_recovery())
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("k", 7)
         .with_receipt()
         .await
@@ -1456,7 +1456,7 @@ async fn changing_timeout_requests_revalidates_the_configuration_before_effects(
         Err(Error::Config(ConfigError::DeadlineOutOfRange))
     ));
     let repaired = memory_repaired.with_distributed_lock_timeout(Timeout::Infinite);
-    cache
+    let _ = cache
         .set("repaired", 7)
         .options(|_| repaired)
         .with_receipt()

@@ -148,7 +148,8 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                 .into(),
             physical_expiration: Timestamp::from_ticks(expired.entry().physical_expiration_ticks),
         };
-        self.write_data(key, &data, None).await?;
+        // Transport failures propagate; replay only needs write completion here.
+        let _ = self.write_data(key, &data, None).await?;
         Ok(ReplayOutcome::Applied)
     }
     async fn replay_owned(
@@ -242,7 +243,9 @@ impl<V: Clone + Send + Sync + 'static> Worker<V> {
                         {
                             return Ok(ReplayOutcome::Expired);
                         }
-                        self.write_data(&item.key, mutation, flight.as_ref())
+                        // Transport failures propagate; the replay stage owns completion.
+                        let _ = self
+                            .write_data(&item.key, mutation, flight.as_ref())
                             .await?;
                         if notification.is_some() {
                             recovery.notification_stage(&ticket);

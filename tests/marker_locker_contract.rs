@@ -348,7 +348,7 @@ async fn fixture(options: EntryOptions, policy: LeasePolicy, prefix: &str) -> Fi
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("key", 7_u64)
         .options(|_| EntryOptions::new(Duration::from_secs(3600)))
         .tags(vec![Tag::new("group").unwrap()].into_boxed_slice())
@@ -769,7 +769,8 @@ async fn until(mut condition: impl FnMut() -> bool) {
 }
 async fn seed_known_without_remote_read(f: &Fixture) {
     f.clock.set(time(1));
-    f.cache
+    let _ = f
+        .cache
         .remove_by_tag(Tag::new("group").unwrap())
         .with_receipt()
         .await

@@ -32,7 +32,7 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     let state = Arc::new(Observation::default());
     let cache = Cache::new();
     *state.events.lock().unwrap() = Some(cache.events().clone());
-    cache
+    let _ = cache
         .set("key", Value(state.clone()))
         .with_receipt()
         .await
@@ -58,7 +58,7 @@ async fn late_observer_sees_one_panic_and_cache_is_usable_after_clone_unwinds() 
     assert_eq!(outcomes, vec![OperationOutcome::Panicked]);
     drop(receiver);
     assert!(cache.try_get("key").into_future().await.unwrap().is_some());
-    cache
+    let _ = cache
         .remove("key")
         .with_receipt()
         .await
@@ -88,7 +88,7 @@ async fn observer_admitted_by_unused_default_drop_receives_the_hit_completion() 
     let state = Arc::new(Observation::default());
     let cache = Cache::new();
     *state.events.lock().unwrap() = Some(cache.events().clone());
-    cache
+    let _ = cache
         .set(
             "key",
             CompletionValue {

@@ -139,7 +139,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .await
         .unwrap();
     clock.advance(Duration::from_millis(1));
-    cache
+    let _ = cache
         .remove_by_tag(Tag::new("old").unwrap())
         .with_receipt()
         .await
@@ -148,7 +148,7 @@ async fn explicit_conditional_tags_replace_the_saved_tags_after_a_new_revision()
         .await
         .unwrap();
     assert_eq!(cache.try_get("key").await.unwrap().as_ref(), Some(&7));
-    cache
+    let _ = cache
         .remove_by_tag(Tag::new("new").unwrap())
         .with_receipt()
         .await

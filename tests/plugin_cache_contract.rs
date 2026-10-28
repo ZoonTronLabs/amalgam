@@ -82,7 +82,7 @@ impl CachePlugin<i32> for Probe {
             )?,
             17
         );
-        boundary(
+        let _ = boundary(
             PluginStage::Start,
             cache
                 .set("plugin-tagged", 18)
@@ -129,7 +129,7 @@ impl PluginSession for Session {
                 boundary(PluginStage::Event, cache.try_get("caller").execute())?.as_ref(),
                 Some(&23)
             );
-            boundary(
+            let _ = boundary(
                 PluginStage::Event,
                 cache.set("plugin-event", 24).with_receipt().execute(),
             )?
@@ -151,13 +151,13 @@ impl PluginSession for Session {
                 .execute(),
         )?;
         assert_eq!(value, 29);
-        boundary(
+        let _ = boundary(
             PluginStage::Stop,
             cache.set("plugin-stop", 30).with_receipt().execute(),
         )?
         .wait()
         .map_err(|e| PluginError::from_source("operational-probe", PluginStage::Stop, e))?;
-        boundary(
+        let _ = boundary(
             PluginStage::Stop,
             cache
                 .remove_by_tag(Tag::new("plugin-tag").unwrap())
@@ -201,7 +201,7 @@ fn start_event_stop_and_retained_detached_view_use_one_cache() {
         cache.try_get("plugin-start").execute().unwrap().as_ref(),
         Some(&17)
     );
-    cache
+    let _ = cache
         .set("caller", 23)
         .with_receipt()
         .execute()
@@ -510,7 +510,7 @@ impl CachePlugin<i32> for TypedOrder {
             ),
             _ => panic!("fixture uses first/third positions"),
         }
-        cache
+        let _ = cache
             .set("ordered", self.position)
             .with_receipt()
             .execute()
@@ -576,7 +576,8 @@ fn one_plugin_definition_gets_independent_operational_sessions_per_cache() {
             .cache_plugin(probe),
     )
     .unwrap();
-    a.set("caller", 23)
+    let _ = a
+        .set("caller", 23)
         .with_receipt()
         .execute()
         .unwrap()
@@ -739,7 +740,7 @@ async fn operational_start_event_and_shutdown_stop_use_native_redis_components()
         cache.distributed_locker().unwrap(),
         view.distributed_locker().unwrap()
     ));
-    cache
+    let _ = cache
         .set("caller", 23)
         .with_receipt()
         .await

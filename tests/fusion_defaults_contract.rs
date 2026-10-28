@@ -156,7 +156,7 @@ async fn default_expire_removes_l2_and_retains_the_eligible_l1_fallback() {
         .unwrap();
     cache.set("hot", 42).await.unwrap();
     assert!(store.get("v2:hot").await.unwrap().is_some());
-    cache
+    let _ = cache
         .expire("hot")
         .with_receipt()
         .await

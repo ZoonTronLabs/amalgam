@@ -206,7 +206,7 @@ async fn seeded_with_tags(
         .default_options(value_options())
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("key", 7)
         .tags(tags)
         .with_receipt()
@@ -1217,7 +1217,7 @@ async fn gap_during_marker_read_revokes_old_observations_before_value_hydration(
         .marker_read_policy(MarkerReadPolicy::OptionsControlled)
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("proof", 1)
         .options(|_| {
             value_options()
@@ -1383,7 +1383,7 @@ async fn retained_tag_expiry_never_bypasses_a_later_hard_clear_remove() {
     let store = Store::new();
     let cache = reader(clock.clone(), backend, store.clone(), control_options());
     cache.try_get("key").await.unwrap();
-    cache
+    let _ = cache
         .remove_by_tag(tag())
         .with_receipt()
         .await
@@ -1447,7 +1447,7 @@ async fn marker_copy_does_not_require_the_ordinary_value_cloner() {
         .try_build()
         .unwrap();
     assert_eq!(cache.try_get("key").await.unwrap(), Some(7));
-    cache
+    let _ = cache
         .remove_by_tag(tag())
         .options(|_| control_options().with_enable_auto_clone(true))
         .with_receipt()
@@ -1556,7 +1556,7 @@ async fn passive_marker_read_is_owned_by_refresh_and_shutdown() {
         .default_options(value_options())
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("key", 9)
         .tags(vec![tag()].into_boxed_slice())
         .with_receipt()

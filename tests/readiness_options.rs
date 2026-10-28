@@ -153,7 +153,7 @@ async fn initial_subscription_wait_admits_a_cold_l2_read_after_acknowledgement()
         .distributed(backend.clone())
         .serializer(Arc::new(JsonSerializer))
         .try_build()?;
-    writer
+    let _ = writer
         .set("shared", 42)
         .with_receipt()
         .await?

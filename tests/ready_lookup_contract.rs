@@ -63,7 +63,7 @@ fn completions(events: &mut broadcast::Receiver<CacheEvent>) -> Vec<OperationOut
 }
 
 async fn populated(cache: &Cache<i32>) {
-    cache
+    let _ = cache
         .set("k", 7)
         .with_receipt()
         .await
@@ -128,7 +128,7 @@ impl Drop for DefaultDrop {
 async fn unused_canonical_default_is_dropped_inside_counted_completion() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
-    cache
+    let _ = cache
         .set(
             "k",
             DefaultDrop {
@@ -158,7 +158,7 @@ async fn unused_canonical_default_is_dropped_inside_counted_completion() {
 async fn unused_default_drop_retains_explicit_cancellation_and_shutdown_drain() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
-    cache
+    let _ = cache
         .set(
             "k",
             DefaultDrop {
@@ -218,7 +218,7 @@ impl Clone for CloneGate {
 async fn ordinary_value_clone_is_counted_as_user_work() {
     let gate = Arc::new(Gate::default());
     let cache = Cache::new();
-    cache
+    let _ = cache
         .set(
             "k",
             CloneGate {
@@ -495,7 +495,7 @@ async fn ready_and_owned_fallback_each_keep_one_observer_and_copy_failure() {
     let missing = cache.try_get("missing").await.unwrap();
     assert!(missing.is_none());
     assert_eq!(completions(&mut events), vec![OperationOutcome::Miss]);
-    cache
+    let _ = cache
         .get_or_set::<_, _>(
             "failure",
             typed_factory(|ctx| async move { Err(ctx.fail("origin failed")) }),

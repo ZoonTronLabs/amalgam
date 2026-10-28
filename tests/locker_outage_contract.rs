@@ -252,7 +252,7 @@ async fn cooperative_rethrow_rejects_origin_after_failed_lease() {
 #[tokio::test]
 async fn fresh_l1_without_backplane_does_not_contact_failed_locker_or_store() {
     let fixture = fixture(Coordination::Fenced, options(), None).await;
-    fixture
+    let _ = fixture
         .cache
         .set("key", 42)
         .with_receipt()
@@ -284,7 +284,7 @@ async fn a_notification_gap_turns_old_l1_into_a_miss_under_each_lease_policy() {
             Some(ReconciliationPolicy::BackplaneContinuity),
         )
         .await;
-        fixture
+        let _ = fixture
             .cache
             .set("key", 42)
             .with_receipt()
@@ -343,7 +343,7 @@ async fn best_effort_keeps_local_l1_across_gap_and_reconnect_under_each_lease_po
         Coordination::Cooperative,
     ] {
         let (fixture, notifications) = best_effort_fixture(coordination, options()).await;
-        fixture
+        let _ = fixture
             .cache
             .set("key", 42)
             .with_receipt()
@@ -372,7 +372,7 @@ async fn best_effort_keeps_local_l1_across_gap_and_reconnect_under_each_lease_po
 async fn best_effort_keeps_hydrated_l1_across_gap_in_bounded_and_unbounded_memory() {
     for bounded in [false, true] {
         let writer = fixture(Coordination::Local, options(), None).await;
-        writer
+        let _ = writer
             .cache
             .set("key", 42)
             .with_receipt()
@@ -458,7 +458,7 @@ async fn best_effort_fail_safe_keeps_stale_but_never_physically_dead_values() {
         )
         .with_rethrow_distributed_locker_exceptions(false);
     let (fixture, notifications) = best_effort_fixture(Coordination::Cooperative, opts).await;
-    fixture
+    let _ = fixture
         .cache
         .set("key", 42)
         .with_receipt()
@@ -495,7 +495,7 @@ async fn best_effort_fail_safe_keeps_stale_but_never_physically_dead_values() {
 #[tokio::test]
 async fn best_effort_does_not_serve_a_hot_value_to_an_explicitly_cancelled_caller() {
     let (fixture, notifications) = best_effort_fixture(Coordination::Cooperative, options()).await;
-    fixture
+    let _ = fixture
         .cache
         .set("key", 42)
         .with_receipt()
@@ -530,7 +530,7 @@ async fn best_effort_does_not_serve_a_hot_value_to_an_explicitly_cancelled_calle
 async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
     let (fixture, notifications) = best_effort_fixture(Coordination::Local, options()).await;
     let tag = Tag::new("group").unwrap();
-    fixture
+    let _ = fixture
         .cache
         .set("removed", 1)
         .with_receipt()
@@ -539,7 +539,7 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
         .wait()
         .await
         .unwrap();
-    fixture
+    let _ = fixture
         .cache
         .set("tagged", 2)
         .tags([tag.clone()])
@@ -549,7 +549,7 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
         .wait()
         .await
         .unwrap();
-    fixture
+    let _ = fixture
         .cache
         .set("cleared", 3)
         .with_receipt()
@@ -561,7 +561,7 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
     fixture.store.down.store(true, Ordering::SeqCst);
     notifications.disconnect();
     fixture.clock.advance(Duration::from_millis(1));
-    fixture
+    let _ = fixture
         .cache
         .remove("removed")
         .with_receipt()
@@ -570,7 +570,7 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
         .wait()
         .await
         .unwrap();
-    fixture
+    let _ = fixture
         .cache
         .remove_by_tag(tag)
         .with_receipt()
@@ -582,7 +582,7 @@ async fn best_effort_still_applies_local_remove_tag_and_clear_during_a_gap() {
     assert_eq!(local_value(&fixture.cache, "removed").await, None);
     assert_eq!(local_value(&fixture.cache, "tagged").await, None);
     assert_eq!(local_value(&fixture.cache, "cleared").await, Some(3));
-    fixture
+    let _ = fixture
         .cache
         .clear(ClearMode::Remove)
         .with_receipt()
@@ -611,7 +611,7 @@ async fn best_effort_retains_l1_after_malformed_frames_but_applies_received_remo
         .try_build_ready()
         .await
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 42)
         .with_receipt()
         .await
@@ -619,7 +619,7 @@ async fn best_effort_retains_l1_after_malformed_frames_but_applies_received_remo
         .wait()
         .await
         .unwrap();
-    cache
+    let _ = cache
         .set("probe", 1)
         .with_receipt()
         .await
@@ -675,7 +675,7 @@ async fn best_effort_healthless_backplanes_do_not_add_periodic_l1_discard() {
             builder
         };
         let cache = builder.try_build_ready().await.unwrap();
-        cache
+        let _ = cache
             .set("key", 42)
             .with_receipt()
             .await

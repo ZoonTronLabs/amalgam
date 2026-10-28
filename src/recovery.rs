@@ -75,6 +75,7 @@ impl Default for RecoveryConfig {
 
 /// Failures of protocol construction or owned recovery lifecycle.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum RecoveryError {
     /// Ordering identifiers must never wrap and become current again.
     #[error("recovery generation sequence exhausted")]
@@ -531,6 +532,12 @@ pub struct AutoRecoveryService {
 
 impl AutoRecoveryService {
     /// Compatible construction; canonical callers validate with `try_new` first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if enabled recovery has a zero delay or its delay cannot be
+    /// represented as a runtime barrier. Use [`Self::try_new`] to receive a
+    /// typed configuration error.
     #[must_use]
     pub fn new(config: RecoveryConfig, clock: Arc<dyn Clock>) -> Arc<Self> {
         match Self::try_new(config, clock) {

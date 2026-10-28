@@ -465,6 +465,11 @@ impl<V: Clone> Entry<V> {
 
 impl<V> Entry<V> {
     /// Builds a fresh entry from a freshly-produced value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied entry options are invalid. Use
+    /// [`Self::try_fresh_at`] to receive a typed configuration error.
     #[must_use]
     pub fn fresh(
         value: V,
@@ -616,6 +621,11 @@ impl<V> Entry<V> {
     ///
     /// Returns `None` when the source value is already physically expired and so
     /// cannot be reused.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied entry options are invalid. Use
+    /// [`Self::try_throttled`] to receive a typed configuration error.
     #[must_use]
     pub fn throttled(source: &Entry<V>, options: &EntryOptions, now: Timestamp) -> Option<Self>
     where
@@ -706,6 +716,11 @@ impl<V> Entry<V> {
 
     /// Rebuilds an in-memory entry from data read out of the L2 distributed
     /// cache, recomputing the backend TTL from the (absolute) physical boundary.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied metadata violates entry invariants. Use
+    /// [`Self::try_rehydrate`] when hydrating untrusted distributed input.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn rehydrate(
@@ -891,6 +906,11 @@ impl<V> Entry<V> {
 
     /// Builds a fail-safe entry from a default value (the `fail_safe_default`),
     /// throttled like [`throttled`](Self::throttled).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied fail-safe configuration is invalid. Use
+    /// [`Self::try_from_fail_safe_default`] to receive a typed configuration error.
     #[must_use]
     pub fn from_fail_safe_default(value: V, options: &EntryOptions, now: Timestamp) -> Self {
         match Self::try_from_fail_safe_default(value, options, now) {

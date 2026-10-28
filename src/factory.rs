@@ -151,14 +151,17 @@ impl<V> FactoryContext<V> {
         self
     }
     /// Original foreground/eager cause, independent of the polling thread.
+    #[must_use]
     pub fn invocation(&self) -> FactoryInvocation {
         self.invocation
     }
     /// The prefixed data key.
+    #[must_use]
     pub fn key(&self) -> &str {
         &self.keys.full
     }
     /// The caller's key before the cache prefix was applied.
+    #[must_use]
     pub fn original_key(&self) -> &str {
         &self.keys.raw
     }
@@ -171,6 +174,7 @@ impl<V> FactoryContext<V> {
         }
     }
     /// Tags in the complete stale snapshot, when one exists.
+    #[must_use]
     pub fn stale_tags(&self) -> Option<&[Tag]> {
         self.stale.as_ref().map(|stale| stale.tags.as_ref())
     }
@@ -179,6 +183,7 @@ impl<V> FactoryContext<V> {
         FactoryOptionsMut { context: self }
     }
     /// Current options.
+    #[must_use]
     pub fn options(&self) -> &EntryOptions {
         &self.options
     }
@@ -188,22 +193,27 @@ impl<V> FactoryContext<V> {
         self.publish_adaptation();
     }
     /// Whether a stale snapshot exists.
+    #[must_use]
     pub fn has_stale_value(&self) -> bool {
         self.stale.is_some()
     }
     /// Isolated stale value.
+    #[must_use]
     pub fn stale_value(&self) -> Option<&V> {
         self.stale.as_ref().map(|stale| &stale.value)
     }
     /// Optional stale validator.
+    #[must_use]
     pub fn stale_etag(&self) -> Option<&str> {
         self.stale.as_ref().and_then(|stale| stale.etag.as_deref())
     }
     /// Optional stale modification timestamp.
+    #[must_use]
     pub fn stale_last_modified(&self) -> Option<Timestamp> {
         self.stale.as_ref().and_then(|stale| stale.last_modified)
     }
     /// Read-only origin execution cancellation.
+    #[must_use]
     pub fn cancellation(&self) -> &FactoryCancellation {
         &self.cancellation
     }
@@ -266,6 +276,7 @@ impl<V> FactoryContext<V> {
         }
     }
     /// Returns a plain value; adapted options and tags remain in this execution.
+    #[must_use]
     pub fn value(self, value: V) -> V {
         value
     }
@@ -324,6 +335,7 @@ impl<V> FactoryContext<V> {
 
 /// Expected rejection when constructing a conditional unchanged product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum ConditionalRefreshError {
     /// An unchanged result requires a complete existing stale snapshot.
     #[error("NotModified requires a stale snapshot")]
@@ -384,6 +396,7 @@ impl<V> NotModifiedBuilder<V> {
         self
     }
     /// Returns the unchanged value with selected metadata and adapted options.
+    #[must_use]
     pub fn done(mut self) -> V {
         self.stale.etag = self.etag.apply(self.stale.etag);
         self.stale.last_modified = self.last_modified.apply(self.stale.last_modified);
@@ -458,6 +471,7 @@ impl<V> ModifiedBuilder<V> {
         self
     }
     /// Produces the result with current adapted options.
+    #[must_use]
     pub fn done(self) -> V {
         let inherited = self.ctx.adaptive_tags.resolve(self.ctx.call_tags);
         let tags = match self.tags {
@@ -480,6 +494,7 @@ impl<V> ModifiedBuilder<V> {
 }
 
 /// Publishes adaptive options when the temporary mutable view is released.
+#[must_use = "use the mutable view to adapt options before releasing it"]
 #[derive(Debug)]
 pub struct FactoryOptionsMut<'a, V> {
     context: &'a mut FactoryContext<V>,

@@ -72,7 +72,7 @@ async fn eager_hit_finishes_in_one_poll_while_its_factory_is_pending() {
         )
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 7)
         .with_receipt()
         .await
@@ -146,7 +146,7 @@ impl Clone for RuntimeCheckedValue {
 fn native_and_async_ready_reads_copy_on_the_caller_without_entering_a_runtime() {
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cache = amalgam::BlockingCache::new().unwrap();
-    cache
+    let _ = cache
         .set(
             "key",
             RuntimeCheckedValue {

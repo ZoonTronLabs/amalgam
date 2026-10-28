@@ -4,6 +4,7 @@
 //! `thiserror`, every fallible boundary returns [`Error`]. Business outcomes
 //! that are *not* failures (a cache miss, a factory choosing to reuse a stale
 //! value) are modelled in the return *type*, never as errors.
+use std::error::Error as StdError;
 use std::fmt::{Formatter, Result as FmtResult};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,6 +20,7 @@ pub enum DrainOperation {
 
 /// A rejected cache configuration. Configuration is checked before work starts.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum ConfigError {
     /// Supplied storage owns capacity policy; built-in limits cannot be applied.
     #[error("configure capacity on the supplied memory storage, not built-in limits")]
@@ -167,6 +169,7 @@ impl FactoryCancellationReason {
 /// dereferences to E instead of implementing Error: derived source() must expose
 /// the original E, not this ownership wrapper, so downcasting keeps working.
 #[derive(Debug)]
+#[must_use = "the original error must be handled or explicitly discarded"]
 pub struct SharedSource<
     E: std::error::Error + Send + Sync + ?Sized + 'static = dyn std::error::Error + Send + Sync,
 > {
@@ -178,6 +181,12 @@ impl<E: std::error::Error + Send + Sync + ?Sized + 'static> SharedSource<E> {
         Self { source }
     }
 }
+impl<E: StdError + Send + Sync + ?Sized + 'static> From<Arc<E>> for SharedSource<E> {
+    fn from(source: Arc<E>) -> Self {
+        Self::from_arc(source)
+    }
+}
+
 impl<E: std::error::Error + Send + Sync + ?Sized + 'static> Clone for SharedSource<E> {
     fn clone(&self) -> Self {
         Self {
@@ -204,6 +213,7 @@ impl<E: std::error::Error + Send + Sync + ?Sized + 'static> std::fmt::Display fo
 
 /// A deep-copy implementation failed. Its original cause remains available.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum CloneError {
     /// Encoding the value failed.
     #[error("deep-copy serialization failed: {source}")]
@@ -239,6 +249,7 @@ impl CloneError {
 
 /// A distributed codec failure with its original concrete source.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum CodecError {
     /// Encoding a value or its snapshot metadata failed.
     #[error("serialization failed: {source}")]
@@ -258,6 +269,7 @@ pub enum CodecError {
 
 /// An external storage or notification failure with its original source.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum TransportError {
     /// Value storage failed.
     #[error("distributed cache error: {source}")]
@@ -318,6 +330,7 @@ impl ShutdownTask {
 
 /// A closed failure family retained by concurrent/idempotent cache shutdown.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum ShutdownFailure {
     /// An attachment's teardown failed.
     #[error(transparent)]
@@ -339,13 +352,13 @@ pub enum ShutdownFailure {
 /// A nonempty immutable set of shutdown failures. Cloning keeps the same
 /// original sources so every concurrent or repeated caller sees one report.
 #[derive(Debug, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub struct ShutdownError {
     failures: Arc<[ShutdownFailure]>,
 }
 
 impl ShutdownError {
     /// Creates a valid report with at least one failure.
-    #[must_use]
     pub fn new(
         first: ShutdownFailure,
         remaining: impl IntoIterator<Item = ShutdownFailure>,
@@ -358,7 +371,6 @@ impl ShutdownError {
     }
 
     /// Every retained failure, in shutdown observation order.
-    #[must_use]
     pub fn failures(&self) -> &[ShutdownFailure] {
         &self.failures
     }
@@ -388,6 +400,7 @@ impl std::error::Error for ShutdownError {
 /// a stale value never produces an `Error` at all.
 #[derive(Debug, thiserror::Error, Clone)]
 #[non_exhaustive]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum Error {
     /// A synchronous callback would wait for its own cache execution to finish.
     #[error("a factory cannot {operation:?} its own cache before returning")]
@@ -586,6 +599,7 @@ impl Error {
 /// It can wrap an arbitrary source error so the original cause is preserved in
 /// the error chain.
 #[derive(Debug, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub struct FactoryError {
     detail: FactoryErrorDetail,
 }
@@ -602,7 +616,6 @@ enum FactoryErrorDetail {
 
 impl FactoryError {
     /// Creates a factory error with a human-readable message.
-    #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             detail: FactoryErrorDetail::Message(into_nonblank(message.into())),
@@ -611,7 +624,6 @@ impl FactoryError {
 
     /// Creates a factory error from an arbitrary source error, preserving it in
     /// the error chain.
-    #[must_use]
     pub fn from_source<E>(source: E) -> Self
     where
         E: std::error::Error + Send + Sync + 'static,
@@ -638,7 +650,6 @@ impl FactoryError {
     }
 
     /// Reports cancellation without turning it into an origin failure.
-    #[must_use]
     pub fn cancelled(reason: FactoryCancellationReason) -> Self {
         Self {
             detail: FactoryErrorDetail::Cancelled(reason),

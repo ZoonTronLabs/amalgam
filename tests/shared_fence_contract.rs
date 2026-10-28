@@ -107,7 +107,7 @@ async fn native_shared_slot_publication_drains_a_started_clone_and_rejects_its_r
     let block = Arc::new(AtomicBool::new(false));
     let (entered, entry) = mpsc::channel();
     let (release, released) = mpsc::channel();
-    cache
+    let _ = cache
         .set(
             "hit",
             Value {
@@ -151,7 +151,7 @@ fn a_closed_native_read_does_not_invoke_value_clone() {
     let block = Arc::new(AtomicBool::new(false));
     let (entered, entry) = mpsc::channel();
     let (_, released) = mpsc::channel();
-    cache
+    let _ = cache
         .set(
             "hit",
             Value {

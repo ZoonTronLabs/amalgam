@@ -302,6 +302,7 @@ impl Drop for LaneAcquisition {
     }
 }
 
+#[must_use = "retain the lane guard until the ordered mutation is complete"]
 pub(crate) struct LaneGuard(Arc<KeyLane>);
 impl Drop for LaneGuard {
     fn drop(&mut self) {

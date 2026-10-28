@@ -73,7 +73,7 @@ fn fixture(provider_options: EntryOptions) -> Fixture {
 }
 
 async fn seed(cache: &Cache<i32>) {
-    cache
+    let _ = cache
         .set("tenant:item", 42)
         .options(|_| options())
         .with_receipt()

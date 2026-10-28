@@ -102,7 +102,7 @@ fn native_origin_receipt_preserves_mutation_and_unchanged_evidence() {
     match first.commit {
         BlockingCommitReceipt::Mutation(receipt) => {
             assert!(matches!(receipt, BlockingMutationReceipt::Completed(_)));
-            receipt.wait().unwrap();
+            let _ = receipt.wait().unwrap();
         }
         BlockingCommitReceipt::Unchanged => panic!("the origin must retain its commit evidence"),
     }
@@ -144,7 +144,7 @@ fn native_supplied_values_preserve_constant_origin_and_receipt_semantics() {
     assert_eq!(first.value, 53);
     match first.commit {
         BlockingCommitReceipt::Mutation(receipt) => {
-            receipt.wait().unwrap();
+            let _ = receipt.wait().unwrap();
         }
         BlockingCommitReceipt::Unchanged => panic!("a supplied cold value must retain its commit"),
     }

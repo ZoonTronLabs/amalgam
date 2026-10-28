@@ -40,6 +40,7 @@ pub(super) fn check_drain(
 
 /// Fallible executor creation and validated cache construction remain distinct.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum BlockingCacheBuildError {
     /// The operating system could not start the executor.
     #[error("cannot create cache executor: {0}")]

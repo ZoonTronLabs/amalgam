@@ -30,6 +30,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         CacheBuilder::new()
     }
     /// Creates the always-valid memory-only defaults without a runtime.
+    #[must_use]
     pub fn new() -> Self {
         match CacheBuilder::new().try_build() {
             Ok(cache) => cache,
@@ -37,14 +38,17 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
     }
     /// Diagnostic name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.inner.name
     }
     /// This instance's diagnostic and backplane sender identity.
+    #[must_use]
     pub fn instance_id(&self) -> &str {
         &self.inner.instance_id
     }
     /// The configured distributed byte store, when L2 is enabled.
+    #[must_use]
     pub fn distributed_cache(&self) -> Option<&Arc<dyn DistributedCache>> {
         match &self.inner.storage {
             Storage::MemoryOnly => None,
@@ -52,18 +56,22 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         }
     }
     /// The configured backplane, when attached.
+    #[must_use]
     pub fn backplane(&self) -> Option<&Arc<dyn Backplane>> {
         self.inner.backplane.as_ref()
     }
     /// The configured distributed locker, when attached.
+    #[must_use]
     pub fn distributed_locker(&self) -> Option<&Arc<dyn DistributedLocker>> {
         self.inner.distributed_locker.as_ref()
     }
     /// Unified event route, including eviction and plugins.
+    #[must_use]
     pub fn events(&self) -> &Events {
         &self.inner.events
     }
     /// Original stored values retired from L1, with independent bounded cursors.
+    #[must_use]
     pub fn memory_evictions(&self) -> &crate::advanced::MemoryEvictions<V> {
         self.inner.memory.evictions()
     }
@@ -84,23 +92,28 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         self.register_plugin(super::plugin::adapter(plugin, &self.inner))
     }
     /// Static default options; per-key providers may override them.
+    #[must_use]
     pub fn entry_options(&self) -> EntryOptions {
         self.inner.default_options.clone()
     }
     /// Independent tag/clear operation defaults; key providers do not affect them.
+    #[must_use]
     pub fn tags_entry_options(&self) -> EntryOptions {
         self.inner.tags_default_options.clone()
     }
 
     /// The selected secondary control-read contract.
+    #[must_use]
     pub fn marker_read_policy(&self) -> MarkerReadPolicy {
         self.inner.marker_reads.policy()
     }
     /// The independent marker snapshot lifetime/repair contract.
+    #[must_use]
     pub fn marker_lifecycle_policy(&self) -> MarkerLifecyclePolicy {
         self.inner.marker_reads.lifecycle_policy()
     }
     /// Configured subscription readiness policy.
+    #[must_use]
     pub fn wait_for_initial_backplane_subscribe(&self) -> bool {
         self.inner.wait_for_initial_backplane_subscribe
     }
@@ -118,6 +131,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             .await
     }
     /// Number of exact queued/in-flight recovery operations (zero when disabled).
+    #[must_use]
     pub fn pending_recovery(&self) -> usize {
         self.inner
             .recovery
@@ -125,6 +139,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             .map_or(0, |recovery| recovery.len())
     }
     /// Immutable diagnostic ticket for a data key; it pins the exact commit lane.
+    #[must_use]
     pub fn recovery_ticket(&self, key: impl AsRef<str>) -> Option<ReplayTicket> {
         let key = self.worker().full_key(key.as_ref());
         self.inner
@@ -133,6 +148,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             .and_then(|recovery| recovery.snapshot(&key))
     }
     /// Immutable pending tag/clear durable, observation-population or notification stage.
+    #[must_use]
     pub fn marker_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
         self.inner
             .recovery
@@ -140,6 +156,7 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
             .and_then(|recovery| recovery.marker_work(&self.inner.scope, kind))
     }
     /// Immutable finite observation repair, distinct from durable tag/clear work.
+    #[must_use]
     pub fn marker_snapshot_recovery_ticket(&self, kind: &MarkerKind) -> Option<ReplayTicket> {
         self.inner
             .recovery
@@ -1306,10 +1323,12 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         Ok(())
     }
     /// The supplied L1 provider, when one was explicitly configured.
+    #[must_use]
     pub fn memory_storage(&self) -> Option<&Arc<dyn crate::provider::MemoryStorage<V>>> {
         self.inner.memory.provider()
     }
     /// The actual supplied secondary observation L1, when configured.
+    #[must_use]
     pub fn marker_memory_storage(
         &self,
     ) -> Option<&Arc<dyn crate::provider::MemoryStorage<crate::advanced::MarkerObservation>>> {

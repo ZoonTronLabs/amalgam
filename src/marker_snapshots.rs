@@ -25,6 +25,7 @@ pub enum MarkerLifecyclePolicy {
 
 /// Invalid construction of a control snapshot or its resource bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum MarkerSnapshotValidationError {
     /// A snapshot must satisfy created <= logical <= physical expiration.
     #[error("marker snapshot deadlines must satisfy created <= logical <= physical")]
@@ -206,6 +207,7 @@ pub enum MarkerSnapshotWriteOutcome {
 
 /// Closed failure family of a cooperative snapshot read or renewal.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum MarkerSnapshotCacheError {
     /// Original storage/protocol failure.
     #[error(transparent)]

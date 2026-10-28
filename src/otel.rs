@@ -62,6 +62,7 @@ enum OtelGuardState {
 
 /// A closed initialization/shutdown failure with its original source.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum OtelInitError {
     /// OTLP's Tokio transport needs an active runtime.
     #[error("OTLP transport requires a Tokio runtime")]

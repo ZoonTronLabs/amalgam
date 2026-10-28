@@ -59,7 +59,8 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         c.memory_storage().unwrap(),
         &(store.clone() as Arc<dyn MemoryStorage<u64>>)
     ));
-    c.set("key", 7)
+    let _ = c
+        .set("key", 7)
         .with_receipt()
         .await
         .unwrap()
@@ -80,7 +81,8 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .unwrap(),
         7
     );
-    c.expire("key")
+    let _ = c
+        .expire("key")
         .with_receipt()
         .await
         .unwrap()
@@ -88,14 +90,16 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .await
         .unwrap();
     assert!(c.try_get("key").into_future().await.unwrap().is_none());
-    c.set("key", 8)
+    let _ = c
+        .set("key", 8)
         .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    c.remove("key")
+    let _ = c
+        .remove("key")
         .with_receipt()
         .await
         .unwrap()
@@ -103,14 +107,16 @@ async fn supplied_store_is_the_actual_l1_for_all_basic_operations() {
         .await
         .unwrap();
     assert!(!store.state.lock().unwrap().records.contains_key("key"));
-    c.set("other", 9)
+    let _ = c
+        .set("other", 9)
         .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    c.clear(ClearMode::Remove)
+    let _ = c
+        .clear(ClearMode::Remove)
         .with_receipt()
         .await
         .unwrap()
@@ -156,7 +162,8 @@ async fn disabled_store_returns_computed_value_with_rejected_admission() {
 async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction() {
     let store = MapStorage::limited(Limit::Entries(1));
     let c = cache(&store);
-    c.set("pinned", 13)
+    let _ = c
+        .set("pinned", 13)
         .options(|_| opts().with_priority(Priority::NeverRemove))
         .with_receipt()
         .await
@@ -179,14 +186,16 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
         ))
     ));
     assert_eq!(c.try_get("pinned").into_future().await.unwrap(), Some(13));
-    c.remove("pinned")
+    let _ = c
+        .remove("pinned")
         .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    c.set("low", 15)
+    let _ = c
+        .set("low", 15)
         .with_receipt()
         .await
         .unwrap()
@@ -194,7 +203,8 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
         .await
         .unwrap();
     let mut evictions = c.memory_evictions().subscribe();
-    c.set("high", 16)
+    let _ = c
+        .set("high", 16)
         .options(|_| opts().with_priority(Priority::High))
         .with_receipt()
         .await
@@ -216,7 +226,8 @@ async fn provider_owns_capacity_and_priority_without_collateral_pinned_eviction(
 async fn weight_accounting_uses_full_u64_units_and_rejection_is_explicit() {
     let store = MapStorage::limited(Limit::Weight(u128::from(u32::MAX) + 10));
     let c = cache(&store);
-    c.set("large", 17)
+    let _ = c
+        .set("large", 17)
         .options(|_| opts().with_size(i64::from(u32::MAX) + 5))
         .with_receipt()
         .await
@@ -311,7 +322,8 @@ async fn controlled_clock_keeps_values_until_the_actual_physical_deadline() {
         .default_options(EntryOptions::new(Duration::from_millis(20)))
         .try_build()
         .unwrap();
-    c.set("clock", 29)
+    let _ = c
+        .set("clock", 29)
         .with_receipt()
         .await
         .unwrap()
@@ -336,7 +348,8 @@ async fn system_clock_retires_physically_expired_records() {
         .default_options(EntryOptions::new(Duration::from_millis(20)))
         .try_build()
         .unwrap();
-    c.set("clock", 31)
+    let _ = c
+        .set("clock", 31)
         .with_receipt()
         .await
         .unwrap()
@@ -397,7 +410,8 @@ async fn eager_refresh_updates_the_supplied_store_in_the_background() {
         )
         .try_build()
         .unwrap();
-    c.set("eager", 41)
+    let _ = c
+        .set("eager", 41)
         .with_receipt()
         .await
         .unwrap()
@@ -465,7 +479,8 @@ async fn write_remove_maintenance_and_usage_errors_remain_typed() {
         Fault::Insert
     );
     *store.fault.lock().unwrap() = None;
-    c.set("k", 53)
+    let _ = c
+        .set("k", 53)
         .with_receipt()
         .await
         .unwrap()
@@ -492,7 +507,8 @@ async fn write_remove_maintenance_and_usage_errors_remain_typed() {
 async fn failed_physical_clear_still_prevents_old_records_from_becoming_visible() {
     let store = MapStorage::new();
     let c = cache(&store);
-    c.set("k", 59)
+    let _ = c
+        .set("k", 59)
         .with_receipt()
         .await
         .unwrap()
@@ -515,7 +531,8 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
     let store = MapStorage::new();
     let a = cache(&store);
     let b = cache(&store);
-    a.set("shared", 61)
+    let _ = a
+        .set("shared", 61)
         .with_receipt()
         .await
         .unwrap()
@@ -533,7 +550,8 @@ async fn shared_store_is_reused_and_shutdown_does_not_dispose_another_cache() {
     );
     a.shutdown().await.unwrap();
     drop(a);
-    b.set("shared", 67)
+    let _ = b
+        .set("shared", 67)
         .with_receipt()
         .await
         .unwrap()
@@ -556,21 +574,24 @@ async fn shared_provider_clear_is_isolated_by_the_actual_key_prefix() {
         .memory_storage(store.clone())
         .try_build()
         .unwrap();
-    a.set("key", 71)
+    let _ = a
+        .set("key", 71)
         .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    b.set("key", 73)
+    let _ = b
+        .set("key", 73)
         .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    a.clear(ClearMode::Remove)
+    let _ = a
+        .clear(ClearMode::Remove)
         .with_receipt()
         .await
         .unwrap()
@@ -599,7 +620,8 @@ fn overlapping_clear_preserves_a_write_admitted_after_its_barrier() {
             .memory_storage(store.clone()),
     )
     .unwrap();
-    a.set("key", 79)
+    let _ = a
+        .set("key", 79)
         .with_receipt()
         .execute()
         .unwrap()
@@ -623,14 +645,15 @@ fn overlapping_clear_preserves_a_write_admitted_after_its_barrier() {
     });
     gate.entered.wait();
     clock.advance(Duration::from_secs(1));
-    b.set("key", 83)
+    let _ = b
+        .set("key", 83)
         .with_receipt()
         .execute()
         .unwrap()
         .wait()
         .unwrap();
     gate.resume.wait();
-    work.join().unwrap();
+    let _ = work.join().unwrap();
     assert_eq!(b.try_get("key").execute().unwrap(), Some(83));
     assert_eq!(a.try_get("key").execute().unwrap(), Some(83));
     a.shutdown().unwrap();
@@ -641,7 +664,7 @@ fn native_and_async_views_use_the_same_supplied_store_and_typed_failure() {
     let store = MapStorage::new();
     let native =
         BlockingCache::from_builder(Cache::builder().memory_storage(store.clone())).unwrap();
-    native
+    let _ = native
         .set("native", 89)
         .with_receipt()
         .execute()
@@ -693,7 +716,8 @@ async fn skipped_memory_options_do_not_touch_the_provider() {
         97
     );
     *store.fault.lock().unwrap() = Some(Fault::Insert);
-    c.set("skip", 101)
+    let _ = c
+        .set("skip", 101)
         .options(|_| skipped)
         .with_receipt()
         .await
@@ -781,14 +805,16 @@ async fn retired_values_are_reported_to_the_inserting_cache_of_a_shared_store() 
     let b = cache(&store);
     let mut original = a.memory_evictions().subscribe();
     let mut replacing = b.memory_evictions().subscribe();
-    a.set("key", 103)
+    let _ = a
+        .set("key", 103)
         .with_receipt()
         .await
         .unwrap()
         .wait()
         .await
         .unwrap();
-    b.set("key", 107)
+    let _ = b
+        .set("key", 107)
         .with_receipt()
         .await
         .unwrap()
@@ -842,7 +868,7 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    source
+    let _ = source
         .set("value", 109_u64)
         .with_receipt()
         .await
@@ -872,7 +898,8 @@ async fn older_l2_hydration_cannot_replace_another_cache_shared_l1_write() {
     let work = tokio::spawn(async move { reading.try_get("value").into_future().await });
     pause.entered.notified().await;
     clock.advance(Duration::from_secs(1));
-    b.set("value", 113_u64)
+    let _ = b
+        .set("value", 113_u64)
         .with_receipt()
         .await
         .unwrap()
@@ -906,7 +933,8 @@ async fn soft_timeout_retains_background_completion_in_supplied_storage() {
         .default_options(options)
         .try_build()
         .unwrap();
-    c.set("key", 127)
+    let _ = c
+        .set("key", 127)
         .with_receipt()
         .await
         .unwrap()
@@ -1003,20 +1031,21 @@ async fn original_value_destruction_follows_provider_and_factory_guards() {
         .default_options(options)
         .try_build()
         .unwrap();
-    c.set(
-        "key",
-        Arc::new(ReentrantDrop {
-            store: Arc::downgrade(&store),
-            locker: locker.clone(),
-            drops: drops.clone(),
-        }),
-    )
-    .with_receipt()
-    .await
-    .unwrap()
-    .wait()
-    .await
-    .unwrap();
+    let _ = c
+        .set(
+            "key",
+            Arc::new(ReentrantDrop {
+                store: Arc::downgrade(&store),
+                locker: locker.clone(),
+                drops: drops.clone(),
+            }),
+        )
+        .with_receipt()
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
     clock.advance(Duration::from_millis(250));
     let next = Arc::new(ReentrantDrop {
         store: Arc::downgrade(&store),
@@ -1064,7 +1093,7 @@ impl Plugin for ReentrantObserver {
                 std::thread::sleep(Duration::from_millis(250));
                 abort.cancel();
             });
-            target
+            let _ = target
                 .set("key", 149)
                 .cancellation(source.token())
                 .with_receipt()
@@ -1095,13 +1124,15 @@ fn shared_original_observer_can_reenter_replacing_cache_after_its_commit_guard()
         BlockingCache::from_builder(Cache::builder().memory_storage(store.clone())).unwrap(),
     );
     *observer.target.lock().unwrap() = Arc::downgrade(&b);
-    a.set("key", 139)
+    let _ = a
+        .set("key", 139)
         .with_receipt()
         .execute()
         .unwrap()
         .wait()
         .unwrap();
-    b.set("key", 143)
+    let _ = b
+        .set("key", 143)
         .with_receipt()
         .execute()
         .unwrap()
@@ -1170,7 +1201,8 @@ async fn non_copy_values_use_the_same_public_storage_contract() {
         .memory_storage(store.clone())
         .try_build()
         .unwrap();
-    c.set("key", "first".to_owned())
+    let _ = c
+        .set("key", "first".to_owned())
         .with_receipt()
         .await
         .unwrap()
@@ -1193,7 +1225,8 @@ async fn non_copy_values_use_the_same_public_storage_contract() {
         c.try_get("key").into_future().await.unwrap().as_deref(),
         Some("first")
     );
-    c.remove("key")
+    let _ = c
+        .remove("key")
         .with_receipt()
         .await
         .unwrap()
@@ -1214,7 +1247,8 @@ impl Drop for CancelUnusedFactory {
 fn native_warm_unused_factory_drop_precedes_final_cancellation_check() {
     let store = MapStorage::new();
     let c = BlockingCache::from_builder(Cache::builder().memory_storage(store)).unwrap();
-    c.set("key", 157)
+    let _ = c
+        .set("key", 157)
         .with_receipt()
         .execute()
         .unwrap()

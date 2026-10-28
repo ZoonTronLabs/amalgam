@@ -40,7 +40,7 @@ async fn scalar_l2_lookup_returns_the_source_while_l1_keeps_its_shorter_limits()
             .memory_storage(memory.clone())
             .default_options(options)
             .try_build()?;
-        cache
+        let _ = cache
             .set("scalar", 7)
             .options(|options| options.with_skip_memory(false, true))
             .tags(["alpha", "beta"])
@@ -127,7 +127,7 @@ async fn scalar_stale_factory_keeps_source_fallback_after_the_hydrated_l1_expire
                 .with_skip_memory(true, false),
         )
         .try_build()?;
-    cache
+    let _ = cache
         .set("stale", 7)
         .options(|options| options.with_skip_memory(false, true))
         .tags(["source"])
@@ -184,7 +184,7 @@ async fn scalar_call_override_preserves_both_selected_auto_clone_copies() -> ama
         .value_cloner(copy.clone())
         .default_options(EntryOptions::new(Duration::from_secs(60)).with_skip_memory(true, false))
         .try_build()?;
-    cache
+    let _ = cache
         .set("copied", 7)
         .options(|options| options.with_skip_memory(false, true))
         .with_receipt()

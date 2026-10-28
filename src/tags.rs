@@ -5,6 +5,7 @@
 //! domain; an ordinary cache key never becomes an invalidation command.
 use std::collections::HashMap;
 use std::fmt::{Formatter, Result as FmtResult};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +16,7 @@ use crate::time::Timestamp;
 
 /// Rejection at the raw-string tag boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum TagError {
     /// Tags cannot be empty or consist only of whitespace.
     #[error("cache tag must not be blank")]
@@ -40,6 +42,14 @@ impl Tag {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl FromStr for Tag {
+    type Err = TagError;
+
+    fn from_str(tag: &str) -> Result<Self, Self::Err> {
+        Self::new(tag)
     }
 }
 
@@ -97,6 +107,7 @@ where
 
 /// Failures in the invalidation protocol, separate from ordinary value I/O.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum MarkerError {
     /// A marker capability was requested from a legacy byte store.
     #[error("the configured backend does not supply atomic invalidation storage")]

@@ -54,7 +54,8 @@ fn node(
         .unwrap()
 }
 async fn tagged(c: &Cache<u64>, value: u64) {
-    c.set("key", value)
+    let _ = c
+        .set("key", value)
         .tags([tag()])
         .with_receipt()
         .await
@@ -131,7 +132,8 @@ async fn shared_local_tag_fact_is_accepted_before_a_ready_value_is_returned() {
     tagged(&b, 13).await;
     assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(13));
     clock.advance(Duration::from_millis(1));
-    a.remove_by_tag(tag())
+    let _ = a
+        .remove_by_tag(tag())
         .with_receipt()
         .await
         .unwrap()
@@ -165,7 +167,8 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
         let clock = Arc::new(ManualClock::default());
         let a = node(&store, &clock, "same:");
         let b = node(&store, &clock, "same:");
-        b.set("key", 19)
+        let _ = b
+            .set("key", 19)
             .with_receipt()
             .await
             .unwrap()
@@ -174,7 +177,8 @@ async fn shared_remove_and_expire_clear_reach_independent_value_stores() {
             .unwrap();
         assert_eq!(b.try_get("key").into_future().await.unwrap(), Some(19));
         clock.advance(Duration::from_millis(1));
-        a.clear(mode)
+        let _ = a
+            .clear(mode)
             .with_receipt()
             .await
             .unwrap()
@@ -208,7 +212,8 @@ async fn a_foreign_fact_remains_a_host_boundary_after_provider_eviction() {
     let original = values.state.lock().unwrap().records["key"].clone();
     assert!(b.try_get("key").into_future().await.unwrap().is_some());
     clock.advance(Duration::from_millis(1));
-    a.remove_by_tag(tag())
+    let _ = a
+        .remove_by_tag(tag())
         .with_receipt()
         .await
         .unwrap()
@@ -255,7 +260,8 @@ async fn distinct_prefixes_and_local_durable_authorities_do_not_share_facts() {
             .is_some()
     );
     clock.advance(Duration::from_millis(1));
-    a.remove_by_tag(tag())
+    let _ = a
+        .remove_by_tag(tag())
         .with_receipt()
         .await
         .unwrap()
@@ -313,7 +319,7 @@ async fn durable_wire_scopes_are_isolated_in_one_observation_provider() {
         assert!(c.try_get("key").into_future().await.unwrap().is_some());
     }
     clock.advance(Duration::from_millis(1));
-    caches[0]
+    let _ = caches[0]
         .remove_by_tag(tag())
         .with_receipt()
         .await
@@ -344,7 +350,8 @@ async fn marker_lookup_and_admission_failures_keep_causes_and_do_not_run_origin(
         let store = MapStorage::new();
         let clock = Arc::new(ManualClock::default());
         let c = node(&store, &clock, "");
-        c.set("key", 41)
+        let _ = c
+            .set("key", 41)
             .with_receipt()
             .await
             .unwrap()
@@ -376,7 +383,8 @@ async fn marker_maintenance_and_usage_keep_their_original_channels() {
     let store = MapStorage::new();
     let clock = Arc::new(ManualClock::default());
     let c = node(&store, &clock, "");
-    c.set("key", 47)
+    let _ = c
+        .set("key", 47)
         .with_receipt()
         .await
         .unwrap()
@@ -411,14 +419,15 @@ async fn wrong_key_and_wrong_epoch_are_explicit_provider_contract_failures() {
                 "same:"
             },
         );
-        c.set("key", 53)
+        let _ = c
+            .set("key", 53)
             .with_receipt()
             .await
             .unwrap()
             .wait()
             .await
             .unwrap();
-        foreign
+        let _ = foreign
             .set("key", 59)
             .with_receipt()
             .await
@@ -505,7 +514,8 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
     let store = MapStorage::limited(Limit::Disabled);
     let clock = Arc::new(ManualClock::default());
     let c = node(&store, &clock, "");
-    c.set("key", 61)
+    let _ = c
+        .set("key", 61)
         .with_receipt()
         .await
         .unwrap()
@@ -527,7 +537,8 @@ async fn provider_owned_capacity_and_expiry_do_not_create_a_shadow_observation_s
         .marker_memory_storage(store.clone())
         .try_build()
         .unwrap();
-    c.set("key", 67)
+    let _ = c
+        .set("key", 67)
         .with_receipt()
         .await
         .unwrap()
@@ -555,7 +566,8 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .marker_memory_storage(store.clone())
         .try_build()
         .unwrap();
-    c.set("key", 71)
+    let _ = c
+        .set("key", 71)
         .with_receipt()
         .await
         .unwrap()
@@ -579,7 +591,8 @@ async fn marker_skips_and_zero_factory_budgets_are_independent_of_value_options(
         .marker_memory_storage(store)
         .try_build()
         .unwrap();
-    c.set("key", 73)
+    let _ = c
+        .set("key", 73)
         .with_receipt()
         .await
         .unwrap()
@@ -604,7 +617,8 @@ fn native_and_async_views_share_actual_marker_records_and_provider_lifetime() {
             .marker_memory_storage(store.clone()),
     )
     .unwrap();
-    c.set("key", 79)
+    let _ = c
+        .set("key", 79)
         .with_receipt()
         .execute()
         .unwrap()
@@ -646,7 +660,8 @@ async fn eager_local_marker_refresh_is_owned_and_replaces_actual_records() {
         .marker_memory_storage(store.clone())
         .try_build()
         .unwrap();
-    c.set("key", 89)
+    let _ = c
+        .set("key", 89)
         .with_receipt()
         .await
         .unwrap()
@@ -705,7 +720,8 @@ async fn a_delayed_lower_admission_accepts_the_concurrent_shared_maximum_before_
     let pending = tokio::spawn(async move { reader.try_get("key").into_future().await });
     gate.entered.wait();
     clock.advance(Duration::from_millis(1));
-    b.remove_by_tag(tag())
+    let _ = b
+        .remove_by_tag(tag())
         .with_receipt()
         .await
         .unwrap()
@@ -788,7 +804,8 @@ async fn failed_gap_cleanup_advances_both_layers_and_preserves_one_or_both_cause
         let clock = Arc::new(ManualClock::default());
         let bp = SnapshotBackplane::new();
         let c = full_node(&values, &markers, &clock, &bp).await;
-        c.set("key", 101)
+        let _ = c
+            .set("key", 101)
             .with_receipt()
             .await
             .unwrap()
@@ -852,7 +869,8 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
         .marker_memory_storage(markers.clone())
         .try_build()
         .unwrap();
-    a.set("key", 103)
+    let _ = a
+        .set("key", 103)
         .with_receipt()
         .await
         .unwrap()
@@ -879,7 +897,8 @@ async fn delayed_value_cleanup_already_hides_old_markers_and_preserves_new_write
     gate.entered.wait();
     assert!(old.iter().all(|record| !record.is_live_at(clock.now())));
     clock.advance(Duration::from_millis(1));
-    b.set("key", 107)
+    let _ = b
+        .set("key", 107)
         .with_receipt()
         .await
         .unwrap()
@@ -1014,7 +1033,8 @@ fn supplied_marker_store_keeps_native_and_async_locker_method_selection() {
             .marker_memory_storage(markers.clone()),
     )
     .unwrap();
-    c.set("key", 109)
+    let _ = c
+        .set("key", 109)
         .with_receipt()
         .execute()
         .unwrap()
@@ -1056,7 +1076,8 @@ async fn distributed_snapshot_hydration_and_repair_use_the_actual_external_obser
         .marker_memory_storage(store.clone())
         .try_build()
         .unwrap();
-    c.remove_by_tag(tag())
+    let _ = c
+        .remove_by_tag(tag())
         .with_receipt()
         .await
         .unwrap()
@@ -1115,7 +1136,8 @@ async fn ready_clear_invalidation_stops_before_a_later_provider_contract_fault()
     tagged(&b, 127).await;
     assert!(b.try_get("key").into_future().await.unwrap().is_some());
     clock.advance(Duration::from_millis(1));
-    a.clear(ClearMode::Remove)
+    let _ = a
+        .clear(ClearMode::Remove)
         .with_receipt()
         .await
         .unwrap()
@@ -1197,7 +1219,8 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
         131
     );
     assert!(b.try_get("key").into_future().await.unwrap().is_some());
-    a.remove_by_tag(tag())
+    let _ = a
+        .remove_by_tag(tag())
         .with_receipt()
         .await
         .unwrap()
@@ -1228,7 +1251,8 @@ async fn real_redis_l2_backplane_fenced_locker_and_external_marker_storage_inter
             .values()
             .all(|record| record.key().contains("/durable/"))
     );
-    a.clear(ClearMode::Remove)
+    let _ = a
+        .clear(ClearMode::Remove)
         .with_receipt()
         .await
         .unwrap()

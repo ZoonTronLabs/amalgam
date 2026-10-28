@@ -42,7 +42,7 @@ async fn l2_hydration_uses_the_supplied_copy_without_an_ordinary_clone() -> amal
         .value_cloner(copy.clone())
         .default_options(options.clone())
         .try_build()?;
-    cache
+    let _ = cache
         .set("payload", Payload(42))
         .options(|options| options.with_skip_memory(false, true))
         .with_receipt()

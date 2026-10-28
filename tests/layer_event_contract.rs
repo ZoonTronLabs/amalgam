@@ -101,7 +101,8 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
             stale: false
         })]
     );
-    c.remove("absent")
+    let _ = c
+        .remove("absent")
         .with_receipt()
         .await
         .unwrap()
@@ -114,7 +115,8 @@ async fn component_memory_attempts_do_not_change_the_legacy_stream() {
             key: key("absent")
         })]
     );
-    c.expire("absent")
+    let _ = c
+        .expire("absent")
         .with_receipt()
         .await
         .unwrap()
@@ -143,7 +145,8 @@ async fn rejected_and_skipped_memory_admission_never_claim_a_set() {
     ));
     assert!(drain(&mut events).is_empty());
     let skipped = options().with_skip_memory(false, true);
-    c.set("skipped", 2)
+    let _ = c
+        .set("skipped", 2)
         .options(|_| skipped)
         .with_receipt()
         .await
@@ -165,7 +168,8 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .try_build()
         .unwrap();
     let mut events = c.events().subscribe_layers();
-    c.set("tagged", 3)
+    let _ = c
+        .set("tagged", 3)
         .tags([Tag::new("group").unwrap()])
         .with_receipt()
         .await
@@ -175,7 +179,8 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .unwrap();
     drain(&mut events);
     clock.advance(Duration::from_millis(1));
-    c.remove_by_tag(Tag::new("group").unwrap())
+    let _ = c
+        .remove_by_tag(Tag::new("group").unwrap())
         .with_receipt()
         .await
         .unwrap()
@@ -192,7 +197,8 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
             stale: false
         }))
     );
-    c.set("stale", 4)
+    let _ = c
+        .set("stale", 4)
         .with_receipt()
         .await
         .unwrap()
@@ -200,7 +206,8 @@ async fn memory_hit_records_expiry_before_final_acceptance_and_secondary_tags() 
         .await
         .unwrap();
     drain(&mut events);
-    c.expire("stale")
+    let _ = c
+        .expire("stale")
         .with_receipt()
         .await
         .unwrap()
@@ -244,7 +251,8 @@ async fn decoded_l2_hit_and_memory_promotion_are_distinct_actual_facts() {
     let b = hybrid(clock.clone(), store.clone());
     let mut wa = a.events().subscribe_layers();
     let mut rb = b.events().subscribe_layers();
-    a.set("k", 5)
+    let _ = a
+        .set("k", 5)
         .with_receipt()
         .await
         .unwrap()
@@ -279,7 +287,8 @@ async fn l2_hit_precedes_durable_tag_rejection_without_a_fabricated_miss() {
     let clock = Arc::new(ManualClock::default());
     let store = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let a = hybrid(clock.clone(), store.clone());
-    a.set("k", 5)
+    let _ = a
+        .set("k", 5)
         .tags([Tag::new("g").unwrap()])
         .with_receipt()
         .await
@@ -288,7 +297,8 @@ async fn l2_hit_precedes_durable_tag_rejection_without_a_fabricated_miss() {
         .await
         .unwrap();
     clock.advance(Duration::from_millis(1));
-    a.remove_by_tag(Tag::new("g").unwrap())
+    let _ = a
+        .remove_by_tag(Tag::new("g").unwrap())
         .with_receipt()
         .await
         .unwrap()
@@ -588,7 +598,8 @@ async fn rich_backplane_frames_preserve_source_revision_action_key_and_rejected_
         .try_build()
         .unwrap();
     let mut events = c.events().subscribe_layers();
-    c.set("k", 12)
+    let _ = c
+        .set("k", 12)
         .with_receipt()
         .await
         .unwrap()
@@ -639,7 +650,8 @@ async fn explicit_layer_skips_and_ignore_incoming_emit_no_false_component_calls(
         .with_skip_memory(true, true)
         .with_skip_distributed(true, true)
         .with_skip_backplane_notifications(true);
-    c.set("skip", 13)
+    let _ = c
+        .set("skip", 13)
         .options(|_| skip.clone())
         .with_receipt()
         .await
@@ -743,7 +755,8 @@ async fn actual_redis_layers_cover_fenced_factory_cold_peer_and_pubsub_remove() 
         19
     );
     assert!(drain(&mut eb).iter().any(|e| matches!(e, LayerEvent::Distributed(DistributedEvent::Hit { key, stale:false }) if key.as_ref()==format!("{prefix}k"))));
-    a.remove("k")
+    let _ = a
+        .remove("k")
         .with_receipt()
         .await
         .unwrap()
@@ -913,7 +926,7 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
     let clock = Arc::new(ManualClock::default());
     let store = Arc::new(InMemoryDistributedCache::new(clock.clone()));
     let writer = hybrid(clock.clone(), store.clone());
-    writer
+    let _ = writer
         .set("key", 28)
         .with_receipt()
         .await

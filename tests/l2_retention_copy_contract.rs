@@ -66,7 +66,7 @@ async fn cache_l2_retention_uses_selected_copies_and_preserves_all_metadata() ->
             .value_cloner(copy.clone())
             .default_options(options.clone())
             .try_build()?;
-        cache
+        let _ = cache
             .set("payload", Payload(42))
             .options(|options| options.with_skip_memory(false, true))
             .tags(["alpha", "beta"])

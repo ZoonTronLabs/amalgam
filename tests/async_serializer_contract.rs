@@ -95,7 +95,7 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
         // Builder discovery of an auto-cloner is independent of runtime codec
         // selection. Async preference must not query the sync hook during I/O.
         counts.sync_queries.store(0, Ordering::SeqCst);
-        cache
+        let _ = cache
             .set("value", 7)
             .with_receipt()
             .await
@@ -113,7 +113,7 @@ async fn codec_preference_uses_the_available_model_for_write_read_and_expiration
             Some(&7)
         );
         clock.advance(Duration::from_millis(1));
-        cache
+        let _ = cache
             .expire("value")
             .distributed_policy(amalgam::advanced::DistributedExpirePolicy::RetainStale)
             .with_receipt()
@@ -256,7 +256,7 @@ async fn legacy_snapshot_overrides_keep_their_contract_even_with_async_preferenc
         .serialization_mode(SerializationMode::AsyncPreferred)
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("value", 7)
         .with_receipt()
         .await

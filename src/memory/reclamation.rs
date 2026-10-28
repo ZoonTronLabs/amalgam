@@ -112,6 +112,7 @@ impl<V: Send + Sync + 'static> Reclamation<V> {
 
 /// Fields release coordination first, then the retirement owner, even if an
 /// unpolled future is dropped. No destructor runs while the queue mutex is held.
+#[must_use = "retain the guard until coordination and deferred reclamation can be released"]
 pub(crate) struct ReclamationGuard<G> {
     guard: G,
     _owner: Option<Arc<dyn ReclamationFence>>,

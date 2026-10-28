@@ -15,10 +15,12 @@ use crate::lifecycle::Tasks;
 use crate::{Error, Result};
 
 #[allow(dead_code, reason = "variants own RAII guards released on enum drop")]
+#[must_use = "retain the local guard until protected work is complete"]
 pub(crate) enum LocalGuard {
     Builtin(KeyGuard),
     Custom(MemoryLock),
 }
+#[must_use = "retain the eager lock and its cancellation source while refresh work is active"]
 pub(crate) struct EagerLock {
     pub(crate) guard: LocalGuard,
     pub(crate) source: CancellationSource,

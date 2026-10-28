@@ -338,7 +338,7 @@ async fn resilient_observer_survives_transient_lag() {
         .unwrap();
     let mut events = cache.events().subscribe_resilient();
     for i in 0..10 {
-        cache
+        let _ = cache
             .set(format!("k-{i}"), i)
             .with_receipt()
             .await
@@ -352,7 +352,7 @@ async fn resilient_observer_survives_transient_lag() {
         .unwrap()
         .unwrap();
     assert!(events.lost_events() > 0);
-    cache
+    let _ = cache
         .set("after-lag", 11)
         .with_receipt()
         .await

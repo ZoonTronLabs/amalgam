@@ -262,6 +262,12 @@ pub enum Timeout {
     After(Duration),
 }
 
+impl From<Option<Duration>> for Timeout {
+    fn from(duration: Option<Duration>) -> Self {
+        Self::from_option(duration)
+    }
+}
+
 impl Timeout {
     /// Builds a timeout from an optional duration (`None` ⇒ [`Timeout::Infinite`]).
     #[must_use]

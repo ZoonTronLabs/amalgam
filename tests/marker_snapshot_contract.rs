@@ -212,7 +212,7 @@ async fn seeded(clock: Arc<ManualClock>) -> Arc<InMemoryDistributedCache> {
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("key", 7)
         .options(|_| EntryOptions::new(Duration::from_secs(3600)))
         .tags(vec![Tag::new("group").unwrap()].into_boxed_slice())

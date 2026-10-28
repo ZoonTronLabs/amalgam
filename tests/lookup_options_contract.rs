@@ -42,13 +42,13 @@ async fn l2_lookup_preserves_raw_provider_context_and_explicit_options_precedenc
         .serializer(Arc::new(JsonSerializer))
         .default_options(EntryOptions::new(Duration::from_secs(60)))
         .try_build()?;
-    writer
+    let _ = writer
         .set("ordinary", 11)
         .with_receipt()
         .await?
         .wait()
         .await?;
-    writer.set("short", 12).with_receipt().await?.wait().await?;
+    let _ = writer.set("short", 12).with_receipt().await?.wait().await?;
 
     let provider = Arc::new(DefaultsProvider::default());
     let defaults = EntryOptions::new(Duration::from_secs(10)).with_skip_memory(true, false);

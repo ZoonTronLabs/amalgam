@@ -26,6 +26,7 @@ pub enum BlockingThreadPool {
 }
 /// Configuration rejection and operating-system failure remain distinct.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum BlockingRuntimeError {
     /// The requested positive thread bound exceeds the explicit resource limit.
     #[error("{pool:?} count {requested} exceeds {maximum}")]
@@ -58,6 +59,7 @@ fn validate_threads(
 
 /// Expected rejection while dispatching a synchronous factory.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum BlockingDispatchError {
     /// Nested callback dispatch exceeded the explicit resource bound.
     #[error("synchronous callback nesting exceeds {limit} callbacks")]
@@ -143,7 +145,9 @@ pub(super) struct FactoryExecutor {
     permits: Arc<Semaphore>,
     lineage: FactoryLineage,
 }
+#[must_use = "retain the guard while the factory thread uses its execution lineage"]
 pub(super) struct FactoryThreadGuard(FactoryLineage);
+#[must_use = "retain the scope while the callback owns its cache execution"]
 pub(super) struct CallbackScope(usize);
 impl Drop for CallbackScope {
     fn drop(&mut self) {

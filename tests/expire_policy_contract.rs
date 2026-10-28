@@ -30,7 +30,7 @@ async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() 
                 .unwrap()
         };
         let first = build();
-        first
+        let _ = first
             .set("key", 7)
             .with_receipt()
             .await
@@ -39,7 +39,7 @@ async fn expiration_policy_keeps_l1_stale_and_selects_l2_retention_or_removal() 
             .await
             .unwrap();
         clock.advance(Duration::from_millis(1));
-        first
+        let _ = first
             .expire("key")
             .distributed_policy(policy)
             .with_receipt()
@@ -79,7 +79,7 @@ async fn explicit_skip_and_cancellation_still_control_distributed_removal() {
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 7)
         .with_receipt()
         .await

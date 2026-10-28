@@ -194,7 +194,7 @@ fn native_request_keeps_captures_lazy_and_runs_the_factory_on_the_caller() {
     let amalgam::advanced::BlockingCommitReceipt::Mutation(receipt) = created.commit else {
         panic!("a newly computed value must retain its actual mutation receipt");
     };
-    receipt.wait().unwrap();
+    let _ = receipt.wait().unwrap();
     cache.shutdown().unwrap();
 }
 

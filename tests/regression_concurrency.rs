@@ -484,7 +484,8 @@ async fn eager_refresh_must_prefer_a_newer_l2_entry_before_running_factory() {
     let b = build();
     a.set("k", 1).await.unwrap();
     clock.advance(Duration::from_secs(6));
-    b.set("k", 2)
+    let _ = b
+        .set("k", 2)
         .with_receipt()
         .await
         .expect("newer write accepted")

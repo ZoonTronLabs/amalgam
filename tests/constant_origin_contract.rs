@@ -92,7 +92,7 @@ async fn async_warm_constant_never_eagerly_replaces_the_existing_value() {
         .plugin(events.clone())
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("warm", 1)
         .options(|_| eager())
         .with_receipt()
@@ -125,7 +125,7 @@ fn native_warm_constant_never_eagerly_replaces_the_existing_value() {
         Cache::builder().clock(clock.clone()).plugin(events.clone()),
     )
     .unwrap();
-    cache
+    let _ = cache
         .set("warm", 1)
         .options(|_| eager())
         .with_receipt()

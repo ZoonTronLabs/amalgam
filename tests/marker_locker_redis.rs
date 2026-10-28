@@ -196,7 +196,7 @@ async fn fixture_with_options(url: &str, test: &str, options: EntryOptions) -> F
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("key", 7_u64)
         .options(|_| EntryOptions::new(Duration::from_secs(3600)))
         .tags(vec![Tag::new("snapshot-group").unwrap()].into_boxed_slice())

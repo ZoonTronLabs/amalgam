@@ -31,6 +31,7 @@ pub trait DefaultEntryOptionsProvider: Send + Sync {
 
 /// A named-cache resolution failure.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum RegistryError {
     /// Registry names must identify a cache.
     #[error("registry name must not be blank")]
@@ -148,8 +149,11 @@ impl<V: Clone + Send + Sync + 'static> CacheRegistry<V> {
     }
 
     /// Registers/replaces a cache. Replacement supersedes an in-flight builder.
-    /// Panics only for an invalid developer-supplied registry name; use
-    /// try_register for expected configuration rejection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the developer-supplied registry name is invalid. Use
+    /// [`Self::try_register`] for expected configuration rejection.
     pub fn register(&self, name: impl Into<String>, cache: Cache<V>) {
         if let Err(error) = self.try_register(&name.into(), cache) {
             panic!("invalid registry configuration: {error}");
@@ -185,6 +189,12 @@ impl<V: Clone + Send + Sync + 'static> CacheRegistry<V> {
 
     /// Legacy infallible adapter. Same-name recursive initialization is a
     /// developer contract violation instead of a permanent deadlock.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the name is invalid or the same thread recursively initializes
+    /// that name. Panics from `build` propagate. Use [`Self::try_get_or_create`]
+    /// for expected configuration rejection.
     pub fn get_or_create(&self, name: &str, build: impl FnOnce() -> Cache<V>) -> Cache<V> {
         match self.try_get_or_create(name, || Ok(build())) {
             Ok(cache) => cache,

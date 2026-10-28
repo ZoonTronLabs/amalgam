@@ -108,7 +108,7 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
         .default_options(options())
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("k", 1)
         .with_receipt()
         .await
@@ -132,7 +132,7 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
     } else {
         builder.try_build().unwrap()
     };
-    reader
+    let _ = reader
         .set("proof", 3)
         .options(|_| options().with_skip_distributed(false, true))
         .with_receipt()
@@ -150,7 +150,7 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
             }))
         }
         Hydration::Passive => {
-            reader
+            let _ = reader
                 .set("k", 0)
                 .options(|_| options().with_skip_distributed(false, true))
                 .with_receipt()
@@ -174,7 +174,7 @@ async fn gap_during_external_cloner(hydration: Hydration, bounded: bool) {
     };
     boundary.wait().await;
     lose_continuity(&reader, &backplane, &clock).await;
-    writer
+    let _ = writer
         .remove("k")
         .with_receipt()
         .await
@@ -263,7 +263,7 @@ async fn gap_during_storage_insertion(bounded: bool) {
         .default_options(options())
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set(
             "k",
             Payload {
@@ -298,7 +298,7 @@ async fn gap_during_storage_insertion(bounded: bool) {
     } else {
         builder.try_build().unwrap()
     };
-    reader
+    let _ = reader
         .set(
             "proof",
             Payload {
@@ -320,7 +320,7 @@ async fn gap_during_storage_insertion(bounded: bool) {
     });
     boundary.wait().await;
     lose_continuity(&reader, &backplane, &clock).await;
-    writer
+    let _ = writer
         .remove("k")
         .with_receipt()
         .await

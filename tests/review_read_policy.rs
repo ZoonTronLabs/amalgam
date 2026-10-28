@@ -48,7 +48,7 @@ async fn distributed_hard_read_budget_includes_required_marker_read() {
         .serializer(Arc::new(JsonSerializer))
         .try_build()
         .unwrap();
-    writer
+    let _ = writer
         .set("key", 7)
         .with_receipt()
         .await
@@ -124,7 +124,7 @@ async fn read_preserves_fusioncache_captured_stale_after_l2_wait() {
         .default_options(options)
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 1)
         .with_receipt()
         .await
@@ -168,7 +168,7 @@ async fn stale_distributed_only_read_is_attributed_to_distributed_layer() {
         .default_options(options.clone())
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 7)
         .with_receipt()
         .await
@@ -219,7 +219,7 @@ async fn required_marker_read_respects_soft_budget_and_preserves_origin_fallback
         .default_options(options)
         .try_build()
         .unwrap();
-    cache
+    let _ = cache
         .set("key", 7)
         .with_receipt()
         .await
@@ -297,7 +297,7 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
             .unwrap()
     };
     let writer = build();
-    writer
+    let _ = writer
         .set("key", 1)
         .with_receipt()
         .await
@@ -336,7 +336,7 @@ async fn optional_hydration_does_not_wait_on_a_newer_parked_commit() {
     let observed = completed.ok().map(|result| result.unwrap().unwrap());
     let premature_wait = observed.is_none();
     backend.write_release.add_permits(1);
-    write.await.unwrap().unwrap();
+    let _ = write.await.unwrap().unwrap();
     if premature_wait {
         read.await.unwrap().unwrap();
     } else {

@@ -126,6 +126,11 @@ impl<V: Clone> DistributedEntry<V> {
 
     /// Legacy infallible DTO adapter. Invalid manually constructed metadata is a
     /// contract violation; distributed input must use `try_into_entry`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this envelope has invalid deadlines or tags. Use
+    /// [`Self::try_into_entry`] for distributed input.
     #[must_use]
     pub fn into_entry(self, now: Timestamp) -> Entry<V> {
         match self.try_into_entry(now) {
@@ -886,6 +891,7 @@ pub enum LeasedWriteOutcome {
 /// preserving their original source. Cancellation cannot be suppressed as a
 /// provider fault or mistaken for a successful absent marker.
 #[derive(Debug, thiserror::Error)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum MarkerReadError {
     /// Storage or control protocol failure.
     #[error(transparent)]

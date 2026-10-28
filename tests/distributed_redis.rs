@@ -767,7 +767,7 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .try_build_ready()
         .await
         .unwrap();
-    cache
+    let _ = cache
         .set("local", 42)
         .with_receipt()
         .await
@@ -775,7 +775,7 @@ async fn live_best_effort_retains_local_and_hydrated_l1_over_a_native_subscriber
         .wait()
         .await
         .unwrap();
-    writer
+    let _ = writer
         .set("hydrated", 41)
         .with_receipt()
         .await

@@ -129,7 +129,7 @@ async fn explicit_real_time_clock_keeps_elapsed_expiry_when_its_timestamp_stops(
             builder = builder.max_capacity(capacity);
         }
         let cache = builder.try_build().unwrap();
-        cache
+        let _ = cache
             .set("k", 7_u64)
             .with_receipt()
             .await

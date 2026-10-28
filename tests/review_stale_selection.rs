@@ -33,7 +33,7 @@ async fn selected_stale_source(source: NewerSource) {
             .unwrap()
     };
     let cache = build();
-    cache
+    let _ = cache
         .set("key", 1)
         .with_receipt()
         .await
@@ -47,7 +47,7 @@ async fn selected_stale_source(source: NewerSource) {
     let writer = build();
     match source {
         NewerSource::Memory | NewerSource::EqualStampMemory => {
-            cache
+            let _ = cache
                 .set("key", 2)
                 .options(|_| opts.clone().with_skip_distributed(false, true))
                 .with_receipt()
@@ -58,7 +58,7 @@ async fn selected_stale_source(source: NewerSource) {
                 .unwrap();
         }
         NewerSource::Distributed => {
-            writer
+            let _ = writer
                 .set("key", 2)
                 .with_receipt()
                 .await

@@ -215,6 +215,7 @@ impl Drop for ReadyObservation<'_> {
 
 // A plain, untraced lookup has no span or timer state to transport. Late
 // recipients still observe its one terminal outcome, including unwind.
+#[must_use = "dropping an unfinished observation records cancellation"]
 pub(crate) struct QuietObservation<'a> {
     events: &'a Events,
     operation: CacheOperation,

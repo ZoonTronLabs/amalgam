@@ -164,7 +164,7 @@ async fn native_sdk_counts_all_warm_reads_even_when_broadcast_loses_events() {
         .try_build()
         .unwrap();
     let mut stream = cache.events().subscribe_layers();
-    cache
+    let _ = cache
         .set("secret-key", 17)
         .with_receipt()
         .await
@@ -235,7 +235,8 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
     };
     let a = build("secret-a");
     let b = build("secret-b");
-    a.set("secret-key", 23)
+    let _ = a
+        .set("secret-key", 23)
         .with_receipt()
         .await
         .unwrap()
@@ -254,7 +255,8 @@ async fn cold_l2_hydration_and_remove_are_separate_from_logical_cache_metrics() 
     assert_eq!(capture.counter("amalgam.distributed.get", "l2"), 1);
     assert_eq!(capture.counter("amalgam.distributed.hit", "l2"), 1);
     assert_eq!(capture.counter("amalgam.cache.hit", "l2"), 1);
-    a.remove("secret-key")
+    let _ = a
+        .remove("secret-key")
         .with_receipt()
         .await
         .unwrap()
@@ -288,7 +290,7 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             .try_build()
             .unwrap();
         let tag = Tag::new("private-tag").unwrap();
-        cache
+        let _ = cache
             .set("key", 17)
             .tags([tag.clone()])
             .with_receipt()
@@ -297,7 +299,7 @@ async fn individual_tags_are_exported_only_when_explicitly_requested() {
             .wait()
             .await
             .unwrap();
-        cache
+        let _ = cache
             .remove_by_tag(tag)
             .with_receipt()
             .await
@@ -337,7 +339,7 @@ async fn cache_name_budget_is_historical_shared_and_does_not_mix_named_series() 
             .plugin(plugin.clone())
             .try_build()
             .unwrap();
-        cache
+        let _ = cache
             .set("private-key", 17)
             .with_receipt()
             .await
@@ -480,7 +482,8 @@ async fn backplane_has_its_own_scope_and_records_only_foreign_receives() {
     };
     let a = build("a");
     let b = build("b");
-    a.set("key", 17)
+    let _ = a
+        .set("key", 17)
         .with_receipt()
         .await
         .unwrap()
@@ -623,7 +626,8 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
         .default_options(options())
         .try_build()
         .unwrap();
-    a.set("key", 17)
+    let _ = a
+        .set("key", 17)
         .with_receipt()
         .await
         .unwrap()
@@ -631,7 +635,8 @@ async fn eager_refresh_that_reuses_a_newer_l2_value_does_not_fabricate_factory_s
         .await
         .unwrap();
     clock.advance(Duration::from_secs(31));
-    b.set("key", 23)
+    let _ = b
+        .set("key", 23)
         .with_receipt()
         .await
         .unwrap()

@@ -37,7 +37,7 @@ async fn paused_origin(mutation: LaterMutation) {
             .await
     });
     entered.await.unwrap();
-    match mutation {
+    let _ = match mutation {
         LaterMutation::Set => cache
             .set("key", 2)
             .with_receipt()

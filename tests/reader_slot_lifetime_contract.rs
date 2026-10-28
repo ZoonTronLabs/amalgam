@@ -18,7 +18,7 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
     let cache = Cache::<Arc<Value>>::new();
     let original = Arc::new(Value(1));
     let old = Arc::downgrade(&original);
-    cache
+    let _ = cache
         .set("replace", original)
         .with_receipt()
         .await
@@ -26,7 +26,7 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
         .wait()
         .await
         .unwrap();
-    cache
+    let _ = cache
         .set("replace", Arc::new(Value(2)))
         .with_receipt()
         .await
@@ -40,7 +40,7 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
     );
     let removed = Arc::new(Value(3));
     let old = Arc::downgrade(&removed);
-    cache
+    let _ = cache
         .set("remove", removed)
         .with_receipt()
         .await
@@ -48,7 +48,7 @@ async fn remove_and_replace_release_unobserved_values_before_receipt_completion(
         .wait()
         .await
         .unwrap();
-    cache
+    let _ = cache
         .remove("remove")
         .with_receipt()
         .await
@@ -94,7 +94,7 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
         .unwrap();
     let original = Arc::new(Value(1));
     let old = Arc::downgrade(&original);
-    cache
+    let _ = cache
         .set("key", original)
         .with_receipt()
         .await
@@ -118,7 +118,7 @@ async fn replacement_keeps_an_owned_cloner_source_alive_and_shutdown_drains_its_
     tokio::time::timeout(Duration::from_secs(2), gate.entered.notified())
         .await
         .unwrap();
-    cache
+    let _ = cache
         .set("key", Arc::new(Value(2)))
         .with_receipt()
         .await

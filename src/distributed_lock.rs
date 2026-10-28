@@ -20,6 +20,7 @@ use crate::time::{Clock, Timeout, Timestamp};
 
 /// Expected lease rejection or infrastructure failure.
 #[derive(Debug, thiserror::Error, Clone)]
+#[must_use = "errors must be handled or explicitly discarded"]
 pub enum LeaseError {
     /// Owned acquisition requires an active runtime before any effect.
     #[error("owned distributed acquisition requires a Tokio runtime")]
@@ -632,6 +633,7 @@ struct LeaseInner {
 }
 
 /// Owned acquisition handle. Drop initiates bounded compare-release cleanup.
+#[must_use = "retain the lease until distributed work is complete or release it explicitly"]
 pub struct DistributedLease {
     inner: Option<Arc<LeaseInner>>,
 }
