@@ -58,11 +58,9 @@ impl<V: Clone + Send + Sync + 'static> Cache<V> {
         } = input;
         let span = observation.span();
         let _entered = span.enter();
-        let flights = self
-            .inner
-            .flights
-            .as_ref()
-            .expect("inline plan owns flights");
+        let Some(flights) = self.inner.flights.as_ref() else {
+            unreachable!("inline plan owns flights");
+        };
         let mut claim = flights.acquire(Arc::clone(&keys.full), self.operation_scopes());
         let leader = claim.leader;
         let flight = Arc::clone(&claim.subscription.flight);

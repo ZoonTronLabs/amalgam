@@ -1,5 +1,9 @@
 //! Cache-owned acquisition budgets, cancellation and provider selection.
-use super::*;
+use super::{
+    Arc, BlockingMemoryLocker, CancellationSource, FactoryCancellation, KeyGuard, KeyedLock,
+    MemoryLock, MemoryLockKind, MemoryLockOutcome, MemoryLockRequest, MemoryLocker,
+    MemoryLockerContext, MemoryLockerError, Reason, Timeout,
+};
 use crate::events::Events;
 use crate::lifecycle::Tasks;
 use crate::{Error, Result};

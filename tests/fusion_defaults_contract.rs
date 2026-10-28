@@ -1,4 +1,6 @@
 //! FusionCache-compatible availability defaults and explicit strict capabilities.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::*;
 use amalgam::*;
 use async_trait::async_trait;

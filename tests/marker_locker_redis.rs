@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Native core acceptance: repair ownership, release and replaced-token rejection.
 use amalgam::advanced::*;

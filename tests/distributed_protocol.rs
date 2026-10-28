@@ -1,5 +1,7 @@
 //! Native protocol acceptance. Cache orchestration is tested in the audit gates.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

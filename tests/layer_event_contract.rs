@@ -1,4 +1,6 @@
 //! Component facts differ from logical acceptance, bypass and cancellation.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;
@@ -938,6 +940,7 @@ async fn decoded_hit_followed_by_marker_timeout_never_claims_an_additional_compo
     reader.shutdown().await.unwrap();
 }
 
+#[cfg(feature = "redis")]
 async fn forbidden_factory(
     message: &'static str,
 ) -> std::result::Result<u64, amalgam::FactoryError> {

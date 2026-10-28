@@ -1,4 +1,6 @@
 //! Independent user-supplied local coordination, including owned background work.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::locking::{KeyGuard, KeyedLock};
 use amalgam::provider::*;

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::*;
 use amalgam::*;
 use std::sync::Arc;

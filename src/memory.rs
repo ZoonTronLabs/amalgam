@@ -1013,7 +1013,7 @@ impl<V> From<Vec<Retirement<V>>> for Retirements<V> {
     fn from(mut values: Vec<Retirement<V>>) -> Self {
         match values.len() {
             0 => Self::None,
-            1 => Self::One(values.pop().expect("one retirement was present")),
+            1 => Self::One(values.remove(0)),
             _ => Self::Many(values),
         }
     }

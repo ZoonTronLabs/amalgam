@@ -79,12 +79,19 @@ mod demo {
                 cache
                     .set(format!("explicit-{i}"), "set-directly".to_owned())
                     .await
-                    .unwrap();
+                    .unwrap_or_else(|error| {
+                        panic!("the example cache operation must succeed: {error:?}")
+                    });
             }
 
             // A remove every few iterations so the keys churn and re-miss later.
             if i % 8 == 0 {
-                cache.remove(format!("item-{}", i % 4)).await.unwrap();
+                cache
+                    .remove(format!("item-{}", i % 4))
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("the example cache operation must succeed: {error:?}")
+                    });
             }
 
             if i % 20 == 0 {

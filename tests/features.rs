@@ -11,6 +11,8 @@
 //! lock polling, backplane fan-out) uses the real tokio timer with generous
 //! margins. Non-obvious timing is explained inline at each call site.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;

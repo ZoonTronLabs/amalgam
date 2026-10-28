@@ -1,4 +1,6 @@
 //! Selected layer hooks are counted and dispatched after cache coordination.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;

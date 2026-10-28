@@ -1,4 +1,6 @@
 //! Physical data keys and reverse backplane decoding preserve every wire mode.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, EntryOptions, advanced::KeyModifierMode, provider::DistributedCache,
     provider::InMemoryDistributedCache, provider::InProcessBackplane, provider::JsonSerializer,

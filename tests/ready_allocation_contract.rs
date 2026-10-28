@@ -1,5 +1,7 @@
 //! A warmed, unobserved scalar L1 read needs no heap-owned operation context.
 //! Unsafe code is restricted to this test allocator forwarding System's contract.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::future::IntoFuture;
 
 use amalgam::{Cache, EntryOptions};

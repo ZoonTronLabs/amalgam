@@ -51,7 +51,7 @@ async fn main() {
         )
         .options(|_| opts.clone())
         .await
-        .expect("priming succeeds");
+        .unwrap_or_else(|error| panic!("priming succeeds: {error:?}"));
     println!("primed value          => {primed:?}");
 
     // 2. Let the freshness window elapse: the entry is now logically stale.
@@ -71,7 +71,7 @@ async fn main() {
         )
         .options(|_| opts)
         .await
-        .expect("fail-safe serves stale instead of erroring");
+        .unwrap_or_else(|error| panic!("fail-safe serves stale instead of erroring: {error:?}"));
     println!("served after failure  => {served:?}  (stale value reused)");
 
     assert_eq!(

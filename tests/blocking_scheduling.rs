@@ -1,4 +1,6 @@
 //! Public progress and cancellation evidence for nested native factories.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::*;
 use std::num::NonZeroUsize;

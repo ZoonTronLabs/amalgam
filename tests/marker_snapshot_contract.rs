@@ -1,4 +1,6 @@
 //! Public expiring-observation contracts; permanent invalidations never expire.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;

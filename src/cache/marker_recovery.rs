@@ -1,5 +1,13 @@
 //! Original-policy observation replay and durable mutation stage transitions.
-use super::*;
+use super::{
+    AcquisitionPolicy, Arc, BackplaneCommand, CacheEvent, CancellationSource, EffectOutcome,
+    EnqueueOutcome, EntryOptions, Error, FactoryCancellation, LeaseError, LinkMode, MarkerCommand,
+    MarkerError, MarkerKind, MarkerLease, MarkerLeaseKey, MarkerLifecycleAccess, MarkerLocalCommit,
+    MarkerMutationRecovery, MarkerProviderFault, MarkerReads, MarkerReplay, MarkerSnapshot,
+    MarkerSnapshotCache, MarkerSnapshotCommit, MarkerSnapshotParticipation, MarkerSnapshotReplay,
+    MarkerSnapshotWritePolicy, MarkerWriteOutcome, Ordering, Result, SkipReason, StoredMarker,
+    Timestamp, Worker, acquire_owned_supervised,
+};
 use crate::recovery::{MarkerMutationStage, RecoveryError, RecoveryStageTransition};
 
 enum CompactionReplay {

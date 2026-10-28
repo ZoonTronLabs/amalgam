@@ -1,4 +1,6 @@
 //! Lookup defaults stay immutable across L2 and adaptive owned origin work.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::{
     DefaultEntryOptionsProvider, DistributedCache, InMemoryDistributedCache, InvalidationStore,
     JsonSerializer, ManualClock,

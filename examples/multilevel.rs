@@ -67,7 +67,7 @@ async fn main() -> amalgam::Result<()> {
                 }),
             )
             .await
-            .expect("node-1 produces the value")
+            .unwrap_or_else(|error| panic!("node-1 produces the value: {error:?}"))
     };
     println!("node-1 get_or_set => {v1:?}");
 
@@ -85,7 +85,7 @@ async fn main() -> amalgam::Result<()> {
                 }),
             )
             .await
-            .expect("node-2 reads through L2")
+            .unwrap_or_else(|error| panic!("node-2 reads through L2: {error:?}"))
     };
     println!("node-2 get_or_set => {v2:?}  (came from shared L2, no factory)");
     assert_eq!(v2, "Alice", "node-2 must serve node-1's value from L2");
@@ -97,19 +97,29 @@ async fn main() -> amalgam::Result<()> {
 
     // node-2 now has "Alice" cached in its own L1 too.
     assert_eq!(
-        node2.try_get("profile").await.unwrap().as_ref(),
+        node2
+            .try_get("profile")
+            .await
+            .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"))
+            .as_ref(),
         Some(&"Alice".to_owned())
     );
 
     // --- 3. node-1 removes the key. The backplane broadcasts a Remove, which
     //         evicts the entry from node-2's L1 as well.
     println!("\nnode-1 removes \"profile\" — backplane will invalidate node-2…");
-    node1.remove("profile").await.unwrap();
+    node1
+        .remove("profile")
+        .await
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
 
     // Give the in-process backplane a moment to deliver the message.
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    let after = node2.try_get("profile").await.unwrap();
+    let after = node2
+        .try_get("profile")
+        .await
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
     println!(
         "node-2 try_get    => {:?}  (evicted by the backplane)",
         after.as_ref()

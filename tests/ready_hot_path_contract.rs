@@ -1,4 +1,6 @@
 //! Ready hits preserve raw-key options, eager ownership and local-only startup.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, EagerThreshold, EntryOptions, provider::DefaultEntryOptionsProvider,
     provider::ManualClock,

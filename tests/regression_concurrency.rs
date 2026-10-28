@@ -1,5 +1,7 @@
 //! Public-API concurrency regressions and explicit FusionCache compatibility observations.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

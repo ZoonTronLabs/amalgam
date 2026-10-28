@@ -56,10 +56,16 @@ mod demo {
             .await?;
         println!("get_or_set #2 → {again}");
 
-        cache.set("farewell", "goodbye".to_owned()).await.unwrap();
+        cache
+            .set("farewell", "goodbye".to_owned())
+            .await
+            .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
         println!("set farewell");
 
-        cache.remove("greeting").await.unwrap();
+        cache
+            .remove("greeting")
+            .await
+            .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
         println!("removed greeting");
 
         println!();

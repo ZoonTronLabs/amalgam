@@ -1,4 +1,6 @@
 //! Standalone elapsed deadlines retain fail-safe and replacement semantics.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{BlockingCache, Cache, EntryOptions};
 use std::time::Duration;
 

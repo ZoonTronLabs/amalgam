@@ -1,4 +1,6 @@
 //! The plain origin hit preserves user callbacks and cleanup without an owned frame.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     BlockingCache, Cache, CacheEvent, CacheLevel, CacheOperation, EntryOptions, Error,
     FactoryCancellationReason, OperationOutcome,

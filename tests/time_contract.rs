@@ -1,5 +1,7 @@
 //! Public range, concurrent-clock and timing-capability contracts.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

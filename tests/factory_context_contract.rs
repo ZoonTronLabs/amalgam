@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, EntryOptions, Tag, TagError, provider::Clock, provider::InMemoryDistributedCache,
     provider::JsonSerializer, provider::ManualClock,

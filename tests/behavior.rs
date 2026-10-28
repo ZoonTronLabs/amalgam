@@ -4,6 +4,8 @@
 //! Expiration is driven by an injected [`ManualClock`] for determinism; factory
 //! timeouts use the real tokio timer (they are wall-clock by nature).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

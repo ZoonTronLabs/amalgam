@@ -41,21 +41,19 @@ impl FlightIdentity for OriginIdentity {
         &self.0.key
     }
     fn panicked(&self, panic: crate::single_flight::Panic) -> Option<crate::single_flight::Panic> {
-        let mut panic = Some(panic);
-        let retired = {
+        let (retired, panic) = {
             let mut delivery = self.0.delivery.lock();
-            let next = match &*delivery {
+            let (next, panic) = match &*delivery {
                 Delivery::Active(Audience::Foreground)
-                | Delivery::Completed(Audience::Foreground, _) => {
-                    Delivery::Completed(Audience::Foreground, Err(Error::FactoryPanicked))
-                }
+                | Delivery::Completed(Audience::Foreground, _) => (
+                    Delivery::Completed(Audience::Foreground, Err(Error::FactoryPanicked)),
+                    Some(panic),
+                ),
                 Delivery::Active(Audience::Background)
                 | Delivery::Completed(Audience::Background, _)
-                | Delivery::BackgroundPanic(_) => {
-                    Delivery::BackgroundPanic(panic.take().expect("panic payload is owned"))
-                }
+                | Delivery::BackgroundPanic(_) => (Delivery::BackgroundPanic(panic), None),
             };
-            std::mem::replace(&mut *delivery, next)
+            (std::mem::replace(&mut *delivery, next), panic)
         };
         drop(retired);
         panic

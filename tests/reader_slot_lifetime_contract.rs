@@ -1,4 +1,6 @@
 //! Reader slots release values deterministically and keep optional cloners outside locks.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, CloneError, EntryOptions, Error, FactoryCancellationReason, provider::ValueCloner,
 };

@@ -1,4 +1,6 @@
 //! Public contracts for tag/clear population and immutable automatic recovery.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;

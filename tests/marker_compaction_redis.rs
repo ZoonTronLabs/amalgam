@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Lower per-node limits must report the actual clear maximum after compaction.
 use amalgam::advanced::*;

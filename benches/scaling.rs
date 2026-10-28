@@ -76,13 +76,13 @@ fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap()
+        .unwrap_or_else(|error| panic!("benchmark runtime creation must succeed: {error:?}"))
 }
 fn cache() -> Cache<u64> {
     Cache::builder()
         .default_options(EntryOptions::new(Duration::from_secs(3600)))
         .try_build()
-        .unwrap()
+        .unwrap_or_else(|error| panic!("benchmark cache configuration must be valid: {error:?}"))
 }
 trait WarmHit {
     async fn value(cache: &Cache<u64>, key: &str) -> u64;
@@ -91,10 +91,16 @@ trait WarmHit {
 struct ReadHit;
 impl WarmHit for ReadHit {
     async fn value(cache: &Cache<u64>, key: &str) -> u64 {
-        cache.try_get(key).into_future().await.unwrap().unwrap()
+        match cache.try_get(key).into_future().await {
+            Ok(Some(value)) => value,
+            result => panic!("a warmed read must find the seeded value, got {result:?}"),
+        }
     }
     fn native(cache: &BlockingCache<u64>, key: &str) -> u64 {
-        cache.try_get(key).execute().unwrap().unwrap()
+        match cache.try_get(key).execute() {
+            Ok(Some(value)) => value,
+            result => panic!("a warmed native read must find the seeded value, got {result:?}"),
+        }
     }
 }
 struct OriginHit;
@@ -108,7 +114,7 @@ impl WarmHit for OriginHit {
                 }),
             )
             .await
-            .unwrap()
+            .unwrap_or_else(|error| panic!("benchmark origin operation must succeed: {error:?}"))
     }
     fn native(cache: &BlockingCache<u64>, key: &str) -> u64 {
         cache
@@ -119,7 +125,7 @@ impl WarmHit for OriginHit {
                 }),
             )
             .execute()
-            .unwrap()
+            .unwrap_or_else(|error| panic!("benchmark origin operation must succeed: {error:?}"))
     }
 }
 fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same: bool) {
@@ -162,7 +168,11 @@ fn scaling<H: WarmHit>(cache: &Cache<u64>, keys: &[String], workers: usize, same
         barrier.wait();
         let allocations: usize = threads
             .into_iter()
-            .map(|thread| thread.join().unwrap())
+            .map(|thread| {
+                thread.join().unwrap_or_else(|error| {
+                    panic!("benchmark worker must complete without panicking: {error:?}")
+                })
+            })
             .sum();
         let elapsed = began.elapsed();
         let label = if same { "same" } else { "distinct" };
@@ -178,14 +188,16 @@ fn synchronous_hit<H: WarmHit>() {
     let cache = BlockingCache::from_builder(
         Cache::builder().default_options(EntryOptions::new(Duration::from_secs(3600))),
     )
-    .unwrap();
+    .unwrap_or_else(|error| panic!("benchmark cache configuration must be valid: {error:?}"));
     cache
         .set("sync", 1_u64)
         .with_receipt()
         .execute()
-        .unwrap()
+        .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"))
         .wait()
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!("benchmark seed mutation must finish its effects: {error:?}")
+        });
     let mut warmup = Warmup::new("sync");
     loop {
         let began = Instant::now();
@@ -210,7 +222,9 @@ fn synchronous_hit<H: WarmHit>() {
         "sync,1,{OPERATIONS},{:.3},{allocations}",
         elapsed.as_nanos() as f64 / OPERATIONS as f64
     );
-    cache.shutdown().unwrap();
+    cache
+        .shutdown()
+        .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
 }
 fn mutations(rt: &tokio::runtime::Runtime) {
     let writes = cache();
@@ -219,7 +233,10 @@ fn mutations(rt: &tokio::runtime::Runtime) {
         loop {
             let began = Instant::now();
             for value in 0..BATCH {
-                writes.set("replace", value as u64).await.unwrap();
+                writes
+                    .set("replace", value as u64)
+                    .await
+                    .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"));
             }
             if warmup.record(began.elapsed(), BATCH) {
                 break;
@@ -228,7 +245,10 @@ fn mutations(rt: &tokio::runtime::Runtime) {
         begin_counting();
         let began = Instant::now();
         for value in 1..=SET_OPERATIONS {
-            writes.set("replace", value as u64).await.unwrap();
+            writes
+                .set("replace", value as u64)
+                .await
+                .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"));
         }
         let elapsed = began.elapsed();
         let allocations = end_counting();
@@ -237,7 +257,11 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             elapsed.as_nanos() as f64 / SET_OPERATIONS as f64
         );
         assert_eq!(
-            writes.try_get("replace").into_future().await.unwrap(),
+            writes
+                .try_get("replace")
+                .into_future()
+                .await
+                .unwrap_or_else(|error| panic!("benchmark read must succeed: {error:?}")),
             Some(SET_OPERATIONS as u64)
         );
         // Reuse the key strings, never the entries. A fresh bounded-size cache
@@ -256,12 +280,16 @@ fn mutations(rt: &tokio::runtime::Runtime) {
                         })
                     )
                     .await
-                    .unwrap(),
+                    .unwrap_or_else(|error| panic!(
+                        "benchmark origin operation must succeed: {error:?}"
+                    )),
                     7
                 );
             }
             let elapsed = began.elapsed();
-            warm.shutdown().await.unwrap();
+            warm.shutdown().await.unwrap_or_else(|error| {
+                panic!("benchmark cache shutdown must complete: {error:?}")
+            });
             drop(warm);
             if warmup.record(elapsed, BATCH) {
                 break;
@@ -283,7 +311,9 @@ fn mutations(rt: &tokio::runtime::Runtime) {
                             })
                         )
                         .await
-                        .unwrap()
+                        .unwrap_or_else(|error| panic!(
+                            "benchmark origin operation must succeed: {error:?}"
+                        ))
                 ),
                 7
             );
@@ -294,7 +324,10 @@ fn mutations(rt: &tokio::runtime::Runtime) {
             "cold,1,{COLD_OPERATIONS},{:.3},{allocations}",
             elapsed.as_nanos() as f64 / COLD_OPERATIONS as f64
         );
-        writes.shutdown().await.unwrap();
+        writes
+            .shutdown()
+            .await
+            .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
     });
 }
 fn main() {
@@ -333,10 +366,12 @@ fn run<H: WarmHit>() {
                 .set(key, id as u64 + 1)
                 .with_receipt()
                 .await
-                .unwrap()
+                .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"))
                 .wait()
                 .await
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("benchmark seed mutation must finish its effects: {error:?}")
+                });
         }
     });
     println!("scenario,threads,operations,ns_per_op,allocations");
@@ -345,7 +380,8 @@ fn run<H: WarmHit>() {
             scaling::<H>(&cache, &keys, workers, same);
         }
     }
-    rt.block_on(cache.shutdown()).unwrap();
+    rt.block_on(cache.shutdown())
+        .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
     synchronous_hit::<H>();
 }
 
@@ -386,7 +422,9 @@ fn ready_costs() {
     cost("system_duration", || {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_else(|error| {
+                panic!("benchmark clock must be after the Unix epoch: {error:?}")
+            })
             .as_secs()
     });
     let hash = std::collections::hash_map::RandomState::new();
@@ -433,40 +471,57 @@ fn ready_costs() {
                 None => builder,
             }
         };
-        let cache = builder().try_build().unwrap();
+        let cache = builder().try_build().unwrap_or_else(|error| {
+            panic!("benchmark cache configuration must be valid: {error:?}")
+        });
         rt.block_on(async {
             cache
                 .set("cost", 7_u64)
                 .with_receipt()
                 .await
-                .unwrap()
+                .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"))
                 .wait()
                 .await
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("benchmark seed mutation must finish its effects: {error:?}")
+                });
         });
         rt.block_on(async {
             cost(&format!("{label}_async"), || {
                 let mut future = std::pin::pin!(cache.try_get("cost").into_future());
                 let mut context = std::task::Context::from_waker(std::task::Waker::noop());
                 match std::future::Future::poll(future.as_mut(), &mut context) {
-                    std::task::Poll::Ready(value) => value.unwrap().unwrap(),
+                    std::task::Poll::Ready(Ok(Some(value))) => value,
+                    std::task::Poll::Ready(result) => {
+                        panic!("a warmed read must find the seeded value, got {result:?}")
+                    }
                     std::task::Poll::Pending => panic!("a warmed read must be ready"),
                 }
             });
         });
-        rt.block_on(cache.shutdown()).unwrap();
-        let native = BlockingCache::from_builder(builder()).unwrap();
+        rt.block_on(cache.shutdown())
+            .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
+        let native = BlockingCache::from_builder(builder()).unwrap_or_else(|error| {
+            panic!("benchmark cache configuration must be valid: {error:?}")
+        });
         native
             .set("cost", 7_u64)
             .with_receipt()
             .execute()
-            .unwrap()
+            .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"))
             .wait()
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("benchmark seed mutation must finish its effects: {error:?}")
+            });
         cost(&format!("{label}_native"), || {
-            native.try_get("cost").execute().unwrap().unwrap()
+            match native.try_get("cost").execute() {
+                Ok(Some(value)) => value,
+                result => panic!("a warmed native read must find the seeded value, got {result:?}"),
+            }
         });
-        native.shutdown().unwrap();
+        native
+            .shutdown()
+            .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
     }
 }
 
@@ -524,7 +579,8 @@ fn metadata_costs() {
     use amalgam::entry::Entry;
     let rt = runtime();
     let now = amalgam::Timestamp::from_ticks(1_000_000_000);
-    let tag = amalgam::Tag::new("measurement-group").unwrap();
+    let tag = amalgam::Tag::new("measurement-group")
+        .unwrap_or_else(|error| panic!("benchmark tag literal must be valid: {error:?}"));
     eprintln!(
         "metadata_bytes={}",
         std::mem::size_of::<amalgam::entry::Metadata>()
@@ -547,7 +603,7 @@ fn metadata_costs() {
                 None,
                 None,
             )
-            .unwrap()
+            .unwrap_or_else(|error| panic!("benchmark entry fixture must be valid: {error:?}"))
         };
         let source = fresh();
         assert_eq!(source.value(), &7);
@@ -572,7 +628,9 @@ fn metadata_costs() {
         let cache = Cache::builder()
             .default_options(options)
             .try_build()
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("benchmark cache configuration must be valid: {error:?}")
+            });
         rt.block_on(async {
             let replacement = || async {
                 let request = cache.set("metadata-cost", 7_u64);
@@ -580,7 +638,9 @@ fn metadata_costs() {
                     MetadataCase::Plain | MetadataCase::Eager => request,
                     MetadataCase::Tagged => request.tags(["measurement-group"]),
                 };
-                request.await.unwrap();
+                request
+                    .await
+                    .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"));
             };
             let mut replace = || {
                 let mut operation = std::pin::pin!(replacement());
@@ -592,11 +652,17 @@ fn metadata_costs() {
             };
             metadata_cost(&format!("set_{}", case.label()), &mut replace);
             assert_eq!(
-                cache.try_get("metadata-cost").into_future().await.unwrap(),
+                cache
+                    .try_get("metadata-cost")
+                    .into_future()
+                    .await
+                    .unwrap_or_else(|error| panic!("benchmark read must succeed: {error:?}")),
                 Some(7)
             );
             metadata_cost(&format!("set_after_read_{}", case.label()), &mut replace);
-            cache.shutdown().await.unwrap();
+            cache.shutdown().await.unwrap_or_else(|error| {
+                panic!("benchmark cache shutdown must complete: {error:?}")
+            });
         });
     }
 }
@@ -614,24 +680,30 @@ fn distributed<H: WarmHit>() {
             )))
             .serializer(Arc::new(amalgam::provider::JsonSerializer))
             .try_build()
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("benchmark cache configuration must be valid: {error:?}")
+            });
         cache
             .set("l2-json", 7_u64)
             .with_receipt()
             .await
-            .unwrap()
+            .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"))
             .wait()
             .await
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("benchmark seed mutation must finish its effects: {error:?}")
+            });
         cache
             .set("l2-json", 11)
             .options(|_| options.with_skip_distributed(false, true))
             .with_receipt()
             .await
-            .unwrap()
+            .unwrap_or_else(|error| panic!("benchmark mutation must succeed: {error:?}"))
             .wait()
             .await
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("benchmark seed mutation must finish its effects: {error:?}")
+            });
         let mut warmup = Warmup::new("l2_json");
         loop {
             let began = Instant::now();
@@ -656,6 +728,9 @@ fn distributed<H: WarmHit>() {
             "l2_json,1,{OPERATIONS},{:.3},{allocations}",
             elapsed.as_nanos() as f64 / OPERATIONS as f64
         );
-        cache.shutdown().await.unwrap();
+        cache
+            .shutdown()
+            .await
+            .unwrap_or_else(|error| panic!("benchmark cache shutdown must complete: {error:?}"));
     });
 }

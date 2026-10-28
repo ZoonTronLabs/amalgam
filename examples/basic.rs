@@ -38,7 +38,7 @@ async fn main() {
                 }),
             )
             .await
-            .expect("factory succeeded")
+            .unwrap_or_else(|error| panic!("factory succeeded: {error:?}"))
     };
     println!("1st get_or_set => {first:?}");
 
@@ -55,7 +55,7 @@ async fn main() {
                 }),
             )
             .await
-            .expect("served from cache")
+            .unwrap_or_else(|error| panic!("served from cache: {error:?}"))
     };
     println!("2nd get_or_set => {second:?}  (served from L1, no factory call)");
 

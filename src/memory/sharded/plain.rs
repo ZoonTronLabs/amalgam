@@ -1,5 +1,8 @@
 //! Only a retained representation or a new slot constructs the full envelope.
-use super::*;
+use super::{
+    Arc, CapacityRejection, MemoryAdmission, Ordering, RandomState, RawEntryMut, Reason, Shard,
+    Sharded, Stored, entry_weight, write,
+};
 use crate::entry::{PlainMetadata, PlainReplacement};
 
 impl<V: Clone> Sharded<V> {

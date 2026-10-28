@@ -1,5 +1,7 @@
 //! Canonical absence must not disguise provider failure or an open circuit.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, CodecError, EntryOptions, Error, RecoveryConfig, Result, Timeout,
     provider::DistributedCache, provider::InMemoryDistributedCache, provider::JsonSerializer,

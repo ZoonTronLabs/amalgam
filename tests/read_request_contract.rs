@@ -1,4 +1,6 @@
 //! The lazy query may contain an unpinned input that opts out of Unpin.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{Cache, Error};
 use std::future::Future;
 use std::future::IntoFuture;

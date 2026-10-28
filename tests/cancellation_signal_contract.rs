@@ -1,4 +1,6 @@
 //! Cancellation remains first-wins and wakes all waiters around registration.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{CancellationSource, FactoryCancellationReason, advanced::CancellationRequest};
 use std::sync::Arc;
 use std::time::Duration;

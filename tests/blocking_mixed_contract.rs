@@ -1,4 +1,6 @@
 //! Native and async handles must share values, coordination and final lifetime.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::*;
 use std::num::NonZeroUsize;

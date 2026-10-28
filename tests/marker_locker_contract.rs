@@ -1,4 +1,6 @@
 //! Public ownership, recheck and cancellation contracts for marker refresh.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;

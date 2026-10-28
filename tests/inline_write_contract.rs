@@ -1,4 +1,6 @@
 //! Inline L1 writes still own close attribution and deterministic reclamation.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{Cache, EntryOptions, advanced::MutationReceipt};
 use std::future::Future;
 use std::future::IntoFuture;

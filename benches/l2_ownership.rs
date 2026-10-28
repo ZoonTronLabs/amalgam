@@ -1,6 +1,8 @@
 //! Untimed allocation stacks for the public L2 fixture.
 //! Kept in a separate executable so tracing cannot affect the scaling allocator.
 //! Run explicitly: cargo test --release --bench l2_ownership -- --ignored --nocapture
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, missing_docs))]
+
 use amalgam::{
     Cache, EntryOptions, provider::InMemoryDistributedCache, provider::JsonSerializer,
     provider::SystemClock,

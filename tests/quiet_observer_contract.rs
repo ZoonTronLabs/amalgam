@@ -1,4 +1,6 @@
 //! A recipient arriving inside ordinary Clone sees the same terminal operation.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{Cache, CacheEvent, Events, OperationOutcome};
 use std::future::Future;
 use std::future::IntoFuture;

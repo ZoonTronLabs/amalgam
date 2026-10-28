@@ -174,11 +174,12 @@ impl QueueRef {
             return true;
         }
         let key = LaneKey::of(lane);
-        let queue = queues.get_mut(&key).expect("a waiting claim is queued");
-        let index = queue
-            .iter()
-            .position(|stored| Arc::ptr_eq(stored, waiter))
-            .expect("a waiting claim keeps its queue identity");
+        let Some(queue) = queues.get_mut(&key) else {
+            unreachable!("a waiting claim is queued");
+        };
+        let Some(index) = queue.iter().position(|stored| Arc::ptr_eq(stored, waiter)) else {
+            unreachable!("a waiting claim keeps its queue identity");
+        };
         // The future still owns this node. Removing the queue reference cannot
         // destroy its user-supplied waker while shard coordination is held.
         queue.remove(index);

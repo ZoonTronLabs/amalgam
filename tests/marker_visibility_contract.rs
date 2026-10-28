@@ -1,4 +1,6 @@
 //! Completed marker publication must become visible to every subsequent read.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::{Arc, Barrier, mpsc};
 use std::time::Duration;
 

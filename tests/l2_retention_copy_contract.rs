@@ -1,4 +1,6 @@
 //! Attaching persisted retention to an owned L2 value must not clone it.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::{
     Clock, DistributedEntry, DistributedSnapshot, InMemoryDistributedCache, JsonSerializer,
     ManualClock, MemoryStorage, SnapshotRetention, ValueCloner,

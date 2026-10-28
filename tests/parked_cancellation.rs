@@ -1,5 +1,7 @@
 //! Cancellation must release an owned pending origin without another caller poll.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::future::{Future, pending, poll_fn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

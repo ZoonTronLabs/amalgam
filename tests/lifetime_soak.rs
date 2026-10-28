@@ -1,5 +1,7 @@
 //! Repeated public-handle lifetime checks while external observers stay alive.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

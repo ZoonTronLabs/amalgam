@@ -1,4 +1,6 @@
 //! Cache-aware plugins use the exact cache without keeping its public owner alive.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::provider::*;
 use amalgam::*;

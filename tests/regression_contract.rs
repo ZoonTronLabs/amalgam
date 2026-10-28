@@ -1,5 +1,7 @@
 //! Public contract acceptance for repaired audit findings.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;

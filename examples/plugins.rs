@@ -50,7 +50,10 @@ async fn main() -> amalgam::Result<()> {
     let cache: Cache<i32> = Cache::builder().plugin(plugin.clone()).try_build()?;
 
     println!("\n-- set(\"answer\", 42) --");
-    cache.set("answer", 42).await.unwrap();
+    cache
+        .set("answer", 42)
+        .await
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
 
     println!("\n-- get_or_set(\"answer\", ..) => cache HIT, factory skipped --");
     let hit = cache
@@ -61,7 +64,7 @@ async fn main() -> amalgam::Result<()> {
             ),
         )
         .await
-        .expect("served from cache");
+        .unwrap_or_else(|error| panic!("served from cache: {error:?}"));
     println!("   value = {hit}");
 
     println!("\n-- get_or_set(\"fresh\", ..) => MISS then factory runs --");
@@ -73,11 +76,14 @@ async fn main() -> amalgam::Result<()> {
             ),
         )
         .await
-        .expect("factory produces a value");
+        .unwrap_or_else(|error| panic!("factory produces a value: {error:?}"));
     println!("   value = {produced}");
 
     println!("\n-- remove(\"answer\") --");
-    cache.remove("answer").await.unwrap();
+    cache
+        .remove("answer")
+        .await
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
 
     // The event stream is best-effort and fanned out synchronously, so by now the
     // plugin has already seen everything above.

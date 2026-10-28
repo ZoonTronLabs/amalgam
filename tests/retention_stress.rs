@@ -1,5 +1,7 @@
 //! Admission/expiry invariants under mixed priority, weight and repeated churn.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

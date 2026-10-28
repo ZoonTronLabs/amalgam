@@ -179,14 +179,16 @@ impl<T: Send + Sync + 'static, K: FlightIdentity> Flight<T, K> {
         CancellationSource::from_owner(self.clone())
     }
     pub(crate) fn install(self: &Arc<Self>, work: Work<T>) {
-        let mut work = Some(work);
-        {
+        let unused = {
             let mut cell = self.cell.lock();
             if matches!(cell.state, State::Starting) {
-                cell.state = State::Pending(work.take().unwrap());
+                cell.state = State::Pending(work);
+                None
+            } else {
+                Some(work)
             }
-        }
-        drop(work);
+        };
+        drop(unused);
     }
     /// First poll uses the same pinned allocation as every later driver.
     /// This method never polls or destroys user work inside coordination.

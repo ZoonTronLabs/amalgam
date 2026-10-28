@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::{InMemoryDistributedCache, JsonSerializer, ManualClock, ValueCloner};
 use amalgam::{Cache, CloneError, EntryOptions};
 use serde::{Deserialize, Serialize};

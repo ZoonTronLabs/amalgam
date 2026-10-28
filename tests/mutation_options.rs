@@ -1,5 +1,7 @@
 //! Dynamic mutation policy is observable at both layers and explicit options win.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, ConfigError, EntryOptions, Error, RecoveryConfig, Timestamp, advanced::EffectOutcome,
     advanced::KeyModifierMode, advanced::LocalEffect, advanced::SkipReason, provider::Clock,

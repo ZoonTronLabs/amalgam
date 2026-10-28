@@ -1,4 +1,6 @@
 //! Original stored values, bounded cursors and producer reentrancy boundaries.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::entry::Entry;
 use amalgam::provider::*;

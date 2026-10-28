@@ -1,4 +1,6 @@
 //! Maintenance clocks are caller code and can reenter the same store.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::time::Duration;

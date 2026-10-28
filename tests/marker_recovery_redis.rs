@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Recovery through real Redis Lua failures, original lifetime and native TTL.
 use amalgam::advanced::*;

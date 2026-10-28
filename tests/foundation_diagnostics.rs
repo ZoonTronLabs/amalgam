@@ -1,6 +1,7 @@
 //! Feature-gated diagnostics contracts. Global initialization runs in a child
 //! test process so unrelated application/test subscribers are never replaced.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(any(feature = "metrics", feature = "opentelemetry"))]
 
 #[cfg(feature = "metrics")]

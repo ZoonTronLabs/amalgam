@@ -1,4 +1,6 @@
 //! Scalar hydration preserves source facts separately from the local limits.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::{
     Clock, InMemoryDistributedCache, JsonSerializer, ManualClock, MemoryStorage, ValueCloner,
 };

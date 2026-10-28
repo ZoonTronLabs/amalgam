@@ -128,7 +128,7 @@ async fn main() -> amalgam::Result<()> {
             "Renamed via another handle".to_owned(),
         )
         .await
-        .unwrap();
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
     let after = service.display_name("42").await;
     println!("after writing via a separate clone, service sees -> {after}");
     assert_eq!(
@@ -165,8 +165,12 @@ async fn main() -> amalgam::Result<()> {
     );
 
     // Resolve named caches by name (the FusionCache "keyed service" move).
-    let sessions = registry.get("sessions").expect("sessions cache registered");
-    let config = registry.get("config").expect("config cache registered");
+    let Some(sessions) = registry.get("sessions") else {
+        panic!("the example registered the sessions cache above");
+    };
+    let Some(config) = registry.get("config") else {
+        panic!("the example registered the config cache above");
+    };
 
     // Same logical key in BOTH caches → independent values, proving isolation.
     let token = sessions
@@ -177,13 +181,16 @@ async fn main() -> amalgam::Result<()> {
             }),
         )
         .await
-        .expect("factory is infallible");
+        .unwrap_or_else(|error| panic!("factory is infallible: {error:?}"));
     println!("sessions[\"session:abc\"] -> {token}");
 
     // The `config` cache has never seen `session:abc`. `try_get` is a pure read
     // (no factory): it returns `None` here, demonstrating the two
     // named caches do not share storage.
-    let config_view = config.try_get("session:abc").await.unwrap();
+    let config_view = config
+        .try_get("session:abc")
+        .await
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
     println!(
         "config[\"session:abc\"] present? {} (independent storage)",
         config_view.is_some()
@@ -200,7 +207,7 @@ async fn main() -> amalgam::Result<()> {
             }),
         )
         .await
-        .expect("factory is infallible");
+        .unwrap_or_else(|error| panic!("factory is infallible: {error:?}"));
     println!("config[\"config:feature_x\"] -> {setting} (1 h freshness via options provider)");
 
     println!("OK: named caches are independent; the options provider drove per-key defaults.");

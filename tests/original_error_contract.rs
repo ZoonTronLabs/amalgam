@@ -1,4 +1,6 @@
 //! Codec/provider boundaries retain concrete causes and the selected failure policy.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::*;
 use amalgam::*;
 use serde::{Deserialize, Serialize};

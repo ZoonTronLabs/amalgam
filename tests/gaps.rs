@@ -1,6 +1,8 @@
 //! Tests for the FusionCache-parity gap-closes: the constant-value
 //! `get_or_set_value` overload and the `Eviction` event.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::time::Duration;
 
 use amalgam::{Cache, CacheEvent, EntryOptions};

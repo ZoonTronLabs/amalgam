@@ -1,4 +1,6 @@
 //! Shared snapshots keep reads stable across provider replacement/removal.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::{
     DistributedBytes, DistributedCache, InMemoryDistributedCache, ManualClock,
 };

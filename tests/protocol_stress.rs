@@ -1,5 +1,7 @@
 //! Seeded, reproducible wire/property checks; no external service required.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

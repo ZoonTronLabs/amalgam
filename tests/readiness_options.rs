@@ -1,5 +1,7 @@
 //! Initial subscription policy and explicit readiness have separate effects.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     BackplaneReadiness, Cache, CacheEvent, CloseOutcome, EntryOptions, Error,
     FactoryCancellationReason, RecoveryConfig, Result, advanced::EffectOutcome,

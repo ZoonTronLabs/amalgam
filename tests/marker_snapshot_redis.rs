@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Mandatory native acceptance in CI: TTL namespace, atomic maxima and ownership.
 use amalgam::advanced::*;

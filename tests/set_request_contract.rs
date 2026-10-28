@@ -1,4 +1,6 @@
 //! Canonical set is lazy, fallible and keeps the cache's unedited defaults.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, EntryOptions, Error, TagError, advanced::MutationReceipt, provider::ManualClock,
 };

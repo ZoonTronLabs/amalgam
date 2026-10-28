@@ -55,7 +55,7 @@ async fn main() {
         )
         .options(|_| opts.clone())
         .await
-        .expect("priming succeeds");
+        .unwrap_or_else(|error| panic!("priming succeeds: {error:?}"));
     println!("primed value => \"v1\"");
 
     // 2. Go stale.
@@ -76,7 +76,7 @@ async fn main() {
         )
         .options(|_| opts)
         .await
-        .expect("soft timeout returns the stale value");
+        .unwrap_or_else(|error| panic!("soft timeout returns the stale value: {error:?}"));
     let waited = started.elapsed();
     println!(
         "served after ~{}ms => {served:?}  (stale value returned immediately)",
@@ -90,7 +90,10 @@ async fn main() {
 
     // 4. Give the background factory time to finish, then read the fresh value.
     tokio::time::sleep(Duration::from_millis(400)).await;
-    let now_cached = cache.try_get("feed").await.unwrap();
+    let now_cached = cache
+        .try_get("feed")
+        .await
+        .unwrap_or_else(|error| panic!("the example cache operation must succeed: {error:?}"));
     println!(
         "cache now holds      => {:?}  (updated by the background factory)",
         now_cached.as_ref()

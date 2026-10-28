@@ -1,4 +1,6 @@
 //! Native output selection preserves actual commit ownership and evidence.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::{BlockingCommitReceipt, BlockingMutationReceipt, BlockingRuntime};
 use amalgam::provider::{
     DistributedCache, InMemoryDistributedCache, InvalidationStore, JsonSerializer, SystemClock,

@@ -1,4 +1,6 @@
 //! Ready L1 work retains cancellation, observation and synchronous drainage.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::provider::*;
 use amalgam::*;
 use std::error::Error as _;

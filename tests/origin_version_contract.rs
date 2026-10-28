@@ -1,4 +1,6 @@
 //! A factory owns its starting version, rather than whichever version exists later.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{Cache, ClearMode, EntryOptions, Timestamp, provider::ManualClock};
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,5 +1,7 @@
 //! Public operation futures must compose on ordinary executor/thread stacks.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{Cache, ClearMode};
 use std::future::IntoFuture;
 use std::mem::size_of_val;

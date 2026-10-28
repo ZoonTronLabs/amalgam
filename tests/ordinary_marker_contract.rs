@@ -1,4 +1,6 @@
 //! Tag/clear over a genuine byte-only L2, with no atomic capability adapter.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::{
     EffectOutcome, LeasePolicy, MarkerError, MarkerKind, MarkerLifecyclePolicy, MarkerReadPolicy,
     MarkerVersion,

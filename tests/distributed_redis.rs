@@ -1,4 +1,5 @@
 //! Live, isolated Redis protocol evidence. CI exports AMALGAM_REQUIRE_REDIS=1.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 
 #[path = "support/redis_fixture.rs"]

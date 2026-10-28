@@ -4,7 +4,14 @@
 //! factories run on its blocking pool and retain counted execution and join
 //! supervision until their actual callback, captures and result have finished.
 pub(crate) mod origin_request;
-use super::*;
+use super::{
+    Arc, Backplane, BackplaneReadiness, Cache, CacheBuilder, CacheValue, CancellationSource,
+    ClearMode, CloseOutcome, CommitCompletion, CommitReceipt, CommitReport, DistributedCache,
+    DistributedLocker, EntryOptions, Error, Events, ExecutorOwnership, FactoryCancellation,
+    FactoryContext, FactoryError, FactoryOrigin, LinkMode, MarkerKind, MarkerLifecyclePolicy,
+    MarkerReadPolicy, MutationReceipt, Plugin, PublicLifetime, Reason, ReplayTicket, Result,
+    Scopes, ShutdownReport, ShutdownTask, Tag, Timeout, Worker,
+};
 use crate::commit::TaskResult;
 use crate::factory::FactoryInvocation;
 pub use origin_request::{BlockingGetOrSetRequest, BlockingReceiptGetOrSetRequest};
@@ -201,8 +208,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::Lifecycle;
+    use crate::execution::lock;
     use std::num::NonZeroUsize;
     use std::sync::Barrier;
+    use std::time::Duration;
     enum PublicHandle {
         Native(BlockingCache<u64>),
         Async(Cache<u64>),

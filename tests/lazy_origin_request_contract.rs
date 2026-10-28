@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     Cache, CancellationSource, EntryOptions, Error, FactoryCancellationReason,
     advanced::CommitReceipt, advanced::MutationReceipt, provider::ManualClock,

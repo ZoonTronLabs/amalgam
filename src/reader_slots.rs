@@ -77,11 +77,13 @@ fn reader_index() -> usize {
         Some(index) => index,
         None => {
             initialize_parking();
-            let index = NEXT_READER
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            let Ok(index) =
+                NEXT_READER.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                     current.checked_add(1)
                 })
-                .expect("reader identity exhausted");
+            else {
+                panic!("reader identity exhausted");
+            };
             reader.set(Some(index));
             index
         }
@@ -234,14 +236,19 @@ impl<T> ReaderSlots<T> {
                     .is_ok();
         if local {
             let count = slot.local.load(Ordering::Relaxed);
-            let next = count.checked_add(1).expect("reader reservation exhausted");
+            let Some(next) = count.checked_add(1) else {
+                panic!("reader reservation exhausted");
+            };
             // Only the owner writes `local`, so a store publishes the count.
             slot.local.store(next, HANDSHAKE);
             Reservation::Local(slot)
         } else {
-            slot.shared
+            let Ok(_) = slot
+                .shared
                 .fetch_update(HANDSHAKE, Ordering::Relaxed, |count| count.checked_add(1))
-                .expect("shared reader reservations exhausted");
+            else {
+                panic!("shared reader reservations exhausted");
+            };
             Reservation::Shared(slot)
         }
     }

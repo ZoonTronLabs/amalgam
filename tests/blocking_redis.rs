@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "redis")]
 //! Native caller-thread contracts on actual Redis/Valkey storage and notifications.
 use amalgam::advanced::*;

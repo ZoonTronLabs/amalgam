@@ -1,4 +1,6 @@
 //! Original receipt causes may reenter shutdown; retire scope admission first.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::{CommitReceipt, MutationReceipt};
 use amalgam::provider::{
     DistributedCache, InMemoryDistributedCache, InvalidationStore, JsonSerializer, SystemClock,

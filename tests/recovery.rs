@@ -6,6 +6,8 @@
 //! `max_retries` budget, and "remove replayed / keep failed" — fully
 //! deterministic (no timers, no real clock).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;

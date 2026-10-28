@@ -57,7 +57,7 @@ async fn adaptive_caching() {
         )
         .options(|_| base.clone())
         .await
-        .expect("factory runs");
+        .unwrap_or_else(|error| panic!("factory runs: {error:?}"));
     println!("produced (empty) value, cached for only 100ms: {value:?}");
 
     // Within 100ms it is still cached (factory not re-run).
@@ -71,7 +71,7 @@ async fn adaptive_caching() {
         )
         .options(|_| base.clone())
         .await
-        .expect("served from cache");
+        .unwrap_or_else(|error| panic!("served from cache: {error:?}"));
     println!("immediately after  => served from cache: {cached:?}");
 
     // After the adapted 100ms window the entry expires and the factory re-runs.
@@ -86,7 +86,7 @@ async fn adaptive_caching() {
         )
         .options(|_| base)
         .await
-        .expect("factory re-runs after the adapted window");
+        .unwrap_or_else(|error| panic!("factory re-runs after the adapted window: {error:?}"));
     println!("after 150ms        => factory re-ran: {refreshed:?}");
     assert_eq!(refreshed, "RESULTS NOW");
 }
@@ -117,7 +117,7 @@ async fn conditional_refresh() {
         )
         .options(|_| opts.clone())
         .await
-        .expect("priming succeeds");
+        .unwrap_or_else(|error| panic!("priming succeeds: {error:?}"));
     println!("primed with etag-v1 => {primed:?}");
 
     // 2. Let it go stale so the next call revalidates.
@@ -139,7 +139,7 @@ async fn conditional_refresh() {
         )
         .options(|_| opts.clone())
         .await
-        .expect("not_modified reuses the stale value");
+        .unwrap_or_else(|error| panic!("not_modified reuses the stale value: {error:?}"));
     println!("after 304 NotModified => {reused:?}  (stale value reused, expiration bumped)");
     assert_eq!(reused, "document v1");
 
@@ -162,7 +162,7 @@ async fn conditional_refresh() {
         )
         .options(|_| opts)
         .await
-        .expect("modified replaces the value");
+        .unwrap_or_else(|error| panic!("modified replaces the value: {error:?}"));
     println!("after 200 Modified    => {updated:?}  (new value + new etag cached)");
     assert_eq!(updated, "document v2");
     println!("OK: adaptive duration + conditional (304/200) refresh both demonstrated.");

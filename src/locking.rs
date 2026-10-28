@@ -66,7 +66,9 @@ impl<T> ControlRetention<T> {
     fn clean_idle(&mut self, budget: usize) {
         if let Self::Reuse(recent) = self {
             for _ in 0..budget.min(recent.len()) {
-                let control = recent.pop_front().expect("count bounds the live queue");
+                let Some(control) = recent.pop_front() else {
+                    unreachable!("count bounds the live queue");
+                };
                 if Arc::strong_count(&control) > 1 {
                     recent.push_back(control);
                 }
@@ -112,7 +114,9 @@ impl<T> SlotShard<T> {
     fn clean(&mut self, budget: usize) -> usize {
         let count = budget.min(self.sweep.len());
         for _ in 0..count {
-            let key = self.sweep.pop_front().expect("count bounds the live queue");
+            let Some(key) = self.sweep.pop_front() else {
+                unreachable!("count bounds the live queue");
+            };
             if self
                 .entries
                 .get(key.as_ref())

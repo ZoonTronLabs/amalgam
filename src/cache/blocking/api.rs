@@ -1,5 +1,13 @@
 //! Synchronous public operations over the shared cache engine.
-use super::*;
+use super::{
+    Arc, Backplane, BackplaneReadiness, BlockingCache, BlockingCacheBuildError, BlockingCacheValue,
+    BlockingCommitCompletion, BlockingCommitReceipt, BlockingMutationReceipt, BlockingRequest,
+    BlockingRuntime, Cache, CacheBuilder, CacheValue, CallerCancellation, ClearMode, CloseOutcome,
+    CommitReceipt, DistributedCache, DistributedLocker, EntryOptions, Events, ExecutorOwnership,
+    FactoryCancellation, FactoryContext, FactoryDispatch, FactoryError, FactoryOrigin, MarkerKind,
+    MarkerLifecyclePolicy, MarkerReadPolicy, MutationReceipt, NativeMemoryView, Plugin,
+    PublicLifetime, ReplayTicket, Result, ShutdownReport, Tag, run_factory, thread,
+};
 
 impl<V: Clone + Send + Sync + 'static> BlockingCache<V> {
     /// Constructs a default memory cache and its executor.

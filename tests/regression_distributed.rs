@@ -1,5 +1,7 @@
 //! Distributed acceptance and separately named FusionCache compatibility observations.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 #[cfg(feature = "redis")]
 #[path = "support/redis_fixture.rs"]
 mod redis_fixture;

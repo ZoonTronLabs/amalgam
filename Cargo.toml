@@ -93,3 +93,11 @@ harness = false
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+missing_docs = "warn"
+
+[lints.clippy]
+wildcard_imports = "deny"
+undocumented_unsafe_blocks = "deny"
+needless_for_each = "warn"
+unwrap_used = "deny"
+expect_used = "deny"

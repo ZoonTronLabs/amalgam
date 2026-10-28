@@ -1,4 +1,6 @@
 //! External provider contracts, independent of the built-in memory algorithms.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::advanced::*;
 use amalgam::entry::Entry;
 use amalgam::locking::KeyedLock;

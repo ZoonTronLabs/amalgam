@@ -4,6 +4,8 @@
 //! several `Cache` instances, and an in-process backplane keeping their L1s
 //! coherent.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

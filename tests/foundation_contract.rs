@@ -1,6 +1,8 @@
 //! Foundation acceptance at the storage, copy, registry and plugin seams.
 //! Cache orchestration has separate end-to-end integration tests.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use std::error::Error as _;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, Weak};

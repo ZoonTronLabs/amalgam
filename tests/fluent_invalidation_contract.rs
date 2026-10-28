@@ -1,4 +1,6 @@
 //! API 0.4 invalidation requests remain lazy, typed and atomic on bad tag input.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{
     BlockingCache, Cache, CancellationSource, ClearMode, EntryOptions, Error,
     FactoryCancellationReason, advanced::MutationReceipt, provider::ManualClock,

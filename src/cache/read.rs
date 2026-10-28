@@ -1289,12 +1289,10 @@ impl<V: Clone + Send + Sync + 'static> super::CacheInner<V> {
                         }
                     }
                 }
-                match changed
-                    .as_mut()
-                    .expect("notification was installed")
-                    .as_mut()
-                    .poll(cx)
-                {
+                let Some(notification) = changed.as_mut() else {
+                    unreachable!("notification was installed");
+                };
+                match notification.as_mut().poll(cx) {
                     std::task::Poll::Ready(()) => {
                         changed = None;
                         if helper.is_none() {

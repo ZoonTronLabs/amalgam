@@ -1,4 +1,5 @@
 //! Actual SDK aggregation/export proves native metrics without a facade recorder.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 #![cfg(feature = "opentelemetry")]
 use amalgam::advanced::*;
 use amalgam::provider::*;

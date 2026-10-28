@@ -1,4 +1,6 @@
 //! API 0.4 factories return values and retain typed errors/adaptive metadata.
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+
 use amalgam::{BlockingCache, Cache, EntryOptions, Tag, provider::ManualClock};
 use std::convert::Infallible;
 use std::error::Error as _;
